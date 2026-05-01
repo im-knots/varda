@@ -1,0 +1,818 @@
+use varda::*;
+use varda::modulation::ModulationSource;
+use varda::ui::{self, UIData, AudioUIData, ModSourceUI, ModAssignmentUI, NotificationUI, ShaderParamsUI, ChannelUIInfo, DeckUIInfo, collect_params, RENDER_WIDTH, RENDER_HEIGHT};
+use varda::ui::notifications::NotificationSystem;
+use winit::{
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop},
+    window::{Window, WindowId},
+};
+
+struct App {
+    window: Option<&'static Window>,
+    context: Option<RenderContext>,
+    registry: ShaderRegistry,
+    mixer: Option<Mixer>,
+    blit_pipeline: Option<BlitPipeline>,
+    // egui state
+    egui_ctx: egui::Context,
+    egui_state: Option<egui_winit::State>,
+    egui_renderer: Option<egui_wgpu::Renderer>,
+    // Deck preview texture IDs for egui ((ch_idx, deck_idx) -> egui TextureId)
+    deck_preview_textures: std::collections::HashMap<(usize, usize), egui::TextureId>,
+    // Main output preview texture ID
+    main_output_texture: Option<egui::TextureId>,
+    // Audio state
+    audio_input: Option<AudioInput>,
+    audio_textures: Option<AudioTextures>,
+    audio_data: AudioData,
+    // OSC state
+    osc_receiver: Option<OscReceiver>,
+    // MIDI state
+    midi_input: Option<MidiInput>,
+    midi_mappings: midi::MidiMappingStore,
+    // Notification system
+    notifications: NotificationSystem,
+    // Currently selected deck for bottom bar detail view
+    selected_deck: Option<(usize, usize)>,
+    // Currently selected channel for bottom bar detail view
+    selected_channel: Option<usize>,
+    // Whether master output is selected for bottom bar detail view
+    selected_master: bool,
+}
+
+impl App {
+    fn new() -> Self {
+        let mut registry = ShaderRegistry::new();
+
+        // Add test shader directory
+        if let Err(e) = registry.add_library_path("test_shaders") {
+            log::warn!("Failed to add test_shaders path: {}", e);
+        }
+
+        // Scan for shaders
+        match registry.scan() {
+            Ok(count) => log::info!("Loaded {} shaders", count),
+            Err(e) => log::error!("Failed to scan shaders: {}", e),
+        }
+
+        // Start watching for shader file changes
+        if let Err(e) = registry.start_watching() {
+            log::warn!("Failed to start shader hot-reload: {}", e);
+        }
+
+        // Initialize audio input
+        let audio_input = match AudioInput::new() {
+            Ok(input) => {
+                log::info!("Audio input initialized");
+                Some(input)
+            }
+            Err(e) => {
+                log::warn!("Failed to initialize audio input: {}", e);
+                None
+            }
+        };
+
+        // Try to start OSC receiver on port 9000
+        let osc_receiver = match OscReceiver::new(9000) {
+            Ok(osc) => {
+                log::info!("OSC receiver started on port 9000");
+                Some(osc)
+            }
+            Err(e) => {
+                log::warn!("Failed to start OSC receiver: {}", e);
+                None
+            }
+        };
+
+        // Initialize MIDI input
+        let midi_input = match MidiInput::new() {
+            Ok(midi) => {
+                log::info!("MIDI input initialized");
+                Some(midi)
+            }
+            Err(e) => {
+                log::warn!("Failed to initialize MIDI input: {}", e);
+                None
+            }
+        };
+
+        Self {
+            window: None,
+            context: None,
+            registry,
+            mixer: None,
+            blit_pipeline: None,
+            egui_ctx: egui::Context::default(),
+            egui_state: None,
+            egui_renderer: None,
+            deck_preview_textures: std::collections::HashMap::new(),
+            main_output_texture: None,
+            audio_input,
+            audio_textures: None,
+            audio_data: AudioData::default(),
+            osc_receiver,
+            midi_input,
+            midi_mappings: midi::MidiMappingStore::new(),
+            notifications: NotificationSystem::new(),
+            selected_deck: None,
+            selected_channel: None,
+            selected_master: false,
+        }
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_none() {
+            let window_attrs = Window::default_attributes()
+                .with_title("Varda VJ Software")
+                .with_inner_size(winit::dpi::LogicalSize::new(1920, 1080));
+
+            match event_loop.create_window(window_attrs) {
+                Ok(window) => {
+                    log::info!("Window created");
+
+                    // Leak window for 'static lifetime
+                    let window_static: &'static Window = Box::leak(Box::new(window));
+                    self.window = Some(window_static);
+
+                    // Create render context
+                    match pollster::block_on(RenderContext::new(window_static)) {
+                        Ok(context) => {
+                            log::info!("Varda initialized successfully!");
+                            log::info!("Window size: {}x{}", context.size.width, context.size.height);
+                            log::info!("Loaded {} shaders", self.registry.count());
+
+                            // Create blit pipeline
+                            match BlitPipeline::new(&context.device, context.surface_config.format) {
+                                Ok(blit_pipeline) => {
+                                    self.blit_pipeline = Some(blit_pipeline);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to create blit pipeline: {}", e);
+                                }
+                            }
+
+                            // Create Mixer with Channel+Mixer hierarchy
+                            match Mixer::new(&context, RENDER_WIDTH, RENDER_HEIGHT) {
+                                Ok(mut mixer) => {
+                                    // Prioritize multi-pass shaders to test feedback rendering
+                                    let generators = self.registry.generators();
+                                    let shader_to_load = generators.iter()
+                                        .find(|s| s.metadata.passes.as_ref().map(|p| !p.is_empty()).unwrap_or(false))
+                                        .or_else(|| generators.first());
+
+                                    if let Some(shader) = shader_to_load {
+                                        log::info!("Loading shader: {} (has_passes: {})",
+                                            shader.name(),
+                                            shader.metadata.passes.as_ref().map(|p| !p.is_empty()).unwrap_or(false));
+                                        match Deck::new(&context, (*shader).clone(), RENDER_WIDTH, RENDER_HEIGHT) {
+                                            Ok(deck) => {
+                                                // Add deck to channel A (index 0)
+                                                if let Some(ch) = mixer.channel_mut(0) {
+                                                    ch.add_deck(deck);
+                                                    log::info!("Created deck in channel A with shader: {}", shader.name());
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::error!("Failed to create deck: {}", e);
+                                            }
+                                        }
+                                    }
+                                    self.mixer = Some(mixer);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to create mixer: {}", e);
+                                }
+                            }
+
+                            // Initialize egui
+                            self.egui_state = Some(egui_winit::State::new(
+                                self.egui_ctx.clone(),
+                                egui::ViewportId::ROOT,
+                                window_static,
+                                Some(window_static.scale_factor() as f32),
+                                None,
+                                Some(2 * 1024), // Max texture size
+                            ));
+
+                            self.egui_renderer = Some(egui_wgpu::Renderer::new(
+                                &context.device,
+                                context.surface_config.format,
+                                egui_wgpu::RendererOptions::default(),
+                            ));
+
+                            log::info!("egui initialized");
+
+                            // Create audio textures
+                            self.audio_textures = Some(AudioTextures::new(&context.device));
+                            log::info!("Audio textures created");
+
+                            // Register deck textures with egui for previews
+                            if let (Some(mixer), Some(egui_renderer)) = (&self.mixer, &mut self.egui_renderer) {
+                                // Register deck preview textures from all channels
+                                for (ch_idx, ch) in mixer.channels.iter().enumerate() {
+                                    for (deck_idx, deck_slot) in ch.decks.iter().enumerate() {
+                                        let texture_id = egui_renderer.register_native_texture(
+                                            &context.device,
+                                            &deck_slot.deck.texture_view,
+                                            wgpu::FilterMode::Linear,
+                                        );
+                                        self.deck_preview_textures.insert((ch_idx, deck_idx), texture_id);
+                                        log::info!("Registered ch{} deck {} texture for preview", ch_idx, deck_idx);
+                                    }
+                                }
+                                // Register main output texture
+                                let main_texture_id = egui_renderer.register_native_texture(
+                                    &context.device,
+                                    &mixer.composite_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                self.main_output_texture = Some(main_texture_id);
+                                log::info!("Registered main output texture for preview");
+                            }
+
+                            self.context = Some(context);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create render context: {}", e);
+                            event_loop.exit();
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to create window: {}", e);
+                    event_loop.exit();
+                }
+            }
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // Pass events to egui first
+        if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state) {
+            let response = egui_state.on_window_event(window, &event);
+            if response.consumed {
+                return;
+            }
+        }
+
+        match event {
+            WindowEvent::CloseRequested => {
+                log::info!("Close requested, exiting...");
+                event_loop.exit();
+            }
+            WindowEvent::Resized(new_size) => {
+                if let Some(context) = &mut self.context {
+                    context.resize(new_size);
+                    log::info!("Window resized to: {}x{}", new_size.width, new_size.height);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                self.render();
+                if let Some(window) = self.window {
+                    window.request_redraw();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl App {
+    /// Collect all data needed by the UI into a read-only snapshot
+    fn collect_ui_data(&self) -> UIData {
+        let generators: Vec<(String, usize)> = self.registry.generators().iter()
+            .enumerate().map(|(i, s)| (s.name(), i)).collect();
+        let filters: Vec<(String, usize)> = self.registry.filters().iter()
+            .enumerate().map(|(i, s)| (s.name(), i)).collect();
+        let shader_count = self.registry.count();
+
+        // Collect per-channel data
+        let channels: Vec<ChannelUIInfo> = self.mixer.as_ref()
+            .map(|m| m.channels.iter().enumerate().map(|(ch_idx, ch)| {
+                let decks = ch.decks.iter().enumerate().map(|(deck_idx, slot)| {
+                    let gen_params = ShaderParamsUI {
+                        shader_name: slot.deck.source_name().to_string(),
+                        params: collect_params(&slot.deck.generator_params),
+                    };
+                    let effects = slot.deck.effects.iter()
+                        .map(|e| {
+                            let params = ShaderParamsUI {
+                                shader_name: e.shader.name(),
+                                params: collect_params(&e.params),
+                            };
+                            (e.shader.name(), e.enabled, params)
+                        })
+                        .collect();
+                    DeckUIInfo {
+                        deck_idx,
+                        name: slot.deck.source_name().to_string(),
+                        opacity: slot.opacity,
+                        blend_mode: slot.blend_mode,
+                        solo: slot.solo,
+                        mute: slot.mute,
+                        scaling_mode: slot.deck.scaling_mode(),
+                        generator: gen_params,
+                        effects,
+                    }
+                }).collect();
+                let ch_effects = ch.effects.iter()
+                    .map(|e| {
+                        let params = ShaderParamsUI {
+                            shader_name: e.shader.name(),
+                            params: collect_params(&e.params),
+                        };
+                        (e.shader.name(), e.enabled, params)
+                    })
+                    .collect();
+                ChannelUIInfo {
+                    ch_idx,
+                    name: ch.name.clone(),
+                    opacity: ch.opacity,
+                    blend_mode: ch.blend_mode,
+                    decks,
+                    effects: ch_effects,
+                }
+            }).collect())
+            .unwrap_or_default();
+
+        let master_effect_info = self.mixer.as_ref()
+            .map(|m| m.master_effects.iter().map(|e| {
+                let params = ShaderParamsUI {
+                    shader_name: e.shader.name(),
+                    params: collect_params(&e.params),
+                };
+                (e.shader.name(), e.enabled, params)
+            }).collect())
+            .unwrap_or_default();
+
+        let modulation_sources = self.mixer.as_ref()
+            .map(|m| m.modulation.sources.iter().map(|src| {
+                match src {
+                    ModulationSource::LFO { waveform, frequency, phase, amplitude, bipolar } => {
+                        ModSourceUI::LFO { waveform: *waveform, frequency: *frequency, phase: *phase, amplitude: *amplitude, bipolar: *bipolar }
+                    }
+                    ModulationSource::AudioBand { band, smoothing } => {
+                        ModSourceUI::Audio { band: *band, smoothing: *smoothing }
+                    }
+                    ModulationSource::ADSR { attack, decay, sustain, release, stage, .. } => {
+                        ModSourceUI::ADSR { attack: *attack, decay: *decay, sustain: *sustain, release: *release, stage: *stage }
+                    }
+                    ModulationSource::StepSequencer { steps, rate, interpolation, bipolar } => {
+                        ModSourceUI::StepSequencer { steps: steps.clone(), rate: *rate, interpolation: *interpolation, bipolar: *bipolar }
+                    }
+                }
+            }).collect())
+            .unwrap_or_default();
+
+        let modulation_current_values = self.mixer.as_ref()
+            .map(|m| m.modulation.current_values().to_vec())
+            .unwrap_or_default();
+
+        let modulation_assignments = self.mixer.as_ref()
+            .map(|m| m.modulation.assignments.iter().map(|(k, v)| {
+                (k.clone(), v.iter().map(|pm| ModAssignmentUI {
+                    source_idx: pm.source_idx,
+                    amount: pm.amount,
+                }).collect())
+            }).collect())
+            .unwrap_or_default();
+
+        let audio = AudioUIData {
+            level: self.audio_data.level,
+            bass: self.audio_data.bass(),
+            mid: self.audio_data.mid(),
+            treble: self.audio_data.treble(),
+            bpm: self.audio_data.bpm,
+            beat_phase: self.audio_data.beat_phase(),
+            enabled: self.audio_input.is_some(),
+        };
+
+        let notifications = self.notifications.visible().iter().map(|n| NotificationUI {
+            level: n.level,
+            message: n.message.clone(),
+            progress: n.progress(),
+        }).collect();
+
+        // Crossfader state
+        let (crossfader, auto_crossfade_active, auto_crossfade_progress) = self.mixer.as_ref()
+            .map(|m| {
+                let active = m.is_crossfading();
+                let progress = m.auto_crossfade.as_ref().map_or(0.0, |a| a.progress());
+                (m.crossfader, active, progress)
+            })
+            .unwrap_or((0.0, false, 0.0));
+
+        UIData {
+            generators,
+            filters,
+            shader_count,
+            channels,
+            master_effect_info,
+            modulation_sources,
+            modulation_current_values,
+            modulation_assignments,
+            audio,
+            deck_preview_textures: self.deck_preview_textures.clone(),
+            main_output_texture: self.main_output_texture,
+            notifications,
+            crossfader,
+            auto_crossfade_active,
+            auto_crossfade_progress,
+            midi_learn_active: self.midi_mappings.learn_mode,
+            midi_learn_target: self.midi_mappings.learn_target.clone(),
+            transition_names: self.registry.transitions().iter().map(|s| s.name()).collect(),
+            active_transition_name: self.mixer.as_ref()
+                .and_then(|m| m.active_transition.as_ref())
+                .map(|t| t.name.clone()),
+            selected_deck: self.selected_deck,
+            selected_channel: self.selected_channel,
+            selected_master: self.selected_master,
+        }
+    }
+
+    /// Process all external inputs: shader hot-reload, audio, OSC, MIDI.
+    fn process_inputs(&mut self) {
+        // Poll for shader file changes (hot-reload)
+        let shader_events = self.registry.poll_changes();
+        for event in &shader_events {
+            match event {
+                ShaderEvent::Changed(path) => {
+                    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                    self.notifications.info(format!("Shader reloaded: {}", name));
+                }
+                ShaderEvent::Removed(path) => {
+                    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                    self.notifications.warn(format!("Shader removed: {}", name));
+                }
+                ShaderEvent::Error(path, err) => {
+                    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                    self.notifications.error(format!("Shader error in {}: {}", name, err));
+                }
+            }
+        }
+
+        // Poll for audio data
+        if let Some(audio_input) = &self.audio_input {
+            if let Some(data) = audio_input.get_latest() {
+                self.audio_data = data;
+            }
+        }
+
+        // Update audio textures
+        if let Some(context) = &self.context {
+            if let Some(audio_textures) = &self.audio_textures {
+                audio_textures.update(&context.queue, &self.audio_data);
+            }
+        }
+
+        // Process OSC messages (mapped to channel A for now)
+        if let Some(osc) = &self.osc_receiver {
+            while let Some(ctrl) = osc.try_recv() {
+                match ctrl {
+                    OscControl::SetOpacity(deck_idx, val) => {
+                        if let Some(mixer) = &mut self.mixer {
+                            if let Some(ch) = mixer.channel_mut(0) {
+                                ch.set_deck_opacity(deck_idx, val);
+                            }
+                        }
+                    }
+                    OscControl::SetSolo(deck_idx, enabled) => {
+                        if let Some(mixer) = &mut self.mixer {
+                            if let Some(ch) = mixer.channel_mut(0) {
+                                ch.set_deck_solo(deck_idx, enabled);
+                            }
+                        }
+                    }
+                    OscControl::SetMute(deck_idx, enabled) => {
+                        if let Some(mixer) = &mut self.mixer {
+                            if let Some(ch) = mixer.channel_mut(0) {
+                                ch.set_deck_mute(deck_idx, enabled);
+                            }
+                        }
+                    }
+                    OscControl::Unknown(addr, args) => {
+                        log::debug!("Unknown OSC: {} {:?}", addr, args);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Process MIDI messages → apply to mixer via mapping store
+        if let Some(midi) = &self.midi_input {
+            while let Some(msg) = midi.try_recv() {
+                let key = msg.mapping_key();
+                let value = msg.normalized_value();
+
+                // Learn mode: map next MIDI input to the learn target
+                if self.midi_mappings.learn_mode {
+                    self.midi_mappings.process_learn(key);
+                    continue;
+                }
+
+                // Normal mode: apply mapped value to mixer
+                if let Some(path) = self.midi_mappings.get(&key).cloned() {
+                    if let Some(mixer) = &mut self.mixer {
+                        midi::apply_midi_to_param(mixer, &path, value);
+                    }
+                } else {
+                    log::debug!("Unmapped MIDI: {} value={:.2}", key, value);
+                }
+            }
+        }
+    }
+
+    /// Re-register GPU textures with egui so preview IDs stay valid.
+    fn refresh_textures(&mut self) {
+        let Some(context) = &self.context else { return };
+        if let (Some(mixer), Some(egui_renderer)) = (&self.mixer, &mut self.egui_renderer) {
+            // Main output texture
+            if let Some(old_id) = self.main_output_texture.take() {
+                egui_renderer.free_texture(&old_id);
+            }
+            let main_texture_id = egui_renderer.register_native_texture(
+                &context.device,
+                &mixer.composite_view,
+                wgpu::FilterMode::Linear,
+            );
+            self.main_output_texture = Some(main_texture_id);
+
+            // Deck preview textures from all channels
+            for (ch_idx, ch) in mixer.channels.iter().enumerate() {
+                for (deck_idx, deck_slot) in ch.decks.iter().enumerate() {
+                    let key = (ch_idx, deck_idx);
+                    if let Some(old_id) = self.deck_preview_textures.get(&key) {
+                        egui_renderer.free_texture(old_id);
+                    }
+                    let new_id = egui_renderer.register_native_texture(
+                        &context.device,
+                        &deck_slot.deck.texture_view,
+                        wgpu::FilterMode::Linear,
+                    );
+                    self.deck_preview_textures.insert(key, new_id);
+                }
+            }
+        }
+    }
+
+    /// Apply UI-driven state changes that don't touch the engine (selection, MIDI learn, notifications).
+    fn apply_ui_actions(&mut self, ui_actions: &ui::UIActions) {
+        // Handle deck selection (clears channel/master selection)
+        if let Some(sel) = ui_actions.select_deck {
+            self.selected_deck = Some(sel);
+            self.selected_channel = None;
+            self.selected_master = false;
+        }
+
+        // Handle channel selection (clears deck/master selection)
+        if let Some(ch) = ui_actions.select_channel {
+            self.selected_channel = Some(ch);
+            self.selected_deck = None;
+            self.selected_master = false;
+        }
+
+        // Handle master selection (clears deck/channel selection)
+        if ui_actions.select_master {
+            self.selected_master = true;
+            self.selected_deck = None;
+            self.selected_channel = None;
+        }
+
+        // Handle MIDI learn actions from UI
+        if let Some(ref path) = ui_actions.midi_learn_start {
+            self.midi_mappings.start_learn(path.clone());
+        }
+        if ui_actions.midi_learn_cancel {
+            self.midi_mappings.cancel_learn();
+        }
+
+        // Handle notification dismissals (process in reverse to keep indices valid)
+        let mut dismissals = ui_actions.notifications_to_dismiss.clone();
+        dismissals.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in dismissals {
+            self.notifications.dismiss(idx);
+        }
+    }
+
+    fn render(&mut self) {
+        self.notifications.update();
+        self.process_inputs();
+        self.refresh_textures();
+
+        let Some(window) = self.window else { return };
+        if self.context.is_none() { return; }
+
+        // Collect UI data and run egui frame
+        let ui_data = self.collect_ui_data();
+        let raw_input = {
+            let Some(egui_state) = &mut self.egui_state else { return };
+            egui_state.take_egui_input(window)
+        };
+        let mut ui_actions = ui::UIActions::new();
+        let full_output = self.egui_ctx.run(raw_input, |ctx| {
+            ui_actions = ui::panels::render_ui(ctx, &ui_data);
+        });
+        {
+            let Some(egui_state) = &mut self.egui_state else { return };
+            egui_state.handle_platform_output(window, full_output.platform_output);
+        }
+
+        // Apply all UI actions (engine state + selection/MIDI learn/notifications)
+        self.apply_engine_actions(&mut ui_actions);
+        self.apply_ui_actions(&ui_actions);
+
+        // Submit GPU frame
+        self.submit_frame(window, full_output.shapes, full_output.pixels_per_point, full_output.textures_delta);
+    }
+
+    /// Apply UI actions that mutate engine state (mixer, decks, effects, transitions).
+    fn apply_engine_actions(&mut self, ui_actions: &mut ui::UIActions) {
+        let Some(context) = &self.context else { return };
+        if let Some(mixer) = &mut self.mixer {
+            ui::state::apply_crossfader_actions(mixer, ui_actions);
+            ui::state::apply_channel_updates(mixer, ui_actions);
+            ui::state::apply_deck_updates(mixer, ui_actions);
+            ui::state::apply_scaling_mode_updates(mixer, ui_actions);
+            ui::state::apply_param_updates(mixer, ui_actions);
+            ui::state::apply_modulation_actions(mixer, ui_actions);
+        }
+        if let (Some(mixer), Some(egui_renderer)) = (&mut self.mixer, &mut self.egui_renderer) {
+            ui::state::apply_deck_and_effect_actions(
+                mixer,
+                context,
+                &self.registry,
+                ui_actions,
+                egui_renderer,
+                &mut self.deck_preview_textures,
+            );
+        }
+        if let Some(mixer) = &mut self.mixer {
+            ui::state::apply_transition_actions(mixer, context, &self.registry, ui_actions);
+        }
+        // Add new channel if requested
+        if ui_actions.add_channel {
+            if let Some(mixer) = &mut self.mixer {
+                match mixer.add_channel(context, RENDER_WIDTH, RENDER_HEIGHT) {
+                    Ok(idx) => {
+                        self.notifications.info(format!("Added channel {} (index {})",
+                            mixer.channels[idx].name, idx));
+                    }
+                    Err(e) => {
+                        log::error!("Failed to add channel: {}", e);
+                        self.notifications.error(format!("Error adding channel: {}", e));
+                    }
+                }
+            }
+        }
+        // Remove channel if requested
+        if let Some(ch_idx) = ui_actions.remove_channel {
+            if let Some(mixer) = &mut self.mixer {
+                let name = mixer.channels.get(ch_idx).map(|c| c.name.clone()).unwrap_or_default();
+                if mixer.remove_channel(ch_idx) {
+                    self.notifications.info(format!("Removed channel {}", name));
+                    // Fix selected_deck/selected_channel if they pointed at or beyond the removed channel
+                    if let Some((sel_ch, _)) = self.selected_deck {
+                        if sel_ch == ch_idx {
+                            self.selected_deck = None;
+                        } else if sel_ch > ch_idx {
+                            self.selected_deck = Some((sel_ch - 1, self.selected_deck.unwrap().1));
+                        }
+                    }
+                    if let Some(sel_ch) = self.selected_channel {
+                        if sel_ch == ch_idx {
+                            self.selected_channel = None;
+                        } else if sel_ch > ch_idx {
+                            self.selected_channel = Some(sel_ch - 1);
+                        }
+                    }
+                } else {
+                    self.notifications.error("Cannot remove channel (minimum 2 required)".to_string());
+                }
+            }
+        }
+    }
+
+    /// Render the mixer, blit to screen, overlay egui, and present.
+    fn submit_frame(
+        &mut self,
+        window: &Window,
+        shapes: Vec<egui::epaint::ClippedShape>,
+        pixels_per_point: f32,
+        textures_delta: egui::TexturesDelta,
+    ) {
+        let Some(context) = &self.context else { return };
+
+        // Acquire surface texture
+        let output = match context.surface.get_current_texture() {
+            Ok(output) => output,
+            Err(e) => {
+                log::error!("Failed to get surface texture: {}", e);
+                return;
+            }
+        };
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Tessellate egui shapes
+        let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
+
+        let Some(egui_renderer) = &mut self.egui_renderer else { return };
+
+        // Update egui textures
+        for (id, image_delta) in &textures_delta.set {
+            egui_renderer.update_texture(&context.device, &context.queue, *id, image_delta);
+        }
+
+        // Create encoder
+        let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder"),
+        });
+
+        // Render the mixer (all channels composited)
+        if let Some(mixer) = &mut self.mixer {
+            if let Err(e) = mixer.render(context, &self.audio_data) {
+                log::error!("Failed to render mixer: {}", e);
+            }
+        }
+
+        // Create bind group to blit mixer composite to screen
+        let bind_group = if let (Some(mixer), Some(blit_pipeline)) = (&self.mixer, &self.blit_pipeline) {
+            Some(blit_pipeline.create_bind_group(&context.device, &mixer.composite_view))
+        } else {
+            None
+        };
+
+        // Screen descriptor for egui
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [context.size.width, context.size.height],
+            pixels_per_point: window.scale_factor() as f32,
+        };
+
+        // Update egui buffers
+        egui_renderer.update_buffers(
+            &context.device,
+            &context.queue,
+            &mut encoder,
+            &paint_jobs,
+            &screen_descriptor,
+        );
+
+        // Render pass — blit mixer output + egui overlay
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Main Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            if let (Some(bind_group), Some(blit_pipeline)) = (&bind_group, &self.blit_pipeline) {
+                blit_pipeline.render(&mut render_pass, bind_group);
+            }
+
+            let mut render_pass_static = render_pass.forget_lifetime();
+            egui_renderer.render(&mut render_pass_static, &paint_jobs, &screen_descriptor);
+        }
+
+        // Free egui textures
+        for id in &textures_delta.free {
+            egui_renderer.free_texture(id);
+        }
+
+        // Submit and present
+        context.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .init();
+
+    log::info!("🎨 Varda VJ Software - Starting up...");
+
+    let event_loop = EventLoop::new()?;
+    let mut app = App::new();
+
+    event_loop.run_app(&mut app)
+        .map_err(|e| anyhow::anyhow!("Event loop error: {:?}", e))?;
+
+    Ok(())
+}
