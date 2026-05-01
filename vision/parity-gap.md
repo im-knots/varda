@@ -46,14 +46,14 @@
 1. ~~**A/B Channel routing with crossfader**~~ ✅ IMPLEMENTED
 2. ~~**MIDI controller support**~~ ✅ IMPLEMENTED
 3. ~~**Stability / crash resilience**~~ ✅ IMPLEMENTED
-4. **Multi-output** — need to send to projector while keeping UI on laptop
-5. **Basic projection mapping** — quad warping at minimum
+4. **Multi-output** — need to send to projector while keeping UI on laptop → DESIGNED ([spec/multi-output.md](/spec/multi-output.md)), three-layer architecture (Content → Surfaces → Outputs)
+5. **Projection mapping** — full spatial mapping system: 2D surface editor, camera-based projection, LED direct output, corner-pin calibration → DESIGNED ([spec/multi-output.md](/spec/multi-output.md))
 6. ~~**Auto-transitions**~~ ✅ IMPLEMENTED
 7. ~~**Per-channel effect chains**~~ ✅ IMPLEMENTED
 
 ### Tier 2 — Expected by Professionals
 8. ~~**MIDI learn / mapping UI**~~ ✅ IMPLEMENTED
-9. **Fullscreen output** — borderless fullscreen on target display
+9. **Fullscreen output** — borderless fullscreen on target display → covered by Phase 8a in multi-output spec
 10. **Performance monitoring** — FPS counter, GPU usage, frame timing
 11. **Undo/redo** — for parameter changes, deck additions, etc.
 12. ~~**Image/still support**~~ ✅ IMPLEMENTED
@@ -67,7 +67,7 @@
 18. **NDI input/output** — inter-app video sharing
 19. **Syphon / Spout** — inter-app video sharing (macOS / Windows)
 20. **MIDI clock sync** — lock to external tempo
-21. **Advanced projection mapping** — multi-surface, edge blending
+21. **Advanced projection mapping** — multi-surface (Phase 8d), 3D model import (Phase 8e), edge blending (Phase 8g)
 22. **Recording** — capture output to video file
 23. **Plugin API** — let users extend Varda with custom sources/effects
 24. **MIDI mapping persistence** — save/load mappings to config file
