@@ -196,11 +196,11 @@ Uses a **three-layer abstraction**: Content (channels, master) → Surfaces (nam
 
 | Task | Spec | Current State |
 |---|---|---|
-| Refactor RenderContext into SharedGPU + per-window surface | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Create/destroy output windows at runtime via UI | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Route content sources (channel/master/deck) to output windows | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Fullscreen borderless output on target monitor | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Multi-window event dispatch (WindowId routing in ApplicationHandler) | [multi-output.md](/spec/multi-output.md) | Not implemented |
+| Refactor RenderContext into SharedGPU + per-window surface | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Create/destroy output windows at runtime via UI | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Route content sources (channel/master/deck) to output windows | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Fullscreen borderless output on target monitor | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Multi-window event dispatch (WindowId routing in ApplicationHandler) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 
 **Depends on**: Phase 1 (mixer).
 **Delivers**: Multiple output windows showing different content, fullscreenable on projectors.

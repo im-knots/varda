@@ -6,6 +6,7 @@ pub mod widgets;
 use crate::mixer::CrossfadeEasing;
 use crate::modulation::{LFOWaveform, AudioBand, ADSRStage, StepInterpolation};
 use crate::params::ParamValue;
+use crate::renderer::context::OutputSource;
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
 /// Fixed render resolution for all decks and stage output (Full HD 1080p)
@@ -202,6 +203,28 @@ pub struct UIData {
     pub selected_channel: Option<usize>,
     /// Whether the master output is selected for detail view in bottom bar
     pub selected_master: bool,
+    /// Output windows state for UI display
+    pub output_windows: Vec<OutputWindowUI>,
+}
+
+/// Output window action from UI
+pub enum OutputAction {
+    /// Create a new output window with the given source
+    Create { source: OutputSource },
+    /// Close an output window by index
+    Close { idx: usize },
+    /// Change the source routing for an output window
+    SetSource { idx: usize, source: OutputSource },
+    /// Toggle fullscreen on an output window
+    ToggleFullscreen { idx: usize },
+}
+
+/// Snapshot of an output window's state for UI display
+#[derive(Clone)]
+pub struct OutputWindowUI {
+    pub name: String,
+    pub source: OutputSource,
+    pub is_fullscreen: bool,
 }
 
 /// Crossfader action from UI
@@ -271,6 +294,8 @@ pub struct UIActions {
     pub remove_channel: Option<usize>,
     /// Move a deck between channels: (source_ch_idx, source_deck_idx, target_ch_idx)
     pub deck_to_move: Option<(usize, usize, usize)>,
+    /// Output window actions
+    pub output_actions: Vec<OutputAction>,
 }
 
 impl UIActions {
@@ -305,6 +330,7 @@ impl UIActions {
             add_channel: false,
             remove_channel: None,
             deck_to_move: None,
+            output_actions: Vec::new(),
         }
     }
 }

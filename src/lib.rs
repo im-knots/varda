@@ -10,6 +10,7 @@ pub mod params;
 pub mod registry;
 pub mod renderer;
 pub mod scene;
+pub mod surface;
 pub mod ui;
 pub mod video;
 

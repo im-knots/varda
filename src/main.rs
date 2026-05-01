@@ -1,6 +1,7 @@
 use varda::*;
 use varda::modulation::ModulationSource;
-use varda::ui::{self, UIData, AudioUIData, ModSourceUI, ModAssignmentUI, NotificationUI, ShaderParamsUI, ChannelUIInfo, DeckUIInfo, collect_params, RENDER_WIDTH, RENDER_HEIGHT};
+use varda::renderer::context::{OutputWindow, OutputSource};
+use varda::ui::{self, UIData, AudioUIData, ModSourceUI, ModAssignmentUI, NotificationUI, OutputWindowUI, ShaderParamsUI, ChannelUIInfo, DeckUIInfo, collect_params, RENDER_WIDTH, RENDER_HEIGHT};
 use varda::ui::notifications::NotificationSystem;
 use winit::{
     application::ApplicationHandler,
@@ -40,6 +41,12 @@ struct App {
     selected_channel: Option<usize>,
     // Whether master output is selected for bottom bar detail view
     selected_master: bool,
+    // Output windows for multi-output
+    output_windows: Vec<OutputWindow>,
+    // Main window ID for event dispatch
+    main_window_id: Option<WindowId>,
+    // Pending output window creation (deferred to next resumed/event cycle since we need ActiveEventLoop)
+    pending_output_creates: Vec<OutputSource>,
 }
 
 impl App {
@@ -119,6 +126,9 @@ impl App {
             selected_deck: None,
             selected_channel: None,
             selected_master: false,
+            output_windows: Vec::new(),
+            main_window_id: None,
+            pending_output_creates: Vec::new(),
         }
     }
 }
@@ -136,6 +146,7 @@ impl ApplicationHandler for App {
 
                     // Leak window for 'static lifetime
                     let window_static: &'static Window = Box::leak(Box::new(window));
+                    self.main_window_id = Some(window_static.id());
                     self.window = Some(window_static);
 
                     // Create render context
@@ -250,33 +261,60 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        // Pass events to egui first
-        if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state) {
-            let response = egui_state.on_window_event(window, &event);
-            if response.consumed {
-                return;
-            }
-        }
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+        let is_main = self.main_window_id == Some(window_id);
 
-        match event {
-            WindowEvent::CloseRequested => {
-                log::info!("Close requested, exiting...");
-                event_loop.exit();
-            }
-            WindowEvent::Resized(new_size) => {
-                if let Some(context) = &mut self.context {
-                    context.resize(new_size);
-                    log::info!("Window resized to: {}x{}", new_size.width, new_size.height);
+        if is_main {
+            // Main window: pass events to egui first
+            if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state) {
+                let response = egui_state.on_window_event(window, &event);
+                if response.consumed {
+                    return;
                 }
             }
-            WindowEvent::RedrawRequested => {
-                self.render();
-                if let Some(window) = self.window {
-                    window.request_redraw();
+
+            match event {
+                WindowEvent::CloseRequested => {
+                    log::info!("Close requested, exiting...");
+                    event_loop.exit();
                 }
+                WindowEvent::Resized(new_size) => {
+                    if let Some(context) = &mut self.context {
+                        context.resize(new_size);
+                        log::info!("Window resized to: {}x{}", new_size.width, new_size.height);
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    self.render(event_loop);
+                    if let Some(window) = self.window {
+                        window.request_redraw();
+                    }
+                }
+                _ => {}
             }
-            _ => {}
+        } else {
+            // Output window events
+            match event {
+                WindowEvent::CloseRequested => {
+                    // Find and remove the output window
+                    if let Some(idx) = self.output_windows.iter().position(|o| o.window.id() == window_id) {
+                        let name = self.output_windows[idx].name.clone();
+                        self.output_windows.remove(idx);
+                        log::info!("Output window '{}' closed", name);
+                    }
+                }
+                WindowEvent::Resized(new_size) => {
+                    if let Some(context) = &self.context {
+                        if let Some(output) = self.output_windows.iter_mut().find(|o| o.window.id() == window_id) {
+                            output.resize(&context.device, new_size);
+                        }
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    // Output windows are rendered in the main render loop
+                }
+                _ => {}
+            }
         }
     }
 }
@@ -431,6 +469,11 @@ impl App {
             selected_deck: self.selected_deck,
             selected_channel: self.selected_channel,
             selected_master: self.selected_master,
+            output_windows: self.output_windows.iter().map(|o| OutputWindowUI {
+                name: o.name.clone(),
+                source: o.source.clone(),
+                is_fullscreen: o.is_fullscreen,
+            }).collect(),
         }
     }
 
@@ -598,13 +641,16 @@ impl App {
         }
     }
 
-    fn render(&mut self) {
+    fn render(&mut self, event_loop: &ActiveEventLoop) {
         self.notifications.update();
         self.process_inputs();
         self.refresh_textures();
 
         let Some(window) = self.window else { return };
         if self.context.is_none() { return; }
+
+        // Create any pending output windows
+        self.create_pending_outputs(event_loop);
 
         // Collect UI data and run egui frame
         let ui_data = self.collect_ui_data();
@@ -624,9 +670,106 @@ impl App {
         // Apply all UI actions (engine state + selection/MIDI learn/notifications)
         self.apply_engine_actions(&mut ui_actions);
         self.apply_ui_actions(&ui_actions);
+        self.apply_output_actions(&ui_actions);
+
+        // Render output windows
+        self.render_output_windows();
 
         // Submit GPU frame
         self.submit_frame(window, full_output.shapes, full_output.pixels_per_point, full_output.textures_delta);
+    }
+
+    /// Create pending output windows (deferred from UI actions to here where we have ActiveEventLoop)
+    fn create_pending_outputs(&mut self, event_loop: &ActiveEventLoop) {
+        let pending: Vec<OutputSource> = self.pending_output_creates.drain(..).collect();
+        for source in pending {
+            let idx = self.output_windows.len() + 1;
+            let name = format!("Output {}", idx);
+            let window_attrs = Window::default_attributes()
+                .with_title(format!("Varda - {}", name))
+                .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+
+            match event_loop.create_window(window_attrs) {
+                Ok(window) => {
+                    let window_static: &'static Window = Box::leak(Box::new(window));
+                    if let Some(context) = &self.context {
+                        match OutputWindow::new(context, window_static, name.clone(), source.clone()) {
+                            Ok(output) => {
+                                log::info!("Created output window '{}' with source: {}", name, source);
+                                self.output_windows.push(output);
+                            }
+                            Err(e) => {
+                                log::error!("Failed to create output window: {}", e);
+                                self.notifications.error(format!("Failed to create output: {}", e));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to create output window: {}", e);
+                    self.notifications.error(format!("Failed to create window: {}", e));
+                }
+            }
+        }
+    }
+
+    /// Apply output-related UI actions
+    fn apply_output_actions(&mut self, ui_actions: &ui::UIActions) {
+        // Process in reverse for removals
+        for action in &ui_actions.output_actions {
+            match action {
+                ui::OutputAction::Create { source } => {
+                    self.pending_output_creates.push(source.clone());
+                }
+                ui::OutputAction::Close { idx } => {
+                    if *idx < self.output_windows.len() {
+                        let name = self.output_windows[*idx].name.clone();
+                        self.output_windows.remove(*idx);
+                        log::info!("Closed output window '{}'", name);
+                    }
+                }
+                ui::OutputAction::SetSource { idx, source } => {
+                    if let Some(output) = self.output_windows.get_mut(*idx) {
+                        output.source = source.clone();
+                        log::info!("Output '{}' source changed to: {}", output.name, source);
+                    }
+                }
+                ui::OutputAction::ToggleFullscreen { idx } => {
+                    if let Some(output) = self.output_windows.get_mut(*idx) {
+                        output.toggle_fullscreen();
+                        log::info!("Output '{}' fullscreen: {}", output.name, output.is_fullscreen);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Render content to all output windows
+    fn render_output_windows(&self) {
+        let Some(context) = &self.context else { return };
+        let Some(mixer) = &self.mixer else { return };
+
+        for output in &self.output_windows {
+            // Resolve the content source to a texture view
+            let content_view = match &output.source {
+                OutputSource::Master => Some(&mixer.composite_view),
+                OutputSource::Channel(ch_idx) => {
+                    mixer.channels.get(*ch_idx).map(|ch| &ch.composite_view)
+                }
+                OutputSource::Deck(ch_idx, deck_idx) => {
+                    mixer.channels.get(*ch_idx)
+                        .and_then(|ch| ch.decks.get(*deck_idx))
+                        .map(|slot| &slot.deck.texture_view)
+                }
+            };
+
+            if let Some(view) = content_view {
+                output.render(context, view);
+            }
+
+            // Request redraw for next frame
+            output.window.request_redraw();
+        }
     }
 
     /// Apply UI actions that mutate engine state (mixer, decks, effects, transitions).

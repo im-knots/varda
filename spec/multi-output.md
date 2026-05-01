@@ -1,6 +1,6 @@
 # Multi-Output & Projection Mapping
 
-## Status: DRAFT
+## Status: DRAFT (Phase 8a IMPLEMENTED)
 
 ## Overview
 

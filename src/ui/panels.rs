@@ -2,7 +2,8 @@ use crate::mixer::CrossfadeEasing;
 use crate::params::ParamValue;
 use crate::modulation::{LFOWaveform, StepInterpolation};
 use crate::{BlendMode, ScalingMode};
-use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, ModSourceUI, NotificationUI, modulator_color};
+use crate::renderer::context::OutputSource;
+use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, OutputAction, ModSourceUI, NotificationUI, modulator_color};
 use super::widgets;
 
 /// Render the complete UI and return all collected actions/intents.
@@ -180,7 +181,102 @@ fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
 
         // Shader browser (moved from bottom bar)
         render_shader_browser(ui, data, actions);
+
+        ui.add_space(10.0);
+        ui.separator();
+
+        // Output windows management
+        render_output_section(ui, data, actions);
     });
+}
+
+/// Render the output windows management section
+fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    ui.heading("📺 Outputs");
+
+    // New output button
+    ui.horizontal(|ui| {
+        if ui.button("+ New Output").clicked() {
+            actions.output_actions.push(OutputAction::Create {
+                source: OutputSource::Master,
+            });
+        }
+    });
+
+    // List existing output windows
+    if data.output_windows.is_empty() {
+        ui.label(egui::RichText::new("No output windows").small().color(egui::Color32::GRAY));
+    } else {
+        for (idx, output) in data.output_windows.iter().enumerate() {
+            egui::Frame::default()
+                .inner_margin(6.0)
+                .corner_radius(4.0)
+                .fill(egui::Color32::from_rgb(30, 30, 45))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&output.name).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("✕").on_hover_text("Close output").clicked() {
+                                actions.output_actions.push(OutputAction::Close { idx });
+                            }
+                        });
+                    });
+
+                    // Source routing dropdown
+                    let current_source_label = match &output.source {
+                        OutputSource::Master => "Master".to_string(),
+                        OutputSource::Channel(ch_idx) => {
+                            data.channels.get(*ch_idx)
+                                .map(|ch| format!("Ch: {}", ch.name))
+                                .unwrap_or_else(|| format!("Channel {}", ch_idx))
+                        }
+                        OutputSource::Deck(ch_idx, dk_idx) => {
+                            format!("Ch{} Deck {}", ch_idx, dk_idx)
+                        }
+                    };
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Source:").small());
+                        egui::ComboBox::from_id_salt(format!("output_src_{}", idx))
+                            .selected_text(&current_source_label)
+                            .width(120.0)
+                            .show_ui(ui, |ui| {
+                                // Master option
+                                if ui.selectable_label(
+                                    output.source == OutputSource::Master,
+                                    "Master Mix",
+                                ).clicked() {
+                                    actions.output_actions.push(OutputAction::SetSource {
+                                        idx,
+                                        source: OutputSource::Master,
+                                    });
+                                }
+                                // Channel options
+                                for ch in &data.channels {
+                                    if ui.selectable_label(
+                                        output.source == OutputSource::Channel(ch.ch_idx),
+                                        format!("Channel {}", ch.name),
+                                    ).clicked() {
+                                        actions.output_actions.push(OutputAction::SetSource {
+                                            idx,
+                                            source: OutputSource::Channel(ch.ch_idx),
+                                        });
+                                    }
+                                }
+                            });
+                    });
+
+                    // Fullscreen toggle
+                    ui.horizontal(|ui| {
+                        let fs_label = if output.is_fullscreen { "⊡ Windowed" } else { "⊞ Fullscreen" };
+                        if ui.button(egui::RichText::new(fs_label).small()).clicked() {
+                            actions.output_actions.push(OutputAction::ToggleFullscreen { idx });
+                        }
+                    });
+                });
+            ui.add_space(4.0);
+        }
+    }
 }
 
 /// Render the bottom panel (crossfader strip + audio, modulation, shader browser)
