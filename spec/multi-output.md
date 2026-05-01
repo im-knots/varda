@@ -1,20 +1,30 @@
 # Multi-Output & Projection Mapping
 
-## Status: DRAFT (Phase 8a IMPLEMENTED)
+## Status: DRAFT (Phase 8a, 8b, 8c, 8d IMPLEMENTED)
 
 ## Overview
 
-Varda's output system uses a **three-layer abstraction** to model how visual content reaches physical displays:
+Varda's output system models the full path from content generation to physical display:
 
 ```
-Content (channels, master mix)
-    ↓  routing
-Surfaces (named regions in a 2D/3D stage model)
-    ↓  mapping
-Outputs (physical displays, projectors, LED controllers)
+Deck → Channel → Mixer/Master
+                      ↓  content routing
+                  Surfaces (named polygon regions, each picks a source)
+                      ↓  spatial mapping + warp
+                  Outputs (render assigned surfaces with per-surface calibration)
+                      ↓  display targeting
+                  Display/Projector (windowed or fullscreen on a specific monitor)
 ```
 
-This separation lets the performer think spatially ("put Channel A on the left LED panel") without coupling to the physical output hardware. The same stage layout can be recalibrated for different venues without changing content routing.
+This five-layer hierarchy scales from simple to complex:
+
+| Use Case | Layers Involved |
+|---|---|
+| 1 projector, no mapping | Decks → Channels → Output → Projector (surfaces auto-created, master mix goes fullscreen) |
+| 1 projector + projection mapping | Add surfaces with warp calibration, assign to output, pick display |
+| Multi-projector installation | Multiple outputs, each with different surface subsets, each on a different display |
+
+The key insight: **each layer is optional until you need it.** A VJ doing a simple club gig never touches surfaces. An installation artist uses all five layers.
 
 ### Why Three Layers (not two)
 
@@ -24,6 +34,30 @@ A simpler "content → output" model (route Channel A directly to Projector 1) b
 - The performer pre-produces a show at home and calibrates at the venue
 
 The **surface** layer is the bridge: it captures the venue's geometry (what screens/panels exist and where), while outputs capture the physical delivery (which projector/controller sends pixels there).
+
+### The Single-Projector, Multiple-Surfaces Problem
+
+The most common real-world case that demands the three-layer model: **one projector throws onto multiple distinct surfaces** showing different content. Examples:
+
+- A projector covers a main screen center-stage AND a floor area — different channels on each
+- A wide-throw projector illuminates three separate LED-style panels at different heights
+- A ceiling projector maps content onto a DJ booth face, tabletop, and a backdrop behind
+
+In a two-layer model, you'd need to manually composite the surfaces into a single output texture and apply a single warp — impossible without spatial awareness. With the three-layer model:
+
+1. **Surfaces** define _what_ and _where_: "Main Screen at center shows Master", "Floor shows Channel B"
+2. **Output** defines _how_: "Projector 1 is responsible for both surfaces"
+3. The rendering pipeline composites each surface's content at its spatial position, then applies per-surface warp so the projector's output aligns with the physical geometry
+
+The output window effectively renders a virtual camera view of the stage model, where each surface is a textured quad showing its routed content. The corner-pin calibration aligns each surface independently within that single projector's throw.
+
+**Data model implications:**
+- An `Output` has a `Vec<SurfaceAssignment>` — an ordered list of surfaces it renders
+- Each `SurfaceAssignment` carries per-surface warp/calibration data (corner-pin offsets relative to this output)
+- A `Surface` can be assigned to exactly one output (no overlapping ownership; edge blending in 8g relaxes this)
+- Surfaces not assigned to any output are "unrouted" — visible in the editor but not sent to any physical display
+
+This is the core of Phase 8d. Phases 8a-8c work with the simpler 1:1 case (one surface per output) to get the foundation in place.
 
 ### Quick Output Shortcut
 
@@ -40,27 +74,81 @@ Any of these can be routed to any surface:
 
 Multiple surfaces can share the same content source. A surface with no content assigned shows black.
 
+### Content Mapping Modes
+
+Each surface has a **content mapping mode** that controls how the source texture maps onto it:
+
+- **Fill** (default): The entire source texture is scaled to fill this surface. Each surface with the same source gets an independent, full copy of the content. Use this for surfaces that should each show the full image (e.g., mirrored screens, IMAG feeds).
+
+- **Mapped**: The surface's position on the 2D canvas determines which region of the source it displays. The canvas IS the content coordinate space — a surface at normalized position (0.2, 0.3) with size (0.1, 0.1) shows source UVs from (0.2, 0.3) to (0.3, 0.4). This is a spatial crop, not a scale.
+
+  Surfaces with the same source in Mapped mode **implicitly form a group** — each shows its slice of one continuous image. No explicit grouping UI needed.
+
+  **Example — sun stage design:**
+  - Center circle surface (Mapped, source: Channel A) → shows the center portion of Channel A
+  - Six triangle "sunbeam" surfaces around it (Mapped, source: Channel A) → each shows its spatial slice of Channel A
+  - Result: Channel A's content is spatially distributed across the whole sun shape
+  - The triangles could also be switched to a different source or to Fill mode independently
+
+**Decision**: Implicit grouping via same-source + Mapped mode, rather than explicit group objects. Rationale: simpler mental model, fewer UI concepts, and the canvas position already encodes the spatial relationship. If a user wants two independent mapped groups, they use different sources.
+
 ---
 
 ## Layer 2: Stage Model & Surfaces
 
-### 2D Surface Editor (Phase 8b)
+### Surface Data Model
 
-The primary interface for defining venue geometry. A 2D canvas where the user places, names, and arranges rectangular surfaces representing physical screens, LED panels, and projection areas.
+Surfaces are **polygons** — an ordered list of vertices in normalized canvas coordinates [0..1]. Rectangles are just 4-vertex polygons. This lets the user model triangles, circles (N-gon approximations), and arbitrary shapes for projection mapping.
+
+```
+Surface {
+    name: String,
+    vertices: Vec<[f32; 2]>,     // ordered polygon vertices, normalized [0..1]
+    source: OutputSource,
+    content_mapping: ContentMapping,
+    output_type: SurfaceOutputType,
+}
+```
+
+**Derived properties:**
+- Bounding box: min/max of all vertices — used for Mapped mode UV calculation and hit testing
+- Center: average of all vertices — used for labeling and selection
+
+### 2D Surface Editor
+
+Two UI modes for defining venue geometry:
+
+**Simple view** (right panel): A read-only mini canvas preview showing all surfaces as colored polygon outlines. An "Open Editor" button launches the full editor. Surface property controls (name, source, mapping mode, output type) remain in the right panel.
+
+**Full editor** (replaces deck view): Activated by clicking "Open Editor" in the right panel. A large dark canvas with configurable grid. Drawing tools and vertex editing. Close button returns to the normal deck view.
 
 **Surface properties:**
 - Name (e.g., "Main Screen", "Left LED", "DJ Booth Front")
-- Position and size on the canvas (in arbitrary units — the canvas represents the venue from a top-down or front-facing view)
-- Aspect ratio (locked or free)
+- Vertices: ordered polygon points on the canvas (normalized [0..1])
 - Content source assignment (channel, master, deck, or none)
+- Content mapping mode: **Fill** or **Mapped** (see Layer 1 above)
 - Output type: **Projection** or **LED Direct** (see Layer 3)
 
-**Editor features:**
-- Drag to place, resize, and reposition surfaces
-- Snap-to-grid optional
-- Named surfaces persist with the scene file
-- Live preview: each surface thumbnail shows what content is currently routed to it
-- The editor is a UI panel (likely a dedicated tab or central area), not a separate window
+**Full editor features:**
+- **Rectangle tool**: Click-drag creates a 4-vertex rectangle surface
+- **Polygon tool**: Click to place vertices, double-click or close-to-start to finish. Creates arbitrary polygon surfaces (triangles, pentagons, etc.)
+- **Circle/N-gon tool**: Click-drag creates a regular polygon approximation (configurable vertex count, 3–128)
+- **Edit mode**: Select a surface, then drag individual vertices to reshape. Visual handles on vertices.
+- **Click-to-select**: Click inside a surface to select it (ray-casting point-in-polygon hit test)
+- **Double-click edge**: Insert a new vertex on an edge at the click point (point-to-segment projection, snaps to grid)
+- **Duplicate** (D key or toolbar): Clone selected surface with grid-aligned offset
+- **Flip Horizontal/Vertical** (H/V keys or toolbar): Mirror surface vertices around bounding box center
+- **Auto-tool switching**: If a drawing tool is active and you click/drag inside an existing surface, automatically switch to Select mode (prevents accidental overlapping draws)
+- **Grid**: Configurable grid size (10%, 5%, 2.5%, 1.25%) with snap-to-grid toggle
+- **Delete**: Select surface + delete key or button
+- **Keyboard shortcuts**: S (Select), R (Rectangle), P (Polygon), C (Circle), Escape (cancel in-progress draw)
+- Named surfaces persist with the scene file (not yet implemented)
+
+**Polygon rendering in outputs**: Output windows render actual polygon shapes using a fan-triangulated vertex pipeline (`PolygonBlitPipeline`). UVs are computed relative to each polygon's bounding box. Triangles render as triangles, circles as circles — whatever shape is drawn in the stage editor appears in the output.
+
+**Decision**: Surfaces support arbitrary polygons (not just rectangles). Rationale: real venues have triangular LED panels, circular projection areas, and irregular shapes. The bounding-box-based Mapped mode UV mapping works naturally with polygons.
+
+**Decision**: No freehand/curve drawing for now. Straight-edge polygons cover the vast majority of real venue geometry.
 
 ### 3D Stage Model Import (Phase 8e — future)
 
@@ -70,93 +158,94 @@ Import a 3D model (OBJ or glTF) representing the venue. Named meshes in the mode
 - Camera placement matching physical projector positions
 
 ### Open Questions — Stage Model
-- Should surfaces support non-rectangular shapes (polygons, curves) in the 2D editor, or only rectangles?
 - For the 3D model path: OBJ (simpler) vs glTF (richer metadata, named meshes)?
 - Should the 2D canvas orientation be configurable (top-down vs front-facing)?
 
 ---
 
-## Layer 3: Physical Outputs
+## Layer 3: Outputs
 
-Two distinct output types, because the rendering strategy is fundamentally different:
+An output renders its assigned surfaces and sends the result to a **display target**. Outputs do NOT have a content source — they get content exclusively through surfaces.
 
-### Projection Output
+### Output Data Model
 
-A projector connected via display output (HDMI, DisplayPort, etc.). Implemented as a separate OS window (`winit::Window` + `wgpu::Surface`) that the user drags to the projector display and fullscreens.
+```
+OutputWindow {
+    name: String,
+    target: OutputTarget,                      // Windowed or Display { name, monitor_index }
+    surface_assignments: Vec<SurfaceAssignment>, // what to render
+    calibration_mode: bool,                      // whether calibration UI is active
+}
 
-**Projection rendering pipeline:**
-1. Render all content sources to offscreen textures (already done by the mixer)
-2. Build a virtual 3D scene: surfaces as textured quads, positioned per the stage model
-3. Place a virtual camera matching the physical projector's position/orientation/FOV
-4. Render the scene from that camera's perspective
-5. Output the result to the projector's window/surface
+SurfaceAssignment {
+    surface_idx: usize,
+    warp_corners: [[f32; 2]; 4],  // per-surface corner-pin in output-normalized [0..1]
+    enabled: bool,
+}
+```
 
-**Calibration — corner-pin method:**
-Rather than requiring the user to manually input camera position/rotation/FOV, use a **corner-pin calibration** workflow:
-1. The output window goes fullscreen on the projector
-2. Display a test pattern with known reference points (e.g., the 4 corners of each surface)
-3. User drags the projected corners to align with the physical surface corners
-4. System solves for the camera/homography matrix from the correspondences
+### Display Targeting
 
-This is intuitive — it's the same "drag corners to match" gesture VJs already understand — and mathematically derives the camera parameters automatically.
+Each output has a **display target** — where its window appears:
 
-**Warp settings** are stored per-output in the scene file and persist across sessions.
+- **Windowed**: A floating OS window the user can position and resize. Good for previewing, testing, and setups where you don't need fullscreen.
+- **Display** (e.g., "HDMI-1 (1920x1080)", "Built-in Retina Display"): Borderless fullscreen on a specific connected monitor. Available monitors are enumerated via `winit::ActiveEventLoop::available_monitors()` and listed in a dropdown. When a projector is plugged in, it appears automatically.
 
-### LED Direct Output
+This replaces the old "drag window to projector + click fullscreen" workflow with a single dropdown selection.
 
-An LED wall/panel connected via a pixel-mapping controller (or direct video output). Content is cropped and scaled to match the panel's exact pixel dimensions — no perspective warp needed.
+### Rendering Rules
 
-**LED rendering pipeline:**
-1. Render the content source to a texture
-2. Crop/scale the region corresponding to the surface's area
-3. Output the pixel data to the LED controller
+- **Output has surface assignments** → renders only those surfaces with per-surface warp (homography)
+- **Output has no surface assignments but surfaces exist** → renders all surfaces without warp (fallback)
+- **No surfaces exist at all** → renders the master mix as a fullscreen quad (basic setup)
 
-**LED output protocols (future — Phase 8f+):**
-- Direct video output (same as projection, but no warp — just crop/scale to the panel resolution)
+### Calibration — Corner-Pin Method
+
+Each surface assignment carries 4 warp corners (TL, TR, BR, BL) in output-normalized coordinates [0..1]. The calibration workflow:
+1. Assign surfaces to an output
+2. Select a display target (projector)
+3. Enter calibration mode (🔧 button)
+4. Drag corner handles to align with physical surfaces
+5. DLT homography solver computes a 3×3 perspective matrix per surface
+6. The polygon vertex shader applies the homography with perspective-correct UV interpolation
+
+**Warp settings** persist per-output in the scene file across sessions.
+
+### LED Direct Output (Phase 8f — future)
+
+An LED wall/panel connected via a pixel-mapping controller. Content is cropped and scaled to match the panel's exact pixel dimensions — no perspective warp needed.
+
+**LED output protocols (future):**
+- Direct video output (no warp — just crop/scale to panel resolution)
 - NDI (network video)
-- Art-Net / sACN (for LED pixel controllers) — stretch goal
+- Art-Net / sACN (for LED pixel controllers)
 
-### Output Management
+### Surface Source Routing Note
 
-Each output has:
-- A unique name
-- Type: Projection or LED Direct
-- One or more assigned surfaces (which surfaces this output is responsible for displaying)
-- Fullscreen toggle + target monitor selection
-- Calibration state (corner-pin data for projection, crop region for LED)
+Surfaces pull content from a source (Master, Channel, or Deck). This interacts with the crossfader: if Surface A pulls from Channel A and Surface B pulls from Channel B, the crossfader fades the *master mix* but doesn't affect these surfaces (they bypass master). Both surfaces need to be set to "Master" source if the crossfader should affect them. This is correct behavior — pulling from a specific channel is for installations where surfaces show independent content.
 
 ---
 
-## GPU Architecture Changes
-
-### Current (single output)
+## GPU Architecture — IMPLEMENTED
 
 ```
-RenderContext { device, queue, surface, surface_config, size }
+RenderContext { instance, adapter, device, queue, surface, surface_config, size }  ← main UI window
+OutputWindow { window, surface, surface_config, size, target, surface_assignments }  ← per output, 0..N
 ```
 
-The device, queue, and surface are bundled together. Only one window exists.
+All output windows share the main `RenderContext`'s device/queue. Each creates its own `wgpu::Surface`.
 
-### Target (multi-output)
+**Display targeting:** `OutputTarget::Windowed` or `OutputTarget::Display { name, monitor_index }`. Display selection uses `winit::ActiveEventLoop::available_monitors()` to enumerate connected displays. Selecting a display calls `window.set_fullscreen(Fullscreen::Borderless(Some(monitor)))`.
 
-```
-SharedGPU { device, queue, adapter }          ← created once at startup
-MainWindow { surface, surface_config, size }  ← the UI window (also hosts egui)
-OutputWindow { surface, surface_config, size, warp_state, source }  ← per output, 0..N
-```
+**winit integration:** `ApplicationHandler::window_event` receives `WindowId` — events are dispatched to the correct window. Each output window handles `Resized` and `RedrawRequested`. The main window additionally handles egui input.
 
-The `SharedGPU` is created from the main window's adapter (ensuring compatibility) and shared across all windows. Each output window creates its own `wgpu::Surface` but reuses the same device/queue.
+### Warp Pipeline — IMPLEMENTED
 
-**winit integration:** `ApplicationHandler::window_event` already receives `WindowId` — we dispatch events to the correct window. Each output window handles `Resized` and `RedrawRequested`. The main window additionally handles egui input.
-
-### Warp Pipeline
-
-A dedicated warp shader that takes:
-- Input: the content texture (from mixer)
-- Uniform: a 4x4 homography matrix (computed from corner-pin calibration)
-- Output: the warped result on the output surface
-
-For simple quad warp, this is a single fullscreen pass with UV remapping. For multi-surface per output (Phase 8d), it renders multiple warped quads in one pass.
+The polygon vertex shader (`polygon.wgsl`) applies a 3×3 homography matrix per surface:
+- **Forward homography**: Maps from surface bounding box corners → warp corners (DLT solver in `warp.rs`)
+- **Vertex transform**: `H * [x, y, 1]` → clip coords with projective `w = h_pos.z`
+- **Perspective-correct UVs**: GPU hardware interpolates UVs correctly via the projective divide
+- **Per-surface**: Each `SurfaceAssignment` gets its own homography uniform via `PolygonBlitPipeline`
 
 ---
 
@@ -165,16 +254,17 @@ For simple quad warp, this is a single fullscreen pass with UV remapping. For mu
 | Phase | Scope | Size | Depends On |
 |-------|-------|------|------------|
 | **8a** | Multi-window outputs + source routing (channel/master → output window) + fullscreen | M | Phase 1 |
-| **8b** | 2D surface editor (place/name rectangular surfaces, route content to surfaces) | M | 8a |
-| **8c** | Quad warp per output (corner-pin calibration, homography-based warp shader) | M | 8a |
-| **8d** | Multi-surface per output (one projector covers multiple surfaces with individual warp) | L | 8b, 8c |
+| **8b** | 2D surface editor: polygon surfaces, advanced stage editor with drawing tools, grid | M | 8a |
+| **8c** | Output-level warp (4-corner whole-frame) + assign surfaces to outputs | M | 8a, 8b |
+| **8d** | Per-surface warp within an output (individual corner-pin per surface) | L | 8c |
 | **8e** | 3D stage model import (OBJ/glTF) + 3D preview + camera-based projection mapping | XL | 8b, 8d |
 | **8f** | LED direct output (pixel-accurate crop/scale, no warp) | M | 8a, 8b |
 | **8g** | Edge blending for overlapping projectors | L | 8d |
 
 **Phase 8a** is the foundation — it generalizes the render context and proves multi-window works.
-**Phases 8b + 8c** together deliver "usable at a gig with projectors."
-**Phase 8d+** is the full spatial mapping vision.
+**Phase 8b** delivers the stage editor with polygon drawing tools for pre-production.
+**Phase 8c** delivers output warp + surface-to-output assignment — "usable at a gig with projectors."
+**Phase 8d+** is the full per-surface spatial mapping vision.
 
 ---
 

@@ -10,11 +10,20 @@ This document describes the target architecture for Varda. The existing prototyp
 [Deck] → [Deck FX] ─┐
 [Deck] → [Deck FX] ─┼─→ [Channel] → [Channel FX] ─┐
 [Deck] → [Deck FX] ─┘                               │
-                                                     ├─→ [Mixer] → [Master FX] → [Output(s)]
+                                                     ├─→ [Mixer] → [Master FX] → [Surfaces] → [Outputs] → [Display/Projector]
 [Deck] → [Deck FX] ─┐                               │
 [Deck] → [Deck FX] ─┼─→ [Channel] → [Channel FX] ─┘
 [Deck] → [Deck FX] ─┘
 ```
+
+**The five-layer hierarchy:**
+- **Deck**: Produces a texture (shader, video, image)
+- **Channel**: Composites multiple decks with per-deck opacity/blend
+- **Mixer/Master**: Crossfades channels, applies master FX → produces the master mix texture
+- **Surface**: A named polygon region that pulls content from a source (Master, Channel, or Deck). Defines *what* content goes *where* spatially.
+- **Output**: Renders assigned surfaces (with per-surface warp/calibration) onto a **display target** (windowed or a specific monitor/projector).
+
+Each layer is optional until needed. A simple 1-projector setup: Decks → Channel → Output → Projector (surfaces auto-created, no warp). Complex installations add surfaces for spatial mapping and multiple outputs for multiple displays.
 
 ### Subsystem Map
 

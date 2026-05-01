@@ -253,7 +253,9 @@ impl Channel {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: if i == 0 {
-                                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                                // Clear to transparent black so empty channels
+                                // don't occlude other channels during mixer compositing
+                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                             } else {
                                 wgpu::LoadOp::Load
                             },
@@ -272,7 +274,7 @@ impl Channel {
             context.queue.submit(std::iter::once(encoder.finish()));
         }
 
-        // If no decks, clear the composite texture
+        // If no decks, clear the composite texture to transparent
         if deck_render_info.is_empty() {
             let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Channel Clear Encoder"),
@@ -284,7 +286,7 @@ impl Channel {
                         view: &self.composite_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
                         },
                         depth_slice: None,

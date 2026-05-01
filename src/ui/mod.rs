@@ -7,6 +7,7 @@ use crate::mixer::CrossfadeEasing;
 use crate::modulation::{LFOWaveform, AudioBand, ADSRStage, StepInterpolation};
 use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
+use crate::surface::{ContentMapping, SurfaceOutputType};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
 /// Fixed render resolution for all decks and stage output (Full HD 1080p)
@@ -205,26 +206,104 @@ pub struct UIData {
     pub selected_master: bool,
     /// Output windows state for UI display
     pub output_windows: Vec<OutputWindowUI>,
+    /// Surfaces in the stage layout
+    pub surfaces: Vec<SurfaceUI>,
+    /// Whether the full-screen stage editor is open (replaces deck view)
+    pub stage_editor_open: bool,
+    /// Stage editor grid size (normalized, e.g. 0.05 = 20 divisions)
+    pub stage_editor_grid_size: f32,
+    /// Whether snap-to-grid is enabled in the stage editor
+    pub stage_editor_snap: bool,
+    /// Available display monitors (refreshed each frame)
+    pub available_monitors: Vec<MonitorInfo>,
+}
+
+/// Info about an available display monitor (for UI display selector)
+#[derive(Clone)]
+pub struct MonitorInfo {
+    pub name: String,
+    pub index: usize,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Output window action from UI
 pub enum OutputAction {
-    /// Create a new output window with the given source
-    Create { source: OutputSource },
+    /// Create a new output window
+    Create,
     /// Close an output window by index
     Close { idx: usize },
-    /// Change the source routing for an output window
-    SetSource { idx: usize, source: OutputSource },
-    /// Toggle fullscreen on an output window
-    ToggleFullscreen { idx: usize },
+    /// Set the display target for an output window (Windowed or a specific display)
+    SetTarget { idx: usize, target: crate::renderer::context::OutputTarget },
+    /// Assign a surface to this output (adds a SurfaceAssignment)
+    AssignSurface { output_idx: usize, surface_idx: usize },
+    /// Remove a surface assignment from this output
+    UnassignSurface { output_idx: usize, assignment_idx: usize },
+    /// Toggle calibration mode on an output
+    ToggleCalibration { idx: usize },
+    /// Update a warp corner for a surface assignment
+    SetWarpCorner { output_idx: usize, assignment_idx: usize, corner_idx: usize, position: [f32; 2] },
+    /// Reset warp to identity for a surface assignment
+    ResetWarp { output_idx: usize, assignment_idx: usize },
+}
+
+/// Snapshot of a surface assignment for UI display
+#[derive(Clone)]
+pub struct SurfaceAssignmentUI {
+    pub surface_idx: usize,
+    pub surface_name: String,
+    pub warp_corners: [[f32; 2]; 4],
+    pub enabled: bool,
 }
 
 /// Snapshot of an output window's state for UI display
 #[derive(Clone)]
 pub struct OutputWindowUI {
     pub name: String,
+    /// Current display target label (e.g. "Windowed", "HDMI-1 (1920x1080)")
+    pub target_label: String,
+    /// Whether currently targeting a display (vs windowed)
+    pub is_on_display: bool,
+    pub surface_assignments: Vec<SurfaceAssignmentUI>,
+    pub calibration_mode: bool,
+}
+
+/// Surface action from UI
+pub enum SurfaceAction {
+    /// Add a new rectangular surface
+    Add { name: String, source: OutputSource },
+    /// Add a polygon surface with specific vertices
+    AddPolygon { name: String, vertices: Vec<[f32; 2]>, source: OutputSource },
+    /// Remove a surface by index
+    Remove { idx: usize },
+    /// Update the vertices of a surface
+    UpdateVertices { idx: usize, vertices: Vec<[f32; 2]> },
+    /// Change the content source for a surface
+    SetSource { idx: usize, source: OutputSource },
+    /// Change the output type for a surface
+    SetOutputType { idx: usize, output_type: SurfaceOutputType },
+    /// Change the content mapping mode for a surface
+    SetContentMapping { idx: usize, mapping: ContentMapping },
+    /// Rename a surface
+    Rename { idx: usize, name: String },
+    /// Duplicate a surface (offset slightly so it's visible)
+    Duplicate { idx: usize },
+    /// Flip a surface horizontally (mirror around its bounding box center X)
+    FlipHorizontal { idx: usize },
+    /// Flip a surface vertically (mirror around its bounding box center Y)
+    FlipVertical { idx: usize },
+    /// Insert a vertex on an edge (after vertex at `after_vert_idx`)
+    InsertVertex { idx: usize, after_vert_idx: usize, position: [f32; 2] },
+}
+
+/// Snapshot of a surface for UI display
+#[derive(Clone)]
+pub struct SurfaceUI {
+    pub name: String,
+    pub vertices: Vec<[f32; 2]>,
     pub source: OutputSource,
-    pub is_fullscreen: bool,
+    pub content_mapping: ContentMapping,
+    pub output_type: SurfaceOutputType,
 }
 
 /// Crossfader action from UI
@@ -247,6 +326,8 @@ pub struct UIActions {
     pub shader_to_add: Option<(usize, usize)>,
     /// (ch_idx, path) — add an image file as a new deck to channel
     pub image_to_add: Option<(usize, std::path::PathBuf)>,
+    /// Channel index to open an image file dialog for (deferred to outside egui frame)
+    pub open_image_dialog_for_channel: Option<usize>,
     /// (ch_idx, color_rgba) — add a solid color deck to channel
     pub solid_color_to_add: Option<(usize, [f32; 4])>,
     /// (ch_idx, deck_idx) — remove deck from channel
@@ -296,6 +377,14 @@ pub struct UIActions {
     pub deck_to_move: Option<(usize, usize, usize)>,
     /// Output window actions
     pub output_actions: Vec<OutputAction>,
+    /// Surface actions
+    pub surface_actions: Vec<SurfaceAction>,
+    /// Toggle stage editor open/closed
+    pub toggle_stage_editor: bool,
+    /// Set stage editor grid size (normalized)
+    pub set_grid_size: Option<f32>,
+    /// Toggle snap-to-grid
+    pub toggle_snap: bool,
 }
 
 impl UIActions {
@@ -303,6 +392,7 @@ impl UIActions {
         Self {
             shader_to_add: None,
             image_to_add: None,
+            open_image_dialog_for_channel: None,
             solid_color_to_add: None,
             deck_to_remove: None,
             deck_updates: Vec::new(),
@@ -331,6 +421,10 @@ impl UIActions {
             remove_channel: None,
             deck_to_move: None,
             output_actions: Vec::new(),
+            surface_actions: Vec::new(),
+            toggle_stage_editor: false,
+            set_grid_size: None,
+            toggle_snap: false,
         }
     }
 }

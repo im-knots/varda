@@ -1,7 +1,10 @@
 use varda::*;
 use varda::modulation::ModulationSource;
-use varda::renderer::context::{OutputWindow, OutputSource};
-use varda::ui::{self, UIData, AudioUIData, ModSourceUI, ModAssignmentUI, NotificationUI, OutputWindowUI, ShaderParamsUI, ChannelUIInfo, DeckUIInfo, collect_params, RENDER_WIDTH, RENDER_HEIGHT};
+use varda::renderer::context::{OutputWindow, OutputSource, OutputTarget, SurfaceRenderInfo};
+use varda::surface::ContentMapping;
+use varda::surface::SurfaceManager;
+use varda::ui::{self, UIData, AudioUIData, ModSourceUI, ModAssignmentUI, NotificationUI, OutputWindowUI, SurfaceUI, ShaderParamsUI, ChannelUIInfo, DeckUIInfo, collect_params, RENDER_WIDTH, RENDER_HEIGHT};
+use varda::renderer::context::SurfaceAssignment;
 use varda::ui::notifications::NotificationSystem;
 use winit::{
     application::ApplicationHandler,
@@ -46,7 +49,15 @@ struct App {
     // Main window ID for event dispatch
     main_window_id: Option<WindowId>,
     // Pending output window creation (deferred to next resumed/event cycle since we need ActiveEventLoop)
-    pending_output_creates: Vec<OutputSource>,
+    pending_output_creates: Vec<()>,
+    // Cached monitor handles (refreshed each frame from event_loop)
+    cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
+    // Surface manager for 2D stage layout
+    surface_manager: SurfaceManager,
+    // Stage editor state
+    stage_editor_open: bool,
+    stage_editor_grid_size: f32,
+    stage_editor_snap: bool,
 }
 
 impl App {
@@ -129,6 +140,11 @@ impl App {
             output_windows: Vec::new(),
             main_window_id: None,
             pending_output_creates: Vec::new(),
+            cached_monitors: Vec::new(),
+            surface_manager: SurfaceManager::new(),
+            stage_editor_open: false,
+            stage_editor_grid_size: 0.05,
+            stage_editor_snap: true,
         }
     }
 }
@@ -471,8 +487,39 @@ impl App {
             selected_master: self.selected_master,
             output_windows: self.output_windows.iter().map(|o| OutputWindowUI {
                 name: o.name.clone(),
-                source: o.source.clone(),
-                is_fullscreen: o.is_fullscreen,
+                target_label: format!("{}", o.target),
+                is_on_display: matches!(o.target, OutputTarget::Display { .. }),
+                surface_assignments: o.surface_assignments.iter().map(|a| {
+                    let surface_name = self.surface_manager.surfaces.get(a.surface_idx)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_else(|| format!("Surface {}", a.surface_idx));
+                    ui::SurfaceAssignmentUI {
+                        surface_idx: a.surface_idx,
+                        surface_name,
+                        warp_corners: a.warp_corners,
+                        enabled: a.enabled,
+                    }
+                }).collect(),
+                calibration_mode: o.calibration_mode,
+            }).collect(),
+            surfaces: self.surface_manager.surfaces.iter().map(|s| SurfaceUI {
+                name: s.name.clone(),
+                vertices: s.vertices.clone(),
+                source: s.source.clone(),
+                content_mapping: s.content_mapping,
+                output_type: s.output_type,
+            }).collect(),
+            stage_editor_open: self.stage_editor_open,
+            stage_editor_grid_size: self.stage_editor_grid_size,
+            stage_editor_snap: self.stage_editor_snap,
+            available_monitors: self.cached_monitors.iter().enumerate().map(|(i, (name, handle))| {
+                let size = handle.size();
+                ui::MonitorInfo {
+                    name: name.clone(),
+                    index: i,
+                    width: size.width,
+                    height: size.height,
+                }
             }).collect(),
         }
     }
@@ -639,6 +686,17 @@ impl App {
         for idx in dismissals {
             self.notifications.dismiss(idx);
         }
+
+        // Handle stage editor toggles
+        if ui_actions.toggle_stage_editor {
+            self.stage_editor_open = !self.stage_editor_open;
+        }
+        if let Some(size) = ui_actions.set_grid_size {
+            self.stage_editor_grid_size = size;
+        }
+        if ui_actions.toggle_snap {
+            self.stage_editor_snap = !self.stage_editor_snap;
+        }
     }
 
     fn render(&mut self, event_loop: &ActiveEventLoop) {
@@ -651,6 +709,14 @@ impl App {
 
         // Create any pending output windows
         self.create_pending_outputs(event_loop);
+
+        // Refresh available monitors
+        self.cached_monitors = event_loop.available_monitors()
+            .map(|m| {
+                let name = m.name().unwrap_or_else(|| "Unknown".to_string());
+                (name, m)
+            })
+            .collect();
 
         // Collect UI data and run egui frame
         let ui_data = self.collect_ui_data();
@@ -671,6 +737,30 @@ impl App {
         self.apply_engine_actions(&mut ui_actions);
         self.apply_ui_actions(&ui_actions);
         self.apply_output_actions(&ui_actions);
+        self.apply_surface_actions(&ui_actions);
+
+        // Handle deferred file dialogs (must happen outside egui frame for macOS Finder focus)
+        if let Some(ch_idx) = ui_actions.open_image_dialog_for_channel {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp"])
+                .pick_file()
+            {
+                ui_actions.image_to_add = Some((ch_idx, path));
+                // Re-apply deck actions so the image gets loaded this frame
+                if let (Some(context), Some(mixer), Some(egui_renderer)) =
+                    (&self.context, &mut self.mixer, &mut self.egui_renderer)
+                {
+                    ui::state::apply_deck_and_effect_actions(
+                        mixer,
+                        context,
+                        &self.registry,
+                        &mut ui_actions,
+                        egui_renderer,
+                        &mut self.deck_preview_textures,
+                    );
+                }
+            }
+        }
 
         // Render output windows
         self.render_output_windows();
@@ -681,8 +771,8 @@ impl App {
 
     /// Create pending output windows (deferred from UI actions to here where we have ActiveEventLoop)
     fn create_pending_outputs(&mut self, event_loop: &ActiveEventLoop) {
-        let pending: Vec<OutputSource> = self.pending_output_creates.drain(..).collect();
-        for source in pending {
+        let pending: Vec<()> = self.pending_output_creates.drain(..).collect();
+        for _ in pending {
             let idx = self.output_windows.len() + 1;
             let name = format!("Output {}", idx);
             let window_attrs = Window::default_attributes()
@@ -693,9 +783,9 @@ impl App {
                 Ok(window) => {
                     let window_static: &'static Window = Box::leak(Box::new(window));
                     if let Some(context) = &self.context {
-                        match OutputWindow::new(context, window_static, name.clone(), source.clone()) {
+                        match OutputWindow::new(context, window_static, name.clone()) {
                             Ok(output) => {
-                                log::info!("Created output window '{}' with source: {}", name, source);
+                                log::info!("Created output window '{}'", name);
                                 self.output_windows.push(output);
                             }
                             Err(e) => {
@@ -718,8 +808,8 @@ impl App {
         // Process in reverse for removals
         for action in &ui_actions.output_actions {
             match action {
-                ui::OutputAction::Create { source } => {
-                    self.pending_output_creates.push(source.clone());
+                ui::OutputAction::Create => {
+                    self.pending_output_creates.push(());
                 }
                 ui::OutputAction::Close { idx } => {
                     if *idx < self.output_windows.len() {
@@ -728,46 +818,258 @@ impl App {
                         log::info!("Closed output window '{}'", name);
                     }
                 }
-                ui::OutputAction::SetSource { idx, source } => {
+                ui::OutputAction::SetTarget { idx, target } => {
                     if let Some(output) = self.output_windows.get_mut(*idx) {
-                        output.source = source.clone();
-                        log::info!("Output '{}' source changed to: {}", output.name, source);
+                        let monitor = match target {
+                            OutputTarget::Display { monitor_index, .. } => {
+                                self.cached_monitors.get(*monitor_index).map(|(_, h)| h.clone())
+                            }
+                            _ => None,
+                        };
+                        log::info!("Output '{}' target: {}", output.name, target);
+                        output.set_target(target.clone(), monitor);
                     }
                 }
-                ui::OutputAction::ToggleFullscreen { idx } => {
+                ui::OutputAction::AssignSurface { output_idx, surface_idx } => {
+                    if let Some(output) = self.output_windows.get_mut(*output_idx) {
+                        // Don't add duplicate assignments
+                        if !output.surface_assignments.iter().any(|a| a.surface_idx == *surface_idx) {
+                            if let Some(surface) = self.surface_manager.surfaces.get(*surface_idx) {
+                                let bb = surface.bounding_box();
+                                let assignment = SurfaceAssignment {
+                                    surface_idx: *surface_idx,
+                                    warp_corners: [
+                                        [bb.x, bb.y],
+                                        [bb.x + bb.width, bb.y],
+                                        [bb.x + bb.width, bb.y + bb.height],
+                                        [bb.x, bb.y + bb.height],
+                                    ],
+                                    enabled: true,
+                                };
+                                log::info!("Assigned surface '{}' to output '{}'", surface.name, output.name);
+                                output.surface_assignments.push(assignment);
+                            }
+                        }
+                    }
+                }
+                ui::OutputAction::UnassignSurface { output_idx, assignment_idx } => {
+                    if let Some(output) = self.output_windows.get_mut(*output_idx) {
+                        if *assignment_idx < output.surface_assignments.len() {
+                            output.surface_assignments.remove(*assignment_idx);
+                            log::info!("Removed surface assignment from output '{}'", output.name);
+                        }
+                    }
+                }
+                ui::OutputAction::ToggleCalibration { idx } => {
                     if let Some(output) = self.output_windows.get_mut(*idx) {
-                        output.toggle_fullscreen();
-                        log::info!("Output '{}' fullscreen: {}", output.name, output.is_fullscreen);
+                        output.calibration_mode = !output.calibration_mode;
+                        log::info!("Output '{}' calibration mode: {}", output.name, output.calibration_mode);
+                    }
+                }
+                ui::OutputAction::SetWarpCorner { output_idx, assignment_idx, corner_idx, position } => {
+                    if let Some(output) = self.output_windows.get_mut(*output_idx) {
+                        if let Some(assignment) = output.surface_assignments.get_mut(*assignment_idx) {
+                            if *corner_idx < 4 {
+                                assignment.warp_corners[*corner_idx] = *position;
+                            }
+                        }
+                    }
+                }
+                ui::OutputAction::ResetWarp { output_idx, assignment_idx } => {
+                    if let Some(output) = self.output_windows.get_mut(*output_idx) {
+                        if let Some(assignment) = output.surface_assignments.get_mut(*assignment_idx) {
+                            if let Some(surface) = self.surface_manager.surfaces.get(assignment.surface_idx) {
+                                let bb = surface.bounding_box();
+                                assignment.warp_corners = [
+                                    [bb.x, bb.y],
+                                    [bb.x + bb.width, bb.y],
+                                    [bb.x + bb.width, bb.y + bb.height],
+                                    [bb.x, bb.y + bb.height],
+                                ];
+                                log::info!("Reset warp for surface in output '{}'", output.name);
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    /// Render content to all output windows
+    /// Apply surface actions from UI
+    fn apply_surface_actions(&mut self, ui_actions: &ui::UIActions) {
+        for action in &ui_actions.surface_actions {
+            match action {
+                ui::SurfaceAction::Add { name, source } => {
+                    let idx = self.surface_manager.add_surface(name.clone(), source.clone());
+                    log::info!("Added surface '{}' (index {})", name, idx);
+                }
+                ui::SurfaceAction::AddPolygon { name, vertices, source } => {
+                    let idx = self.surface_manager.add_polygon_surface(name.clone(), vertices.clone(), source.clone());
+                    log::info!("Added polygon surface '{}' with {} vertices (index {})", name, vertices.len(), idx);
+                }
+                ui::SurfaceAction::Remove { idx } => {
+                    if *idx < self.surface_manager.surfaces.len() {
+                        let name = self.surface_manager.surfaces[*idx].name.clone();
+                        self.surface_manager.remove_surface(*idx);
+                        log::info!("Removed surface '{}'", name);
+                    }
+                }
+                ui::SurfaceAction::UpdateVertices { idx, vertices } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        surface.vertices = vertices.clone();
+                    }
+                }
+                ui::SurfaceAction::SetSource { idx, source } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        surface.source = source.clone();
+                        log::info!("Surface '{}' source changed to: {}", surface.name, source);
+                    }
+                }
+                ui::SurfaceAction::SetOutputType { idx, output_type } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        surface.output_type = *output_type;
+                        log::info!("Surface '{}' output type changed to: {}", surface.name, output_type);
+                    }
+                }
+                ui::SurfaceAction::SetContentMapping { idx, mapping } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        surface.content_mapping = *mapping;
+                        log::info!("Surface '{}' content mapping changed to: {}", surface.name, mapping);
+                    }
+                }
+                ui::SurfaceAction::Rename { idx, name } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        log::info!("Surface '{}' renamed to '{}'", surface.name, name);
+                        surface.name = name.clone();
+                    }
+                }
+                ui::SurfaceAction::Duplicate { idx } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get(*idx).cloned() {
+                        let mut dup = surface;
+                        dup.name = format!("{} (copy)", dup.name);
+                        // Offset by one grid step so the duplicate snaps to grid
+                        let offset = self.stage_editor_grid_size;
+                        for v in &mut dup.vertices {
+                            v[0] = (v[0] + offset).min(1.0);
+                            v[1] = (v[1] + offset).min(1.0);
+                        }
+                        let name = dup.name.clone();
+                        self.surface_manager.surfaces.push(dup);
+                        log::info!("Duplicated surface '{}' → '{}'", self.surface_manager.surfaces[*idx].name, name);
+                    }
+                }
+                ui::SurfaceAction::FlipHorizontal { idx } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        let bb = surface.bounding_box();
+                        let cx = bb.x + bb.width / 2.0;
+                        for v in &mut surface.vertices {
+                            v[0] = cx + (cx - v[0]);
+                        }
+                        log::info!("Flipped surface '{}' horizontally", surface.name);
+                    }
+                }
+                ui::SurfaceAction::FlipVertical { idx } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        let bb = surface.bounding_box();
+                        let cy = bb.y + bb.height / 2.0;
+                        for v in &mut surface.vertices {
+                            v[1] = cy + (cy - v[1]);
+                        }
+                        log::info!("Flipped surface '{}' vertically", surface.name);
+                    }
+                }
+                ui::SurfaceAction::InsertVertex { idx, after_vert_idx, position } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        if *after_vert_idx < surface.vertices.len() {
+                            surface.vertices.insert(after_vert_idx + 1, *position);
+                            log::info!("Inserted vertex on surface '{}' after vertex {}", surface.name, after_vert_idx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolve an OutputSource to a texture view from the mixer
+    fn resolve_source<'a>(mixer: &'a Mixer, source: &OutputSource) -> Option<&'a wgpu::TextureView> {
+        match source {
+            OutputSource::Master => Some(&mixer.composite_view),
+            OutputSource::Channel(ch_idx) => {
+                mixer.channels.get(*ch_idx).map(|ch| &ch.composite_view)
+            }
+            OutputSource::Deck(ch_idx, deck_idx) => {
+                mixer.channels.get(*ch_idx)
+                    .and_then(|ch| ch.decks.get(*deck_idx))
+                    .map(|slot| &slot.deck.texture_view)
+            }
+        }
+    }
+
+    /// Render content to all output windows using the surface layout.
+    /// If the output has surface assignments, only those surfaces are rendered (with per-surface warp).
+    /// If no assignments, all surfaces are rendered (no warp). If no surfaces at all, falls back to direct source blit.
     fn render_output_windows(&self) {
         let Some(context) = &self.context else { return };
         let Some(mixer) = &self.mixer else { return };
 
         for output in &self.output_windows {
-            // Resolve the content source to a texture view
-            let content_view = match &output.source {
-                OutputSource::Master => Some(&mixer.composite_view),
-                OutputSource::Channel(ch_idx) => {
-                    mixer.channels.get(*ch_idx).map(|ch| &ch.composite_view)
-                }
-                OutputSource::Deck(ch_idx, deck_idx) => {
-                    mixer.channels.get(*ch_idx)
-                        .and_then(|ch| ch.decks.get(*deck_idx))
-                        .map(|slot| &slot.deck.texture_view)
-                }
-            };
+            if self.surface_manager.surfaces.is_empty() {
+                // No surfaces — show master mix as fullscreen quad
+                output.render(context, &mixer.composite_view);
+            } else if !output.surface_assignments.is_empty() {
+                // Render only assigned surfaces, with per-surface warp
+                let render_infos: Vec<SurfaceRenderInfo<'_>> = output.surface_assignments.iter()
+                    .filter(|a| a.enabled)
+                    .filter_map(|assignment| {
+                        let surface = self.surface_manager.surfaces.get(assignment.surface_idx)?;
+                        let content_view = Self::resolve_source(mixer, &surface.source)?;
+                        let bb = surface.bounding_box();
+                        let (uv_scale, uv_offset) = match surface.content_mapping {
+                            ContentMapping::Fill => ([1.0, 1.0], [0.0, 0.0]),
+                            ContentMapping::Mapped => (
+                                [bb.width, bb.height],
+                                [bb.x, bb.y],
+                            ),
+                        };
+                        Some(SurfaceRenderInfo {
+                            content_view,
+                            vertices: &surface.vertices,
+                            bounding_box: [bb.x, bb.y, bb.width, bb.height],
+                            uv_scale,
+                            uv_offset,
+                            warp_corners: Some(assignment.warp_corners),
+                        })
+                    })
+                    .collect();
 
-            if let Some(view) = content_view {
-                output.render(context, view);
+                output.render_surfaces(context, &render_infos);
+            } else {
+                // No assignments — render all surfaces without warp (fallback)
+                let render_infos: Vec<SurfaceRenderInfo<'_>> = self.surface_manager.surfaces.iter()
+                    .filter_map(|surface| {
+                        let content_view = Self::resolve_source(mixer, &surface.source)?;
+                        let bb = surface.bounding_box();
+                        let (uv_scale, uv_offset) = match surface.content_mapping {
+                            ContentMapping::Fill => ([1.0, 1.0], [0.0, 0.0]),
+                            ContentMapping::Mapped => (
+                                [bb.width, bb.height],
+                                [bb.x, bb.y],
+                            ),
+                        };
+                        Some(SurfaceRenderInfo {
+                            content_view,
+                            vertices: &surface.vertices,
+                            bounding_box: [bb.x, bb.y, bb.width, bb.height],
+                            uv_scale,
+                            uv_offset,
+                            warp_corners: None,
+                        })
+                    })
+                    .collect();
+
+                output.render_surfaces(context, &render_infos);
             }
 
-            // Request redraw for next frame
             output.window.request_redraw();
         }
     }

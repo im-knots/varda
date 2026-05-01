@@ -212,5 +212,304 @@ impl BlitPipeline {
         self.set_opacity(queue, opacity);
         self.render(render_pass, bind_group);
     }
+
+    /// Create a bind group with its own params buffer baked in.
+    /// Use this when you need multiple surfaces with different UV transforms in one render pass.
+    pub fn create_bind_group_with_params(
+        &self,
+        device: &wgpu::Device,
+        texture_view: &wgpu::TextureView,
+        opacity: f32,
+        uv_scale: [f32; 2],
+        uv_offset: [f32; 2],
+    ) -> wgpu::BindGroup {
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Blit Params Buffer (per-surface)"),
+            contents: bytemuck::cast_slice(&[BlitParams {
+                opacity,
+                _pad: 0.0,
+                uv_scale,
+                uv_offset,
+                _pad2: [0.0, 0.0],
+            }]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blit Bind Group (per-surface)"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+}
+
+// === Polygon rendering pipeline ===
+
+/// Extended params for polygon pipeline — includes homography matrix for warp.
+/// Must match the PolygonParams struct in polygon.wgsl.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PolygonParams {
+    opacity: f32,
+    _pad: f32,
+    uv_scale: [f32; 2],
+    uv_offset: [f32; 2],
+    _pad2: [f32; 2],
+    // 3x3 homography matrix stored as 3 × vec4 (xyz used, w = 0 padding)
+    h_row0: [f32; 4],
+    h_row1: [f32; 4],
+    h_row2: [f32; 4],
+}
+
+impl PolygonParams {
+    /// Identity homography (no warp)
+    fn identity_homography() -> [[f32; 4]; 3] {
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]
+    }
+}
+
+/// Vertex for polygon rendering — position + UV
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PolygonVertex {
+    pub position: [f32; 2],
+    pub uv: [f32; 2],
+}
+
+impl PolygonVertex {
+    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<PolygonVertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 8,
+                shader_location: 1,
+            },
+        ],
+    };
+}
+
+/// Pipeline for rendering textured polygon surfaces using vertex buffers.
+pub struct PolygonBlitPipeline {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+}
+
+impl PolygonBlitPipeline {
+    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Polygon Blit Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Polygon Blit Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        // Combined vertex + fragment shader with homography support
+        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Polygon Warp Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/polygon.wgsl").into()),
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Polygon Blit Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader_module,
+                entry_point: Some("vs_main"),
+                buffers: &[PolygonVertex::LAYOUT],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Polygon Blit Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        Ok(Self { pipeline, bind_group_layout, sampler })
+    }
+
+    /// Create a bind group for a texture with UV transform and homography warp.
+    /// `homography` is a 3×3 matrix packed as 12 floats (3 rows × 4, with w padding).
+    /// Pass `None` for identity (no warp).
+    pub fn create_bind_group(
+        &self,
+        device: &wgpu::Device,
+        texture_view: &wgpu::TextureView,
+        uv_scale: [f32; 2],
+        uv_offset: [f32; 2],
+        homography: Option<&[f32; 12]>,
+    ) -> wgpu::BindGroup {
+        let h = homography.copied().unwrap_or_else(|| {
+            let id = PolygonParams::identity_homography();
+            [id[0][0], id[0][1], id[0][2], id[0][3],
+             id[1][0], id[1][1], id[1][2], id[1][3],
+             id[2][0], id[2][1], id[2][2], id[2][3]]
+        });
+
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Polygon Params Buffer"),
+            contents: bytemuck::cast_slice(&[PolygonParams {
+                opacity: 1.0,
+                _pad: 0.0,
+                uv_scale,
+                uv_offset,
+                _pad2: [0.0, 0.0],
+                h_row0: [h[0], h[1], h[2], h[3]],
+                h_row1: [h[4], h[5], h[6], h[7]],
+                h_row2: [h[8], h[9], h[10], h[11]],
+            }]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Polygon Blit Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(texture_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        })
+    }
+
+    /// Fan-triangulate polygon vertices and render.
+    /// `vertices` are in normalized canvas coords [0..1], UVs computed from bounding box.
+    pub fn render_polygon<'a>(
+        &'a self,
+        _device: &wgpu::Device,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+        vertex_buffer: &'a wgpu::Buffer,
+        num_triangles: u32,
+    ) {
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.draw(0..num_triangles * 3, 0..1);
+    }
+
+    /// Build a fan-triangulated vertex buffer from polygon vertices.
+    /// Returns (buffer, num_triangles).
+    /// UVs are set so that the bounding box maps to [0..1] (for Fill mode,
+    /// the blit shader's uv_scale/uv_offset handle the rest).
+    pub fn triangulate(
+        device: &wgpu::Device,
+        canvas_verts: &[[f32; 2]],
+        bb_x: f32, bb_y: f32, bb_w: f32, bb_h: f32,
+    ) -> (wgpu::Buffer, u32) {
+        let n = canvas_verts.len();
+        let num_tris = if n >= 3 { (n - 2) as u32 } else { 0 };
+
+        let mut gpu_verts: Vec<PolygonVertex> = Vec::with_capacity(num_tris as usize * 3);
+
+        if n >= 3 {
+            // Fan triangulation from vertex 0
+            let to_vert = |v: &[f32; 2]| -> PolygonVertex {
+                let u = if bb_w > 0.0 { (v[0] - bb_x) / bb_w } else { 0.0 };
+                let t = if bb_h > 0.0 { (v[1] - bb_y) / bb_h } else { 0.0 };
+                PolygonVertex {
+                    position: *v,
+                    uv: [u, t],
+                }
+            };
+
+            for i in 1..n - 1 {
+                gpu_verts.push(to_vert(&canvas_verts[0]));
+                gpu_verts.push(to_vert(&canvas_verts[i]));
+                gpu_verts.push(to_vert(&canvas_verts[i + 1]));
+            }
+        }
+
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Polygon Vertex Buffer"),
+            contents: bytemuck::cast_slice(&gpu_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        (buffer, num_tris)
+    }
 }
 

@@ -198,8 +198,8 @@ Uses a **three-layer abstraction**: Content (channels, master) → Surfaces (nam
 |---|---|---|
 | Refactor RenderContext into SharedGPU + per-window surface | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Create/destroy output windows at runtime via UI | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
-| Route content sources (channel/master/deck) to output windows | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
-| Fullscreen borderless output on target monitor | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Outputs get content through surfaces (no direct OutputSource on outputs) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Display target selector (enumerate monitors, fullscreen on selected display) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Multi-window event dispatch (WindowId routing in ApplicationHandler) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 
 **Depends on**: Phase 1 (mixer).
@@ -209,36 +209,63 @@ Uses a **three-layer abstraction**: Content (channels, master) → Surfaces (nam
 
 | Task | Spec | Current State |
 |---|---|---|
-| 2D canvas UI for placing/naming rectangular surfaces | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Route content (channel/master/deck) to surfaces | [multi-output.md](/spec/multi-output.md) | Not implemented |
+| Simple canvas UI for placing/naming rectangular surfaces | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Route content (channel/master/deck) to surfaces | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Content mapping modes (Fill / Mapped) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Surface-to-output compositing (surfaces render at canvas positions) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Surface data model: SurfaceRect → polygon vertices | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Advanced stage editor (replaces deck view, full-screen canvas) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Drawing tools: Rectangle, Polygon, Circle/N-gon | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Vertex editing mode (drag individual vertices to reshape) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Configurable grid with snap-to-grid toggle | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Right panel: read-only surface preview + Open Editor button | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Polygon rendering pipeline (fan-triangulated textured polygons in outputs) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Duplicate surface (D key, grid-aligned offset) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Flip surface H/V (H/V keys, mirror around bounding box center) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Click-to-select surface interiors (ray-casting) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Double-click edge to insert vertex (point-to-segment projection) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Auto-tool switch (drawing tools → Select when clicking inside surfaces) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| N-channel compositing fix (transparent clear, correct alpha blending) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Live preview thumbnails on surfaces in the editor | [multi-output.md](/spec/multi-output.md) | Not implemented |
 | Surface layout saved/loaded with scene file | [multi-output.md](/spec/multi-output.md) | Not implemented |
 
 **Depends on**: Phase 8a.
-**Delivers**: Visual stage layout editor for venue pre-production and spatial content routing.
+**Delivers**: Full stage layout editor with polygon drawing tools for venue pre-production.
+**Status**: ✅ COMPLETE (core — live preview thumbnails and scene persistence are stretch)
 
-### Phase 8c: Quad Warp & Calibration — Size: M
+### Phase 8c (Revised): Output Warp + Surface Assignment — Size: M
+
+Assign surfaces to outputs and apply output-level warp. This is the "show up at the venue" feature — plug in projectors, assign surfaces, warp to align.
 
 | Task | Spec | Current State |
 |---|---|---|
-| Warp shader (homography-based UV remapping) | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Corner-pin calibration UI (drag corners on fullscreen output) | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Derive camera/homography matrix from corner correspondences | [multi-output.md](/spec/multi-output.md) | Not implemented |
+| Surface-to-output assignment (dropdown/UI to assign surfaces to outputs) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Outputs only render assigned surfaces (unassigned = render all as fallback) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Warp shader (homography in polygon vertex shader, perspective-correct UV) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Homography math (DLT solve from 4 corner correspondences) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Forward homography (bbox corners → warp corners for vertex transform) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Calibration UI (drag corners in output management panel) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Display target selector (Windowed / specific monitor from dropdown) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Removed OutputSource from outputs (surfaces are the source) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Warp calibration saved with scene file | [multi-output.md](/spec/multi-output.md) | Not implemented |
 
-**Depends on**: Phase 8a.
-**Delivers**: Perspective-corrected projection output. Usable at a gig with projectors.
+**Depends on**: Phase 8a, 8b.
+**Delivers**: Multi-projector shows with surface assignment, display targeting, and perspective-corrected output. Usable at a gig.
+**Status**: ✅ COMPLETE (core — scene persistence deferred)
 
-### Phase 8d: Multi-Surface Per Output — Size: L
+### Phase 8d: Per-Surface Warp — Size: L
+
+Per-surface warp within a single output. One projector covers multiple surfaces, each with independent corner-pin calibration. The most common real-world projection mapping scenario (e.g., one projector covering main screen + floor + DJ booth).
 
 | Task | Spec | Current State |
 |---|---|---|
-| One output window renders multiple warped surfaces | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Per-surface warp calibration within a single output | [multi-output.md](/spec/multi-output.md) | Not implemented |
-| Surface selection/editing in calibration mode | [multi-output.md](/spec/multi-output.md) | Not implemented |
+| Per-surface warp corners (independent corner-pin within one output) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| One output renders multiple independently-warped surfaces | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Surface selection in calibration mode (drag corners per surface in calibration UI) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 
-**Depends on**: Phase 8b, 8c.
-**Delivers**: Single projector covering multiple venue surfaces (e.g., main screen + floor).
+**Depends on**: Phase 8c.
+**Delivers**: Single projector covering multiple venue surfaces with independent warp per surface.
+**Status**: ✅ COMPLETE
 
 ### Phase 8e: 3D Stage Model Import — Size: XL
 

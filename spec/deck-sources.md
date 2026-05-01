@@ -18,16 +18,29 @@ A Deck is an independent render unit that outputs a texture. The **source** is w
 - **Status**: IMPLEMENTED
 
 ### 2. Video File
-- **What**: Video file (MP4, MOV, AVI, etc.) decoded via ffmpeg
+- **What**: Video file (MP4, MOV, AVI, etc.)
 - **Resolution**: Decoded at native resolution, scaled to deck texture (see resolution-and-scaling.md)
-- **Codecs**: Whatever ffmpeg supports; HAP preferred for performance (GPU-native texture compression)
+- **Codec support — two paths**:
+  - **HAP path** (preferred for VJ content): HAP / HAP Alpha / HAP Q / HAP Q Alpha. These encode frames as GPU-compressed textures (S3TC/BCn). The CPU reads compressed blocks from the container and uploads directly to the GPU — near-zero CPU decode cost. This is the standard codec for professional VJ content.
+    - **HAP** → `BC1` (DXT1) — no alpha, smallest files
+    - **HAP Alpha** → `BC3` (DXT5) — with alpha channel
+    - **HAP Q** → `BC7` — higher visual quality, no alpha
+    - **HAP Q Alpha** → `BC7` + separate `BC3` alpha plane — best quality with alpha. **This is the target default for Varda.**
+  - **ffmpeg path** (fallback for everything else): H.264, ProRes, VP9, etc. Decoded to RGBA on the CPU via ffmpeg-next, then uploaded to a regular `Rgba8Unorm` texture. Higher CPU cost, but handles any codec.
+- **HAP implementation notes**:
+  - Container: MOV or AVI with HAP FourCC (`Hap1`, `Hap5`, `HapY`, `HapA`)
+  - Demux the container to get compressed texture data per frame (not decoded pixels)
+  - Upload as `wgpu::TextureFormat::Bc1RgbaUnorm` / `Bc3RgbaUnorm` / `Bc7RgbaUnorm` depending on variant
+  - Requires `wgpu::Features::TEXTURE_COMPRESSION_BC` (supported on all desktop GPUs)
+  - HAP Q Alpha has two texture planes (BC7 color + BC3 alpha) — combine in a shader pass or sample both in the blit shader
+  - The `snappy` crate handles HAP's optional Snappy decompression of the compressed blocks
 - **Playback Controls** (all required):
   - **Loop modes**: Loop, ping-pong (forward then reverse), one-shot, hold last frame
   - **Speed control**: Arbitrary speed multiplier (0.5×, 1×, 2×, etc.), reverse playback
   - **Beat-sync**: Lock video playback speed to detected BPM so loops align with music
   - **Scrub/seek**: Seek to arbitrary position, mappable to MIDI knob
   - **In/out points**: Define a sub-range of the video to play (loop within segment)
-- **Status**: IMPLEMENTED (basic — ffmpeg-next, missing most playback controls)
+- **Status**: IMPLEMENTED (basic — ffmpeg-next CPU decode only, HAP GPU path not yet implemented, missing most playback controls)
 
 ### 3. Image / Still
 - **What**: Static image file (PNG, JPG, BMP, TIFF, etc.)

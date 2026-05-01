@@ -332,8 +332,13 @@ impl Mixer {
         }
 
         // Fallback: opacity-based crossfade
+        // For 2 channels: crossfader drives the mix, multiplied by per-channel opacity
+        // For 3+ channels: per-channel opacity only (no crossfader)
         let opacities: Vec<f32> = if channel_count == 2 {
-            vec![1.0 - self.crossfader, self.crossfader]
+            vec![
+                (1.0 - self.crossfader) * self.channels[0].opacity,
+                self.crossfader * self.channels[1].opacity,
+            ]
         } else {
             self.channels.iter().map(|ch| ch.opacity).collect()
         };
@@ -348,7 +353,7 @@ impl Mixer {
             let pipeline = self.blend_blit_pipelines.get(&blend_mode)
                 .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
 
-            let effective_opacity = opacity * channel.opacity;
+            let effective_opacity = opacity;
             pipeline.set_opacity(&context.queue, effective_opacity);
 
             let bind_group = pipeline.create_bind_group(&context.device, &channel.composite_view);
