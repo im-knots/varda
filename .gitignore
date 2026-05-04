@@ -1,3 +1,6 @@
 /target
 .augment/
 .varda/
+intent/
+spec/
+vision/
