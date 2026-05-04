@@ -1,115 +1,185 @@
-//! Scene - Saveable preset for VJ configurations
+//! Scene configuration — serializable snapshot of the full VJ performance state.
+//!
+//! This is the data model for `.varda/scene.json`. It captures everything needed
+//! to reconstruct a show: channels, decks, effects, surfaces, outputs, warp, modulation.
 
-use crate::params::ParamValue;
 use crate::channel::BlendMode;
+use crate::modulation::ModulationEngine;
+use crate::params::ParamValue;
+use crate::surface::SurfaceManager;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
-/// Scene configuration - serializable snapshot of a VJ setup
+// ── Scene (top-level) ──────────────────────────────────────────────
+
+/// Full scene configuration — the root of `.varda/scene.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneConfig {
-    /// Scene name
-    pub name: String,
-    
-    /// Scene description
-    #[serde(default)]
-    pub description: String,
-    
-    /// Deck configurations
-    pub decks: Vec<DeckConfig>,
-    
-    /// Master effect chain (shader paths)
-    #[serde(default)]
-    pub master_effects: Vec<String>,
-    
-    /// Scene version for compatibility
+    /// File format version (for future migrations)
     #[serde(default = "default_version")]
     pub version: u32,
+
+    /// Channel configurations (ordered)
+    #[serde(default)]
+    pub channels: Vec<ChannelConfig>,
+
+    /// Crossfader position (0.0 = Ch 1, 1.0 = Ch 2)
+    #[serde(default)]
+    pub crossfader: f32,
+
+    /// Active transition shader name (None = opacity crossfade)
+    #[serde(default)]
+    pub active_transition: Option<String>,
+
+    /// Master effect chain
+    #[serde(default)]
+    pub master_effects: Vec<EffectConfig>,
+
+    /// 2D stage surface layout (already Serialize/Deserialize)
+    #[serde(default)]
+    pub surfaces: SurfaceManager,
+
+    /// Output window configurations
+    #[serde(default)]
+    pub outputs: Vec<OutputConfig>,
+
+    /// Modulation engine state (sources + assignments, already Serialize/Deserialize)
+    #[serde(default)]
+    pub modulation: ModulationEngine,
 }
 
-fn default_version() -> u32 { 1 }
+fn default_version() -> u32 { 2 }
 
-/// Deck configuration - serializable deck state
+// ── Channel ────────────────────────────────────────────────────────
+
+/// Serializable channel state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeckConfig {
-    /// Deck name/label
-    #[serde(default)]
+pub struct ChannelConfig {
     pub name: String,
-    
-    /// Source configuration
-    pub source: SourceConfig,
-    
-    /// Effect chain (shader paths)
+
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+
+    #[serde(default)]
+    pub blend_mode: BlendModeConfig,
+
+    #[serde(default)]
+    pub decks: Vec<DeckConfig>,
+
     #[serde(default)]
     pub effects: Vec<EffectConfig>,
-    
+}
+
+fn default_opacity() -> f32 { 1.0 }
+
+// ── Deck ───────────────────────────────────────────────────────────
+
+/// Serializable deck state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeckConfig {
+    /// Display name
+    #[serde(default)]
+    pub name: String,
+
+    /// Source configuration
+    pub source: SourceConfig,
+
+    /// Effect chain
+    #[serde(default)]
+    pub effects: Vec<EffectConfig>,
+
     /// Deck opacity (0.0 - 1.0)
     #[serde(default = "default_opacity")]
     pub opacity: f32,
-    
+
     /// Blend mode for compositing
     #[serde(default)]
     pub blend_mode: BlendModeConfig,
-    
+
     /// Mute state
     #[serde(default)]
     pub mute: bool,
-    
+
     /// Solo state
     #[serde(default)]
     pub solo: bool,
-    
+
     /// Z-index for layer ordering
     #[serde(default)]
     pub z_index: i32,
 }
 
-fn default_opacity() -> f32 { 1.0 }
+// ── Source ──────────────────────────────────────────────────────────
 
-/// Source configuration - what generates the base image
+/// What generates the base image for a deck.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SourceConfig {
     /// ISF shader generator
     Shader {
-        /// Path to shader file
         path: String,
-        /// Parameter values (name -> value)
         #[serde(default)]
-        params: std::collections::HashMap<String, ParamValue>,
+        params: HashMap<String, ParamValue>,
     },
-    /// Video file
+    /// Video file (ffmpeg or HAP)
     Video {
-        /// Path to video file
         path: String,
-        /// Loop playback
-        #[serde(default = "default_true")]
-        loop_playback: bool,
     },
     /// Static image
     Image {
-        /// Path to image file
         path: String,
     },
+    /// Solid color fill
+    SolidColor {
+        color: [f32; 4],
+    },
+    // Note: Camera decks are NOT persisted — cameras are re-detected on startup
 }
 
-fn default_true() -> bool { true }
+// ── Effect ─────────────────────────────────────────────────────────
 
-/// Effect configuration
+/// Serializable effect (ISF filter) state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EffectConfig {
-    /// Path to effect shader
+    /// Path to the ISF shader file
     pub path: String,
     /// Whether effect is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Parameter values
+    /// Parameter values (name -> value)
     #[serde(default)]
-    pub params: std::collections::HashMap<String, ParamValue>,
+    pub params: HashMap<String, ParamValue>,
 }
 
-/// Blend mode for serialization
+fn default_true() -> bool { true }
+
+// ── Output ─────────────────────────────────────────────────────────
+
+/// Serializable output window configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputConfig {
+    pub name: String,
+    /// Display target name (matched by monitor name on load). None = windowed.
+    #[serde(default)]
+    pub target_display: Option<String>,
+    /// Surface assignments with warp calibration
+    #[serde(default)]
+    pub surface_assignments: Vec<SurfaceAssignmentConfig>,
+}
+
+/// Per-surface warp calibration in an output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfaceAssignmentConfig {
+    pub surface_idx: usize,
+    pub warp_corners: [[f32; 2]; 4],
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+// ── Blend mode ─────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BlendModeConfig {
@@ -148,90 +218,24 @@ impl From<BlendModeConfig> for BlendMode {
     }
 }
 
+// ── I/O ────────────────────────────────────────────────────────────
+
 impl SceneConfig {
-    /// Create a new empty scene
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: String::new(),
-            decks: Vec::new(),
-            master_effects: Vec::new(),
-            version: 1,
-        }
-    }
-
-    /// Load a scene from a JSON file
+    /// Load from a JSON file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref();
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read scene file: {}", path.display()))?;
-
+        let content = std::fs::read_to_string(path.as_ref())
+            .with_context(|| format!("Failed to read scene file: {}", path.as_ref().display()))?;
         let scene: SceneConfig = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse scene file: {}", path.display()))?;
-
+            .with_context(|| format!("Failed to parse scene file: {}", path.as_ref().display()))?;
         Ok(scene)
     }
 
-    /// Save the scene to a JSON file
+    /// Save to a JSON file
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let path = path.as_ref();
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize scene")?;
-
-        std::fs::write(path, content)
-            .with_context(|| format!("Failed to write scene file: {}", path.display()))?;
-
+        std::fs::write(path.as_ref(), content)
+            .with_context(|| format!("Failed to write scene file: {}", path.as_ref().display()))?;
         Ok(())
     }
-
-    /// Add a deck configuration
-    pub fn add_deck(&mut self, deck: DeckConfig) {
-        self.decks.push(deck);
-    }
 }
-
-impl DeckConfig {
-    /// Create a new deck config with a shader source
-    pub fn from_shader(shader_path: impl Into<String>) -> Self {
-        Self {
-            name: String::new(),
-            source: SourceConfig::Shader {
-                path: shader_path.into(),
-                params: std::collections::HashMap::new(),
-            },
-            effects: Vec::new(),
-            opacity: 1.0,
-            blend_mode: BlendModeConfig::Normal,
-            mute: false,
-            solo: false,
-            z_index: 0,
-        }
-    }
-
-    /// Create a new deck config with a video source
-    pub fn from_video(video_path: impl Into<String>) -> Self {
-        Self {
-            name: String::new(),
-            source: SourceConfig::Video {
-                path: video_path.into(),
-                loop_playback: true,
-            },
-            effects: Vec::new(),
-            opacity: 1.0,
-            blend_mode: BlendModeConfig::Normal,
-            mute: false,
-            solo: false,
-            z_index: 0,
-        }
-    }
-
-    /// Add an effect to this deck
-    pub fn add_effect(&mut self, effect_path: impl Into<String>) {
-        self.effects.push(EffectConfig {
-            path: effect_path.into(),
-            enabled: true,
-            params: std::collections::HashMap::new(),
-        });
-    }
-}
-

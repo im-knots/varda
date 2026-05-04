@@ -1,0 +1,131 @@
+{
+  "version": 2,
+  "channels": [
+    {
+      "name": "Ch 1",
+      "opacity": 1.0,
+      "blend_mode": "normal",
+      "decks": [
+        {
+          "name": "rings",
+          "source": {
+            "type": "Shader",
+            "path": "shaders/rings.fs",
+            "params": {
+              "ring_count": 8.0,
+              "color1": [
+                0.0,
+                0.8,
+                1.0,
+                1.0
+              ],
+              "center_x": 0.5,
+              "color2": [
+                1.0,
+                0.2,
+                0.5,
+                1.0
+              ],
+              "bg_color": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "anim_speed": 1.0,
+              "ring_width": 0.4,
+              "center_y": 0.5
+            }
+          },
+          "effects": [
+            {
+              "path": "shaders/channel_mixer.fs",
+              "enabled": true,
+              "params": {
+                "gr": 0.0,
+                "gg": 1.0,
+                "rg": 0.0,
+                "bg_param": 0.0,
+                "gb": 0.0,
+                "rb": 1.8,
+                "bb": 1.0,
+                "rr": 1.0,
+                "br": 0.0
+              }
+            },
+            {
+              "path": "shaders/block_distort.fs",
+              "enabled": true,
+              "params": {
+                "shift_amount": 0.1,
+                "color_split": 0.0,
+                "scramble": 0.3,
+                "block_size": 8.0,
+                "anim_speed": 1.0
+              }
+            }
+          ],
+          "opacity": 1.0,
+          "blend_mode": "normal",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
+        }
+      ],
+      "effects": []
+    },
+    {
+      "name": "Ch 2",
+      "opacity": 1.0,
+      "blend_mode": "normal",
+      "decks": [
+        {
+          "name": "oscilloscope",
+          "source": {
+            "type": "Shader",
+            "path": "shaders/oscilloscope.fs",
+            "params": {
+              "anim_speed": 1.0,
+              "amplitude": 0.7,
+              "glow_amount": 0.5,
+              "freq_y": 2.0,
+              "color1": [
+                0.0,
+                1.0,
+                0.4,
+                1.0
+              ],
+              "bg_color": [
+                0.0,
+                0.02,
+                0.0,
+                1.0
+              ],
+              "line_width": 0.008,
+              "freq_x": 3.0,
+              "phase": 1.57
+            }
+          },
+          "effects": [],
+          "opacity": 1.0,
+          "blend_mode": "normal",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
+        }
+      ],
+      "effects": []
+    }
+  ],
+  "crossfader": 0.0,
+  "active_transition": null,
+  "master_effects": [],
+  "surfaces": {
+    "surfaces": []
+  },
+  "outputs": [],
+  "modulation": {
+    "sources": [],
+    "assignments": {}
+  }
+}

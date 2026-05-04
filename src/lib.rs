@@ -8,6 +8,7 @@ pub mod mixer;
 pub mod modulation;
 pub mod osc;
 pub mod params;
+pub mod persistence;
 pub mod registry;
 pub mod renderer;
 pub mod scene;

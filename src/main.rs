@@ -64,6 +64,8 @@ struct App {
     calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
     // Camera capture manager (shared camera sessions)
     camera_manager: varda::camera::CameraManager,
+    // Workspace persistence
+    workspace: varda::persistence::Workspace,
 }
 
 impl App {
@@ -158,6 +160,123 @@ impl App {
             library_panel_open: true,
             calibration_textures: Vec::new(),
             camera_manager: varda::camera::CameraManager::new(),
+            workspace: varda::persistence::Workspace::from_cwd()
+                .unwrap_or_else(|_| varda::persistence::Workspace::new(std::path::PathBuf::from("."))),
+        }
+    }
+}
+
+impl App {
+    /// Save the entire workspace to `.varda/`.
+    fn save_workspace(&self) {
+        if let Err(e) = self.workspace.ensure_dir() {
+            log::error!("Failed to create .varda directory: {}", e);
+            return;
+        }
+
+        // Save scene
+        if let Some(mixer) = &self.mixer {
+            let scene = varda::persistence::snapshot_scene(
+                mixer,
+                &self.surface_manager,
+                &self.output_windows,
+            );
+            match scene.save(self.workspace.scene_path()) {
+                Ok(()) => log::info!("Saved scene to {}", self.workspace.scene_path().display()),
+                Err(e) => log::error!("Failed to save scene: {}", e),
+            }
+        }
+
+        // Save MIDI mappings
+        if let Some(midi) = &self.midi_devices {
+            let midi_config = self.midi_mappings.to_config(&midi.devices);
+            match midi_config.save(self.workspace.midi_path()) {
+                Ok(()) => log::info!("Saved MIDI mappings to {}", self.workspace.midi_path().display()),
+                Err(e) => log::error!("Failed to save MIDI config: {}", e),
+            }
+        }
+
+        // Save stage prefs
+        let stage = varda::persistence::StagePrefs {
+            grid_size: self.stage_editor_grid_size,
+            snap: self.stage_editor_snap,
+            library_panel_open: self.library_panel_open,
+            stage_editor_open: self.stage_editor_open,
+        };
+        match stage.save(self.workspace.stage_path()) {
+            Ok(()) => log::info!("Saved stage prefs to {}", self.workspace.stage_path().display()),
+            Err(e) => log::error!("Failed to save stage prefs: {}", e),
+        }
+    }
+
+    /// Load workspace from `.varda/` if it exists. Called after RenderContext is ready.
+    fn load_workspace(&mut self, context: &RenderContext) {
+        if !self.workspace.exists() {
+            log::info!("No .varda/ directory found, starting fresh");
+            return;
+        }
+
+        // Load stage prefs first (doesn't need GPU)
+        if self.workspace.has_stage() {
+            match varda::persistence::StagePrefs::load(self.workspace.stage_path()) {
+                Ok(prefs) => {
+                    self.stage_editor_grid_size = prefs.grid_size;
+                    self.stage_editor_snap = prefs.snap;
+                    self.library_panel_open = prefs.library_panel_open;
+                    self.stage_editor_open = prefs.stage_editor_open;
+                    log::info!("Loaded stage prefs");
+                }
+                Err(e) => log::warn!("Failed to load stage prefs: {}", e),
+            }
+        }
+
+        // Load scene (channels, decks, effects, surfaces, modulation)
+        if self.workspace.has_scene() {
+            match varda::scene::SceneConfig::load(self.workspace.scene_path()) {
+                Ok(scene_config) => {
+                    match varda::persistence::restore_scene(&scene_config, context, &self.registry) {
+                        Ok(result) => {
+                            self.mixer = Some(result.mixer);
+                            self.surface_manager = result.surface_manager;
+                            // Output configs are stored but windows created lazily
+                            // (need ActiveEventLoop, handled in create_pending_outputs)
+                            for _output_config in &result.output_configs {
+                                self.pending_output_creates.push(());
+                            }
+                            for warn in &result.warnings {
+                                self.notifications.warn(warn.clone());
+                            }
+                            log::info!("Loaded scene with {} channels, {} surfaces, {} outputs",
+                                scene_config.channels.len(),
+                                scene_config.surfaces.surfaces.len(),
+                                scene_config.outputs.len());
+                        }
+                        Err(e) => {
+                            log::error!("Failed to restore scene: {}", e);
+                            self.notifications.error(format!("Failed to load scene: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to load scene file: {}", e);
+                    self.notifications.warn(format!("Failed to load scene: {}", e));
+                }
+            }
+        }
+
+        // Load MIDI mappings
+        if self.workspace.has_midi() {
+            match varda::midi::MidiConfig::load(self.workspace.midi_path()) {
+                Ok(midi_config) => {
+                    if let Some(midi) = &self.midi_devices {
+                        self.midi_mappings.load_from_config(&midi_config, &midi.devices);
+                        log::info!("Loaded {} MIDI mappings", midi_config.mappings.len());
+                    } else {
+                        log::info!("MIDI config found but no MIDI devices connected, mappings deferred");
+                    }
+                }
+                Err(e) => log::warn!("Failed to load MIDI config: {}", e),
+            }
         }
     }
 }
@@ -195,36 +314,40 @@ impl ApplicationHandler for App {
                                 }
                             }
 
-                            // Create Mixer with Channel+Mixer hierarchy
-                            match Mixer::new(&context, RENDER_WIDTH, RENDER_HEIGHT) {
-                                Ok(mut mixer) => {
-                                    // Prioritize multi-pass shaders to test feedback rendering
-                                    let generators = self.registry.generators();
-                                    let shader_to_load = generators.iter()
-                                        .find(|s| s.metadata.passes.as_ref().map(|p| !p.is_empty()).unwrap_or(false))
-                                        .or_else(|| generators.first());
+                            // Try to load workspace from .varda/, or create fresh mixer
+                            self.load_workspace(&context);
 
-                                    if let Some(shader) = shader_to_load {
-                                        log::info!("Loading shader: {} (has_passes: {})",
-                                            shader.name(),
-                                            shader.metadata.passes.as_ref().map(|p| !p.is_empty()).unwrap_or(false));
-                                        match Deck::new(&context, (*shader).clone(), RENDER_WIDTH, RENDER_HEIGHT) {
-                                            Ok(deck) => {
-                                                // Add deck to channel A (index 0)
-                                                if let Some(ch) = mixer.channel_mut(0) {
-                                                    ch.add_deck(deck);
-                                                    log::info!("Created deck in channel A with shader: {}", shader.name());
+                            if self.mixer.is_none() {
+                                // No saved scene — create default Mixer
+                                match Mixer::new(&context, RENDER_WIDTH, RENDER_HEIGHT) {
+                                    Ok(mut mixer) => {
+                                        // Load first available shader into channel A
+                                        let generators = self.registry.generators();
+                                        let shader_to_load = generators.iter()
+                                            .find(|s| s.metadata.passes.as_ref().map(|p| !p.is_empty()).unwrap_or(false))
+                                            .or_else(|| generators.first());
+
+                                        if let Some(shader) = shader_to_load {
+                                            log::info!("Loading shader: {} (has_passes: {})",
+                                                shader.name(),
+                                                shader.metadata.passes.as_ref().map(|p| !p.is_empty()).unwrap_or(false));
+                                            match Deck::new(&context, (*shader).clone(), RENDER_WIDTH, RENDER_HEIGHT) {
+                                                Ok(deck) => {
+                                                    if let Some(ch) = mixer.channel_mut(0) {
+                                                        ch.add_deck(deck);
+                                                        log::info!("Created deck in channel A with shader: {}", shader.name());
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    log::error!("Failed to create deck: {}", e);
                                                 }
                                             }
-                                            Err(e) => {
-                                                log::error!("Failed to create deck: {}", e);
-                                            }
                                         }
+                                        self.mixer = Some(mixer);
                                     }
-                                    self.mixer = Some(mixer);
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to create mixer: {}", e);
+                                    Err(e) => {
+                                        log::error!("Failed to create mixer: {}", e);
+                                    }
                                 }
                             }
 
@@ -312,7 +435,8 @@ impl ApplicationHandler for App {
 
             match event {
                 WindowEvent::CloseRequested => {
-                    log::info!("Close requested, exiting...");
+                    log::info!("Close requested, saving workspace and exiting...");
+                    self.save_workspace();
                     event_loop.exit();
                 }
                 WindowEvent::Resized(new_size) => {
@@ -751,6 +875,12 @@ impl App {
         }
         if ui_actions.toggle_library_panel {
             self.library_panel_open = !self.library_panel_open;
+        }
+
+        // Ctrl+S / Cmd+S: save workspace
+        if ui_actions.save_requested {
+            self.save_workspace();
+            self.notifications.info("💾 Workspace saved".to_string());
         }
     }
 

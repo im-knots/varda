@@ -519,6 +519,10 @@ pub struct Deck {
     /// Name of this deck's source
     source_name: String,
 
+    /// Original file path used to create this deck (for persistence).
+    /// Shader path, video path, or image path. None for solid color / camera.
+    source_path: Option<String>,
+
     /// Source type and pipeline (shader, video, or image)
     source: DeckSource,
 
@@ -727,8 +731,15 @@ impl Deck {
             passes,
         };
 
+        // Extract source path for persistence before shader is moved
+        let source_path = match &source {
+            DeckSource::Shader { shader, .. } => shader.file_path.clone(),
+            _ => None,
+        };
+
         Ok(Self {
             source_name,
+            source_path,
             source,
             generator_params,
             texture,
@@ -792,6 +803,7 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
+        let source_path_str = path.as_ref().to_string_lossy().to_string();
         let source_name = path.as_ref()
             .file_name()
             .and_then(|f| f.to_str())
@@ -939,6 +951,7 @@ impl Deck {
 
         Ok(Self {
             source_name,
+            source_path: Some(source_path_str),
             source,
             generator_params,
             texture,
@@ -961,6 +974,7 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
+        let source_path_str = path.as_ref().to_string_lossy().to_string();
         let img = image::open(&path)
             .with_context(|| format!("Failed to load image: {}", path.as_ref().display()))?;
         let rgba = img.to_rgba8();
@@ -1053,6 +1067,7 @@ impl Deck {
 
         Ok(Self {
             source_name,
+            source_path: Some(source_path_str),
             source,
             generator_params,
             texture,
@@ -1116,6 +1131,7 @@ impl Deck {
 
         Ok(Self {
             source_name,
+            source_path: None, // Solid color — no file path
             source,
             generator_params,
             texture,
@@ -1182,6 +1198,7 @@ impl Deck {
 
         Ok(Self {
             source_name,
+            source_path: None, // Camera — no file path
             source,
             generator_params,
             texture,
@@ -1200,6 +1217,30 @@ impl Deck {
     /// Get the source name (shader name, video filename, etc.)
     pub fn source_name(&self) -> &str {
         &self.source_name
+    }
+
+    /// Get the source file path (for persistence). None for solid color / camera.
+    pub fn source_path(&self) -> Option<&str> {
+        self.source_path.as_deref()
+    }
+
+    /// Get the source type as a string for serialization
+    pub fn source_type(&self) -> &str {
+        match &self.source {
+            DeckSource::Shader { .. } => "shader",
+            DeckSource::Video { .. } | DeckSource::HapVideo { .. } => "video",
+            DeckSource::Image { .. } => "image",
+            DeckSource::SolidColor { .. } => "solid_color",
+            DeckSource::Camera { .. } => "camera",
+        }
+    }
+
+    /// Get the solid color value (if source is a solid color)
+    pub fn solid_color(&self) -> Option<[f32; 4]> {
+        match &self.source {
+            DeckSource::SolidColor { color } => Some([color[0] as f32, color[1] as f32, color[2] as f32, color[3] as f32]),
+            _ => None,
+        }
     }
 
     /// Get the scaling mode (if applicable for this source type)

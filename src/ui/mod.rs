@@ -445,6 +445,8 @@ pub struct UIActions {
     pub camera_to_add: Option<(usize, crate::camera::CameraId)>,
     /// Rescan for camera devices
     pub camera_rescan: bool,
+    /// Save workspace requested (Ctrl+S / Cmd+S)
+    pub save_requested: bool,
 }
 
 impl UIActions {
@@ -497,6 +499,7 @@ impl UIActions {
             master_effect_to_move: None,
             camera_to_add: None,
             camera_rescan: false,
+            save_requested: false,
         }
     }
 }

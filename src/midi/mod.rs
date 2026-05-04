@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Mutex;
 
+use anyhow::Context as _;
 use midir::{MidiInput, MidiOutput};
 
 use crate::mixer::Mixer;
@@ -87,7 +88,7 @@ impl MidiMessage {
 
 /// Unique identifier for a MIDI control (for mapping).
 /// Includes device_id so the same CC# on different devices maps independently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MidiKey {
     /// CC message: (device_id, channel, cc_number)
     CC(DeviceId, u8, u8),
@@ -481,6 +482,99 @@ impl MidiMappingStore {
             .collect();
         list.sort_by_key(|(k, _)| k.device_id());
         list
+    }
+
+    /// Export mappings to a serializable config using device names instead of IDs.
+    pub fn to_config(&self, devices: &HashMap<DeviceId, MidiDeviceInfo>) -> MidiConfig {
+        let mappings = self.mappings.iter().map(|(key, path)| {
+            let device_name = devices.get(&key.device_id())
+                .map(|d| d.name.clone())
+                .unwrap_or_else(|| format!("unknown_{}", key.device_id()));
+            let (msg_type, channel, number) = match key {
+                MidiKey::CC(_, ch, cc) => ("cc".to_string(), *ch, *cc),
+                MidiKey::Note(_, ch, note) => ("note".to_string(), *ch, *note),
+            };
+            MidiMappingEntry {
+                device_name,
+                msg_type,
+                channel,
+                number,
+                param_path: path.clone(),
+            }
+        }).collect();
+        MidiConfig { version: 1, mappings }
+    }
+
+    /// Import mappings from config, resolving device names to current device IDs.
+    pub fn load_from_config(&mut self, config: &MidiConfig, devices: &HashMap<DeviceId, MidiDeviceInfo>) {
+        // Build name -> device_id lookup
+        let name_to_id: HashMap<&str, DeviceId> = devices.iter()
+            .map(|(id, info)| (info.name.as_str(), *id))
+            .collect();
+
+        for entry in &config.mappings {
+            let device_id = match name_to_id.get(entry.device_name.as_str()) {
+                Some(id) => *id,
+                None => {
+                    log::warn!("MIDI mapping references unknown device '{}', skipping: {} -> {}",
+                        entry.device_name, entry.device_name, entry.param_path);
+                    continue;
+                }
+            };
+            let key = match entry.msg_type.as_str() {
+                "cc" => MidiKey::CC(device_id, entry.channel, entry.number),
+                "note" => MidiKey::Note(device_id, entry.channel, entry.number),
+                _ => {
+                    log::warn!("Unknown MIDI message type '{}', skipping", entry.msg_type);
+                    continue;
+                }
+            };
+            self.set(key, entry.param_path.clone());
+        }
+    }
+}
+
+// ── MIDI Persistence Config ─────────────────────────────────────────
+
+/// Serializable MIDI configuration for `.varda/midi.json`.
+/// Uses device names (not IDs) so mappings survive device re-enumeration.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MidiConfig {
+    #[serde(default = "default_midi_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub mappings: Vec<MidiMappingEntry>,
+}
+
+fn default_midi_version() -> u32 { 1 }
+
+/// A single MIDI mapping entry (device name + CC/Note -> parameter path).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MidiMappingEntry {
+    pub device_name: String,
+    pub msg_type: String, // "cc" or "note"
+    pub channel: u8,
+    pub number: u8,
+    pub param_path: String,
+}
+
+impl MidiConfig {
+    /// Load from a JSON file
+    pub fn load<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(path.as_ref())
+            .with_context(|| format!("Failed to read MIDI config: {}", path.as_ref().display()))?;
+        let config: MidiConfig = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse MIDI config: {}", path.as_ref().display()))?;
+        Ok(config)
+    }
+
+    /// Save to a JSON file
+    pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
+        let content = serde_json::to_string_pretty(self)
+            .context("Failed to serialize MIDI config")?;
+        std::fs::write(path.as_ref(), content)
+            .with_context(|| format!("Failed to write MIDI config: {}", path.as_ref().display()))?;
+        Ok(())
     }
 }
 

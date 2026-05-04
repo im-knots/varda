@@ -41,6 +41,17 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
             render_bottom_panel(ui, data, &mut actions);
         });
 
+    // === TOP BAR: Save button + status ===
+    egui::TopBottomPanel::top("top_bar")
+        .exact_height(28.0)
+        .show(ctx, |ui| {
+            ui.horizontal_centered(|ui| {
+                if ui.button("💾 Save").on_hover_text("Save workspace (⌘S)").clicked() {
+                    actions.save_requested = true;
+                }
+            });
+        });
+
     // === CENTRAL AREA: Decks as columns ===
     egui::CentralPanel::default().show(ctx, |ui| {
         render_central_panel(ui, data, &mut actions);
@@ -347,6 +358,11 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
     }
 
     // === KEYBOARD SHORTCUTS (global) ===
+    // Ctrl+S / Cmd+S: save workspace
+    if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
+        actions.save_requested = true;
+    }
+
     // L key: toggle library panel (only if no text field has focus)
     if !ctx.wants_keyboard_input() {
         if ctx.input(|i| i.key_pressed(egui::Key::L)) {
