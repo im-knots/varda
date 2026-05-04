@@ -1,5 +1,5 @@
 //! MIDI input/output support for Varda
-//! Uses coremidi on macOS. Linux backend to be added later.
+//! Uses midir for cross-platform MIDI (CoreMIDI/ALSA/JACK/WinMM).
 //!
 //! Supports N simultaneous MIDI devices. Each device gets a unique `DeviceId`.
 //! MIDI mappings are device-specific so two controllers can have the same CC#
@@ -9,6 +9,9 @@ pub mod apc_mini;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::Mutex;
+
+use midir::{MidiInput, MidiOutput};
 
 use crate::mixer::Mixer;
 use crate::modulation::ModulationSource;
@@ -155,15 +158,11 @@ pub struct MidiDeviceManager {
     pub devices: HashMap<DeviceId, MidiDeviceInfo>,
     /// Next device ID to assign.
     next_device_id: DeviceId,
-    /// coremidi state (macOS)
-    #[cfg(target_os = "macos")]
-    client: coremidi::Client,
-    #[cfg(target_os = "macos")]
-    input_ports: Vec<coremidi::InputPort>,
-    #[cfg(target_os = "macos")]
-    output_port: coremidi::OutputPort,
-    #[cfg(target_os = "macos")]
-    destinations: Vec<(DeviceId, coremidi::Destination)>,
+    /// Held alive so callbacks keep firing.
+    input_connections: Vec<midir::MidiInputConnection<()>>,
+    /// Output connections keyed by DeviceId. Mutex for interior mutability
+    /// (MidiOutputConnection::send requires &mut self, but send_raw takes &self).
+    output_connections: HashMap<DeviceId, Mutex<midir::MidiOutputConnection>>,
 }
 
 impl MidiDeviceManager {
@@ -171,154 +170,148 @@ impl MidiDeviceManager {
     pub fn new() -> anyhow::Result<Self> {
         let (sender, receiver) = channel();
 
-        #[cfg(target_os = "macos")]
-        {
-            let client = coremidi::Client::new("Varda MIDI")
-                .map_err(|e| anyhow::anyhow!("Failed to create MIDI client: {:?}", e))?;
-            let output_port = client
-                .output_port("Varda Output")
-                .map_err(|e| anyhow::anyhow!("Failed to create MIDI output port: {:?}", e))?;
-
-            let mut mgr = Self {
-                receiver,
-                sender,
-                devices: HashMap::new(),
-                next_device_id: 0,
-                client,
-                input_ports: Vec::new(),
-                output_port,
-                destinations: Vec::new(),
-            };
-            mgr.scan_devices()?;
-            Ok(mgr)
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            drop(sender.clone()); // keep sender alive
-            log::warn!("MIDI not yet supported on this platform");
-            Ok(Self {
-                receiver,
-                sender,
-                devices: HashMap::new(),
-                next_device_id: 0,
-            })
-        }
+        let mut mgr = Self {
+            receiver,
+            sender,
+            devices: HashMap::new(),
+            next_device_id: 0,
+            input_connections: Vec::new(),
+            output_connections: HashMap::new(),
+        };
+        mgr.scan_devices()?;
+        Ok(mgr)
     }
 
     /// Scan for MIDI devices. Can be called again to rescan (hot-plug).
-    #[cfg(target_os = "macos")]
     pub fn scan_devices(&mut self) -> anyhow::Result<()> {
-        // Disconnect existing
-        self.input_ports.clear();
-        self.destinations.clear();
+        // Disconnect existing connections by dropping them
+        self.input_connections.clear();
+        self.output_connections.clear();
         self.devices.clear();
         self.next_device_id = 0;
 
-        // Build a map of destination names for matching sources to outputs
-        // Filter out offline (phantom/cached) endpoints
-        let dest_count = coremidi::Destinations::count();
-        let mut dest_names: Vec<(coremidi::Destination, String)> = Vec::new();
-        for i in 0..dest_count {
-            if let Some(dest) = coremidi::Destination::from_index(i) {
-                // Skip offline (phantom) destinations cached by CoreMIDI
-                let is_offline = dest.get_property(&coremidi::Properties::offline()).unwrap_or(false);
-                if is_offline {
-                    let name = dest.display_name().unwrap_or_default();
-                    log::debug!("MIDI: skipping offline destination: {}", name);
-                    continue;
-                }
-                let name = dest.display_name().unwrap_or_else(|| format!("Destination {}", i));
-                dest_names.push((dest, name));
-            }
-        }
+        // Snapshot output port names (throwaway MidiOutput, collect names, drop)
+        let output_port_names: Vec<String> = {
+            let midi_out = MidiOutput::new("Varda scan")
+                .map_err(|e| anyhow::anyhow!("Failed to create MidiOutput for scan: {}", e))?;
+            let ports = midi_out.ports();
+            ports.iter()
+                .map(|p| midi_out.port_name(p).unwrap_or_default())
+                .collect()
+        };
 
-        // Scan sources (input devices), filtering out offline endpoints
-        let source_count = coremidi::Sources::count();
-        log::info!("MIDI scan: {} source(s), {} destination(s) (after offline filter)", source_count, dest_count);
+        // Snapshot input port names (throwaway MidiInput, collect names, drop)
+        let input_port_names: Vec<String> = {
+            let midi_in = MidiInput::new("Varda scan")
+                .map_err(|e| anyhow::anyhow!("Failed to create MidiInput for scan: {}", e))?;
+            let ports = midi_in.ports();
+            ports.iter()
+                .map(|p| midi_in.port_name(p).unwrap_or_default())
+                .collect()
+        };
 
-        for i in 0..source_count {
-            if let Some(source) = coremidi::Source::from_index(i) {
-                // Skip offline (phantom) sources cached by CoreMIDI
-                let is_offline = source.get_property(&coremidi::Properties::offline()).unwrap_or(false);
-                if is_offline {
-                    let name = source.display_name().unwrap_or_default();
-                    log::debug!("MIDI: skipping offline source: {}", name);
-                    continue;
-                }
-                let name = source.display_name().unwrap_or_else(|| format!("MIDI Source {}", i));
-                let device_id = self.next_device_id;
-                self.next_device_id += 1;
+        log::info!("MIDI scan: {} input(s), {} output(s)", input_port_names.len(), output_port_names.len());
 
-                // Check if there's a matching output destination
-                let matching_dest = dest_names.iter().find(|(_, dn)| {
-                    dn.to_lowercase() == name.to_lowercase()
-                });
-                let has_output = matching_dest.is_some();
-                if let Some((dest, _)) = matching_dest {
-                    self.destinations.push((device_id, dest.clone()));
-                }
+        // Track which output names have been matched to an input
+        let mut matched_outputs: Vec<bool> = vec![false; output_port_names.len()];
 
-                let profile = ControllerProfile::detect(&name);
-                log::info!("MIDI device [{}]: {} (profile={:?}, output={})",
-                    device_id, name, profile, has_output);
+        // For each input: assign DeviceId, check matching output, connect
+        for (i, in_name) in input_port_names.iter().enumerate() {
+            let device_id = self.next_device_id;
+            self.next_device_id += 1;
 
-                self.devices.insert(device_id, MidiDeviceInfo {
-                    id: device_id,
-                    name: name.clone(),
-                    enabled: true,
-                    has_output,
-                    profile,
-                });
-
-                // Create input port for this source
-                let tx = self.sender.clone();
-                let dev_id = device_id;
-                let port_name = format!("Varda Input {}", device_id);
-                let port = self.client
-                    .input_port(&port_name, move |packet_list| {
-                        for packet in packet_list.iter() {
-                            if let Some(msg) = MidiMessage::from_bytes(packet.data(), dev_id) {
-                                let _ = tx.send(msg);
-                            }
-                        }
-                    })
-                    .map_err(|e| anyhow::anyhow!("Failed to create MIDI port: {:?}", e))?;
-
-                port.connect_source(&source)
-                    .map_err(|e| anyhow::anyhow!("Failed to connect to MIDI source: {:?}", e))?;
-
-                self.input_ports.push(port);
-            }
-        }
-
-        // Also register destinations that have no matching source (output-only devices)
-        // (already filtered for offline above)
-        for (dest, dn) in &dest_names {
-            let already_matched = self.devices.values().any(|d| {
-                d.name.to_lowercase() == dn.to_lowercase()
+            // Check for a matching output port by name
+            let matching_out_idx = output_port_names.iter().position(|out_name| {
+                out_name.to_lowercase() == in_name.to_lowercase()
             });
-            if !already_matched {
-                let device_id = self.next_device_id;
-                self.next_device_id += 1;
-                let profile = ControllerProfile::detect(dn);
-                log::info!("MIDI output-only device [{}]: {} (profile={:?})", device_id, dn, profile);
-                self.destinations.push((device_id, dest.clone()));
-                self.devices.insert(device_id, MidiDeviceInfo {
-                    id: device_id,
-                    name: dn.clone(),
-                    enabled: true,
-                    has_output: true,
-                    profile,
-                });
+            let has_output = matching_out_idx.is_some();
+
+            if let Some(out_idx) = matching_out_idx {
+                matched_outputs[out_idx] = true;
+                self.connect_output(device_id, &output_port_names[out_idx]);
             }
+
+            let profile = ControllerProfile::detect(in_name);
+            log::info!("MIDI device [{}]: {} (profile={:?}, output={})",
+                device_id, in_name, profile, has_output);
+
+            self.devices.insert(device_id, MidiDeviceInfo {
+                id: device_id,
+                name: in_name.clone(),
+                enabled: true,
+                has_output,
+                profile,
+            });
+
+            // Connect input (fresh MidiInput per port — midir consumes it on connect)
+            let tx = self.sender.clone();
+            let dev_id = device_id;
+            let port_label = format!("Varda In {}", device_id);
+            match MidiInput::new(&port_label) {
+                Ok(midi_in) => {
+                    let ports = midi_in.ports();
+                    if i < ports.len() {
+                        match midi_in.connect(
+                            &ports[i],
+                            &port_label,
+                            move |_ts, data, _| {
+                                if let Some(msg) = MidiMessage::from_bytes(data, dev_id) {
+                                    let _ = tx.send(msg);
+                                }
+                            },
+                            (),
+                        ) {
+                            Ok(conn) => self.input_connections.push(conn),
+                            Err(e) => log::warn!("Failed to connect MIDI input {}: {}", in_name, e),
+                        }
+                    }
+                }
+                Err(e) => log::warn!("Failed to create MidiInput for {}: {}", in_name, e),
+            }
+        }
+
+        // Register unmatched outputs as output-only devices
+        for (j, out_name) in output_port_names.iter().enumerate() {
+            if matched_outputs[j] {
+                continue;
+            }
+            let device_id = self.next_device_id;
+            self.next_device_id += 1;
+            let profile = ControllerProfile::detect(out_name);
+            log::info!("MIDI output-only device [{}]: {} (profile={:?})", device_id, out_name, profile);
+            self.connect_output(device_id, out_name);
+            self.devices.insert(device_id, MidiDeviceInfo {
+                id: device_id,
+                name: out_name.clone(),
+                enabled: true,
+                has_output: true,
+                profile,
+            });
         }
 
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn scan_devices(&mut self) -> anyhow::Result<()> { Ok(()) }
+    /// Connect an output port by name and store the connection.
+    fn connect_output(&mut self, device_id: DeviceId, port_name: &str) {
+        match MidiOutput::new(&format!("Varda Out {}", device_id)) {
+            Ok(midi_out) => {
+                let ports = midi_out.ports();
+                let port = ports.iter().find(|p| {
+                    midi_out.port_name(p).map(|n| n == port_name).unwrap_or(false)
+                });
+                if let Some(port) = port {
+                    match midi_out.connect(port, &format!("Varda Out {}", device_id)) {
+                        Ok(conn) => {
+                            self.output_connections.insert(device_id, Mutex::new(conn));
+                        }
+                        Err(e) => log::warn!("Failed to connect MIDI output {}: {}", port_name, e),
+                    }
+                }
+            }
+            Err(e) => log::warn!("Failed to create MidiOutput for {}: {}", port_name, e),
+        }
+    }
 
     /// Get the next MIDI message (non-blocking). Skips messages from disabled devices.
     pub fn try_recv(&self) -> Option<MidiMessage> {
@@ -347,20 +340,15 @@ impl MidiDeviceManager {
     }
 
     /// Send raw MIDI bytes to a specific device.
-    #[cfg(target_os = "macos")]
     pub fn send_raw(&self, device_id: DeviceId, bytes: &[u8]) {
-        let packets = coremidi::PacketBuffer::new(0, bytes);
-        for (did, dest) in &self.destinations {
-            if *did == device_id {
-                if let Err(e) = self.output_port.send(dest, &packets) {
-                    log::warn!("Failed to send MIDI to device {}: {:?}", device_id, e);
+        if let Some(conn_mutex) = self.output_connections.get(&device_id) {
+            if let Ok(mut conn) = conn_mutex.lock() {
+                if let Err(e) = conn.send(bytes) {
+                    log::warn!("Failed to send MIDI to device {}: {}", device_id, e);
                 }
             }
         }
     }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn send_raw(&self, _device_id: DeviceId, _bytes: &[u8]) {}
 
     /// Get device info by ID.
     pub fn device(&self, id: DeviceId) -> Option<&MidiDeviceInfo> {

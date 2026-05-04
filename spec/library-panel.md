@@ -41,6 +41,8 @@ Each section is a collapsible header. Items within are a vertical scrollable lis
 
 **Video** — File browser / persistent collection of video files. Same drag-to-channel pattern.
 
+**Cameras** — Live-enumerated list of connected camera devices. Each entry shows device name. "🔄 Rescan" button re-enumerates devices (same manual pattern as MIDI — no polling). Drag to a channel to create a camera deck. The same camera can be dragged to multiple decks — they share the underlying capture session via `CameraManager`. Works on macOS (AVFoundation) and Linux (V4L2).
+
 **Audio** — Reserved for audio-reactive sources and audio file playback (future).
 
 **Solid Color** — Quick access to add a solid color deck to any channel.
@@ -57,6 +59,7 @@ Uses `egui::DragAndDrop` payload system with a **deferred drop pattern** to work
 | Library Effect | `LibraryDrag::Effect(registry_idx)` | Effect chain in bottom bar | Add effect to deck/channel/master |
 | Library Image | `LibraryDrag::Image(path)` | Channel column | Create new image deck |
 | Library Video | `LibraryDrag::Video(path)` | Channel column | Create new video deck |
+| Library Camera | `LibraryDrag::Camera(camera_id)` | Channel column | Create new camera deck (shares capture session) |
 | Effect grip ⠿ (bottom bar) | `EffectDrag::Deck/Channel/Master` | Drop zone in same chain | Reorder effect |
 
 #### Deferred Drop Pattern — IMPLEMENTED

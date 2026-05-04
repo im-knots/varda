@@ -1,126 +1,96 @@
 /*{
-    "DESCRIPTION": "Psychedelic feedback trails - creates visual tracers like seeing trails on psychedelics",
+    "DESCRIPTION": "Psychedelic trails effect — like waving your hand in front of your face on psychedelics. Moving things leave ghostly color-shifted trails that linger and fade. Static parts stay clean.",
     "CREDIT": "Varda VJ",
     "CATEGORIES": ["Filter", "Feedback"],
     "INPUTS": [
-        {
-            "NAME": "inputImage",
-            "TYPE": "image"
-        },
-        {
-            "NAME": "feedback_amount",
-            "TYPE": "float",
-            "DEFAULT": 0.85,
-            "MIN": 0.0,
-            "MAX": 0.99
-        },
-        {
-            "NAME": "color_shift",
-            "TYPE": "float",
-            "DEFAULT": 0.02,
-            "MIN": 0.0,
-            "MAX": 0.1
-        },
-        {
-            "NAME": "zoom_amount",
-            "TYPE": "float",
-            "DEFAULT": 0.005,
-            "MIN": -0.02,
-            "MAX": 0.02
-        },
-        {
-            "NAME": "rotation_speed",
-            "TYPE": "float",
-            "DEFAULT": 0.01,
-            "MIN": -0.05,
-            "MAX": 0.05
-        }
+        { "NAME": "inputImage", "TYPE": "image" },
+        { "NAME": "trail_length",    "TYPE": "float", "DEFAULT": 0.92, "MIN": 0.0, "MAX": 0.99, "LABEL": "Trail Length" },
+        { "NAME": "motion_sens",     "TYPE": "float", "DEFAULT": 0.05, "MIN": 0.01, "MAX": 0.3,  "LABEL": "Motion Sensitivity" },
+        { "NAME": "color_spread",    "TYPE": "float", "DEFAULT": 0.004,"MIN": 0.0,  "MAX": 0.02, "LABEL": "Rainbow Spread" },
+        { "NAME": "trail_zoom",      "TYPE": "float", "DEFAULT": 0.002,"MIN": -0.01,"MAX": 0.01, "LABEL": "Trail Zoom" },
+        { "NAME": "trail_rotate",    "TYPE": "float", "DEFAULT": 0.003,"MIN": -0.03,"MAX": 0.03, "LABEL": "Trail Rotate" }
     ],
     "PASSES": [
-        {
-            "TARGET": "feedbackBuffer",
-            "PERSISTENT": true
-        }
+        { "TARGET": "trailBuffer", "PERSISTENT": true },
+        { "TARGET": "prevFrame",   "PERSISTENT": true }
     ]
 }*/
 
 #version 450
-
 layout(location = 0) out vec4 fragColor;
 layout(location = 0) in vec2 uv;
 
 layout(set = 0, binding = 0) uniform ISFUniforms {
-    float TIME;
-    float TIMEDELTA;
-    uint FRAMEINDEX;
-    int PASSINDEX;
+    float TIME; float TIMEDELTA; uint FRAMEINDEX; int PASSINDEX;
     vec2 RENDERSIZE;
-    // Audio
-    float audio_level;
-    float audio_bass;
-    float audio_mid;
-    float audio_treble;
-    float audio_bpm;
-    float audio_beat_phase;
+    float audio_level; float audio_bass; float audio_mid; float audio_treble;
+    float audio_bpm; float audio_beat_phase;
     vec4 DATE;
 };
-
-layout(set = 0, binding = 1) uniform sampler texSampler;
+layout(set = 0, binding = 1) uniform sampler samp;
 layout(set = 0, binding = 2) uniform texture2D inputImage;
-layout(set = 0, binding = 3) uniform texture2D feedbackBuffer;
-
-// Uniform inputs
-layout(set = 0, binding = 4) uniform FilterParams {
-    float feedback_amount;
-    float color_shift;
-    float zoom_amount;
-    float rotation_speed;
+layout(set = 0, binding = 3) uniform texture2D trailBuffer;
+layout(set = 0, binding = 4) uniform texture2D prevFrame;
+layout(set = 0, binding = 5) uniform FilterParams {
+    float trail_length; float motion_sens; float color_spread;
+    float trail_zoom; float trail_rotate;
 };
 
-vec2 rotate2D(vec2 p, float angle) {
-    float c = cos(angle);
-    float s = sin(angle);
-    return vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+vec2 rot(vec2 p, float a) {
+    return vec2(p.x*cos(a) - p.y*sin(a), p.x*sin(a) + p.y*cos(a));
 }
 
 void main() {
-    // Use all ISF uniforms in actual output to prevent stripping
-    float uniformKeeper = (audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase) * 0.000001
-                        + (TIMEDELTA + float(FRAMEINDEX) + DATE.x + DATE.y + DATE.z + DATE.w) * 0.000001;
+    // Keep all uniforms alive
+    float _k = (audio_level+audio_bass+audio_mid+audio_treble+audio_bpm+audio_beat_phase
+               +TIMEDELTA+float(FRAMEINDEX)+DATE.x+DATE.y+DATE.z+DATE.w) * 1e-7;
 
-    vec2 center = vec2(0.5);
-    vec2 centered_uv = uv - center;
+    vec4 cur = texture(sampler2D(inputImage, samp), uv);
 
+    // ── Pass 0: write trailBuffer ───────────────────────────────────
     if (PASSINDEX == 0) {
-        // First pass: blend input with feedback buffer
+        // Compare current input to the CLEAN previous frame (prevFrame)
+        // to find pixels that actually moved
+        vec4 prev = texture(sampler2D(prevFrame, samp), uv);
+        float motion = smoothstep(motion_sens * 0.4, motion_sens, length(cur.rgb - prev.rgb));
 
-        // Apply zoom and rotation to feedback UV
-        vec2 feedback_uv = centered_uv;
-        feedback_uv *= (1.0 + zoom_amount);  // Subtle zoom
-        feedback_uv = rotate2D(feedback_uv, rotation_speed);  // Subtle rotation
-        feedback_uv += center;
+        // Read old trails with slight warp for that drifting psychedelic feel
+        vec2 tc = uv - 0.5;
+        tc *= 1.0 + trail_zoom;
+        tc = rot(tc, trail_rotate);
+        tc = clamp(tc + 0.5, 0.001, 0.999);
 
-        // Clamp to valid range
-        feedback_uv = clamp(feedback_uv, 0.001, 0.999);
+        // Chromatic-split sample of old trail for rainbow fringing
+        vec3 oldTrail;
+        oldTrail.r = texture(sampler2D(trailBuffer, samp), tc + vec2(color_spread, 0.0)).r;
+        oldTrail.g = texture(sampler2D(trailBuffer, samp), tc).g;
+        oldTrail.b = texture(sampler2D(trailBuffer, samp), tc - vec2(color_spread, 0.0)).b;
 
-        // Sample current input
-        vec4 current = texture(sampler2D(inputImage, texSampler), uv);
+        // Fade old trails
+        oldTrail *= trail_length;
 
-        // Sample feedback with slight color shift for trippy rainbow trails
-        vec4 feedback;
-        feedback.r = texture(sampler2D(feedbackBuffer, texSampler), feedback_uv + vec2(color_shift, 0.0)).r;
-        feedback.g = texture(sampler2D(feedbackBuffer, texSampler), feedback_uv).g;
-        feedback.b = texture(sampler2D(feedbackBuffer, texSampler), feedback_uv - vec2(color_shift, 0.0)).b;
-        feedback.a = 1.0;
+        // Where motion happened: stamp current color into trail.
+        // Where static: just let old trails keep fading.
+        vec3 result = mix(oldTrail, cur.rgb, motion);
 
-        // Blend: new content shows through, old content fades
-        fragColor = mix(current, feedback, feedback_amount);
-        fragColor.rgb += uniformKeeper;
-        fragColor.a = 1.0;
-    } else {
-        // Final pass: output the result
-        fragColor = texture(sampler2D(feedbackBuffer, texSampler), uv);
-        fragColor.rgb += uniformKeeper;
+        fragColor = vec4(result + _k, 1.0);
+    }
+
+    // ── Pass 1: write prevFrame (store clean current for next frame) ─
+    else if (PASSINDEX == 1) {
+        fragColor = vec4(cur.rgb + _k, 1.0);
+    }
+
+    // ── Final pass: composite to screen ─────────────────────────────
+    else {
+        vec3 trail = texture(sampler2D(trailBuffer, samp), uv).rgb;
+
+        // Show clean current image, with trail ghosts layered underneath.
+        // Where there are no trails (black), you just see the input.
+        // Where there are trails, they bleed through as ghostly echoes.
+        // Screen blend: bright trails glow, dark areas stay clean.
+        vec3 out_color = 1.0 - (1.0 - cur.rgb) * (1.0 - trail * 0.6);
+
+        fragColor = vec4(out_color + _k, 1.0);
     }
 }
-

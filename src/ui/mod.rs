@@ -222,6 +222,8 @@ pub struct UIData {
     pub midi_devices: Vec<MidiDeviceUI>,
     /// Current MIDI mappings (for display)
     pub midi_mappings: Vec<MidiMappingUI>,
+    /// Available camera devices (name, id)
+    pub cameras: Vec<(String, crate::camera::CameraId)>,
 }
 
 /// Info about an available display monitor (for UI display selector)
@@ -439,6 +441,10 @@ pub struct UIActions {
     pub ch_effect_to_move: Option<(usize, usize, usize)>,
     /// Move a master effect within its chain: (from_idx, to_idx)
     pub master_effect_to_move: Option<(usize, usize)>,
+    /// (ch_idx, camera_id) — add a camera as a new deck to channel
+    pub camera_to_add: Option<(usize, crate::camera::CameraId)>,
+    /// Rescan for camera devices
+    pub camera_rescan: bool,
 }
 
 impl UIActions {
@@ -489,6 +495,8 @@ impl UIActions {
             effect_to_move: None,
             ch_effect_to_move: None,
             master_effect_to_move: None,
+            camera_to_add: None,
+            camera_rescan: false,
         }
     }
 }
@@ -500,6 +508,8 @@ pub enum LibraryDrag {
     Generator(usize),
     /// Effect/filter shader from library (registry index)
     Effect(usize),
+    /// Camera device from library (CameraId)
+    Camera(crate::camera::CameraId),
 }
 
 /// Drag payload for effect reordering within a chain

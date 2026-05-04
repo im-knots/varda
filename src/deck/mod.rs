@@ -127,6 +127,14 @@ pub enum DeckSource {
     SolidColor {
         color: [f64; 4], // RGBA as f64 for wgpu::Color compatibility
     },
+    /// Live camera feed (reads shared texture from CameraManager)
+    Camera {
+        camera_id: crate::camera::CameraId,
+        blit_pipeline: BlitPipeline,
+        source_width: u32,
+        source_height: u32,
+        scaling_mode: ScalingMode,
+    },
 }
 
 /// An effect in the deck's effect chain (ISF filter)
@@ -306,7 +314,10 @@ impl Effect {
                     wgpu::TextureFormat::Rgba8Unorm
                 };
 
-                let iterations = if pass.persistent.unwrap_or(false) { 4 } else { 1 };
+                // Effects use 1 iteration for persistent passes — the persistence means
+                // "keep buffer contents between frames", not "run multiple simulation steps".
+                // Multi-iteration is only for generator simulation passes (reaction-diffusion etc).
+                let iterations = 1;
 
                 for _iter in 0..iterations {
                     let mut pass_uniforms = *uniforms;
@@ -538,6 +549,9 @@ pub struct Deck {
 
     /// Last frame time
     last_frame_time: Instant,
+
+    /// Camera source texture view (set each frame for Camera decks, cloned from CameraManager)
+    pub camera_source_view: Option<wgpu::TextureView>,
 }
 
 impl Deck {
@@ -726,6 +740,7 @@ impl Deck {
             start_time: now,
             frame_count: 0,
             last_frame_time: now,
+            camera_source_view: None,
         })
     }
 
@@ -935,6 +950,7 @@ impl Deck {
             start_time: now,
             frame_count: 0,
             last_frame_time: now,
+            camera_source_view: None,
         })
     }
 
@@ -1048,6 +1064,7 @@ impl Deck {
             start_time: now,
             frame_count: 0,
             last_frame_time: now,
+            camera_source_view: None,
         })
     }
 
@@ -1110,6 +1127,73 @@ impl Deck {
             start_time: now,
             frame_count: 0,
             last_frame_time: now,
+            camera_source_view: None,
+        })
+    }
+
+    /// Create a new deck from a camera source.
+    /// The camera is managed by CameraManager — this deck reads from the shared texture.
+    pub fn new_from_camera(
+        context: &RenderContext,
+        camera_id: crate::camera::CameraId,
+        camera_name: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name = format!("📹 {}", camera_name);
+        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+        let source = DeckSource::Camera {
+            camera_id,
+            blit_pipeline,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Deck Camera Texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let texture_b = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Deck Camera Texture B"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let texture_b_view = texture_b.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let now = Instant::now();
+        let generator_params = ShaderParams::from_inputs(&[]);
+
+        Ok(Self {
+            source_name,
+            source,
+            generator_params,
+            texture,
+            texture_view,
+            texture_b,
+            texture_b_view,
+            effects: Vec::new(),
+            opacity: 1.0,
+            start_time: now,
+            frame_count: 0,
+            last_frame_time: now,
+            camera_source_view: None,
         })
     }
 
@@ -1122,14 +1206,25 @@ impl Deck {
     pub fn scaling_mode(&self) -> Option<ScalingMode> {
         match &self.source {
             DeckSource::Image { scaling_mode, .. } => Some(*scaling_mode),
+            DeckSource::Camera { scaling_mode, .. } => Some(*scaling_mode),
             _ => None,
         }
     }
 
-    /// Set the scaling mode (only applies to Image sources)
+    /// Set the scaling mode (applies to Image and Camera sources)
     pub fn set_scaling_mode(&mut self, mode: ScalingMode) {
-        if let DeckSource::Image { scaling_mode, .. } = &mut self.source {
-            *scaling_mode = mode;
+        match &mut self.source {
+            DeckSource::Image { scaling_mode, .. } => *scaling_mode = mode,
+            DeckSource::Camera { scaling_mode, .. } => *scaling_mode = mode,
+            _ => {}
+        }
+    }
+
+    /// Get the camera ID (if source is a camera)
+    pub fn camera_id(&self) -> Option<crate::camera::CameraId> {
+        match &self.source {
+            DeckSource::Camera { camera_id, .. } => Some(*camera_id),
+            _ => None,
         }
     }
 
@@ -1394,6 +1489,41 @@ impl Deck {
                     });
                 }
                 cmd_buffers.push(encoder.finish());
+            }
+            DeckSource::Camera { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
+                // Blit shared camera texture to generator target
+                if let Some(cam_view) = &self.camera_source_view {
+                    let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
+                        *source_width, *source_height,
+                        self.texture.width(), self.texture.height(),
+                    );
+                    blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
+
+                    let bind_group = blit_pipeline.create_bind_group(&context.device, cam_view);
+                    let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Camera Blit Encoder"),
+                    });
+                    {
+                        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Camera Blit Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: generator_target,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        blit_pipeline.render(&mut render_pass, &bind_group);
+                    }
+                    cmd_buffers.push(encoder.finish());
+                }
+                // If no camera_source_view, the deck renders black (camera not yet started)
             }
         }
 

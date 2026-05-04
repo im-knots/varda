@@ -43,6 +43,7 @@ This project follows a strict documentation-to-code pipeline. Each layer derives
 - **ALWAYS** clean up old code paths. prefer replacing in place and cleaning up vs creating new files. 
 - **ALWAYS** just replace old code with new code. We dont have users yet so we dont have to worry about backwards compatibility. 
 - **ALWAYS** us an abstracted logger so logging is fully module with whatever data we need across the codebase using the same logging format and tooling. call this over native .log.
+- **ALWAYS** be performance minded when implementing new features. users expect the fastest possible performance.
 
 ### Before Writing Code
 - Review relevant `/spec` documents to understand what is being built

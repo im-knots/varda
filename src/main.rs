@@ -62,6 +62,8 @@ struct App {
     library_panel_open: bool,
     // Calibration card textures (one per color, created on init)
     calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
+    // Camera capture manager (shared camera sessions)
+    camera_manager: varda::camera::CameraManager,
 }
 
 impl App {
@@ -155,6 +157,7 @@ impl App {
             stage_editor_snap: true,
             library_panel_open: true,
             calibration_textures: Vec::new(),
+            camera_manager: varda::camera::CameraManager::new(),
         }
     }
 }
@@ -567,6 +570,9 @@ impl App {
                     }
                 }).collect()
             },
+            cameras: self.camera_manager.devices().iter()
+                .map(|d| (d.name.clone(), d.id))
+                .collect(),
         }
     }
 
@@ -797,6 +803,11 @@ impl App {
                 self.midi_mappings.learn_mode,
                 self.midi_mappings.learn_target.as_deref(),
             );
+        }
+
+        // Handle camera rescan
+        if ui_actions.camera_rescan {
+            self.camera_manager.scan_devices();
         }
 
         // Handle MIDI device actions from UI
@@ -1269,6 +1280,18 @@ impl App {
             ui::state::apply_param_updates(mixer, ui_actions);
             ui::state::apply_modulation_actions(mixer, ui_actions);
         }
+        // Release camera references before deck removal
+        if let Some((ch_idx, deck_idx)) = ui_actions.deck_to_remove {
+            if let Some(mixer) = &self.mixer {
+                if let Some(ch) = mixer.channels.get(ch_idx) {
+                    if let Some(slot) = ch.decks.get(deck_idx) {
+                        if let Some(cam_id) = slot.deck.camera_id() {
+                            self.camera_manager.release_camera(cam_id);
+                        }
+                    }
+                }
+            }
+        }
         if let (Some(mixer), Some(egui_renderer)) = (&mut self.mixer, &mut self.egui_renderer) {
             ui::state::apply_deck_and_effect_actions(
                 mixer,
@@ -1297,6 +1320,47 @@ impl App {
                 }
             }
         }
+        // Add camera deck if requested
+        if let Some((ch_idx, camera_id)) = ui_actions.camera_to_add.take() {
+            if let (Some(context), Some(mixer), Some(egui_renderer)) =
+                (&self.context, &mut self.mixer, &mut self.egui_renderer)
+            {
+                let cam_name = self.camera_manager.devices().iter()
+                    .find(|d| d.id == camera_id)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| format!("Camera {}", camera_id));
+
+                match self.camera_manager.open_camera(camera_id, &context.device) {
+                    Ok((src_w, src_h)) => {
+                        match Deck::new_from_camera(context, camera_id, &cam_name, src_w, src_h, RENDER_WIDTH, RENDER_HEIGHT) {
+                            Ok(deck) => {
+                                if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                    let idx = ch.add_deck(deck);
+                                    log::info!("Added camera deck {} to channel {}: {}", idx, ch_idx, cam_name);
+
+                                    let texture_id = egui_renderer.register_native_texture(
+                                        &context.device,
+                                        &ch.decks[idx].deck.texture_view,
+                                        wgpu::FilterMode::Linear,
+                                    );
+                                    self.deck_preview_textures.insert((ch_idx, idx), texture_id);
+                                    self.notifications.info(format!("📹 Camera '{}' added to Ch {}", cam_name, ch_idx + 1));
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Failed to create camera deck: {}", e);
+                                self.notifications.error(format!("Failed to create camera deck: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to open camera '{}': {}", cam_name, e);
+                        self.notifications.error(format!("Failed to open camera '{}': {}", cam_name, e));
+                    }
+                }
+            }
+        }
+
         // Remove channel if requested
         if let Some(ch_idx) = ui_actions.remove_channel {
             if let Some(mixer) = &mut self.mixer {
@@ -1359,6 +1423,20 @@ impl App {
         let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
+
+        // Update camera frames and distribute shared texture views to camera decks
+        self.camera_manager.update(&context.queue);
+        if let Some(mixer) = &mut self.mixer {
+            for channel in &mut mixer.channels {
+                for slot in &mut channel.decks {
+                    if let Some(cam_id) = slot.deck.camera_id() {
+                        slot.deck.camera_source_view = self.camera_manager
+                            .texture_view(cam_id)
+                            .cloned();
+                    }
+                }
+            }
+        }
 
         // Render the mixer (all channels composited)
         if let Some(mixer) = &mut self.mixer {

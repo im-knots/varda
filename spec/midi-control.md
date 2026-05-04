@@ -49,7 +49,7 @@ Pure MIDI-learn mapping: any parameter in the UI can be mapped to any MIDI contr
 
 ### MIDI Output — IMPLEMENTED
 
-- Uses coremidi `OutputPort` on macOS to send messages back to controllers
+- Uses midir for cross-platform MIDI I/O (CoreMIDI on macOS, ALSA/JACK on Linux, WinMM on Windows)
 - `MidiDeviceManager` handles output per device (send by `DeviceId`)
 - Source/destination pairing by name matching
 - Sends Note On messages to control button LEDs

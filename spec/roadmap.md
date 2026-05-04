@@ -330,6 +330,26 @@ Per-surface warp within a single output. One projector covers multiple surfaces,
 
 ---
 
+## Phase 9b: Camera Input — Size: M ✅ COMPLETE
+
+**Why**: Live camera feeds are essential for VJ performance — IMAG (live audience shots), interactive installations, mixed-media shows. North-star scenario #1 mentions webcam feeds. ([/spec/deck-sources.md](/spec/deck-sources.md) §4)
+
+| Task | Spec | Current State |
+|---|---|---|
+| CameraManager: shared capture sessions, one per physical device | [deck-sources.md](/spec/deck-sources.md) | ✅ Implemented |
+| Device enumeration + manual rescan (same pattern as MIDI) | [deck-sources.md](/spec/deck-sources.md) | ✅ Implemented |
+| DeckSource::Camera variant (reads shared texture via CameraId) | [deck-sources.md](/spec/deck-sources.md) | ✅ Implemented |
+| Library panel "📹 Cameras" section with drag-to-channel | [library-panel.md](/spec/library-panel.md) | ✅ Implemented |
+| Deck controls: resolution selector, scaling mode | [deck-sources.md](/spec/deck-sources.md) | Scaling mode implemented; resolution selector not yet |
+| 1 camera → N decks (shared texture, independent effect chains) | [deck-sources.md](/spec/deck-sources.md) | ✅ Implemented |
+| SIMD-accelerated YUV→RGBA decode (YUYV, NV12) | [deck-sources.md](/spec/deck-sources.md) | ✅ Implemented (yuvutils-rs) |
+| Cross-platform: macOS (AVFoundation) + Linux (V4L2) | [deck-sources.md](/spec/deck-sources.md) | ✅ Implemented (nokhwa input-native) |
+
+**Depends on**: Phase 1 (deck system), Phase 3 (library DnD).
+**Delivers**: Live camera input as a deck source. One camera can feed multiple decks across channels with independent effects. Works on macOS and Linux.
+
+---
+
 ## Phase 10: Settings, Monitoring & Polish
 
 **Why**: Professional polish and performance visibility. Parity-gap #10. ([/spec/settings-and-monitoring.md](/spec/settings-and-monitoring.md))
@@ -340,7 +360,6 @@ Per-surface warp within a single output. One projector covers multiple surfaces,
 | FPS overlay with frame time graph | [settings-and-monitoring.md](/spec/settings-and-monitoring.md) | Not implemented |
 | Per-deck render time stats | [settings-and-monitoring.md](/spec/settings-and-monitoring.md) | Not implemented |
 | GPU info display | [settings-and-monitoring.md](/spec/settings-and-monitoring.md) | Not implemented |
-| Webcam/capture device source | [deck-sources.md](/spec/deck-sources.md) | Not implemented |
 | Config file persistence (XDG on Linux, ~/Library on macOS) | [settings-and-monitoring.md](/spec/settings-and-monitoring.md) | Not implemented |
 
 **Depends on**: Most other phases complete.

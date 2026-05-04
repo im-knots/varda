@@ -116,13 +116,20 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                 let hover_ch: Option<usize> = ctx.memory(|mem| mem.data.get_temp(hover_ch_id).unwrap_or(None));
                 let hover_fx: Option<(String, usize, usize)> = ctx.memory(|mem| mem.data.get_temp(hover_fx_target_id).unwrap_or(None));
 
-                // Generator drop on channel
+                // Generator or Camera drop on channel
                 if let Some(ch_idx) = hover_ch {
                     let gen_key = egui::Id::new("__lib_dnd_gen_idx");
                     let gen_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(gen_key));
                     if let Some(gen_idx) = gen_idx {
                         log::info!("Library drop (deferred): generator {} -> ch{}", gen_idx, ch_idx);
                         actions.shader_to_add = Some((ch_idx, gen_idx));
+                    }
+
+                    let cam_key = egui::Id::new("__lib_dnd_cam_id");
+                    let cam_id: Option<crate::camera::CameraId> = ctx.memory(|mem| mem.data.get_temp(cam_key));
+                    if let Some(cam_id) = cam_id {
+                        log::info!("Library drop (deferred): camera {} -> ch{}", cam_id, ch_idx);
+                        actions.camera_to_add = Some((ch_idx, cam_id));
                     }
                 }
 
@@ -156,6 +163,7 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                     mem.data.remove::<Option<(String, usize, usize)>>(hover_fx_target_id);
                     mem.data.remove::<usize>(egui::Id::new("__lib_dnd_gen_idx"));
                     mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
+                    mem.data.remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));
                 });
             }
         }
@@ -526,6 +534,30 @@ fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
             for ch in &data.channels {
                 if ui.button(format!("Add to {}", ch.name)).clicked() {
                     actions.solid_color_to_add = Some((ch.ch_idx, [0.0, 0.0, 0.0, 1.0]));
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+
+        // === CAMERAS ===
+        let cam_header = egui::RichText::new(format!("📹 Cameras ({})", data.cameras.len())).strong();
+        egui::CollapsingHeader::new(cam_header).default_open(true).show(ui, |ui| {
+            if ui.small_button("🔄 Rescan").clicked() {
+                actions.camera_rescan = true;
+            }
+            if data.cameras.is_empty() {
+                ui.label(egui::RichText::new("No cameras detected").small().weak());
+            }
+            for (name, cam_id) in &data.cameras {
+                let item_id = egui::Id::new(("lib_cam", *cam_id));
+                ui.dnd_drag_source(item_id, LibraryDrag::Camera(*cam_id), |ui| {
+                    ui.label(egui::RichText::new(format!("  📹 {}", name)).size(12.0));
+                }).response;
+                if ui.ctx().is_being_dragged(item_id) {
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(egui::Id::new("__lib_dnd_cam_id"), *cam_id);
+                    });
                 }
             }
         });

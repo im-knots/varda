@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod camera;
 pub mod channel;
 pub mod deck;
 pub mod isf;
