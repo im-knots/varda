@@ -68,9 +68,9 @@ impl App {
     fn new() -> Self {
         let mut registry = ShaderRegistry::new();
 
-        // Add test shader directory
-        if let Err(e) = registry.add_library_path("test_shaders") {
-            log::warn!("Failed to add test_shaders path: {}", e);
+        // Add shader library directory
+        if let Err(e) = registry.add_library_path("shaders") {
+            log::warn!("Failed to add shaders path: {}", e);
         }
 
         // Scan for shaders
@@ -356,10 +356,12 @@ impl ApplicationHandler for App {
 impl App {
     /// Collect all data needed by the UI into a read-only snapshot
     fn collect_ui_data(&self) -> UIData {
-        let generators: Vec<(String, usize)> = self.registry.generators().iter()
+        let mut generators: Vec<(String, usize)> = self.registry.generators().iter()
             .enumerate().map(|(i, s)| (s.name(), i)).collect();
-        let filters: Vec<(String, usize)> = self.registry.filters().iter()
+        generators.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        let mut filters: Vec<(String, usize)> = self.registry.filters().iter()
             .enumerate().map(|(i, s)| (s.name(), i)).collect();
+        filters.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
         let shader_count = self.registry.count();
 
         // Collect per-channel data
