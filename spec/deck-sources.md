@@ -40,7 +40,7 @@ A Deck is an independent render unit that outputs a texture. The **source** is w
   - **Beat-sync**: Lock video playback speed to detected BPM so loops align with music
   - **Scrub/seek**: Seek to arbitrary position, mappable to MIDI knob
   - **In/out points**: Define a sub-range of the video to play (loop within segment)
-- **Status**: IMPLEMENTED (basic — ffmpeg-next CPU decode only, HAP GPU path not yet implemented, missing most playback controls)
+- **Status**: IMPLEMENTED (HAP GPU-native path with all variants: BC1/BC3/BC7/YCoCg/BC4. HAP Q Alpha dual-plane decode + YCoCg→RGB conversion shader. Playback controls: loop/ping-pong/one-shot/hold-last, speed multiplier, in/out points, seek. Video loading via file dialog in UI. ffmpeg CPU decode fallback for all other codecs. Not yet implemented: beat-sync.)
 
 ### 3. Image / Still
 - **What**: Static image file (PNG, JPG, BMP, TIFF, etc.)

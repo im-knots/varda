@@ -7,7 +7,7 @@ use crate::mixer::CrossfadeEasing;
 use crate::modulation::{LFOWaveform, AudioBand, ADSRStage, StepInterpolation};
 use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
-use crate::surface::{ContentMapping, SurfaceOutputType};
+use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
 /// Fixed render resolution for all decks and stage output (Full HD 1080p)
@@ -210,12 +210,18 @@ pub struct UIData {
     pub surfaces: Vec<SurfaceUI>,
     /// Whether the full-screen stage editor is open (replaces deck view)
     pub stage_editor_open: bool,
+    /// Whether the library panel (left sidebar) is open
+    pub library_panel_open: bool,
     /// Stage editor grid size (normalized, e.g. 0.05 = 20 divisions)
     pub stage_editor_grid_size: f32,
     /// Whether snap-to-grid is enabled in the stage editor
     pub stage_editor_snap: bool,
     /// Available display monitors (refreshed each frame)
     pub available_monitors: Vec<MonitorInfo>,
+    /// Connected MIDI devices
+    pub midi_devices: Vec<MidiDeviceUI>,
+    /// Current MIDI mappings (for display)
+    pub midi_mappings: Vec<MidiMappingUI>,
 }
 
 /// Info about an available display monitor (for UI display selector)
@@ -225,6 +231,25 @@ pub struct MonitorInfo {
     pub index: usize,
     pub width: u32,
     pub height: u32,
+}
+
+/// MIDI device info for UI display.
+#[derive(Clone)]
+pub struct MidiDeviceUI {
+    pub id: crate::midi::DeviceId,
+    pub name: String,
+    pub enabled: bool,
+    pub has_output: bool,
+    pub profile: String,
+}
+
+/// MIDI mapping entry for UI display.
+#[derive(Clone)]
+pub struct MidiMappingUI {
+    pub key: crate::midi::MidiKey,
+    pub key_display: String,
+    pub device_name: String,
+    pub param_path: String,
 }
 
 /// Output window action from UI
@@ -294,6 +319,14 @@ pub enum SurfaceAction {
     FlipVertical { idx: usize },
     /// Insert a vertex on an edge (after vertex at `after_vert_idx`)
     InsertVertex { idx: usize, after_vert_idx: usize, position: [f32; 2] },
+    /// Add a circle surface with a CircleHint (vertices generated from hint)
+    AddCircle { name: String, hint: CircleHint, source: OutputSource },
+    /// Update a circle's radius and regenerate vertices
+    SetCircleRadius { idx: usize, radius: f32 },
+    /// Update a circle's side count and regenerate vertices
+    SetCircleSides { idx: usize, sides: u32 },
+    /// Convert a circle surface to a plain polygon (drop circle hint)
+    ConvertToPolygon { idx: usize },
 }
 
 /// Snapshot of a surface for UI display
@@ -304,6 +337,7 @@ pub struct SurfaceUI {
     pub source: OutputSource,
     pub content_mapping: ContentMapping,
     pub output_type: SurfaceOutputType,
+    pub circle_hint: Option<CircleHint>,
 }
 
 /// Crossfader action from UI
@@ -328,6 +362,10 @@ pub struct UIActions {
     pub image_to_add: Option<(usize, std::path::PathBuf)>,
     /// Channel index to open an image file dialog for (deferred to outside egui frame)
     pub open_image_dialog_for_channel: Option<usize>,
+    /// (ch_idx, path) — add a video file as a new deck to channel
+    pub video_to_add: Option<(usize, std::path::PathBuf)>,
+    /// Channel index to open a video file dialog for (deferred to outside egui frame)
+    pub open_video_dialog_for_channel: Option<usize>,
     /// (ch_idx, color_rgba) — add a solid color deck to channel
     pub solid_color_to_add: Option<(usize, [f32; 4])>,
     /// (ch_idx, deck_idx) — remove deck from channel
@@ -357,10 +395,10 @@ pub struct UIActions {
     pub crossfader_action: Option<CrossfaderAction>,
     /// (ch_idx, opacity, blend_mode) — per-channel updates
     pub channel_updates: Vec<(usize, f32, BlendMode)>,
-    /// MIDI learn: start learning for a parameter path
-    pub midi_learn_start: Option<String>,
-    /// MIDI learn: cancel current learn mode
-    pub midi_learn_cancel: bool,
+    /// MIDI learn: toggle learn mode on/off
+    pub midi_learn_toggle: bool,
+    /// MIDI learn: select a parameter as learn target (in learn mode, clicking a param)
+    pub midi_learn_select: Option<String>,
     /// Set a transition shader by name (None = clear/use opacity crossfade)
     pub set_transition: Option<Option<String>>,
     /// Select a deck for detail view in bottom bar (ch_idx, deck_idx)
@@ -385,6 +423,22 @@ pub struct UIActions {
     pub set_grid_size: Option<f32>,
     /// Toggle snap-to-grid
     pub toggle_snap: bool,
+    /// MIDI: rescan devices
+    pub midi_rescan: bool,
+    /// MIDI: toggle device enabled/disabled (device_id, enabled)
+    pub midi_device_toggles: Vec<(crate::midi::DeviceId, bool)>,
+    /// MIDI: clear all mappings
+    pub midi_clear_mappings: bool,
+    /// MIDI: remove a specific mapping
+    pub midi_remove_mapping: Vec<crate::midi::MidiKey>,
+    /// Toggle library panel open/closed
+    pub toggle_library_panel: bool,
+    /// Move an effect within a deck's chain: (ch_idx, deck_idx, from_idx, to_idx)
+    pub effect_to_move: Option<(usize, usize, usize, usize)>,
+    /// Move a channel effect within its chain: (ch_idx, from_idx, to_idx)
+    pub ch_effect_to_move: Option<(usize, usize, usize)>,
+    /// Move a master effect within its chain: (from_idx, to_idx)
+    pub master_effect_to_move: Option<(usize, usize)>,
 }
 
 impl UIActions {
@@ -393,6 +447,8 @@ impl UIActions {
             shader_to_add: None,
             image_to_add: None,
             open_image_dialog_for_channel: None,
+            video_to_add: None,
+            open_video_dialog_for_channel: None,
             solid_color_to_add: None,
             deck_to_remove: None,
             deck_updates: Vec::new(),
@@ -411,8 +467,8 @@ impl UIActions {
             notifications_to_dismiss: Vec::new(),
             crossfader_action: None,
             channel_updates: Vec::new(),
-            midi_learn_start: None,
-            midi_learn_cancel: false,
+            midi_learn_toggle: false,
+            midi_learn_select: None,
             set_transition: None,
             select_deck: None,
             select_channel: None,
@@ -425,8 +481,36 @@ impl UIActions {
             toggle_stage_editor: false,
             set_grid_size: None,
             toggle_snap: false,
+            midi_rescan: false,
+            midi_device_toggles: Vec::new(),
+            midi_clear_mappings: false,
+            midi_remove_mapping: Vec::new(),
+            toggle_library_panel: false,
+            effect_to_move: None,
+            ch_effect_to_move: None,
+            master_effect_to_move: None,
         }
     }
+}
+
+/// Drag payload types for library drag-and-drop
+#[derive(Debug, Clone)]
+pub enum LibraryDrag {
+    /// Generator shader from library (registry index)
+    Generator(usize),
+    /// Effect/filter shader from library (registry index)
+    Effect(usize),
+}
+
+/// Drag payload for effect reordering within a chain
+#[derive(Debug, Clone, Copy)]
+pub enum EffectDrag {
+    /// Deck effect: (ch_idx, deck_idx, effect_idx)
+    Deck(usize, usize, usize),
+    /// Channel effect: (ch_idx, effect_idx)
+    Channel(usize, usize),
+    /// Master effect: (effect_idx)
+    Master(usize),
 }
 
 /// Helper to extract params from ShaderParams for UI display

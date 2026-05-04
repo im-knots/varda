@@ -98,7 +98,7 @@ Each surface has a **content mapping mode** that controls how the source texture
 
 ### Surface Data Model
 
-Surfaces are **polygons** — an ordered list of vertices in normalized canvas coordinates [0..1]. Rectangles are just 4-vertex polygons. This lets the user model triangles, circles (N-gon approximations), and arbitrary shapes for projection mapping.
+Surfaces are **polygons** — an ordered list of vertices in normalized canvas coordinates [0..1]. Rectangles are just 4-vertex polygons. This lets the user model triangles, circles, and arbitrary shapes for projection mapping.
 
 ```
 Surface {
@@ -107,8 +107,18 @@ Surface {
     source: OutputSource,
     content_mapping: ContentMapping,
     output_type: SurfaceOutputType,
+    circle_hint: Option<CircleHint>,  // present if surface was created as a circle
+}
+
+CircleHint {
+    center: [f32; 2],   // center in normalized coords
+    radius: f32,         // radius in normalized coords
+    sides: u32,          // number of polygon sides (3–128)
+    aspect_ratio: f32,   // canvas width/height used for vertex generation
 }
 ```
+
+**Circle support**: Surfaces created with the Circle tool carry a `CircleHint` that enables radius and side-count editing. Vertices are regenerated from the hint when these properties change. "Convert to Polygon" drops the circle identity, keeping vertices as a plain polygon. Vertex insertion or individual vertex dragging on a circle also auto-converts to polygon. Moving a circle surface (select tool drag) keeps the hint center in sync with the vertices — the radius handle, ring, and center dot follow the moved shape.
 
 **Derived properties:**
 - Bounding box: min/max of all vertices — used for Mapped mode UV calculation and hit testing
@@ -132,15 +142,17 @@ Two UI modes for defining venue geometry:
 **Full editor features:**
 - **Rectangle tool**: Click-drag creates a 4-vertex rectangle surface
 - **Polygon tool**: Click to place vertices, double-click or close-to-start to finish. Creates arbitrary polygon surfaces (triangles, pentagons, etc.)
-- **Circle/N-gon tool**: Click-drag creates a regular polygon approximation (configurable vertex count, 3–128)
-- **Edit mode**: Select a surface, then drag individual vertices to reshape. Visual handles on vertices.
+- **Circle/N-gon tool**: Click-drag creates a circle surface with `CircleHint` (configurable vertex count, 3–128). Circle surfaces show a radius ring and handle instead of vertex handles. Dragging the radius handle adjusts radius interactively. Toolbar shows radius DragValue, sides DragValue, and "Convert to Polygon" button when a circle is selected.
+- **Edit mode**: Select a surface, then drag individual vertices to reshape. Visual handles on vertices. Dragging a vertex on a circle auto-converts it to a polygon first.
 - **Click-to-select**: Click inside a surface to select it (ray-casting point-in-polygon hit test)
+- **Multi-select**: Shift+click to toggle individual surfaces in/out of the selection. Click-drag on empty space to draw a marquee rectangle — all surfaces whose bounding box intersects the rectangle are selected on release. Shift+marquee adds to the existing selection.
+- **Multi-move**: When multiple surfaces are selected, dragging any one of them moves all selected surfaces together by the same delta.
 - **Double-click edge**: Insert a new vertex on an edge at the click point (point-to-segment projection, snaps to grid)
-- **Duplicate** (D key or toolbar): Clone selected surface with grid-aligned offset
-- **Flip Horizontal/Vertical** (H/V keys or toolbar): Mirror surface vertices around bounding box center
+- **Duplicate** (D key or toolbar): Clone selected surface(s) with grid-aligned offset. Works on multi-selection — each selected surface is duplicated independently.
+- **Flip Horizontal/Vertical** (H/V keys or toolbar): Mirror surface vertices around each surface's bounding box center. Works on multi-selection — each selected surface is flipped independently.
+- **Delete**: Select one or more surfaces + Delete/Backspace key removes all selected (indices removed in reverse order to preserve correctness)
 - **Auto-tool switching**: If a drawing tool is active and you click/drag inside an existing surface, automatically switch to Select mode (prevents accidental overlapping draws)
 - **Grid**: Configurable grid size (10%, 5%, 2.5%, 1.25%) with snap-to-grid toggle
-- **Delete**: Select surface + delete key or button
 - **Keyboard shortcuts**: S (Select), R (Rectangle), P (Polygon), C (Circle), Escape (cancel in-progress draw)
 - Named surfaces persist with the scene file (not yet implemented)
 
@@ -205,9 +217,13 @@ Each surface assignment carries 4 warp corners (TL, TR, BR, BL) in output-normal
 1. Assign surfaces to an output
 2. Select a display target (projector)
 3. Enter calibration mode (🔧 button)
-4. Drag corner handles to align with physical surfaces
-5. DLT homography solver computes a 3×3 perspective matrix per surface
-6. The polygon vertex shader applies the homography with perspective-correct UV interpolation
+4. **Calibration test cards** appear on the output — each surface shows a distinct colored card with grid lines, crosshairs, corner markers, and border. This replaces the live content on the projector so you can see alignment clearly. ✅ Implemented.
+5. Drag corner handles (in the mini warp canvas) to align with physical surfaces
+6. DLT homography solver computes a 3×3 perspective matrix per surface
+7. The polygon vertex shader applies the homography with perspective-correct UV interpolation
+8. Click "Done" to exit calibration and return to live content
+
+**Calibration card details**: 8 distinct colors (red, green, blue, yellow, purple, cyan, orange, pink) cycle across surfaces. Cards include an 8×8 grid, center crosshair + circle, corner bracket markers, and edge midpoint markers. Cards always use Fill UV mapping regardless of the surface's content mapping mode, so the full grid is visible per surface.
 
 **Warp settings** persist per-output in the scene file across sessions.
 

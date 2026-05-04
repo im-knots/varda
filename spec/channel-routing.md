@@ -8,11 +8,11 @@ The channel routing architecture is fully implemented. Varda uses a Deck → Cha
 
 ```
 Deck 1 → Deck 1 FX ─┐
-Deck 2 → Deck 2 FX ─┼─→ [Channel A] ─→ Channel A FX ─┐
-Deck 3 → Deck 3 FX ─┘                                 │
-                                                       ├─→ [Crossfader] ─→ [Master FX] ─→ [Output]
-Deck 4 → Deck 4 FX ─┐                                 │
-Deck 5 → Deck 5 FX ─┼─→ [Channel B] ─→ Channel B FX ─┘
+Deck 2 → Deck 2 FX ─┼─→ [Ch 1] ─→ Ch 1 FX ─┐
+Deck 3 → Deck 3 FX ─┘                       │
+                                             ├─→ [Crossfader] ─→ [Master FX] ─→ [Output]
+Deck 4 → Deck 4 FX ─┐                       │
+Deck 5 → Deck 5 FX ─┼─→ [Ch 2] ─→ Ch 2 FX ─┘
 Deck 6 → Deck 6 FX ─┘
 ```
 
@@ -20,9 +20,9 @@ Deck 6 → Deck 6 FX ─┘
 
 1. **Decks** — individual visual sources (shaders, video, images)
 2. **Deck FX** — per-deck effect chain, applied before the deck enters the channel mix
-3. **Channels (A/B/C...)** — groups of decks composited together, each with its own effect chain
+3. **Channels (Ch 1/Ch 2/Ch 3...)** — groups of decks composited together, each with its own effect chain
 4. **Channel FX** — per-channel effect chain, applied to the composited channel output
-5. **Crossfader** — hardware-mappable slider that blends between Channel A and Channel B
+5. **Crossfader** — hardware-mappable slider that blends between Ch 1 and Ch 2
 6. **Master FX** — effects applied to the final composite after crossfading
 7. **Auto-Transitions** — timed crossfade or effect-based transition between channels
 
@@ -32,7 +32,7 @@ Effects can be applied at every level of the routing chain:
 
 ```
 Level 1: Deck FX      — transforms individual source (e.g., kaleidoscope on one shader)
-Level 2: Channel FX   — transforms the mixed channel (e.g., color grade on everything in Channel A)
+Level 2: Channel FX   — transforms the mixed channel (e.g., color grade on everything in Ch 1)
 Level 3: Master FX    — transforms final output (e.g., bloom, vignette on everything)
 ```
 
@@ -41,7 +41,7 @@ This gives the VJ maximum flexibility — apply a blur to one deck, a color shif
 ### What This Enables
 
 - **Smooth transitions**: Crossfade from one visual set to another without visible setup
-- **Prepare-while-playing**: Build up Channel B while Channel A is live, then crossfade
+- **Prepare-while-playing**: Build up Ch 2 while Ch 1 is live, then crossfade
 - **Per-channel effects**: Different effect chains for each channel group
 - **Hardware mapping**: Physical crossfader on MIDI controller maps directly
 
@@ -49,23 +49,23 @@ This gives the VJ maximum flexibility — apply a blur to one deck, a color shif
 
 ```
 Deck 1 → Deck 1 FX ─┐
-Deck 2 → Deck 2 FX ─┼─→ [Channel A] ─→ Channel A FX ─┐
-Deck 3 → Deck 3 FX ─┘                                 │
-                                                       │
-Deck 4 → Deck 4 FX ─┐                                 ├─→ [Crossfader/Mixer] ─→ [Master FX] ─→ [Output(s)]
-Deck 5 → Deck 5 FX ─┼─→ [Channel B] ─→ Channel B FX ─┤
-Deck 6 → Deck 6 FX ─┘                                 │
-                                                       │
-Deck 7 → Deck 7 FX ─┐                                 │
-Deck 8 → Deck 8 FX ─┼─→ [Channel C] ─→ Channel C FX ─┘
+Deck 2 → Deck 2 FX ─┼─→ [Ch 1] ─→ Ch 1 FX ─┐
+Deck 3 → Deck 3 FX ─┘                       │
+                                             │
+Deck 4 → Deck 4 FX ─┐                       ├─→ [Crossfader/Mixer] ─→ [Master FX] ─→ [Output(s)]
+Deck 5 → Deck 5 FX ─┼─→ [Ch 2] ─→ Ch 2 FX ─┤
+Deck 6 → Deck 6 FX ─┘                       │
+                                             │
+Deck 7 → Deck 7 FX ─┐                       │
+Deck 8 → Deck 8 FX ─┼─→ [Ch 3] ─→ Ch 3 FX ─┘
                      ...  (N channels)
 ```
 
 ### Decided
 
-1. **N channels, default 2**: Channels are dynamic — create as many as needed. Default setup is A and B. Naming scheme: A, B, C, ... Z, A1, B1, ... Z1, A2, etc. Names are assigned from a **monotonic counter** on the Mixer — removing a channel does not recycle its name. This prevents duplicate names and routing ambiguity (e.g., removing B and adding a new channel gives D, not another B or C). ✅ Implemented.
+1. **N channels, default 2**: Channels are dynamic — create as many as needed. Default setup is Ch 1 and Ch 2. Naming scheme: Ch 1, Ch 2, Ch 3, etc. Names are assigned from a **monotonic counter** on the Mixer — removing a channel does not recycle its name. This prevents duplicate names and routing ambiguity. ✅ Implemented.
 
-2. **All channels always render**: Even if the crossfader is hard-left on Channel A, Channel B continues rendering. This lets the VJ prepare visuals on the non-live channel before transitioning. GPU cost is the tradeoff — accept it.
+2. **All channels always render**: Even if the crossfader is hard-left on Ch 1, Ch 2 continues rendering. This lets the VJ prepare visuals on the non-live channel before transitioning. GPU cost is the tradeoff — accept it.
 
 3. **Hot deck reassignment**: Decks can be reassigned to any channel on the fly during performance. Drag-and-drop deck thumbnails between channel columns. No restart, no reload. Deck properties (opacity, blend mode, solo, mute) are preserved across the move. ✅ Implemented.
 

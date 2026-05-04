@@ -14,7 +14,9 @@ pub fn render_params(
     modulation_actions: &mut Vec<ModulationAction>,
     id_prefix: &str,
     midi_learn_path_prefix: Option<&str>,
-    midi_learn_start: &mut Option<String>,
+    midi_learn_active: bool,
+    midi_learn_select: &mut Option<String>,
+    midi_learn_target: Option<&str>,
     mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>>,
     mod_current_values: &[f32],
     mod_param_prefix: &str,
@@ -38,9 +40,37 @@ pub fn render_params(
                     } else {
                         ui.label(egui::RichText::new(label).small());
                     }
-                    let slider_response = ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
-                    if slider_response.changed() {
-                        param_updates.push(make_update(&param.name, ParamValue::Float(v)));
+                    // Render slider — in learn mode, disable mouse interaction via a scope
+                    let slider_rect;
+                    if midi_learn_active {
+                        let inner = ui.scope(|ui| {
+                            ui.disable();
+                            ui.add(egui::Slider::new(&mut v, min..=max).show_value(false))
+                        });
+                        slider_rect = inner.inner.rect;
+                    } else {
+                        let slider_response = ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
+                        if slider_response.changed() {
+                            param_updates.push(make_update(&param.name, ParamValue::Float(v)));
+                        }
+                        slider_rect = slider_response.rect;
+                    }
+                    // MIDI learn mode: glow + click overlay on the (now-enabled) outer ui
+                    if midi_learn_active {
+                        if let Some(prefix) = midi_learn_path_prefix {
+                            let path = format!("{}/param/{}", prefix, param.name);
+                            let is_target = midi_learn_target.map_or(false, |t| t == path);
+                            if is_target {
+                                draw_midi_learn_selected(ui, slider_rect);
+                            } else {
+                                draw_midi_learn_glow(ui, slider_rect);
+                            }
+                            let click_id = ui.id().with(("midi_learn_param", &param.name));
+                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            if click_resp.clicked() {
+                                *midi_learn_select = Some(path);
+                            }
+                        }
                     }
                     // Draw modulation ghost indicator on top of slider
                     if is_modulated {
@@ -52,7 +82,6 @@ pub fn render_params(
                                 }
                             }
                             let modulated_val = (v + total_offset).clamp(min, max);
-                            let slider_rect = slider_response.rect;
                             let frac = (modulated_val - min) / (max - min);
                             let x = slider_rect.left() + frac * slider_rect.width();
                             let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
@@ -63,16 +92,6 @@ pub fn render_params(
                                 egui::Stroke::new(2.0, color),
                             );
                         }
-                    }
-                    // Right-click context menu for MIDI learn
-                    if let Some(prefix) = midi_learn_path_prefix {
-                        slider_response.context_menu(|ui| {
-                            let path = format!("{}/param/{}", prefix, param.name);
-                            if ui.button("🎹 MIDI Learn").clicked() {
-                                *midi_learn_start = Some(path);
-                                ui.close_menu();
-                            }
-                        });
                     }
                     // Modulation assignment dropdown (only if sources exist and callbacks provided)
                     if !modulation_sources.is_empty() {
@@ -134,7 +153,9 @@ pub fn render_effect_params(
     modulation_actions: &mut Vec<ModulationAction>,
     id_prefix: &str,
     midi_learn_path_prefix: Option<&str>,
-    midi_learn_start: &mut Option<String>,
+    midi_learn_active: bool,
+    midi_learn_select: &mut Option<String>,
+    midi_learn_target: Option<&str>,
     mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>>,
     mod_current_values: &[f32],
     mod_param_prefix: &str,
@@ -155,9 +176,37 @@ pub fn render_effect_params(
                     } else {
                         ui.label(egui::RichText::new(label).small().weak());
                     }
-                    let slider_resp = ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
-                    if slider_resp.changed() {
-                        param_updates.push(make_update(&param.name, ParamValue::Float(v)));
+                    // Render slider — in learn mode, disable mouse interaction via a scope
+                    let slider_rect;
+                    if midi_learn_active {
+                        let inner = ui.scope(|ui| {
+                            ui.disable();
+                            ui.add(egui::Slider::new(&mut v, min..=max).show_value(false))
+                        });
+                        slider_rect = inner.inner.rect;
+                    } else {
+                        let slider_resp = ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
+                        if slider_resp.changed() {
+                            param_updates.push(make_update(&param.name, ParamValue::Float(v)));
+                        }
+                        slider_rect = slider_resp.rect;
+                    }
+                    // MIDI learn mode: glow + click overlay
+                    if midi_learn_active {
+                        if let Some(prefix) = midi_learn_path_prefix {
+                            let path = format!("{}/param/{}", prefix, param.name);
+                            let is_target = midi_learn_target.map_or(false, |t| t == path);
+                            if is_target {
+                                draw_midi_learn_selected(ui, slider_rect);
+                            } else {
+                                draw_midi_learn_glow(ui, slider_rect);
+                            }
+                            let click_id = ui.id().with(("midi_learn_fx_param", &param.name));
+                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            if click_resp.clicked() {
+                                *midi_learn_select = Some(path);
+                            }
+                        }
                     }
                     // Draw modulation ghost indicator
                     if is_modulated {
@@ -169,7 +218,6 @@ pub fn render_effect_params(
                                 }
                             }
                             let modulated_val = (v + total_offset).clamp(min, max);
-                            let slider_rect = slider_resp.rect;
                             let frac = (modulated_val - min) / (max - min);
                             let x = slider_rect.left() + frac * slider_rect.width();
                             let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
@@ -179,15 +227,6 @@ pub fn render_effect_params(
                                 egui::Stroke::new(2.0, color),
                             );
                         }
-                    }
-                    if let Some(prefix) = midi_learn_path_prefix {
-                        slider_resp.context_menu(|ui| {
-                            let path = format!("{}/param/{}", prefix, param.name);
-                            if ui.button("🎹 MIDI Learn").clicked() {
-                                *midi_learn_start = Some(path);
-                                ui.close_menu();
-                            }
-                        });
                     }
                     // Modulation assignment dropdown
                     if !modulation_sources.is_empty() {
@@ -267,3 +306,20 @@ pub fn render_audio_levels(ui: &mut egui::Ui, audio: &AudioUIData) {
     }
 }
 
+
+
+/// Draw a pulsing purple glow around a rect to indicate it's a MIDI-learnable target.
+pub fn draw_midi_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter();
+    let glow_color = egui::Color32::from_rgba_unmultiplied(180, 80, 220, 80);
+    let expanded = rect.expand(2.0);
+    painter.rect_stroke(expanded, 3.0, egui::Stroke::new(2.0, glow_color), egui::StrokeKind::Outside);
+}
+
+/// Draw a brighter glow for the currently selected MIDI learn target.
+pub fn draw_midi_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter();
+    let glow_color = egui::Color32::from_rgba_unmultiplied(255, 100, 50, 120);
+    let expanded = rect.expand(3.0);
+    painter.rect_stroke(expanded, 3.0, egui::Stroke::new(3.0, glow_color), egui::StrokeKind::Outside);
+}

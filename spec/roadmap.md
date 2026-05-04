@@ -82,7 +82,8 @@ Traces from: [/intent/why.md](/intent/why.md), [/vision/parity-gap.md](/vision/p
 | Deck preview in bottom bar (scales with panel height, 16:9) | [ui-design.md](/spec/ui-design.md) | ✅ IMPLEMENTED |
 | Effect chain as horizontal columns in bottom bar | [ui-design.md](/spec/ui-design.md) | ✅ IMPLEMENTED |
 | Modulation panel in right sidebar (horizontal columns per modulator) | [ui-design.md](/spec/ui-design.md) | ✅ IMPLEMENTED |
-| Shader library in right sidebar | [ui-design.md](/spec/ui-design.md) | ✅ IMPLEMENTED |
+| Library panel (left sidebar, collapsible) with drag-and-drop | [library-panel.md](/spec/library-panel.md) | ✅ IMPLEMENTED |
+| Effect chain drag-and-drop reordering | [library-panel.md](/spec/library-panel.md) | ✅ IMPLEMENTED |
 | Dark theme color language (purple/blue/orange/green accents) | [ui-design.md](/spec/ui-design.md) | ✅ IMPLEMENTED |
 | Channel opacity/blend mode controls | [channel-routing.md](/spec/channel-routing.md) | ✅ IMPLEMENTED |
 | 1920×1080 default window size | [ui-design.md](/spec/ui-design.md) | ✅ IMPLEMENTED |
@@ -95,7 +96,7 @@ Traces from: [/intent/why.md](/intent/why.md), [/vision/parity-gap.md](/vision/p
 
 ---
 
-## Phase 4: MIDI Control System — ✅ COMPLETE (core)
+## Phase 4: MIDI Control System — ✅ COMPLETE
 
 **Why**: Can't perform without hardware control. Parity-gap #2. ([/spec/midi-control.md](/spec/midi-control.md))
 
@@ -104,15 +105,19 @@ Traces from: [/intent/why.md](/intent/why.md), [/vision/parity-gap.md](/vision/p
 | MIDI input via coremidi (macOS) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
 | Parameter address system (hierarchical paths) | [midi-control.md](/spec/midi-control.md), [modulation.md](/spec/modulation.md) | ✅ IMPLEMENTED |
 | MIDI learn mode (right-click param → move control → mapped) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
-| Mapping store (in-memory, applies MIDI to mixer) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
+| Mapping store (in-memory, device-aware keys) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
 | Crossfader MIDI mapping | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
 | MIDI learn status indicator (purple bar + cancel) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
+| Multi-device support (N surfaces, device IDs, enable/disable) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
+| MIDI output (coremidi OutputPort, per-device routing) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
+| APC Mini mk1 LED feedback (N devices, diff-only sends) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
+| APC Mini controller profile (auto-detect, LED colors) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
+| MIDI UI panel (devices list, mappings table, rescan, clear) | [midi-control.md](/spec/midi-control.md) | ✅ IMPLEMENTED |
 | Mapping persistence (save/load to config) | [midi-control.md](/spec/midi-control.md) | Not implemented |
-| LED feedback for Akai APC Mini | [midi-control.md](/spec/midi-control.md) | Not implemented |
 
 **Depends on**: Phase 1 (parameter paths need channel/mixer hierarchy).
-**Delivers**: Hardware control of Varda. VJ can map any MIDI controller to any parameter.
-**Status**: ✅ COMPLETE (core — persistence and LED feedback are stretch)
+**Delivers**: Hardware control of Varda with N simultaneous MIDI devices. Device-aware mappings, LED feedback, controller profiles.
+**Status**: ✅ COMPLETE (persistence is stretch)
 
 ---
 
@@ -225,7 +230,9 @@ Uses a **three-layer abstraction**: Content (channels, master) → Surfaces (nam
 | Click-to-select surface interiors (ray-casting) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Double-click edge to insert vertex (point-to-segment projection) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Auto-tool switch (drawing tools → Select when clicking inside surfaces) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Multi-select surfaces (Shift+click, marquee drag, multi-move, multi-delete) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | N-channel compositing fix (transparent clear, correct alpha blending) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| True circle support (CircleHint metadata, radius/sides editing, auto-convert to polygon) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Live preview thumbnails on surfaces in the editor | [multi-output.md](/spec/multi-output.md) | Not implemented |
 | Surface layout saved/loaded with scene file | [multi-output.md](/spec/multi-output.md) | Not implemented |
 
@@ -245,6 +252,7 @@ Assign surfaces to outputs and apply output-level warp. This is the "show up at 
 | Homography math (DLT solve from 4 corner correspondences) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Forward homography (bbox corners → warp corners for vertex transform) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Calibration UI (drag corners in output management panel) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
+| Calibration test cards on output (per-surface colored grid cards replace content in cal mode) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Display target selector (Windowed / specific monitor from dropdown) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Removed OutputSource from outputs (surfaces are the source) | [multi-output.md](/spec/multi-output.md) | ✅ IMPLEMENTED |
 | Warp calibration saved with scene file | [multi-output.md](/spec/multi-output.md) | Not implemented |
@@ -302,7 +310,27 @@ Per-surface warp within a single output. One projector covers multiple surfaces,
 
 ---
 
-## Phase 9: Settings, Monitoring & Polish
+## Phase 9: HAP Video Codec — Size: M
+
+**Why**: HAP is the standard codec for VJ content. CPU-decoded video (ffmpeg) works but is a bottleneck for high-res multi-deck playback. HAP uploads GPU-compressed texture data directly — near-zero CPU cost. ([/spec/deck-sources.md](/spec/deck-sources.md))
+
+| Task | Spec | Current State |
+|---|---|---|
+| HAP container demuxing (MOV/AVI, detect HAP FourCC variants) | [deck-sources.md](/spec/deck-sources.md) | ✅ IMPLEMENTED |
+| Snappy decompression of HAP compressed blocks | [deck-sources.md](/spec/deck-sources.md) | ✅ IMPLEMENTED |
+| GPU texture upload as BC1/BC3/BC7 (wgpu compressed textures) | [deck-sources.md](/spec/deck-sources.md) | ✅ IMPLEMENTED |
+| HAP Q Alpha dual-plane support (YCoCg BC3 color + BC4 alpha, HapConvertPipeline shader) | [deck-sources.md](/spec/deck-sources.md) | ✅ IMPLEMENTED |
+| Auto-detect codec: HAP path vs ffmpeg fallback | [deck-sources.md](/spec/deck-sources.md) | ✅ IMPLEMENTED |
+| Video playback controls (loop/ping-pong/one-shot/hold, speed, seek, in/out points) | [deck-sources.md](/spec/deck-sources.md) | ✅ IMPLEMENTED |
+| Video loading UI (file dialog in deck panel) | [deck-sources.md](/spec/deck-sources.md) | ✅ IMPLEMENTED |
+
+**Depends on**: Phase 1 (deck system).
+**Delivers**: GPU-native HAP Q Alpha video playback — professional-grade video performance matching Resolume.
+**Status**: ✅ COMPLETE
+
+---
+
+## Phase 10: Settings, Monitoring & Polish
 
 **Why**: Professional polish and performance visibility. Parity-gap #10. ([/spec/settings-and-monitoring.md](/spec/settings-and-monitoring.md))
 
@@ -335,14 +363,17 @@ Phase 7: Transitions         (uses param addresses) │
     │                                                │
 Phase 8: Multi-Output ──────────────────────────────┘
     │
-Phase 9: Polish
+Phase 9: HAP Video ─── (depends on Phase 1)
+    │
+Phase 10: Polish
 ```
 
 Phases 4, 5 can run in parallel with Phases 2, 3 after Phase 1 is complete.
 Phase 6 depends on Phase 4 (shared parameter address system).
 Phase 7 depends on Phases 2 + 3.
 Phase 8 depends on Phase 1 + 3.
-Phase 9 is the final polish pass.
+Phase 9 (HAP) depends on Phase 1 (deck system).
+Phase 10 is the final polish pass.
 
 ## Traceability Summary
 
@@ -358,6 +389,7 @@ Phase 9 is the final polish pass.
 | 6b | — (performance, intent belief #2) | performance-optimization.md, architecture-overview.md |
 | 7 | #6 (auto-transitions), #13 (presets), #14 (transition builder) | transitions.md, scene-management.md |
 | 8 | #4 (multi-output), #5 (projection mapping), #9 (fullscreen) | multi-output.md |
-| 9 | #10 (perf monitoring) | settings-and-monitoring.md |
+| 9 | HAP/DXV codec (parity gap: high-perf video) | deck-sources.md |
+| 10 | #10 (perf monitoring) | settings-and-monitoring.md |
 
 

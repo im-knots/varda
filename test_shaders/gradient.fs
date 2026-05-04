@@ -89,8 +89,5 @@ void main() {
         color = mix(color_b, color_c, (t - 0.5) * 2.0);
     }
 
-    // Audio reactive brightness pulse
-    color.rgb *= 1.0 + audio_level * 0.2;
-
     fragColor = vec4(color.rgb * color.a, color.a);
 }

@@ -3,13 +3,24 @@ use crate::params::ParamValue;
 use crate::modulation::{LFOWaveform, StepInterpolation};
 use crate::{BlendMode, ScalingMode};
 use crate::renderer::context::{OutputSource, OutputTarget};
-use crate::surface::{ContentMapping, SurfaceOutputType};
-use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, OutputAction, SurfaceAction, ModSourceUI, NotificationUI, modulator_color};
+use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
+use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, OutputAction, SurfaceAction, ModSourceUI, NotificationUI, modulator_color, LibraryDrag, EffectDrag};
 use super::widgets;
 
 /// Render the complete UI and return all collected actions/intents.
 pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
     let mut actions = UIActions::new();
+
+    // === LEFT PANEL: Library (collapsible) ===
+    if data.library_panel_open {
+        egui::SidePanel::left("library_panel")
+            .min_width(180.0)
+            .default_width(220.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                render_library_panel(ui, data, &mut actions);
+            });
+    }
 
     // === RIGHT PANEL: Main Output + Master Effects ===
     egui::SidePanel::right("master_panel")
@@ -35,8 +46,305 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
         render_central_panel(ui, data, &mut actions);
     });
 
+    // === LIBRARY DnD: deferred drop handler ===
+    // We can't rely on egui's dnd_release_payload/contains_pointer because the drag ghost
+    // (tooltip layer) covers drop targets. Instead, each frame we store which target the
+    // pointer is over. When the payload disappears (mouse released), we use the last target.
+    {
+        let had_payload_id = egui::Id::new("__lib_dnd_had_payload");
+        let hover_ch_id = egui::Id::new("__lib_dnd_hover_ch");
+        // Effect chain targets: "deck", "channel", or "master"
+        let hover_fx_target_id = egui::Id::new("__lib_dnd_hover_fx_target");
+        let has_payload = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ctx);
+
+        if has_payload {
+            if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                // Check channel column rects (for generator drops)
+                let mut found_ch: Option<usize> = None;
+                for ch_idx in 0..data.channels.len() {
+                    let key = egui::Id::new("ch_drop_rect").with(ch_idx);
+                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
+                        if rect.contains(pos) {
+                            found_ch = Some(ch_idx);
+                            break;
+                        }
+                    }
+                }
+
+                // Check effect chain rects (for effect drops)
+                // Format: (target_type, ch_idx, deck_idx) — "deck"/(ch,dk), "channel"/(ch,0), "master"/(0,0)
+                let mut found_fx: Option<(String, usize, usize)> = None;
+
+                // Deck effect chains
+                if let Some((sel_ch, sel_dk)) = data.selected_deck {
+                    let key = egui::Id::new("deck_fx_drop_rect").with((sel_ch, sel_dk));
+                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
+                        if rect.contains(pos) {
+                            found_fx = Some(("deck".to_string(), sel_ch, sel_dk));
+                        }
+                    }
+                }
+
+                // Channel effect chains
+                for ch_idx in 0..data.channels.len() {
+                    let key = egui::Id::new("ch_fx_drop_rect").with(ch_idx);
+                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
+                        if rect.contains(pos) {
+                            found_fx = Some(("channel".to_string(), ch_idx, 0));
+                        }
+                    }
+                }
+
+                // Master effect chain
+                let master_key = egui::Id::new("master_fx_drop_rect");
+                if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(master_key)) {
+                    if rect.contains(pos) {
+                        found_fx = Some(("master".to_string(), 0, 0));
+                    }
+                }
+
+                ctx.memory_mut(|mem| {
+                    mem.data.insert_temp(hover_ch_id, found_ch);
+                    mem.data.insert_temp(hover_fx_target_id, found_fx);
+                    mem.data.insert_temp::<bool>(had_payload_id, true);
+                });
+            }
+        } else {
+            // No payload this frame — check if we HAD one last frame (= drop just happened)
+            let had_payload: bool = ctx.memory(|mem| mem.data.get_temp(had_payload_id).unwrap_or(false));
+            if had_payload {
+                let hover_ch: Option<usize> = ctx.memory(|mem| mem.data.get_temp(hover_ch_id).unwrap_or(None));
+                let hover_fx: Option<(String, usize, usize)> = ctx.memory(|mem| mem.data.get_temp(hover_fx_target_id).unwrap_or(None));
+
+                // Generator drop on channel
+                if let Some(ch_idx) = hover_ch {
+                    let gen_key = egui::Id::new("__lib_dnd_gen_idx");
+                    let gen_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(gen_key));
+                    if let Some(gen_idx) = gen_idx {
+                        log::info!("Library drop (deferred): generator {} -> ch{}", gen_idx, ch_idx);
+                        actions.shader_to_add = Some((ch_idx, gen_idx));
+                    }
+                }
+
+                // Effect drop on chain
+                if let Some((target_type, ch_idx, deck_idx)) = hover_fx {
+                    let fx_key = egui::Id::new("__lib_dnd_fx_idx");
+                    let filter_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(fx_key));
+                    if let Some(filter_idx) = filter_idx {
+                        match target_type.as_str() {
+                            "deck" => {
+                                log::info!("Library drop (deferred): effect {} -> ch{} deck{}", filter_idx, ch_idx, deck_idx);
+                                actions.effect_to_add = Some((ch_idx, deck_idx, filter_idx));
+                            }
+                            "channel" => {
+                                log::info!("Library drop (deferred): effect {} -> ch{} channel fx", filter_idx, ch_idx);
+                                actions.ch_effect_to_add = Some((ch_idx, filter_idx));
+                            }
+                            "master" => {
+                                log::info!("Library drop (deferred): effect {} -> master fx", filter_idx);
+                                actions.master_effect_to_add = Some(filter_idx);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Clear state
+                ctx.memory_mut(|mem| {
+                    mem.data.remove::<bool>(had_payload_id);
+                    mem.data.remove::<Option<usize>>(hover_ch_id);
+                    mem.data.remove::<Option<(String, usize, usize)>>(hover_fx_target_id);
+                    mem.data.remove::<usize>(egui::Id::new("__lib_dnd_gen_idx"));
+                    mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
+                });
+            }
+        }
+    }
+
+    // === EFFECT REORDER DnD: deferred drop handler ===
+    // Same pattern as library drops — dnd_drag_source renders on tooltip layer blocking drop zones.
+    // Each frame while EffectDrag is active, find which drop zone the pointer is over.
+    // When the payload disappears, apply the move.
+    {
+        let had_eff_id = egui::Id::new("__eff_dnd_had_payload");
+        let hover_dz_id = egui::Id::new("__eff_dnd_hover_dz"); // (chain_key, position)
+        let has_eff_payload = egui::DragAndDrop::has_payload_of_type::<EffectDrag>(ctx);
+
+        if has_eff_payload {
+            if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                // Search all known drop zone rects to find which one the pointer is over
+                let mut found_dz: Option<(String, usize)> = None;
+
+                // Helper: check drop zones for a given chain key
+                let check_chain = |chain_key: &str, ctx: &egui::Context, pos: egui::Pos2| -> Option<(String, usize)> {
+                    let count_key = egui::Id::new("eff_dz_count").with(chain_key.to_string());
+                    let count: usize = ctx.memory(|mem| mem.data.get_temp(count_key).unwrap_or(0));
+                    for p in 0..count {
+                        let rk = egui::Id::new("eff_dz_rect").with((chain_key.to_string(), p));
+                        if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(rk)) {
+                            if rect.contains(pos) {
+                                return Some((chain_key.to_string(), p));
+                            }
+                        }
+                    }
+                    None
+                };
+
+                // Check deck chains
+                if found_dz.is_none() {
+                    if let Some((sel_ch, sel_dk)) = data.selected_deck {
+                        found_dz = check_chain(&format!("deck_{}_{}", sel_ch, sel_dk), ctx, pos);
+                    }
+                }
+                // Check master chain
+                if found_dz.is_none() {
+                    found_dz = check_chain("master", ctx, pos);
+                }
+                // Check channel chains
+                if found_dz.is_none() {
+                    for ch_idx in 0..data.channels.len() {
+                        found_dz = check_chain(&format!("ch_{}", ch_idx), ctx, pos);
+                        if found_dz.is_some() { break; }
+                    }
+                }
+
+                ctx.memory_mut(|mem| {
+                    mem.data.insert_temp(hover_dz_id, found_dz);
+                    mem.data.insert_temp::<bool>(had_eff_id, true);
+                });
+            }
+        } else {
+            let had: bool = ctx.memory(|mem| mem.data.get_temp(had_eff_id).unwrap_or(false));
+            if had {
+                let hover_dz: Option<(String, usize)> = ctx.memory(|mem| mem.data.get_temp(hover_dz_id).unwrap_or(None));
+                // Retrieve the source payload — stored by dnd_drag_source before cleanup
+                // We need to read it from the last frame. Since egui clears it, we stored the
+                // EffectDrag in temp memory during the drag.
+                let src_key = egui::Id::new("__eff_dnd_src");
+                let src: Option<EffectDrag> = ctx.memory(|mem| mem.data.get_temp(src_key));
+
+                if let (Some((chain_key, target_pos)), Some(src_drag)) = (hover_dz, src) {
+                    match src_drag {
+                        EffectDrag::Deck(src_ch, src_dk, src_eff) => {
+                            let expected_key = format!("deck_{}_{}", src_ch, src_dk);
+                            if chain_key == expected_key {
+                                let to = if src_eff < target_pos { target_pos - 1 } else { target_pos };
+                                if to != src_eff {
+                                    log::info!("Effect reorder (deferred): deck {}/{} effect {} -> {}", src_ch, src_dk, src_eff, to);
+                                    actions.effect_to_move = Some((src_ch, src_dk, src_eff, to));
+                                }
+                            }
+                        }
+                        EffectDrag::Channel(src_ch, src_eff) => {
+                            let expected_key = format!("ch_{}", src_ch);
+                            if chain_key == expected_key {
+                                let to = if src_eff < target_pos { target_pos - 1 } else { target_pos };
+                                if to != src_eff {
+                                    log::info!("Effect reorder (deferred): ch{} effect {} -> {}", src_ch, src_eff, to);
+                                    actions.ch_effect_to_move = Some((src_ch, src_eff, to));
+                                }
+                            }
+                        }
+                        EffectDrag::Master(src_eff) => {
+                            if chain_key == "master" {
+                                let to = if src_eff < target_pos { target_pos - 1 } else { target_pos };
+                                if to != src_eff {
+                                    log::info!("Effect reorder (deferred): master effect {} -> {}", src_eff, to);
+                                    actions.master_effect_to_move = Some((src_eff, to));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ctx.memory_mut(|mem| {
+                    mem.data.remove::<bool>(had_eff_id);
+                    mem.data.remove::<Option<(String, usize)>>(hover_dz_id);
+                    mem.data.remove::<EffectDrag>(src_key);
+                });
+            }
+        }
+    }
+
     // === NOTIFICATION OVERLAY (rendered last, on top of everything) ===
     render_notifications(ctx, &data.notifications, &mut actions);
+
+    // === GLOBAL RIGHT-CLICK: Toggle MIDI Learn Mode ===
+    // Track popup state: position and "just opened" flag to avoid same-frame dismiss
+    let popup_id = egui::Id::new("global_midi_learn_popup");
+    let popup_fresh_id = egui::Id::new("global_midi_learn_popup_fresh");
+
+    // Check if popup is currently open
+    let popup_pos: Option<egui::Pos2> = ctx.memory(|mem| mem.data.get_temp(popup_id));
+    let popup_fresh: bool = ctx.memory(|mem| mem.data.get_temp(popup_fresh_id).unwrap_or(false));
+
+    if ctx.input(|i| i.pointer.secondary_clicked()) {
+        if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+            if popup_pos.is_some() {
+                // Close existing popup
+                ctx.memory_mut(|mem| {
+                    mem.data.remove::<egui::Pos2>(popup_id);
+                    mem.data.remove::<bool>(popup_fresh_id);
+                });
+            } else {
+                // Open new popup, mark as fresh (skip dismiss this frame)
+                ctx.memory_mut(|mem| {
+                    mem.data.insert_temp(popup_id, pos);
+                    mem.data.insert_temp(popup_fresh_id, true);
+                });
+            }
+        }
+    }
+
+    // Re-read after potential update
+    let popup_pos: Option<egui::Pos2> = ctx.memory(|mem| mem.data.get_temp(popup_id));
+    if let Some(pos) = popup_pos {
+        let label = if data.midi_learn_active { "🎹 Exit MIDI Learn" } else { "🎹 Enter MIDI Learn" };
+
+        let area_resp = egui::Area::new(popup_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    if ui.button(label).clicked() {
+                        actions.midi_learn_toggle = true;
+                        ctx.memory_mut(|mem| {
+                            mem.data.remove::<egui::Pos2>(popup_id);
+                            mem.data.remove::<bool>(popup_fresh_id);
+                        });
+                    }
+                });
+            });
+
+        // Dismiss on primary click outside the popup (but not on the fresh frame)
+        if !popup_fresh {
+            if ctx.input(|i| i.pointer.primary_clicked()) {
+                let popup_rect = area_resp.response.rect;
+                let click_pos = ctx.input(|i| i.pointer.interact_pos());
+                if let Some(click) = click_pos {
+                    if !popup_rect.contains(click) {
+                        ctx.memory_mut(|mem| {
+                            mem.data.remove::<egui::Pos2>(popup_id);
+                            mem.data.remove::<bool>(popup_fresh_id);
+                        });
+                    }
+                }
+            }
+        } else {
+            // Clear the fresh flag for next frame
+            ctx.memory_mut(|mem| {
+                mem.data.insert_temp(popup_fresh_id, false);
+            });
+        }
+    }
+
+    // === KEYBOARD SHORTCUTS (global) ===
+    // L key: toggle library panel (only if no text field has focus)
+    if !ctx.wants_keyboard_input() {
+        if ctx.input(|i| i.key_pressed(egui::Key::L)) {
+            actions.toggle_library_panel = true;
+        }
+    }
 
     actions
 }
@@ -126,6 +434,112 @@ fn render_notifications(ctx: &egui::Context, notifications: &[NotificationUI], a
     ctx.request_repaint();
 }
 
+/// Render the left library panel — generators, effects, images, video, solid color
+fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    ui.horizontal(|ui| {
+        ui.heading("📚 Library");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button("◀").on_hover_text("Close library (L)").clicked() {
+                actions.toggle_library_panel = true;
+            }
+        });
+    });
+    ui.separator();
+
+    egui::ScrollArea::vertical().scroll_source(egui::scroll_area::ScrollSource {
+        scroll_bar: true,
+        drag: false,
+        mouse_wheel: true,
+    }).show(ui, |ui| {
+        // === GENERATORS ===
+        let gen_header = egui::RichText::new(format!("🎨 Generators ({})", data.generators.len())).strong();
+        egui::CollapsingHeader::new(gen_header).default_open(true).show(ui, |ui| {
+            for (name, gen_idx) in &data.generators {
+                let item_id = egui::Id::new(("lib_gen", *gen_idx));
+                let resp = ui.dnd_drag_source(item_id, LibraryDrag::Generator(*gen_idx), |ui| {
+                    ui.label(egui::RichText::new(format!("  ◆ {}", name)).size(12.0));
+                }).response;
+                // Store generator index in temp memory so the deferred drop handler can use it
+                if ui.ctx().is_being_dragged(item_id) {
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(egui::Id::new("__lib_dnd_gen_idx"), *gen_idx);
+                    });
+                }
+                // Fallback: double-click adds to first channel
+                if resp.double_clicked() {
+                    actions.shader_to_add = Some((0, *gen_idx));
+                }
+                resp.on_hover_text("Drag to a channel to create a deck, or double-click to add to Ch 1");
+            }
+        });
+
+        ui.add_space(4.0);
+
+        // === EFFECTS ===
+        let fx_header = egui::RichText::new(format!("🔮 Effects ({})", data.filters.len())).strong();
+        egui::CollapsingHeader::new(fx_header).default_open(true).show(ui, |ui| {
+            for (name, filter_idx) in &data.filters {
+                let item_id = egui::Id::new(("lib_fx", *filter_idx));
+                ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
+                    ui.label(egui::RichText::new(format!("  ◇ {}", name)).size(12.0));
+                });
+                // Store effect filter index in temp memory for deferred drop handler
+                if ui.ctx().is_being_dragged(item_id) {
+                    ui.ctx().memory_mut(|mem| {
+                        mem.data.insert_temp(egui::Id::new("__lib_dnd_fx_idx"), *filter_idx);
+                    });
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+
+        // === IMAGES ===
+        let img_header = egui::RichText::new("🖼 Images").strong();
+        egui::CollapsingHeader::new(img_header).default_open(false).show(ui, |ui| {
+            ui.label(egui::RichText::new("Load image files as deck sources").small().weak());
+            for ch in &data.channels {
+                if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
+                    actions.open_image_dialog_for_channel = Some(ch.ch_idx);
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+
+        // === VIDEO ===
+        let vid_header = egui::RichText::new("🎬 Video").strong();
+        egui::CollapsingHeader::new(vid_header).default_open(false).show(ui, |ui| {
+            ui.label(egui::RichText::new("Load video files as deck sources").small().weak());
+            for ch in &data.channels {
+                if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
+                    actions.open_video_dialog_for_channel = Some(ch.ch_idx);
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+
+        // === SOLID COLOR ===
+        let color_header = egui::RichText::new("🎨 Solid Color").strong();
+        egui::CollapsingHeader::new(color_header).default_open(false).show(ui, |ui| {
+            for ch in &data.channels {
+                if ui.button(format!("Add to {}", ch.name)).clicked() {
+                    actions.solid_color_to_add = Some((ch.ch_idx, [0.0, 0.0, 0.0, 1.0]));
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+
+        // === AUDIO (placeholder) ===
+        let audio_header = egui::RichText::new("🔊 Audio").strong();
+        egui::CollapsingHeader::new(audio_header).default_open(false).show(ui, |ui| {
+            ui.label(egui::RichText::new("Audio sources (coming soon)").small().weak());
+        });
+    });
+}
+
 /// Render the right side panel (main output + master effects only)
 fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -174,14 +588,23 @@ fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
         ui.add_space(10.0);
         ui.separator();
 
-        // Modulation sources (moved from bottom bar)
+        // Modulation sources
         render_modulation_section(ui, data, actions);
 
         ui.add_space(10.0);
         ui.separator();
 
-        // Shader browser (moved from bottom bar)
-        render_shader_browser(ui, data, actions);
+        // Library panel toggle (if closed, show a button to reopen)
+        if !data.library_panel_open {
+            if ui.button("📚 Open Library (L)").clicked() {
+                actions.toggle_library_panel = true;
+            }
+            ui.add_space(10.0);
+            ui.separator();
+        }
+
+        // MIDI devices & mappings
+        render_midi_section(ui, data, actions);
 
         ui.add_space(10.0);
         ui.separator();
@@ -320,7 +743,7 @@ fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
 
     // Handle drag interactions on the canvas
     let drag_id = ui.id().with("surface_drag");
-    let drag_state = ui.memory(|mem| {
+    let _drag_state = ui.memory(|mem| {
         mem.data.get_temp::<SurfaceDragState>(drag_id)
     });
 
@@ -330,18 +753,19 @@ fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
             let ny = (pos.y - canvas_rect.top()) / canvas_height;
 
             // Check if near a vertex (drag vertex) or inside a surface (move whole shape)
-            let vertex_threshold = 12.0 / canvas_width;
+            // Use pixel-space distance for correct hit detection on non-square canvas
+            let vertex_threshold_px = 14.0;
             let mut found_vertex = None;
             let mut found_surface = None;
 
             for (i, surface) in data.surfaces.iter().enumerate().rev() {
                 if let Some(vert_idx) = surface.vertices.iter().enumerate()
                     .map(|(vi, v)| {
-                        let dx = nx - v[0];
-                        let dy = ny - v[1];
-                        (vi, (dx * dx + dy * dy).sqrt())
+                        let dx_px = (nx - v[0]) * canvas_width;
+                        let dy_px = (ny - v[1]) * canvas_height;
+                        (vi, (dx_px * dx_px + dy_px * dy_px).sqrt())
                     })
-                    .filter(|(_, d)| *d < vertex_threshold)
+                    .filter(|(_, d)| *d < vertex_threshold_px)
                     .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                     .map(|(vi, _)| vi)
                 {
@@ -468,7 +892,7 @@ fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
                             for ch in &data.channels {
                                 if ui.selectable_label(
                                     surface.source == OutputSource::Channel(ch.ch_idx),
-                                    format!("Ch: {}", ch.name),
+                                    &ch.name,
                                 ).clicked() {
                                     actions.surface_actions.push(SurfaceAction::SetSource {
                                         idx: i,
@@ -574,12 +998,16 @@ struct StageEditorState {
     circle_center: Option<[f32; 2]>,
     /// Number of sides for circle/N-gon approximation
     circle_sides: u32,
-    /// Currently selected surface index
-    selected_surface: Option<usize>,
+    /// Currently selected surface indices (supports multi-select)
+    selected_surfaces: std::collections::BTreeSet<usize>,
     /// Drag state for vertex editing in select mode
     dragging_vertex: Option<(usize, usize)>, // (surface_idx, vertex_idx)
     /// Drag state for moving whole surface in select mode
     moving_surface: Option<(usize, f32, f32)>, // (surface_idx, last_x, last_y)
+    /// Marquee selection: start position of drag rectangle in normalized coords
+    selection_rect_start: Option<[f32; 2]>,
+    /// Drag state for radius handle on circle surfaces
+    dragging_radius: Option<usize>, // surface_idx
 }
 
 /// Full-screen stage editor — replaces the deck view
@@ -647,22 +1075,45 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
             ui.add(egui::DragValue::new(&mut state.circle_sides).range(3..=128).speed(1));
         }
 
-        // Duplicate & flip (enabled when a surface is selected)
+        // Circle-specific toolbar: when exactly one circle is selected, show radius/sides/convert
+        let selected_circle = if state.selected_surfaces.len() == 1 {
+            let idx = *state.selected_surfaces.iter().next().unwrap();
+            data.surfaces.get(idx).and_then(|s| s.circle_hint.map(|h| (idx, h)))
+        } else {
+            None
+        };
+        if let Some((sel_idx, hint)) = selected_circle {
+            ui.separator();
+            ui.label("⬤ Circle:");
+            let mut radius = hint.radius;
+            if ui.add(egui::DragValue::new(&mut radius).prefix("R: ").range(0.01..=1.0).speed(0.005)).changed() {
+                actions.surface_actions.push(SurfaceAction::SetCircleRadius { idx: sel_idx, radius });
+            }
+            let mut sides = hint.sides;
+            if ui.add(egui::DragValue::new(&mut sides).prefix("Sides: ").range(3..=128).speed(1)).changed() {
+                actions.surface_actions.push(SurfaceAction::SetCircleSides { idx: sel_idx, sides });
+            }
+            if ui.button("⬠ Convert to Polygon").on_hover_text("Drop circle identity, keep vertices as polygon").clicked() {
+                actions.surface_actions.push(SurfaceAction::ConvertToPolygon { idx: sel_idx });
+            }
+        }
+
+        // Duplicate & flip (enabled when any surfaces are selected)
         ui.separator();
-        let has_sel = state.selected_surface.is_some();
+        let has_sel = !state.selected_surfaces.is_empty();
         ui.add_enabled_ui(has_sel, |ui| {
             if ui.button("📋 Dup").on_hover_text("Duplicate selected (D)").clicked() {
-                if let Some(idx) = state.selected_surface {
+                for &idx in &state.selected_surfaces {
                     actions.surface_actions.push(SurfaceAction::Duplicate { idx });
                 }
             }
             if ui.button("↔ Flip H").on_hover_text("Flip horizontal (H)").clicked() {
-                if let Some(idx) = state.selected_surface {
+                for &idx in &state.selected_surfaces {
                     actions.surface_actions.push(SurfaceAction::FlipHorizontal { idx });
                 }
             }
             if ui.button("↕ Flip V").on_hover_text("Flip vertical (V)").clicked() {
-                if let Some(idx) = state.selected_surface {
+                for &idx in &state.selected_surfaces {
                     actions.surface_actions.push(SurfaceAction::FlipVertical { idx });
                 }
             }
@@ -725,7 +1176,7 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
 
     for (i, surface) in data.surfaces.iter().enumerate() {
         let color = surface_colors[i % surface_colors.len()];
-        let is_selected = state.selected_surface == Some(i);
+        let is_selected = state.selected_surfaces.contains(&i);
         let fill_alpha = if is_selected { 120 } else { 60 };
         let fill = egui::Color32::from_rgba_premultiplied(color.r() / 3, color.g() / 3, color.b() / 3, fill_alpha);
         let stroke_width = if is_selected { 2.5 } else { 1.5 };
@@ -753,11 +1204,32 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
         );
         painter.text(center_px, egui::Align2::CENTER_CENTER, &surface.name, egui::FontId::proportional(13.0), egui::Color32::WHITE);
 
-        // Vertex handles (larger in editor)
-        let handle_size = if is_selected { 8.0 } else { 5.0 };
-        for v in &pixel_verts {
-            let handle_rect = egui::Rect::from_center_size(*v, egui::vec2(handle_size, handle_size));
-            painter.rect_filled(handle_rect, 2.0, color);
+        // For circles: render radius handle instead of vertex handles
+        if is_selected && surface.circle_hint.is_some() {
+            let hint = surface.circle_hint.unwrap();
+            let cx_px = canvas_rect.left() + hint.center[0] * canvas_width;
+            let cy_px = canvas_rect.top() + hint.center[1] * canvas_height;
+            let center_pos = egui::pos2(cx_px, cy_px);
+            // Radius ring — compute the pixel radius at angle=0
+            let radius_px_x = hint.radius * canvas_width;
+            let radius_px_y = hint.radius * hint.aspect_ratio * canvas_height;
+            let avg_radius_px = (radius_px_x + radius_px_y) / 2.0;
+            // Center dot (white)
+            painter.circle_filled(center_pos, 4.0, egui::Color32::WHITE);
+            // Radius ring (yellow, dashed look via stroke)
+            painter.circle_stroke(center_pos, avg_radius_px, egui::Stroke::new(1.0, egui::Color32::YELLOW));
+            // Radius handle at angle=0 (yellow dot on the right)
+            let handle_pos = egui::pos2(cx_px + radius_px_x, cy_px);
+            painter.circle_filled(handle_pos, 6.0, egui::Color32::YELLOW);
+            painter.circle_stroke(handle_pos, 6.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+        } else {
+            // Regular vertex handles
+            let handle_size = if is_selected { 10.0 } else { 7.0 };
+            for v in &pixel_verts {
+                let handle_rect = egui::Rect::from_center_size(*v, egui::vec2(handle_size, handle_size));
+                painter.rect_filled(handle_rect, 2.0, if is_selected { egui::Color32::WHITE } else { color });
+                painter.rect_stroke(handle_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::BLACK), egui::StrokeKind::Outside);
+            }
         }
     }
 
@@ -848,20 +1320,25 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
 
     match state.tool {
         DrawingTool::Select => {
+            // Helper: pixel-space distance between a normalized point and a vertex
+            let pixel_dist = |nx: f32, ny: f32, vx: f32, vy: f32| -> f32 {
+                let dx_px = (nx - vx) * canvas_width;
+                let dy_px = (ny - vy) * canvas_height;
+                (dx_px * dx_px + dy_px * dy_px).sqrt()
+            };
+
             // Helper: find what's under the cursor (vertex, edge, or surface interior)
             let hit_test = |nx: f32, ny: f32| -> (Option<(usize, usize)>, Option<(usize, usize, [f32; 2])>, Option<(usize, f32, f32)>) {
-                let vertex_threshold = 12.0 / canvas_width;
-                let edge_threshold = 8.0 / canvas_width;
+                let vertex_threshold_px = 14.0; // pixels
+                let edge_threshold_px = 10.0;   // pixels
                 let mut found_vertex = None;
                 let mut found_edge = None;
                 let mut found_surface = None;
 
                 for (i, surface) in data.surfaces.iter().enumerate().rev() {
-                    // Check vertices
+                    // Check vertices (pixel-space distance for correct hit on non-square canvas)
                     for (vi, v) in surface.vertices.iter().enumerate() {
-                        let dx = nx - v[0];
-                        let dy = ny - v[1];
-                        if (dx * dx + dy * dy).sqrt() < vertex_threshold {
+                        if pixel_dist(nx, ny, v[0], v[1]) < vertex_threshold_px {
                             found_vertex = Some((i, vi));
                             return (found_vertex, None, None);
                         }
@@ -875,18 +1352,19 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                             let ej = (ei + 1) % n;
                             let (ax, ay) = (verts[ei][0], verts[ei][1]);
                             let (bx, by) = (verts[ej][0], verts[ej][1]);
-                            // Project point onto edge segment
-                            let dx = bx - ax;
-                            let dy = by - ay;
+                            // Project point onto edge segment (in pixel space for accuracy)
+                            let dx = (bx - ax) * canvas_width;
+                            let dy = (by - ay) * canvas_height;
                             let len_sq = dx * dx + dy * dy;
-                            if len_sq < 1e-10 { continue; }
-                            let t = ((nx - ax) * dx + (ny - ay) * dy) / len_sq;
+                            if len_sq < 1e-6 { continue; }
+                            let px_nx = (nx - ax) * canvas_width;
+                            let px_ny = (ny - ay) * canvas_height;
+                            let t = (px_nx * dx + px_ny * dy) / len_sq;
                             let t = t.clamp(0.0, 1.0);
-                            let px = ax + t * dx;
-                            let py = ay + t * dy;
-                            let dist = ((nx - px).powi(2) + (ny - py).powi(2)).sqrt();
-                            if dist < edge_threshold {
-                                found_edge = Some((i, ei, [px, py]));
+                            let proj_x = ax + t * (bx - ax);
+                            let proj_y = ay + t * (by - ay);
+                            if pixel_dist(nx, ny, proj_x, proj_y) < edge_threshold_px {
+                                found_edge = Some((i, ei, [proj_x, proj_y]));
                                 break;
                             }
                         }
@@ -916,17 +1394,45 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                 (found_vertex, found_edge, found_surface)
             };
 
+            // Hover feedback: change cursor when over interactive elements
+            if let Some(pos) = canvas_response.hover_pos() {
+                let [nx, ny] = to_norm(pos);
+                let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
+                if found_vertex.is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                } else if found_surface.is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+            }
+
+            let shift_held = ui.input(|i| i.modifiers.shift);
+
             // Click to select (without drag)
             if canvas_response.clicked() {
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
                     let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
                     if let Some((si, _vi)) = found_vertex {
-                        state.selected_surface = Some(si);
+                        if shift_held {
+                            // Toggle selection with shift
+                            if !state.selected_surfaces.remove(&si) {
+                                state.selected_surfaces.insert(si);
+                            }
+                        } else {
+                            state.selected_surfaces.clear();
+                            state.selected_surfaces.insert(si);
+                        }
                     } else if let Some((si, _lx, _ly)) = found_surface {
-                        state.selected_surface = Some(si);
-                    } else {
-                        state.selected_surface = None;
+                        if shift_held {
+                            if !state.selected_surfaces.remove(&si) {
+                                state.selected_surfaces.insert(si);
+                            }
+                        } else {
+                            state.selected_surfaces.clear();
+                            state.selected_surfaces.insert(si);
+                        }
+                    } else if !shift_held {
+                        state.selected_surfaces.clear();
                     }
                 }
             }
@@ -943,29 +1449,69 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                             after_vert_idx: ei,
                             position: snapped,
                         });
-                        state.selected_surface = Some(si);
+                        state.selected_surfaces.clear();
+                        state.selected_surfaces.insert(si);
                     }
                 }
             }
 
-            // Drag start: begin vertex drag or surface move
+            // Drag start: begin radius drag, vertex drag, surface move, or marquee selection
             if canvas_response.drag_started() {
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
-                    let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
 
-                    if let Some((si, vi)) = found_vertex {
-                        state.selected_surface = Some(si);
-                        state.dragging_vertex = Some((si, vi));
-                        state.moving_surface = None;
-                    } else if let Some((si, lx, ly)) = found_surface {
-                        state.selected_surface = Some(si);
-                        state.moving_surface = Some((si, lx, ly));
+                    // Check for radius handle hit on selected circles first
+                    let mut found_radius_handle = None;
+                    for &si in &state.selected_surfaces {
+                        if let Some(surface) = data.surfaces.get(si) {
+                            if let Some(hint) = &surface.circle_hint {
+                                // Radius handle is at angle=0: (center_x + radius, center_y)
+                                let hx = hint.center[0] + hint.radius;
+                                let hy = hint.center[1];
+                                if pixel_dist(nx, ny, hx, hy) < 14.0 {
+                                    found_radius_handle = Some(si);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(si) = found_radius_handle {
+                        state.dragging_radius = Some(si);
                         state.dragging_vertex = None;
+                        state.moving_surface = None;
+                        state.selection_rect_start = None;
                     } else {
-                        state.selected_surface = None;
-                        state.dragging_vertex = None;
-                        state.moving_surface = None;
+                        let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
+
+                        if let Some((si, vi)) = found_vertex {
+                            // If vertex drag on a circle, auto-convert to polygon first
+                            if data.surfaces.get(si).map_or(false, |s| s.circle_hint.is_some()) {
+                                actions.surface_actions.push(SurfaceAction::ConvertToPolygon { idx: si });
+                            }
+                            if !shift_held {
+                                state.selected_surfaces.clear();
+                            }
+                            state.selected_surfaces.insert(si);
+                            state.dragging_vertex = Some((si, vi));
+                            state.moving_surface = None;
+                            state.selection_rect_start = None;
+                        } else if let Some((si, lx, ly)) = found_surface {
+                            if !shift_held && !state.selected_surfaces.contains(&si) {
+                                state.selected_surfaces.clear();
+                            }
+                            state.selected_surfaces.insert(si);
+                            state.moving_surface = Some((si, lx, ly));
+                            state.dragging_vertex = None;
+                            state.selection_rect_start = None;
+                        } else {
+                            if !shift_held {
+                                state.selected_surfaces.clear();
+                            }
+                            state.selection_rect_start = Some([nx, ny]);
+                            state.dragging_vertex = None;
+                            state.moving_surface = None;
+                        }
                     }
                 }
             }
@@ -974,7 +1520,20 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
 
-                    if let Some((si, vi)) = state.dragging_vertex {
+                    if let Some(si) = state.dragging_radius {
+                        // Compute new radius from cursor distance to circle center
+                        if let Some(surface) = data.surfaces.get(si) {
+                            if let Some(hint) = &surface.circle_hint {
+                                let dx = nx - hint.center[0];
+                                let dy = ny - hint.center[1];
+                                // Use x-distance as primary radius (consistent with angle=0 handle)
+                                let new_radius = (dx * dx + dy * dy).sqrt().max(0.01);
+                                actions.surface_actions.push(SurfaceAction::SetCircleRadius {
+                                    idx: si, radius: new_radius,
+                                });
+                            }
+                        }
+                    } else if let Some((si, vi)) = state.dragging_vertex {
                         if let Some(surface) = data.surfaces.get(si) {
                             let mut new_verts = surface.vertices.clone();
                             if vi < new_verts.len() {
@@ -984,32 +1543,81 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                                 });
                             }
                         }
-                    } else if let Some((si, lx, ly)) = state.moving_surface {
-                        if let Some(surface) = data.surfaces.get(si) {
-                            let dx = nx - lx;
-                            let dy = ny - ly;
-                            let new_verts: Vec<[f32; 2]> = surface.vertices.iter()
-                                .map(|v| [(v[0] + dx).clamp(0.0, 1.0), (v[1] + dy).clamp(0.0, 1.0)])
-                                .collect();
-                            actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                idx: si, vertices: new_verts,
-                            });
-                            state.moving_surface = Some((si, nx, ny));
+                    } else if let Some((_si, lx, ly)) = state.moving_surface {
+                        let dx = nx - lx;
+                        let dy = ny - ly;
+                        // Move ALL selected surfaces by the same delta
+                        for &surf_idx in &state.selected_surfaces {
+                            if let Some(surface) = data.surfaces.get(surf_idx) {
+                                let new_verts: Vec<[f32; 2]> = surface.vertices.iter()
+                                    .map(|v| [(v[0] + dx).clamp(0.0, 1.0), (v[1] + dy).clamp(0.0, 1.0)])
+                                    .collect();
+                                actions.surface_actions.push(SurfaceAction::UpdateVertices {
+                                    idx: surf_idx, vertices: new_verts,
+                                });
+                            }
                         }
+                        state.moving_surface = Some((_si, nx, ny));
+                    } else if let Some(start) = state.selection_rect_start {
+                        // Draw marquee selection rectangle
+                        let x0 = canvas_rect.left() + start[0] * canvas_width;
+                        let y0 = canvas_rect.top() + start[1] * canvas_height;
+                        let x1 = canvas_rect.left() + nx * canvas_width;
+                        let y1 = canvas_rect.top() + ny * canvas_height;
+                        let sel_rect = egui::Rect::from_two_pos(
+                            egui::pos2(x0, y0),
+                            egui::pos2(x1, y1),
+                        );
+                        painter.rect_filled(sel_rect, 0.0, egui::Color32::from_rgba_premultiplied(80, 130, 255, 40));
+                        painter.rect_stroke(sel_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 255)), egui::StrokeKind::Outside);
                     }
                 }
             }
 
             if canvas_response.drag_stopped() {
+                // Finish marquee selection: select all surfaces that intersect the rect
+                if let Some(start) = state.selection_rect_start {
+                    if let Some(pos) = canvas_response.interact_pointer_pos() {
+                        let [nx, ny] = to_norm(pos);
+                        let sel_min_x = start[0].min(nx);
+                        let sel_max_x = start[0].max(nx);
+                        let sel_min_y = start[1].min(ny);
+                        let sel_max_y = start[1].max(ny);
+
+                        for (i, surface) in data.surfaces.iter().enumerate() {
+                            // Compute bounding box of surface vertices
+                            let (mut bb_min_x, mut bb_min_y) = (f32::MAX, f32::MAX);
+                            let (mut bb_max_x, mut bb_max_y) = (f32::MIN, f32::MIN);
+                            for v in &surface.vertices {
+                                bb_min_x = bb_min_x.min(v[0]);
+                                bb_min_y = bb_min_y.min(v[1]);
+                                bb_max_x = bb_max_x.max(v[0]);
+                                bb_max_y = bb_max_y.max(v[1]);
+                            }
+                            // Check if surface bounding box overlaps the selection rect
+                            let intersects = bb_min_x < sel_max_x && bb_max_x > sel_min_x &&
+                                bb_min_y < sel_max_y && bb_max_y > sel_min_y;
+                            if intersects {
+                                state.selected_surfaces.insert(i);
+                            }
+                        }
+                    }
+                }
+                state.selection_rect_start = None;
                 state.dragging_vertex = None;
                 state.moving_surface = None;
+                state.dragging_radius = None;
             }
 
-            // Delete selected surface with delete key
-            if state.selected_surface.is_some() {
+            // Delete selected surfaces with delete key
+            if !state.selected_surfaces.is_empty() {
                 if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
-                    actions.surface_actions.push(SurfaceAction::Remove { idx: state.selected_surface.unwrap() });
-                    state.selected_surface = None;
+                    // Remove in reverse order to preserve indices
+                    let indices: Vec<usize> = state.selected_surfaces.iter().copied().rev().collect();
+                    for idx in indices {
+                        actions.surface_actions.push(SurfaceAction::Remove { idx });
+                    }
+                    state.selected_surfaces.clear();
                 }
             }
         }
@@ -1019,7 +1627,8 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
                     if let Some(si) = point_in_any_surface(nx, ny) {
-                        state.selected_surface = Some(si);
+                        state.selected_surfaces.clear();
+                        state.selected_surfaces.insert(si);
                         state.moving_surface = Some((si, nx, ny));
                         state.tool = DrawingTool::Select;
                     } else {
@@ -1057,7 +1666,8 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                     let mut handled = false;
                     if state.polygon_verts.is_empty() {
                         if let Some(si) = point_in_any_surface(pt[0], pt[1]) {
-                            state.selected_surface = Some(si);
+                            state.selected_surfaces.clear();
+                            state.selected_surfaces.insert(si);
                             state.tool = DrawingTool::Select;
                             handled = true;
                         }
@@ -1105,7 +1715,8 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
                     if let Some(si) = point_in_any_surface(nx, ny) {
-                        state.selected_surface = Some(si);
+                        state.selected_surfaces.clear();
+                        state.selected_surfaces.insert(si);
                         state.moving_surface = Some((si, nx, ny));
                         state.tool = DrawingTool::Select;
                     } else {
@@ -1117,22 +1728,20 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                 if let Some(center) = state.circle_center.take() {
                     if let Some(pos) = canvas_response.interact_pointer_pos() {
                         let end = to_norm(pos);
-                        // Compute radius in normalized space (use average of x/y scale)
                         let rx = (end[0] - center[0]).abs();
                         let ry = (end[1] - center[1]).abs();
                         let radius = (rx.max(ry)).max(0.02);
                         let sides = state.circle_sides.max(3);
-                        let vertices: Vec<[f32; 2]> = (0..sides).map(|i| {
-                            let angle = 2.0 * std::f32::consts::PI * i as f32 / sides as f32;
-                            [
-                                snap((center[0] + angle.cos() * radius).clamp(0.0, 1.0)),
-                                snap((center[1] + angle.sin() * radius * (canvas_width / canvas_height)).clamp(0.0, 1.0)),
-                            ]
-                        }).collect();
+                        let aspect_ratio = canvas_width / canvas_height;
                         let idx = data.surfaces.len() + 1;
-                        actions.surface_actions.push(SurfaceAction::AddPolygon {
+                        actions.surface_actions.push(SurfaceAction::AddCircle {
                             name: format!("Surface {}", idx),
-                            vertices,
+                            hint: CircleHint {
+                                center,
+                                radius,
+                                sides,
+                                aspect_ratio,
+                            },
                             source: OutputSource::Master,
                         });
                     }
@@ -1151,16 +1760,22 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
         state.rect_start = None;
         state.circle_center = None;
     }
-    // Duplicate & flip shortcuts (when a surface is selected)
-    if let Some(idx) = state.selected_surface {
+    // Duplicate & flip shortcuts (when any surfaces are selected)
+    if !state.selected_surfaces.is_empty() {
         if ui.input(|i| i.key_pressed(egui::Key::D)) {
-            actions.surface_actions.push(SurfaceAction::Duplicate { idx });
+            for &idx in &state.selected_surfaces {
+                actions.surface_actions.push(SurfaceAction::Duplicate { idx });
+            }
         }
         if ui.input(|i| i.key_pressed(egui::Key::H)) {
-            actions.surface_actions.push(SurfaceAction::FlipHorizontal { idx });
+            for &idx in &state.selected_surfaces {
+                actions.surface_actions.push(SurfaceAction::FlipHorizontal { idx });
+            }
         }
         if ui.input(|i| i.key_pressed(egui::Key::V)) {
-            actions.surface_actions.push(SurfaceAction::FlipVertical { idx });
+            for &idx in &state.selected_surfaces {
+                actions.surface_actions.push(SurfaceAction::FlipVertical { idx });
+            }
         }
     }
 
@@ -1438,15 +2053,16 @@ fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
             .fill(egui::Color32::from_rgb(180, 80, 220))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("🎹 MIDI LEARN — Move a control to map it")
-                        .strong().color(egui::Color32::WHITE));
                     if let Some(target) = &data.midi_learn_target {
-                        ui.label(egui::RichText::new(format!("→ {}", target))
-                            .color(egui::Color32::from_rgb(255, 255, 200)));
+                        ui.label(egui::RichText::new(format!("🎹 MIDI LEARN — Move a control to map: {}", target))
+                            .strong().color(egui::Color32::WHITE));
+                    } else {
+                        ui.label(egui::RichText::new("🎹 MIDI LEARN — Click a parameter to select it")
+                            .strong().color(egui::Color32::WHITE));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("✕ Cancel").clicked() {
-                            actions.midi_learn_cancel = true;
+                        if ui.button("✕ Exit MIDI Learn").clicked() {
+                            actions.midi_learn_toggle = true;
                         }
                     });
                 });
@@ -1599,7 +2215,9 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                 &mut actions.modulation_actions,
                                 &format!("sel_{}_{}", ch_idx, deck_idx),
                                 Some(&midi_path_prefix),
-                                &mut actions.midi_learn_start,
+                                data.midi_learn_active,
+                                &mut actions.midi_learn_select,
+                                data.midi_learn_target.as_deref(),
                                 &data.modulation_assignments,
                                 &data.modulation_current_values,
                                 &format!("ch{}_deck{}", ch_idx, deck_idx),
@@ -1615,83 +2233,120 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
 
             ui.separator();
 
-            // One column per effect
-            for (eff_idx, (eff_name, eff_enabled, eff_params)) in deck.effects.iter().enumerate() {
-                egui::Frame::default()
-                    .inner_margin(6.0)
-                    .corner_radius(4.0)
-                    .fill(ui.visuals().faint_bg_color)
-                    .show(ui, |ui| {
-                        ui.set_min_width(180.0);
-                        ui.set_max_width(250.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}_{}",ch_idx,deck_idx,eff_idx)).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let mut enabled = *eff_enabled;
-                                if ui.checkbox(&mut enabled, "").changed() {
-                                    actions.effect_to_toggle = Some((ch_idx, deck_idx, eff_idx));
-                                }
-                                ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong());
-                                if ui.small_button("✕").clicked() {
-                                    actions.effect_to_remove = Some((ch_idx, deck_idx, eff_idx));
+            // Effect chain: drag-and-drop reordering + library drops
+            {
+                for (eff_idx, (eff_name, eff_enabled, eff_params)) in deck.effects.iter().enumerate() {
+                    // Drop zone before this effect (for reordering)
+                    render_effect_drop_zone(ui, &format!("deck_{}_{}", ch_idx, deck_idx), eff_idx);
+
+                    // Effect card
+                    egui::Frame::default()
+                        .inner_margin(6.0)
+                        .corner_radius(4.0)
+                        .fill(ui.visuals().faint_bg_color)
+                        .show(ui, |ui| {
+                            ui.set_min_width(180.0);
+                            ui.set_max_width(250.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}_{}",ch_idx,deck_idx,eff_idx)).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let grip = ui.add(egui::Label::new(egui::RichText::new("⠿").weak().size(14.0)).sense(egui::Sense::drag()));
+                                    if grip.drag_started() {
+                                        egui::DragAndDrop::set_payload(ui.ctx(), EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
+                                        ui.ctx().memory_mut(|mem| {
+                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
+                                        });
+                                    } else if grip.dragged() {
+                                        ui.ctx().memory_mut(|mem| {
+                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
+                                        });
+                                    }
+                                    let mut enabled = *eff_enabled;
+                                    if ui.checkbox(&mut enabled, "").changed() {
+                                        actions.effect_to_toggle = Some((ch_idx, deck_idx, eff_idx));
+                                    }
+                                    ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong());
+                                    if ui.small_button("✕").clicked() {
+                                        actions.effect_to_remove = Some((ch_idx, deck_idx, eff_idx));
+                                    }
+                                });
+
+                                if !eff_params.params.is_empty() {
+                                    let ch_copy = ch_idx;
+                                    let deck_copy = deck_idx;
+                                    let eff_idx_copy = eff_idx;
+                                    let eff_midi_prefix = format!("ch/{}/deck/{}/effect/{}", ch_copy, deck_copy, eff_idx_copy);
+                                    widgets::render_effect_params(
+                                        ui,
+                                        &eff_params.params,
+                                        &data.modulation_sources,
+                                        &|name: &str, val: ParamValue| match val {
+                                            ParamValue::Float(v) => ParamUpdate::EffectFloat { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            ParamValue::Bool(v) => ParamUpdate::EffectBool { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            ParamValue::Color(v) => ParamUpdate::EffectColor { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            _ => unreachable!(),
+                                        },
+                                        Some(&|name: &str, src_idx: usize| ModulationAction::AssignEffectModulation {
+                                            ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy,
+                                            param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
+                                        }),
+                                        Some(&|name: &str| ModulationAction::RemoveEffectAssignment {
+                                            ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy,
+                                            param_name: name.to_string(),
+                                        }),
+                                        &mut actions.param_updates,
+                                        &mut actions.modulation_actions,
+                                        &format!("fx_{}_{}_{}", ch_copy, deck_copy, eff_idx_copy),
+                                        Some(&eff_midi_prefix),
+                                        data.midi_learn_active,
+                                        &mut actions.midi_learn_select,
+                                        data.midi_learn_target.as_deref(),
+                                        &data.modulation_assignments,
+                                        &data.modulation_current_values,
+                                        &format!("ch{}_deck{}_fx{}", ch_copy, deck_copy, eff_idx_copy),
+                                    );
                                 }
                             });
+                            });
+                        });
+                    ui.separator();
+                }
 
-                            if !eff_params.params.is_empty() {
-                                let ch_copy = ch_idx;
-                                let deck_copy = deck_idx;
-                                let eff_idx_copy = eff_idx;
-                                let eff_midi_prefix = format!("ch/{}/deck/{}/effect/{}", ch_copy, deck_copy, eff_idx_copy);
-                                widgets::render_effect_params(
-                                    ui,
-                                    &eff_params.params,
-                                    &data.modulation_sources,
-                                    &|name: &str, val: ParamValue| match val {
-                                        ParamValue::Float(v) => ParamUpdate::EffectFloat { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        ParamValue::Bool(v) => ParamUpdate::EffectBool { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        ParamValue::Color(v) => ParamUpdate::EffectColor { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        _ => unreachable!(),
-                                    },
-                                    Some(&|name: &str, src_idx: usize| ModulationAction::AssignEffectModulation {
-                                        ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy,
-                                        param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
-                                    }),
-                                    Some(&|name: &str| ModulationAction::RemoveEffectAssignment {
-                                        ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy,
-                                        param_name: name.to_string(),
-                                    }),
-                                    &mut actions.param_updates,
-                                    &mut actions.modulation_actions,
-                                    &format!("fx_{}_{}_{}", ch_copy, deck_copy, eff_idx_copy),
-                                    Some(&eff_midi_prefix),
-                                    &mut actions.midi_learn_start,
-                                    &data.modulation_assignments,
-                                    &data.modulation_current_values,
-                                    &format!("ch{}_deck{}_fx{}", ch_copy, deck_copy, eff_idx_copy),
-                                );
-                            }
-                        });
-                        });
+                // Drop zone after last effect (for reordering to end)
+                if !deck.effects.is_empty() {
+                    let num_effects = deck.effects.len();
+                    render_effect_drop_zone(ui, &format!("deck_{}_{}", ch_idx, deck_idx), num_effects);
+                }
+
+                // Remaining space: always present drop target that fills remaining width
+                let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+                    .map(|p| matches!(&*p, LibraryDrag::Effect(_))).unwrap_or(false);
+                let remaining_w = ui.available_width().max(80.0);
+                let remaining_h = ui.available_height().max(40.0);
+                let stroke = if has_fx_drag { egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255)) } else { egui::Stroke::NONE };
+                let fill = if has_fx_drag { egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20) } else { egui::Color32::TRANSPARENT };
+                egui::Frame::default()
+                    .inner_margin(8.0)
+                    .corner_radius(4.0)
+                    .fill(fill)
+                    .stroke(stroke)
+                    .show(ui, |ui| {
+                        ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
+                        if deck.effects.is_empty() {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(egui::RichText::new("🔮 Drag effects here").weak());
+                            });
+                        }
                     });
-                ui.separator();
             }
 
-            // Add effect column
-            egui::Frame::default()
-                .inner_margin(6.0)
-                .corner_radius(4.0)
-                .fill(ui.visuals().faint_bg_color)
-                .show(ui, |ui| {
-                    ui.set_min_width(100.0);
-                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                    ui.label(egui::RichText::new("➕ Add Effect").strong());
-                    for (filter_name, filter_idx) in &data.filters {
-                        if ui.button(filter_name).clicked() {
-                            actions.effect_to_add = Some((ch_idx, deck_idx, *filter_idx));
-                        }
-                    }
-                    });
-                });
+            // Store the entire horizontal_top area as the drop rect for deferred library effect drops
+            let chain_rect = ui.min_rect();
+            let deck_chain_key = format!("deck_{}_{}", ch_idx, deck_idx);
+            ui.ctx().memory_mut(|mem| {
+                mem.data.insert_temp(egui::Id::new("deck_fx_drop_rect").with((ch_idx, deck_idx)), chain_rect);
+                mem.data.insert_temp(egui::Id::new("eff_dz_count").with(deck_chain_key), deck.effects.len() + 1);
+            });
         });
     });
 }
@@ -1700,83 +2355,116 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
 fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.heading("🎬 Master Effects");
 
-    // Horizontal columns: one per effect + add column
     egui::ScrollArea::horizontal().id_salt("master_fx_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
-            for (eff_idx, (eff_name, eff_enabled, eff_params)) in data.master_effect_info.iter().enumerate() {
-                egui::Frame::default()
-                    .inner_margin(6.0)
-                    .corner_radius(4.0)
-                    .fill(ui.visuals().faint_bg_color)
-                    .show(ui, |ui| {
-                        ui.set_min_width(180.0);
-                        ui.set_max_width(250.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        egui::ScrollArea::vertical().id_salt(format!("master_fx_scroll_{}", eff_idx)).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let mut enabled = *eff_enabled;
-                                if ui.checkbox(&mut enabled, "").changed() {
-                                    actions.master_effect_to_toggle = Some(eff_idx);
-                                }
-                                ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong());
-                                if ui.small_button("✕").clicked() {
-                                    actions.master_effect_to_remove = Some(eff_idx);
+            {
+                for (eff_idx, (eff_name, eff_enabled, eff_params)) in data.master_effect_info.iter().enumerate() {
+                    render_effect_drop_zone(ui, "master", eff_idx);
+
+                    egui::Frame::default()
+                        .inner_margin(6.0)
+                        .corner_radius(4.0)
+                        .fill(ui.visuals().faint_bg_color)
+                        .show(ui, |ui| {
+                            ui.set_min_width(180.0);
+                            ui.set_max_width(250.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            egui::ScrollArea::vertical().id_salt(format!("master_fx_scroll_{}", eff_idx)).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let grip = ui.add(egui::Label::new(egui::RichText::new("⠿").weak().size(14.0)).sense(egui::Sense::drag()));
+                                    if grip.drag_started() {
+                                        egui::DragAndDrop::set_payload(ui.ctx(), EffectDrag::Master(eff_idx));
+                                        ui.ctx().memory_mut(|mem| {
+                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Master(eff_idx));
+                                        });
+                                    } else if grip.dragged() {
+                                        ui.ctx().memory_mut(|mem| {
+                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Master(eff_idx));
+                                        });
+                                    }
+                                    let mut enabled = *eff_enabled;
+                                    if ui.checkbox(&mut enabled, "").changed() {
+                                        actions.master_effect_to_toggle = Some(eff_idx);
+                                    }
+                                    ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong());
+                                    if ui.small_button("✕").clicked() {
+                                        actions.master_effect_to_remove = Some(eff_idx);
+                                    }
+                                });
+
+                                if !eff_params.params.is_empty() {
+                                    let eff_idx_copy = eff_idx;
+                                    let midi_prefix = format!("master/effect/{}", eff_idx_copy);
+                                    widgets::render_effect_params(
+                                        ui,
+                                        &eff_params.params,
+                                        &data.modulation_sources,
+                                        &|name: &str, val: ParamValue| match val {
+                                            ParamValue::Float(v) => ParamUpdate::MasterEffectFloat { effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            ParamValue::Bool(v) => ParamUpdate::MasterEffectBool { effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            ParamValue::Color(v) => ParamUpdate::MasterEffectColor { effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            _ => unreachable!(),
+                                        },
+                                        Some(&|name: &str, src_idx: usize| ModulationAction::AssignMasterEffectModulation {
+                                            effect_idx: eff_idx_copy,
+                                            param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
+                                        }),
+                                        Some(&|name: &str| ModulationAction::RemoveMasterEffectAssignment {
+                                            effect_idx: eff_idx_copy,
+                                            param_name: name.to_string(),
+                                        }),
+                                        &mut actions.param_updates,
+                                        &mut actions.modulation_actions,
+                                        &format!("master_fx_{}", eff_idx_copy),
+                                        Some(&midi_prefix),
+                                        data.midi_learn_active,
+                                        &mut actions.midi_learn_select,
+                                        data.midi_learn_target.as_deref(),
+                                        &data.modulation_assignments,
+                                        &data.modulation_current_values,
+                                        &format!("master_fx{}", eff_idx_copy),
+                                    );
                                 }
                             });
+                            });
+                        });
+                    ui.separator();
+                }
 
-                            if !eff_params.params.is_empty() {
-                                let eff_idx_copy = eff_idx;
-                                let midi_prefix = format!("master/effect/{}", eff_idx_copy);
-                                widgets::render_effect_params(
-                                    ui,
-                                    &eff_params.params,
-                                    &data.modulation_sources,
-                                    &|name: &str, val: ParamValue| match val {
-                                        ParamValue::Float(v) => ParamUpdate::MasterEffectFloat { effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        ParamValue::Bool(v) => ParamUpdate::MasterEffectBool { effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        ParamValue::Color(v) => ParamUpdate::MasterEffectColor { effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        _ => unreachable!(),
-                                    },
-                                    Some(&|name: &str, src_idx: usize| ModulationAction::AssignMasterEffectModulation {
-                                        effect_idx: eff_idx_copy,
-                                        param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
-                                    }),
-                                    Some(&|name: &str| ModulationAction::RemoveMasterEffectAssignment {
-                                        effect_idx: eff_idx_copy,
-                                        param_name: name.to_string(),
-                                    }),
-                                    &mut actions.param_updates,
-                                    &mut actions.modulation_actions,
-                                    &format!("master_fx_{}", eff_idx_copy),
-                                    Some(&midi_prefix),
-                                    &mut actions.midi_learn_start,
-                                    &data.modulation_assignments,
-                                    &data.modulation_current_values,
-                                    &format!("master_fx{}", eff_idx_copy),
-                                );
-                            }
-                        });
-                        });
+                // Drop zone after last effect (for reordering)
+                if !data.master_effect_info.is_empty() {
+                    let num_effects = data.master_effect_info.len();
+                    render_effect_drop_zone(ui, "master", num_effects);
+                }
+
+                // Remaining space: always present drop target
+                let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+                    .map(|p| matches!(&*p, LibraryDrag::Effect(_))).unwrap_or(false);
+                let remaining_w = ui.available_width().max(80.0);
+                let remaining_h = ui.available_height().max(40.0);
+                let stroke = if has_fx_drag { egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255)) } else { egui::Stroke::NONE };
+                let fill = if has_fx_drag { egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20) } else { egui::Color32::TRANSPARENT };
+                egui::Frame::default()
+                    .inner_margin(8.0)
+                    .corner_radius(4.0)
+                    .fill(fill)
+                    .stroke(stroke)
+                    .show(ui, |ui| {
+                        ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
+                        if data.master_effect_info.is_empty() {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(egui::RichText::new("🔮 Drag effects here").weak());
+                            });
+                        }
                     });
-                ui.separator();
             }
 
-            // Add effect column
-            egui::Frame::default()
-                .inner_margin(6.0)
-                .corner_radius(4.0)
-                .fill(ui.visuals().faint_bg_color)
-                .show(ui, |ui| {
-                    ui.set_min_width(100.0);
-                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                    ui.label(egui::RichText::new("➕ Add Effect").strong());
-                    for (filter_name, filter_idx) in &data.filters {
-                        if ui.button(filter_name).clicked() {
-                            actions.master_effect_to_add = Some(*filter_idx);
-                        }
-                    }
-                    });
-                });
+            // Store master effect chain rect for deferred library drops
+            let chain_rect = ui.min_rect();
+            ui.ctx().memory_mut(|mem| {
+                mem.data.insert_temp(egui::Id::new("master_fx_drop_rect"), chain_rect);
+                mem.data.insert_temp(egui::Id::new("eff_dz_count").with("master".to_string()), data.master_effect_info.len() + 1);
+            });
         });
     });
 }
@@ -1792,84 +2480,118 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
     let accent = channel_color(ch_idx);
     ui.heading(egui::RichText::new(format!("🔮 Channel {} Effects", ch.name)).color(accent));
 
-    // Horizontal columns: one per effect + add column
     egui::ScrollArea::horizontal().id_salt("channel_fx_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
-            for (eff_idx, (eff_name, eff_enabled, eff_params)) in ch.effects.iter().enumerate() {
-                egui::Frame::default()
-                    .inner_margin(6.0)
-                    .corner_radius(4.0)
-                    .fill(ui.visuals().faint_bg_color)
-                    .show(ui, |ui| {
-                        ui.set_min_width(180.0);
-                        ui.set_max_width(250.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        egui::ScrollArea::vertical().id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx)).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let mut enabled = *eff_enabled;
-                                if ui.checkbox(&mut enabled, "").changed() {
-                                    actions.ch_effect_to_toggle = Some((ch_idx, eff_idx));
-                                }
-                                ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong().color(accent));
-                                if ui.small_button("✕").clicked() {
-                                    actions.ch_effect_to_remove = Some((ch_idx, eff_idx));
+            {
+                for (eff_idx, (eff_name, eff_enabled, eff_params)) in ch.effects.iter().enumerate() {
+                    render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), eff_idx);
+
+                    egui::Frame::default()
+                        .inner_margin(6.0)
+                        .corner_radius(4.0)
+                        .fill(ui.visuals().faint_bg_color)
+                        .show(ui, |ui| {
+                            ui.set_min_width(180.0);
+                            ui.set_max_width(250.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            egui::ScrollArea::vertical().id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx)).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let grip = ui.add(egui::Label::new(egui::RichText::new("⠿").weak().size(14.0)).sense(egui::Sense::drag()));
+                                    if grip.drag_started() {
+                                        egui::DragAndDrop::set_payload(ui.ctx(), EffectDrag::Channel(ch_idx, eff_idx));
+                                        ui.ctx().memory_mut(|mem| {
+                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Channel(ch_idx, eff_idx));
+                                        });
+                                    } else if grip.dragged() {
+                                        ui.ctx().memory_mut(|mem| {
+                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Channel(ch_idx, eff_idx));
+                                        });
+                                    }
+                                    let mut enabled = *eff_enabled;
+                                    if ui.checkbox(&mut enabled, "").changed() {
+                                        actions.ch_effect_to_toggle = Some((ch_idx, eff_idx));
+                                    }
+                                    ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong().color(accent));
+                                    if ui.small_button("✕").clicked() {
+                                        actions.ch_effect_to_remove = Some((ch_idx, eff_idx));
+                                    }
+                                });
+
+                                if !eff_params.params.is_empty() {
+                                    let ch_copy = ch_idx;
+                                    let eff_idx_copy = eff_idx;
+                                    let midi_prefix = format!("ch/{}/effect/{}", ch_copy, eff_idx_copy);
+                                    widgets::render_effect_params(
+                                        ui,
+                                        &eff_params.params,
+                                        &data.modulation_sources,
+                                        &|name: &str, val: ParamValue| match val {
+                                            ParamValue::Float(v) => ParamUpdate::ChannelEffectFloat { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            ParamValue::Bool(v) => ParamUpdate::ChannelEffectBool { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            ParamValue::Color(v) => ParamUpdate::ChannelEffectColor { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+                                            _ => unreachable!(),
+                                        },
+                                        Some(&|name: &str, src_idx: usize| ModulationAction::AssignChannelEffectModulation {
+                                            ch_idx: ch_copy, effect_idx: eff_idx_copy,
+                                            param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
+                                        }),
+                                        Some(&|name: &str| ModulationAction::RemoveChannelEffectAssignment {
+                                            ch_idx: ch_copy, effect_idx: eff_idx_copy,
+                                            param_name: name.to_string(),
+                                        }),
+                                        &mut actions.param_updates,
+                                        &mut actions.modulation_actions,
+                                        &format!("ch_fx_{}_{}", ch_copy, eff_idx_copy),
+                                        Some(&midi_prefix),
+                                        data.midi_learn_active,
+                                        &mut actions.midi_learn_select,
+                                        data.midi_learn_target.as_deref(),
+                                        &data.modulation_assignments,
+                                        &data.modulation_current_values,
+                                        &format!("ch{}_fx{}", ch_copy, eff_idx_copy),
+                                    );
                                 }
                             });
+                            });
+                        });
+                    ui.separator();
+                }
 
-                            if !eff_params.params.is_empty() {
-                                let ch_copy = ch_idx;
-                                let eff_idx_copy = eff_idx;
-                                let midi_prefix = format!("ch/{}/effect/{}", ch_copy, eff_idx_copy);
-                                widgets::render_effect_params(
-                                    ui,
-                                    &eff_params.params,
-                                    &data.modulation_sources,
-                                    &|name: &str, val: ParamValue| match val {
-                                        ParamValue::Float(v) => ParamUpdate::ChannelEffectFloat { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        ParamValue::Bool(v) => ParamUpdate::ChannelEffectBool { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        ParamValue::Color(v) => ParamUpdate::ChannelEffectColor { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                        _ => unreachable!(),
-                                    },
-                                    Some(&|name: &str, src_idx: usize| ModulationAction::AssignChannelEffectModulation {
-                                        ch_idx: ch_copy, effect_idx: eff_idx_copy,
-                                        param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
-                                    }),
-                                    Some(&|name: &str| ModulationAction::RemoveChannelEffectAssignment {
-                                        ch_idx: ch_copy, effect_idx: eff_idx_copy,
-                                        param_name: name.to_string(),
-                                    }),
-                                    &mut actions.param_updates,
-                                    &mut actions.modulation_actions,
-                                    &format!("ch_fx_{}_{}", ch_copy, eff_idx_copy),
-                                    Some(&midi_prefix),
-                                    &mut actions.midi_learn_start,
-                                    &data.modulation_assignments,
-                                    &data.modulation_current_values,
-                                    &format!("ch{}_fx{}", ch_copy, eff_idx_copy),
-                                );
-                            }
-                        });
-                        });
+                // Drop zone after last effect (for reordering)
+                if !ch.effects.is_empty() {
+                    let num_effects = ch.effects.len();
+                    render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), num_effects);
+                }
+
+                // Remaining space: always present drop target
+                let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+                    .map(|p| matches!(&*p, LibraryDrag::Effect(_))).unwrap_or(false);
+                let remaining_w = ui.available_width().max(80.0);
+                let remaining_h = ui.available_height().max(40.0);
+                let stroke = if has_fx_drag { egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255)) } else { egui::Stroke::NONE };
+                let fill = if has_fx_drag { egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20) } else { egui::Color32::TRANSPARENT };
+                egui::Frame::default()
+                    .inner_margin(8.0)
+                    .corner_radius(4.0)
+                    .fill(fill)
+                    .stroke(stroke)
+                    .show(ui, |ui| {
+                        ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
+                        if ch.effects.is_empty() {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(egui::RichText::new("🔮 Drag effects here").weak());
+                            });
+                        }
                     });
-                ui.separator();
             }
 
-            // Add effect column
-            egui::Frame::default()
-                .inner_margin(6.0)
-                .corner_radius(4.0)
-                .fill(ui.visuals().faint_bg_color)
-                .show(ui, |ui| {
-                    ui.set_min_width(100.0);
-                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                    ui.label(egui::RichText::new("➕ Add Effect").strong());
-                    for (filter_name, filter_idx) in &data.filters {
-                        if ui.button(filter_name).clicked() {
-                            actions.ch_effect_to_add = Some((ch_idx, *filter_idx));
-                        }
-                    }
-                    });
-                });
+            // Store channel effect chain rect for deferred library drops
+            let chain_rect = ui.min_rect();
+            let ch_chain_key = format!("ch_{}", ch_idx);
+            ui.ctx().memory_mut(|mem| {
+                mem.data.insert_temp(egui::Id::new("ch_fx_drop_rect").with(ch_idx), chain_rect);
+                mem.data.insert_temp(egui::Id::new("eff_dz_count").with(ch_chain_key), ch.effects.len() + 1);
+            });
         });
     });
 }
@@ -1970,7 +2692,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut freq = *frequency;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Freq:").small());
-                                    if ui.add(egui::Slider::new(&mut freq, 0.01..=10.0).logarithmic(true).show_value(true).suffix("Hz")).changed() {
+                                    let path = format!("mod/{}/frequency", idx);
+                                    if render_mod_learn_slider(ui, &mut freq, 0.01..=10.0, |s| s.logarithmic(true).show_value(true).suffix("Hz"), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateLFOFrequency { idx, frequency: freq });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "frequency");
@@ -1978,7 +2701,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut amp = *amplitude;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Amp:").small());
-                                    if ui.add(egui::Slider::new(&mut amp, 0.0..=1.0).show_value(true)).changed() {
+                                    let path = format!("mod/{}/amplitude", idx);
+                                    if render_mod_learn_slider(ui, &mut amp, 0.0..=1.0, |s| s.show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateLFOAmplitude { idx, amplitude: amp });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "amplitude");
@@ -1986,7 +2710,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut ph = *phase;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Phase:").small());
-                                    if ui.add(egui::Slider::new(&mut ph, 0.0..=1.0).show_value(false)).changed() {
+                                    let path = format!("mod/{}/phase", idx);
+                                    if render_mod_learn_slider(ui, &mut ph, 0.0..=1.0, |s| s.show_value(false), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateLFOPhase { idx, phase: ph });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "phase");
@@ -2041,7 +2766,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut sm = *smoothing;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Smooth:").small());
-                                    if ui.add(egui::Slider::new(&mut sm, 0.0..=0.99).show_value(false)).changed() {
+                                    let path = format!("mod/{}/smoothing", idx);
+                                    if render_mod_learn_slider(ui, &mut sm, 0.0..=0.99, |s| s.show_value(false), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateAudioSmoothing { idx, smoothing: sm });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "smoothing");
@@ -2077,7 +2803,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut a = *attack;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("A:").small());
-                                    if ui.add(egui::Slider::new(&mut a, 0.001..=5.0).logarithmic(true).suffix("s").show_value(true)).changed() {
+                                    let path = format!("mod/{}/attack", idx);
+                                    if render_mod_learn_slider(ui, &mut a, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateADSRAttack { idx, attack: a });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "attack");
@@ -2085,7 +2812,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut d = *decay;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("D:").small());
-                                    if ui.add(egui::Slider::new(&mut d, 0.001..=5.0).logarithmic(true).suffix("s").show_value(true)).changed() {
+                                    let path = format!("mod/{}/decay", idx);
+                                    if render_mod_learn_slider(ui, &mut d, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateADSRDecay { idx, decay: d });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "decay");
@@ -2093,7 +2821,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut s = *sustain;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("S:").small());
-                                    if ui.add(egui::Slider::new(&mut s, 0.0..=1.0).show_value(true)).changed() {
+                                    let path = format!("mod/{}/sustain", idx);
+                                    if render_mod_learn_slider(ui, &mut s, 0.0..=1.0, |s| s.show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateADSRSustain { idx, sustain: s });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "sustain");
@@ -2101,7 +2830,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut r = *release;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("R:").small());
-                                    if ui.add(egui::Slider::new(&mut r, 0.001..=5.0).logarithmic(true).suffix("s").show_value(true)).changed() {
+                                    let path = format!("mod/{}/release", idx);
+                                    if render_mod_learn_slider(ui, &mut r, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateADSRRelease { idx, release: r });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "release");
@@ -2142,7 +2872,8 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                 let mut r = *rate;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Rate:").small());
-                                    if ui.add(egui::Slider::new(&mut r, 0.1..=20.0).logarithmic(true).suffix("Hz").show_value(true)).changed() {
+                                    let path = format!("mod/{}/rate", idx);
+                                    if render_mod_learn_slider(ui, &mut r, 0.1..=20.0, |s| s.logarithmic(true).suffix("Hz").show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateStepRate { idx, rate: r });
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "rate");
@@ -2184,8 +2915,26 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                         let slider = egui::Slider::new(&mut val, 0.0..=1.0)
                                             .vertical()
                                             .show_value(false);
-                                        if ui.add_sized([12.0, 30.0], slider).on_hover_text(format!("Step {}", step_idx + 1)).changed() {
-                                            actions.modulation_actions.push(ModulationAction::UpdateStepValue { idx, step_idx, value: val });
+                                        if data.midi_learn_active {
+                                            let inner = ui.scope(|ui| {
+                                                ui.disable();
+                                                ui.add_sized([12.0, 30.0], slider)
+                                            });
+                                            let step_path = format!("mod/{}/step/{}", idx, step_idx);
+                                            let is_target = data.midi_learn_target.as_deref() == Some(step_path.as_str());
+                                            if is_target {
+                                                widgets::draw_midi_learn_selected(ui, inner.inner.rect);
+                                            } else {
+                                                widgets::draw_midi_learn_glow(ui, inner.inner.rect);
+                                            }
+                                            let click_id = ui.id().with(("midi_learn_step", idx, step_idx));
+                                            if ui.interact(inner.inner.rect, click_id, egui::Sense::click()).clicked() {
+                                                actions.midi_learn_select = Some(step_path);
+                                            }
+                                        } else {
+                                            if ui.add_sized([12.0, 30.0], slider).on_hover_text(format!("Step {}", step_idx + 1)).changed() {
+                                                actions.modulation_actions.push(ModulationAction::UpdateStepValue { idx, step_idx, value: val });
+                                            }
                                         }
                                     }
                                 });
@@ -2198,6 +2947,43 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
             });
         });
     }
+}
+
+/// Render a modulation source slider with MIDI learn support.
+/// Returns true if the slider value changed (only in non-learn mode).
+fn render_mod_learn_slider(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    slider_opts: impl FnOnce(egui::Slider<'_>) -> egui::Slider<'_>,
+    midi_path: &str,
+    data: &UIData,
+    actions: &mut UIActions,
+) -> bool {
+    let mut changed = false;
+    if data.midi_learn_active {
+        let inner = ui.scope(|ui| {
+            ui.disable();
+            ui.add(slider_opts(egui::Slider::new(value, range)))
+        });
+        let slider_rect = inner.inner.rect;
+        let is_target = data.midi_learn_target.as_deref() == Some(midi_path);
+        if is_target {
+            widgets::draw_midi_learn_selected(ui, slider_rect);
+        } else {
+            widgets::draw_midi_learn_glow(ui, slider_rect);
+        }
+        let click_id = ui.id().with(("midi_learn_mod", midi_path));
+        let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+        if click_resp.clicked() {
+            actions.midi_learn_select = Some(midi_path.to_string());
+        }
+    } else {
+        if ui.add(slider_opts(egui::Slider::new(value, range))).changed() {
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Render a mod-on-mod assignment dropdown for a modulator's parameter.
@@ -2258,59 +3044,99 @@ fn render_mod_on_mod_dropdown(
         });
 }
 
-/// Render shader browser section
-fn render_shader_browser(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    ui.heading("📚 Shader Library");
-    ui.label(format!("{} shaders loaded", data.shader_count));
+/// Render MIDI devices and mappings section
+fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    ui.heading("🎹 MIDI");
 
-    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-        ui.collapsing(format!("Generators ({})", data.generators.len()), |ui| {
-            for (name, gen_idx) in &data.generators {
-                // Show which channel to add to
+    ui.horizontal(|ui| {
+        ui.label(format!("{} device(s)", data.midi_devices.len()));
+        if ui.button("🔄 Rescan").clicked() {
+            actions.midi_rescan = true;
+        }
+    });
+
+    // Device list
+    if !data.midi_devices.is_empty() {
+        ui.collapsing(format!("Devices ({})", data.midi_devices.len()), |ui| {
+            for dev in &data.midi_devices {
                 ui.horizontal(|ui| {
-                    for ch in &data.channels {
-                        if ui.button(format!("{}+", ch.name)).on_hover_text(format!("Add {} to Channel {}", name, ch.name)).clicked() {
-                            actions.shader_to_add = Some((ch.ch_idx, *gen_idx));
-                        }
+                    let mut enabled = dev.enabled;
+                    if ui.checkbox(&mut enabled, "").changed() {
+                        actions.midi_device_toggles.push((dev.id, enabled));
                     }
-                    ui.label(name);
+                    let status = if dev.enabled { "●" } else { "○" };
+                    let color = if dev.enabled {
+                        egui::Color32::from_rgb(100, 255, 100)
+                    } else {
+                        egui::Color32::GRAY
+                    };
+                    ui.label(egui::RichText::new(status).color(color));
+                    ui.label(&dev.name);
+                    if dev.has_output {
+                        ui.label(egui::RichText::new("⇄").small().color(egui::Color32::from_rgb(100, 200, 255)))
+                            .on_hover_text("Has output (LED feedback)");
+                    }
+                    ui.label(egui::RichText::new(&dev.profile).small().weak());
                 });
             }
         });
+    }
 
-        ui.collapsing(format!("Filters ({})", data.filters.len()), |ui| {
-            for (name, _) in &data.filters {
-                ui.label(format!("  🔮 {}", name));
-            }
-        });
-
-        ui.collapsing("🖼 Image / Solid Color", |ui| {
+    // Mappings list
+    if !data.midi_mappings.is_empty() {
+        ui.collapsing(format!("Mappings ({})", data.midi_mappings.len()), |ui| {
             ui.horizontal(|ui| {
-                ui.label("📁 Image file:");
-                for ch in &data.channels {
-                    if ui.button(format!("{}+", ch.name)).on_hover_text(format!("Load image to Channel {}", ch.name)).clicked() {
-                        // Defer file dialog to outside egui frame (macOS requires this for proper Finder focus)
-                        actions.open_image_dialog_for_channel = Some(ch.ch_idx);
-                    }
+                if ui.button("🗑 Clear All").clicked() {
+                    actions.midi_clear_mappings = true;
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label("🎨 Solid color:");
-                for ch in &data.channels {
-                    if ui.button(format!("{}+", ch.name)).on_hover_text(format!("Add solid color to Channel {}", ch.name)).clicked() {
-                        actions.solid_color_to_add = Some((ch.ch_idx, [0.0, 0.0, 0.0, 1.0]));
-                    }
+            egui::ScrollArea::vertical().max_height(150.0).id_salt("midi_mappings_scroll").show(ui, |ui| {
+                for mapping in &data.midi_mappings {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✕").clicked() {
+                            actions.midi_remove_mapping.push(mapping.key);
+                        }
+                        ui.label(egui::RichText::new(&mapping.device_name).small().color(egui::Color32::from_rgb(180, 180, 255)));
+                        ui.label(egui::RichText::new(&mapping.key_display).small().strong());
+                        ui.label(egui::RichText::new("→").small());
+                        ui.label(egui::RichText::new(&mapping.param_path).small().color(egui::Color32::from_rgb(255, 200, 100)));
+                    });
                 }
             });
         });
+    } else {
+        ui.label(egui::RichText::new("No mappings. Right-click anywhere → Enter MIDI Learn.").small().weak());
+    }
+}
+
+
+/// Render a thin drop zone for effect reordering within a chain.
+/// Stores the zone rect in temp memory for deferred drop detection.
+/// `chain_key` identifies the chain (e.g. "deck_0_1", "ch_0", "master").
+/// `position` is the insert index in the chain.
+fn render_effect_drop_zone(ui: &mut egui::Ui, chain_key: &str, position: usize) {
+    let dz = ui.allocate_response(egui::vec2(8.0, ui.available_height().max(40.0)), egui::Sense::hover());
+    let has_drag = egui::DragAndDrop::has_payload_of_type::<EffectDrag>(ui.ctx());
+    // Store rect for deferred handler to find
+    let key = egui::Id::new("eff_dz_rect").with((chain_key.to_string(), position));
+    ui.ctx().memory_mut(|mem| {
+        mem.data.insert_temp(key, dz.rect);
     });
+    // Visual highlight: check if pointer is actually over this zone
+    if has_drag {
+        if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+            if dz.rect.contains(pos) {
+                ui.painter().rect_filled(dz.rect, 2.0, egui::Color32::from_rgb(100, 200, 255));
+            }
+        }
+    }
 }
 
 /// Channel accent colors
 fn channel_color(ch_idx: usize) -> egui::Color32 {
     match ch_idx {
-        0 => egui::Color32::from_rgb(160, 100, 255), // Purple — Channel A
-        1 => egui::Color32::from_rgb(100, 160, 255), // Blue — Channel B
+        0 => egui::Color32::from_rgb(160, 100, 255), // Purple — Ch 1
+        1 => egui::Color32::from_rgb(100, 160, 255), // Blue — Ch 2
         2 => egui::Color32::from_rgb(255, 160, 60),  // Orange
         3 => egui::Color32::from_rgb(80, 200, 120),   // Green
         _ => egui::Color32::from_rgb(180, 180, 180),  // Gray for extras
@@ -2413,6 +3239,15 @@ fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
 
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
+                // Center faders: estimate total width and add leading space
+                let per_fader_width = 30.0_f32; // label + slider column width
+                let spacing = 4.0;
+                let total_faders_width = num_channels as f32 * per_fader_width
+                    + (num_channels.saturating_sub(1)) as f32 * spacing;
+                let avail = ui.available_width();
+                if avail > total_faders_width {
+                    ui.add_space((avail - total_faders_width) / 2.0);
+                }
                 for (ch_idx, ch) in data.channels.iter().enumerate() {
                     let color = channel_color(ch_idx);
                     ui.vertical(|ui| {
@@ -2425,16 +3260,39 @@ fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
                                 }
                             }
                         });
-                        let slider = egui::Slider::new(&mut opacities[ch_idx], 0.0..=1.0)
-                            .vertical()
-                            .show_value(false);
-                        let resp = ui.add_sized([18.0, fader_height], slider);
-                        resp.context_menu(|ui| {
-                            if ui.button("🎹 MIDI Learn").clicked() {
-                                actions.midi_learn_start = Some(format!("ch/{}/opacity", ch_idx));
-                                ui.close_menu();
+                        // Render slider — disabled in learn mode
+                        let slider_rect;
+                        if data.midi_learn_active {
+                            let inner = ui.scope(|ui| {
+                                ui.disable();
+                                let slider = egui::Slider::new(&mut opacities[ch_idx], 0.0..=1.0)
+                                    .vertical()
+                                    .show_value(false);
+                                ui.add_sized([18.0, fader_height], slider)
+                            });
+                            slider_rect = inner.inner.rect;
+                        } else {
+                            let slider = egui::Slider::new(&mut opacities[ch_idx], 0.0..=1.0)
+                                .vertical()
+                                .show_value(false);
+                            let resp = ui.add_sized([18.0, fader_height], slider);
+                            slider_rect = resp.rect;
+                        }
+                        // MIDI learn: glow + click overlay
+                        if data.midi_learn_active {
+                            let path = format!("ch/{}/opacity", ch_idx);
+                            let is_target = data.midi_learn_target.as_deref() == Some(path.as_str());
+                            if is_target {
+                                widgets::draw_midi_learn_selected(ui, slider_rect);
+                            } else {
+                                widgets::draw_midi_learn_glow(ui, slider_rect);
                             }
-                        });
+                            let click_id = ui.id().with(("midi_learn_ch_opacity", ch_idx));
+                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            if click_resp.clicked() {
+                                actions.midi_learn_select = Some(path);
+                            }
+                        }
                     });
                 }
             });
@@ -2460,18 +3318,37 @@ fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(name_a).small().color(color_a));
                     let mut crossfader = data.crossfader;
-                    let slider = egui::Slider::new(&mut crossfader, 0.0..=1.0)
-                        .show_value(false);
-                    let resp = ui.add_sized([ui.available_width() - 16.0, 18.0], slider);
-                    if resp.changed() {
-                        actions.crossfader_action = Some(CrossfaderAction::SetPosition(crossfader));
-                    }
-                    resp.context_menu(|ui| {
-                        if ui.button("🎹 MIDI Learn").clicked() {
-                            actions.midi_learn_start = Some("crossfader".to_string());
-                            ui.close_menu();
+                    let slider_rect;
+                    if data.midi_learn_active {
+                        let inner = ui.scope(|ui| {
+                            ui.disable();
+                            let slider = egui::Slider::new(&mut crossfader, 0.0..=1.0)
+                                .show_value(false);
+                            ui.add_sized([ui.available_width() - 16.0, 18.0], slider)
+                        });
+                        slider_rect = inner.inner.rect;
+                    } else {
+                        let slider = egui::Slider::new(&mut crossfader, 0.0..=1.0)
+                            .show_value(false);
+                        let resp = ui.add_sized([ui.available_width() - 16.0, 18.0], slider);
+                        if resp.changed() {
+                            actions.crossfader_action = Some(CrossfaderAction::SetPosition(crossfader));
                         }
-                    });
+                        slider_rect = resp.rect;
+                    }
+                    if data.midi_learn_active {
+                        let is_target = data.midi_learn_target.as_deref() == Some("crossfader");
+                        if is_target {
+                            widgets::draw_midi_learn_selected(ui, slider_rect);
+                        } else {
+                            widgets::draw_midi_learn_glow(ui, slider_rect);
+                        }
+                        let click_id = ui.id().with("midi_learn_crossfader");
+                        let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                        if click_resp.clicked() {
+                            actions.midi_learn_select = Some("crossfader".to_string());
+                        }
+                    }
                     ui.label(egui::RichText::new(name_b).small().color(color_b));
                 });
 
@@ -2595,13 +3472,11 @@ fn render_channel_column(ui: &mut egui::Ui, ch: &super::ChannelUIInfo, data: &UI
     let ch_idx = ch.ch_idx;
 
     ui.push_id(format!("ch_{}", ch_idx), |ui| {
-        // Check if a deck is being dragged over this channel
-        let is_drag_hovering = egui::DragAndDrop::payload::<(usize, usize)>(ui.ctx())
-            .map(|p| p.0 != ch_idx) // only highlight if from a different channel
-            .unwrap_or(false)
-            && ui.rect_contains_pointer(ui.max_rect());
+        // Visual feedback: highlight when a library drag hovers over this channel
+        let has_library_drag = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ui.ctx());
+        let is_hovering = has_library_drag && ui.rect_contains_pointer(ui.max_rect());
 
-        let frame = if is_drag_hovering {
+        let frame = if is_hovering {
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.08))
                 .stroke(egui::Stroke::new(2.0, accent.linear_multiply(0.5)))
@@ -2612,7 +3487,7 @@ fn render_channel_column(ui: &mut egui::Ui, ch: &super::ChannelUIInfo, data: &UI
 
         frame.show(ui, |ui| {
         ui.vertical(|ui| {
-            // Channel header (clickable to select channel for bottom bar)
+            // Channel header
             let is_ch_selected = data.selected_channel == Some(ch_idx);
             let header_frame = if is_ch_selected {
                 egui::Frame::default().fill(accent.linear_multiply(0.15)).corner_radius(3.0).inner_margin(2.0)
@@ -2621,20 +3496,23 @@ fn render_channel_column(ui: &mut egui::Ui, ch: &super::ChannelUIInfo, data: &UI
             };
             header_frame.show(ui, |ui| {
                 let header_resp = ui.label(egui::RichText::new(format!("▌ Channel {}", ch.name)).strong().color(accent).size(16.0));
-                if header_resp.interact(egui::Sense::click()).clicked() {
+                let header_resp = header_resp.interact(egui::Sense::click());
+                if header_resp.clicked() {
                     actions.select_channel = Some(ch_idx);
                 }
             });
 
             ui.separator();
 
-            // Deck grid (dynamically scaled columns based on available width)
-            egui::ScrollArea::vertical().id_salt(format!("ch_scroll_{}", ch_idx)).show(ui, |ui| {
+            // Deck grid
+            egui::ScrollArea::vertical()
+                .id_salt(format!("ch_scroll_{}", ch_idx))
+                .drag_to_scroll(false)
+                .show(ui, |ui| {
                 if ch.decks.is_empty() {
-                    ui.label(egui::RichText::new("No decks — drag from shader library").weak().small());
+                    ui.label(egui::RichText::new("No decks — drag generator here").weak().small());
                 }
-                // Calculate how many deck cards fit per row
-                let card_width = 134.0; // preview(100) + slider(18) + padding(8) + margin(8)
+                let card_width = 134.0;
                 let available_w = ui.available_width();
                 let cols = ((available_w / card_width).floor() as usize).max(1);
                 let mut deck_iter = ch.decks.iter().peekable();
@@ -2649,7 +3527,7 @@ fn render_channel_column(ui: &mut egui::Ui, ch: &super::ChannelUIInfo, data: &UI
                     ui.add_space(2.0);
                 }
 
-                // Drop zone: accept deck drops into this channel
+                // Remaining space for deck-to-deck moves
                 let drop_resp = ui.allocate_response(
                     egui::vec2(ui.available_width(), 20.0_f32.max(ui.available_height())),
                     egui::Sense::hover(),
@@ -2679,6 +3557,12 @@ fn render_channel_column(ui: &mut egui::Ui, ch: &super::ChannelUIInfo, data: &UI
             });
         });
         }); // frame.show
+
+        // Store this channel's screen rect for the deferred DnD drop handler
+        let ch_rect = ui.min_rect();
+        ui.ctx().memory_mut(|mem| {
+            mem.data.insert_temp(egui::Id::new("ch_drop_rect").with(ch_idx), ch_rect);
+        });
     });
 }
 
@@ -2721,6 +3605,20 @@ fn render_deck_thumbnail(
             card_size,
             egui::Sense::click_and_drag(),
         );
+
+        // MIDI learn mode: glow on deck card, click to select trigger
+        if data.midi_learn_active {
+            let trigger_path = format!("ch/{}/deck/{}/trigger", ch_idx, idx);
+            let is_target = data.midi_learn_target.as_deref() == Some(trigger_path.as_str());
+            if is_target {
+                widgets::draw_midi_learn_selected(ui, card_rect);
+            } else {
+                widgets::draw_midi_learn_glow(ui, card_rect);
+            }
+            if card_resp.clicked() {
+                actions.midi_learn_select = Some(trigger_path);
+            }
+        }
 
         // Start drag: set payload for deck move between channels
         if card_resp.drag_started() {
@@ -2778,25 +3676,44 @@ fn render_deck_thumbnail(
             );
         }
 
-        // Click on preview to select
-        let preview_resp = ui.allocate_rect(preview_rect, egui::Sense::click());
-        if preview_resp.clicked() {
+        // Click on card to select deck (only when not in learn mode — learn mode click selects trigger)
+        if !data.midi_learn_active && card_resp.clicked() {
             actions.select_deck = Some((ch_idx, idx));
         }
 
         // Vertical opacity slider — use a child ui placed at the slider rect
         let mut slider_ui = ui.new_child(egui::UiBuilder::new().max_rect(slider_rect));
-        let slider = egui::Slider::new(&mut opacity, 0.0..=1.0)
-            .vertical()
-            .show_value(false);
-        let op_resp = slider_ui.add_sized([slider_width, preview_height], slider);
-        op_resp.context_menu(|ui| {
-            let path = format!("ch/{}/deck/{}/opacity", ch_idx, idx);
-            if ui.button("🎹 MIDI Learn").clicked() {
-                actions.midi_learn_start = Some(path);
-                ui.close_menu();
+        let op_slider_rect;
+        if data.midi_learn_active {
+            let inner = slider_ui.scope(|ui| {
+                ui.disable();
+                let slider = egui::Slider::new(&mut opacity, 0.0..=1.0)
+                    .vertical()
+                    .show_value(false);
+                ui.add_sized([slider_width, preview_height], slider)
+            });
+            op_slider_rect = inner.inner.rect;
+        } else {
+            let slider = egui::Slider::new(&mut opacity, 0.0..=1.0)
+                .vertical()
+                .show_value(false);
+            let resp = slider_ui.add_sized([slider_width, preview_height], slider);
+            op_slider_rect = resp.rect;
+        }
+        if data.midi_learn_active {
+            let opacity_path = format!("ch/{}/deck/{}/opacity", ch_idx, idx);
+            let is_target = data.midi_learn_target.as_deref() == Some(opacity_path.as_str());
+            if is_target {
+                widgets::draw_midi_learn_selected(&slider_ui, op_slider_rect);
+            } else {
+                widgets::draw_midi_learn_glow(&slider_ui, op_slider_rect);
             }
-        });
+            let click_id = slider_ui.id().with(("midi_learn_deck_opacity", ch_idx, idx));
+            let click_resp = slider_ui.interact(op_slider_rect, click_id, egui::Sense::click());
+            if click_resp.clicked() {
+                actions.midi_learn_select = Some(opacity_path);
+            }
+        }
 
         // Row 2: Deck name
         let name_y = card_rect.min.y + padding + preview_height + spacing;

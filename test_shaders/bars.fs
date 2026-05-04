@@ -59,9 +59,6 @@ void main() {
     // Animate
     coord += TIME * anim_speed * 0.1;
 
-    // Audio reactive speed boost
-    coord += audio_bass * 0.05;
-
     // Create bars
     float pattern = fract(coord * bar_count);
     float bar;

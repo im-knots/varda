@@ -62,8 +62,7 @@ void main() {
     // Grid cell
     vec2 cell = fract(p * grid_size) - 0.5;
 
-    // Audio reactive dot size
-    float ds = dot_size * (1.0 + audio_bass * 0.3);
+    float ds = dot_size;
 
     float pattern = 0.0;
     float st = floor(style + 0.5);

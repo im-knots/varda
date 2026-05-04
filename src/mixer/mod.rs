@@ -104,7 +104,7 @@ pub struct Mixer {
     /// Monotonic counter for generating unique channel names (never decremented)
     next_channel_index: usize,
 
-    /// Crossfader position (0.0 = Channel A, 1.0 = Channel B)
+    /// Crossfader position (0.0 = Ch 1, 1.0 = Ch 2)
     pub crossfader: f32,
 
     /// Active auto-crossfade (if any)
@@ -165,13 +165,13 @@ impl Mixer {
         }
 
         // Create two default channels
-        let channel_a = Channel::new("A".to_string(), context, width, height)?;
-        let channel_b = Channel::new("B".to_string(), context, width, height)?;
+        let channel_1 = Channel::new("Ch 1".to_string(), context, width, height)?;
+        let channel_2 = Channel::new("Ch 2".to_string(), context, width, height)?;
 
         let now = std::time::Instant::now();
         Ok(Self {
-            channels: vec![channel_a, channel_b],
-            next_channel_index: 2, // A=0, B=1 already used
+            channels: vec![channel_1, channel_2],
+            next_channel_index: 2, // Ch 1=0, Ch 2=1 already used
             crossfader: 0.0,
             auto_crossfade: None,
             beat_sync_crossfade: None,
@@ -599,12 +599,7 @@ impl Mixer {
 }
 
 
-/// Generate a channel name from its index: 0→"A", 1→"B", 2→"C", ..., 25→"Z", 26→"A2", etc.
+/// Generate a channel name from its index: 0→"Ch 1", 1→"Ch 2", 2→"Ch 3", etc.
 fn channel_name(index: usize) -> String {
-    let letter = (b'A' + (index % 26) as u8) as char;
-    if index < 26 {
-        letter.to_string()
-    } else {
-        format!("{}{}", letter, index / 26 + 1)
-    }
+    format!("Ch {}", index + 1)
 }

@@ -175,9 +175,7 @@ void main() {
 
     float t = TIME * flow_speed;
 
-    // Audio reactivity: bass drives agitation, beat drives color pulse
-    float agit = agitation + audio_bass * 0.3;
-    float colorPulse = 1.0 + audio_level * 0.15;
+    float agit = agitation;
 
     // ---- Layer 1: Large-scale oil blobs via metaballs ----
     vec2 mp = p * blob_scale * 0.7;
@@ -233,7 +231,7 @@ void main() {
     liquid += vec3(boundary) * 0.3;
 
     // ---- Color intensity & saturation ----
-    liquid *= color_intensity * colorPulse;
+    liquid *= color_intensity;
 
     // Boost saturation (liquid light shows are VIVID)
     float lum = dot(liquid, vec3(0.299, 0.587, 0.114));
@@ -257,10 +255,6 @@ void main() {
     // ---- Vignette (projector edge falloff) ----
     float vig = 1.0 - smoothstep(0.5, 1.4, length(p * 0.7)) * vignette_amt;
     liquid *= vig;
-
-    // ---- Film grain for analog texture ----
-    float grain = (hash21(uv * RENDERSIZE + fract(TIME * 100.0)) - 0.5) * 0.03;
-    liquid += vec3(grain);
 
     liquid = clamp(liquid, 0.0, 1.0);
     fragColor = vec4(liquid, 1.0);

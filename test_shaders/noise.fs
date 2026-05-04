@@ -99,9 +99,6 @@ void main() {
     n = n * 0.5 + 0.5; // normalize to 0-1
     n = clamp((n - 0.5) * contrast + 0.5, 0.0, 1.0);
 
-    // Audio reactive: shift noise with bass
-    n = clamp(n + audio_bass * 0.15, 0.0, 1.0);
-
     vec3 col;
     if (color_mode > 0.5) {
         // RGB noise - independent channels

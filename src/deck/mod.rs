@@ -1,8 +1,8 @@
 use crate::isf::{ISFShader, ISFPass, compile_glsl_to_spirv};
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
-use crate::renderer::{RenderContext, UnifiedPipeline, ISFUniforms, BlitPipeline};
-use crate::video::VideoPlayer;
+use crate::renderer::{RenderContext, UnifiedPipeline, ISFUniforms, BlitPipeline, HapConvertPipeline};
+use crate::video::{VideoPlayer, HapTextureFormat, hap::HapPlayer};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -92,12 +92,27 @@ pub enum DeckSource {
         pass_buffers: HashMap<String, PassBuffer>,
         passes: Vec<ISFPass>,
     },
-    /// Video file playback
+    /// Video file playback (ffmpeg CPU decode → RGBA)
     Video {
         player: VideoPlayer,
         texture: wgpu::Texture,
         texture_view: wgpu::TextureView,
         blit_pipeline: BlitPipeline,
+    },
+    /// HAP video playback (GPU-native BCn compressed textures)
+    HapVideo {
+        player: HapPlayer,
+        texture: wgpu::Texture,
+        texture_view: wgpu::TextureView,
+        /// Alpha-plane texture (for HAP Q Alpha dual-plane)
+        alpha_texture: Option<wgpu::Texture>,
+        alpha_texture_view: Option<wgpu::TextureView>,
+        /// Dummy 1x1 texture for single-plane (shader always needs a binding)
+        dummy_alpha_view: wgpu::TextureView,
+        /// YCoCg/dual-plane conversion pipeline (used instead of blit for HAP Q/Q Alpha)
+        convert_pipeline: HapConvertPipeline,
+        blit_pipeline: BlitPipeline,
+        hap_format: HapTextureFormat,
     },
     /// Static image
     Image {
@@ -754,46 +769,129 @@ impl Deck {
         }
     }
 
-    /// Create a new deck from a video file
+    /// Create a new deck from a video file.
+    /// Auto-detects HAP codec and uses GPU-native BCn path when available.
     pub fn new_from_video<P: AsRef<Path>>(
         context: &RenderContext,
         path: P,
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let player = VideoPlayer::new(&path)?;
         let source_name = path.as_ref()
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or("video")
             .to_string();
 
-        // Create texture for video frames
-        let video_texture = context.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Video Frame Texture"),
-            size: wgpu::Extent3d {
-                width: player.width(),
-                height: player.height(),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let video_texture_view = video_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Check if the GPU supports BC textures and file uses HAP codec
+        let gpu_has_bc = context.device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let hap_format = if gpu_has_bc {
+            crate::video::detect_hap_codec(&path).ok().flatten()
+        } else {
+            None
+        };
 
-        // Create blit pipeline for copying video frame to deck texture
-        // Must match the render target format (Rgba8Unorm), not the source texture format
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+        let source = if let Some(hap_fmt) = hap_format {
+            // ── HAP path: GPU-native compressed textures ──
+            let player = HapPlayer::new(&path, hap_fmt)?;
+            let vid_w = player.width();
+            let vid_h = player.height();
+            let tex_format = hap_fmt.wgpu_format();
 
-        let source = DeckSource::Video {
-            player,
-            texture: video_texture,
-            texture_view: video_texture_view,
-            blit_pipeline,
+            let video_texture = context.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("HAP Video Texture"),
+                size: wgpu::Extent3d { width: vid_w, height: vid_h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: tex_format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let video_texture_view = video_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            // Create alpha texture for HAP Q Alpha (BC4 single-channel)
+            let (alpha_texture, alpha_texture_view) = if matches!(hap_fmt, HapTextureFormat::Bc3YCoCg) {
+                // HAP Q Alpha might send dual-plane frames — pre-allocate alpha texture
+                let alpha_tex = context.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("HAP Alpha Texture"),
+                    size: wgpu::Extent3d { width: vid_w, height: vid_h, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Bc4RUnorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let alpha_view = alpha_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                (Some(alpha_tex), Some(alpha_view))
+            } else {
+                (None, None)
+            };
+
+            // Dummy 1x1 R8 texture for shader binding when no alpha plane
+            let dummy_alpha = context.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("HAP Dummy Alpha"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            context.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &dummy_alpha, mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                },
+                &[255u8],
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: Some(1) },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            let dummy_alpha_view = dummy_alpha.create_view(&wgpu::TextureViewDescriptor::default());
+
+            let convert_pipeline = HapConvertPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+            let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+            log::info!("Using HAP GPU path for '{}' ({:?})", source_name, hap_fmt);
+            DeckSource::HapVideo {
+                player,
+                texture: video_texture,
+                texture_view: video_texture_view,
+                alpha_texture,
+                alpha_texture_view,
+                dummy_alpha_view,
+                convert_pipeline,
+                blit_pipeline,
+                hap_format: hap_fmt,
+            }
+        } else {
+            // ── ffmpeg path: CPU decode to RGBA ──
+            let player = VideoPlayer::new(&path)?;
+            let video_texture = context.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Video Frame Texture"),
+                size: wgpu::Extent3d {
+                    width: player.width(),
+                    height: player.height(),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let video_texture_view = video_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+            DeckSource::Video {
+                player,
+                texture: video_texture,
+                texture_view: video_texture_view,
+                blit_pipeline,
+            }
         };
 
         // Create render target textures (Rgba8Unorm for effect chain compatibility)
@@ -822,8 +920,6 @@ impl Deck {
         let texture_b_view = texture_b.create_view(&wgpu::TextureViewDescriptor::default());
 
         let now = Instant::now();
-
-        // Video sources have no shader parameters
         let generator_params = ShaderParams::from_inputs(&[]);
 
         Ok(Self {
@@ -1045,37 +1141,80 @@ impl Deck {
         }
     }
 
-    /// Update video frame (call before render if using video source)
+    /// Update video frame (call before render if using video source).
+    /// Handles both ffmpeg RGBA uploads and HAP BCn compressed uploads.
     pub fn update_video_frame(&mut self, context: &RenderContext) -> Result<()> {
-        if let DeckSource::Video { ref mut player, ref texture, .. } = &mut self.source {
-            if player.is_playing() {
-                // Get dimensions before borrowing player mutably
-                let width = player.width();
-                let height = player.height();
-
-                if let Some(frame_data) = player.next_frame()? {
-                    // Upload frame data to video texture
-                    context.queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(width * 4),
-                            rows_per_image: Some(height),
-                        },
-                        wgpu::Extent3d {
-                            width,
-                            height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+        match &mut self.source {
+            DeckSource::Video { ref mut player, ref texture, .. } => {
+                if player.is_playing() {
+                    let width = player.width();
+                    let height = player.height();
+                    if let Some(frame_data) = player.next_frame()? {
+                        context.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture, mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(width * 4),
+                                rows_per_image: Some(height),
+                            },
+                            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                        );
+                    }
                 }
             }
+            DeckSource::HapVideo { ref mut player, ref texture, ref alpha_texture, .. } => {
+                if player.is_playing() {
+                    let width = player.width();
+                    let height = player.height();
+                    if let Some(frame) = player.next_frame()? {
+                        // Upload color plane
+                        let blocks_x = (width + 3) / 4;
+                        let blocks_y = (height + 3) / 4;
+                        let color_bpr = blocks_x * frame.color_format.block_bytes();
+                        context.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture, mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame.color_data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(color_bpr),
+                                rows_per_image: Some(blocks_y),
+                            },
+                            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                        );
+
+                        // Upload alpha plane if dual-plane (HAP Q Alpha)
+                        if let (Some(alpha_data), Some(alpha_fmt), Some(alpha_tex)) =
+                            (frame.alpha_data, frame.alpha_format, alpha_texture.as_ref())
+                        {
+                            let alpha_bpr = blocks_x * alpha_fmt.block_bytes();
+                            context.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: alpha_tex, mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                alpha_data,
+                                wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(alpha_bpr),
+                                    rows_per_image: Some(blocks_y),
+                                },
+                                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -1130,7 +1269,6 @@ impl Deck {
                 }
             }
             DeckSource::Video { ref texture_view, ref blit_pipeline, .. } => {
-                // Blit video frame to generator target
                 let bind_group = blit_pipeline.create_bind_group(&context.device, texture_view);
                 let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Video Blit Encoder"),
@@ -1152,6 +1290,46 @@ impl Deck {
                         occlusion_query_set: None,
                     });
                     blit_pipeline.render(&mut render_pass, &bind_group);
+                }
+                cmd_buffers.push(encoder.finish());
+            }
+            DeckSource::HapVideo {
+                ref texture_view, ref alpha_texture_view, ref dummy_alpha_view,
+                ref convert_pipeline, ref hap_format, ref player, ..
+            } => {
+                // Use HAP convert pipeline for YCoCg and/or dual-plane alpha
+                let needs_ycocg = hap_format.needs_ycocg_convert();
+                let has_alpha = player.is_dual_plane && alpha_texture_view.is_some();
+                convert_pipeline.set_params(&context.queue, 1.0, needs_ycocg, has_alpha);
+
+                let alpha_view = if let Some(ref av) = alpha_texture_view {
+                    av
+                } else {
+                    dummy_alpha_view
+                };
+                let bind_group = convert_pipeline.create_bind_group(
+                    &context.device, texture_view, alpha_view,
+                );
+                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("HAP Convert Encoder"),
+                });
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("HAP Convert Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: generator_target,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    convert_pipeline.draw(&mut render_pass, &bind_group);
                 }
                 cmd_buffers.push(encoder.finish());
             }

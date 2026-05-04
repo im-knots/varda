@@ -488,6 +488,29 @@ pub fn apply_deck_and_effect_actions(
         }
     }
 
+    // Add video deck if requested
+    if let Some((ch_idx, path)) = actions.video_to_add.take() {
+        match Deck::new_from_video(context, &path, RENDER_WIDTH, RENDER_HEIGHT) {
+            Ok(deck) => {
+                if let Some(ch) = mixer.channel_mut(ch_idx) {
+                    let name = deck.source_name().to_string();
+                    let idx = ch.add_deck(deck);
+                    log::info!("Added video deck {} to channel {}: {}", idx, ch_idx, name);
+
+                    let texture_id = egui_renderer.register_native_texture(
+                        &context.device,
+                        &ch.decks[idx].deck.texture_view,
+                        wgpu::FilterMode::Linear,
+                    );
+                    deck_preview_textures.insert((ch_idx, idx), texture_id);
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to create video deck: {}", e);
+            }
+        }
+    }
+
     // Add solid color deck if requested
     if let Some((ch_idx, color)) = actions.solid_color_to_add.take() {
         match Deck::new_solid_color(context, color, RENDER_WIDTH, RENDER_HEIGHT) {
@@ -623,6 +646,40 @@ pub fn apply_deck_and_effect_actions(
     if let Some(effect_idx) = actions.master_effect_to_remove {
         if mixer.remove_master_effect(effect_idx) {
             log::info!("Removed master effect {}", effect_idx);
+        }
+    }
+
+    // Move (reorder) effect within a deck's chain
+    if let Some((ch_idx, deck_idx, from_idx, to_idx)) = actions.effect_to_move {
+        if let Some(ch) = mixer.channel_mut(ch_idx) {
+            if deck_idx < ch.decks.len() {
+                let effects = &mut ch.decks[deck_idx].deck.effects;
+                if from_idx < effects.len() && to_idx < effects.len() && from_idx != to_idx {
+                    let effect = effects.remove(from_idx);
+                    effects.insert(to_idx, effect);
+                    log::info!("Moved deck effect {} -> {} on ch{} deck{}", from_idx, to_idx, ch_idx, deck_idx);
+                }
+            }
+        }
+    }
+
+    // Move (reorder) channel effect
+    if let Some((ch_idx, from_idx, to_idx)) = actions.ch_effect_to_move {
+        if let Some(ch) = mixer.channel_mut(ch_idx) {
+            if from_idx < ch.effects.len() && to_idx < ch.effects.len() && from_idx != to_idx {
+                let effect = ch.effects.remove(from_idx);
+                ch.effects.insert(to_idx, effect);
+                log::info!("Moved channel effect {} -> {} on ch{}", from_idx, to_idx, ch_idx);
+            }
+        }
+    }
+
+    // Move (reorder) master effect
+    if let Some((from_idx, to_idx)) = actions.master_effect_to_move {
+        if from_idx < mixer.master_effects.len() && to_idx < mixer.master_effects.len() && from_idx != to_idx {
+            let effect = mixer.master_effects.remove(from_idx);
+            mixer.master_effects.insert(to_idx, effect);
+            log::info!("Moved master effect {} -> {}", from_idx, to_idx);
         }
     }
 }

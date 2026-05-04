@@ -49,11 +49,20 @@ impl RenderContext {
         log::info!("Backend: {:?}", adapter.get_info().backend);
 
         // Request device and queue
+        // TEXTURE_COMPRESSION_BC is needed for HAP video codec (GPU-native BCn textures)
+        let mut required_features = wgpu::Features::empty();
+        if adapter.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
+            required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
+            log::info!("GPU supports BC texture compression (HAP video enabled)");
+        } else {
+            log::warn!("GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode");
+        }
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("Varda Device"),
-                    required_features: wgpu::Features::empty(),
+                    required_features,
                     required_limits: wgpu::Limits::default(),
                     memory_hints: Default::default(),
                     experimental_features: Default::default(),
@@ -157,8 +166,8 @@ impl std::fmt::Display for OutputSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OutputSource::Master => write!(f, "Master"),
-            OutputSource::Channel(idx) => write!(f, "Channel {}", idx),
-            OutputSource::Deck(ch, dk) => write!(f, "Ch{} Deck {}", ch, dk),
+            OutputSource::Channel(idx) => write!(f, "Ch {}", idx + 1),
+            OutputSource::Deck(ch, dk) => write!(f, "Ch {} Deck {}", ch + 1, dk + 1),
         }
     }
 }
@@ -410,3 +419,207 @@ impl OutputWindow {
 
 use super::blit::{BlitPipeline, PolygonBlitPipeline};
 
+/// Calibration card colors for distinct surface identification.
+/// Each surface gets a different accent color for its test card.
+const CALIBRATION_COLORS: [[u8; 3]; 8] = [
+    [255, 80, 80],   // Red
+    [80, 200, 120],  // Green
+    [80, 140, 255],  // Blue
+    [255, 200, 60],  // Yellow
+    [200, 80, 255],  // Purple
+    [80, 220, 220],  // Cyan
+    [255, 140, 60],  // Orange
+    [255, 100, 180], // Pink
+];
+
+/// Generate a calibration test card as RGBA pixel data.
+///
+/// Everything lives inside the border/corner brackets:
+/// - **Grid + crosshair + circle** (upper ~70% of interior)
+/// - **Gradient bars** (lower ~30% of interior): grayscale, R, G, B, stepped gray
+///
+/// Each surface gets a distinct accent color border for identification.
+pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) -> Vec<u8> {
+    let [cr, cg, cb] = CALIBRATION_COLORS[color_index % CALIBRATION_COLORS.len()];
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+
+    let bg = [20u8, 20, 30, 255];
+    let border_color = [cr, cg, cb, 255];
+    let grid_color = [cr / 3, cg / 3, cb / 3, 255];
+    let grid_bright = [cr / 2, cg / 2, cb / 2, 255];
+    let center_color = [255u8, 255, 255, 200];
+    let corner_color = [255u8, 255, 255, 255];
+
+    let border_w = (width.min(height) / 40).max(2);
+    let corner_size = (width.min(height) / 8).max(8);
+
+    // Interior content region (inside border)
+    let inset = border_w + 1;
+    let inner_w = width.saturating_sub(inset * 2);
+    let inner_h = height.saturating_sub(inset * 2);
+
+    // Split interior: top 70% = grid zone, bottom 30% = gradient bars
+    let grid_h = (inner_h as f32 * 0.70) as u32;
+    let grad_h = inner_h - grid_h;
+    let bar_h = grad_h / 5; // 5 bars
+    let grid_zone_bottom = inset + grid_h;
+
+    // Crosshair centered on FULL card (not just grid zone)
+    let cx = width / 2;
+    let cy = height / 2;
+    let cross_len = height.min(inner_w) / 4;
+    let cross_thick = (width.min(height) / 200).max(1);
+
+    // Corner brackets sit at the very edge of the output (pixel 0)
+    let bracket_len = (width.min(height) / 6).max(10);
+    let bracket_thick = (width.min(height) / 80).max(2);
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = ((y * width + x) * 4) as usize;
+            let mut color = bg;
+
+            let inside = x >= inset && x < width - inset && y >= inset && y < height - inset;
+
+            if inside {
+                // === Gradient bars (bottom 30% of interior) ===
+                if y >= grid_zone_bottom {
+                    let bar_idx = (y - grid_zone_bottom) / bar_h.max(1);
+                    let t = (x - inset) as f32 / inner_w.max(1) as f32;
+                    let v = (t * 255.0) as u8;
+
+                    color = match bar_idx {
+                        0 => [v, v, v, 255],       // Grayscale
+                        1 => [v, 0, 0, 255],       // Red
+                        2 => [0, v, 0, 255],       // Green
+                        3 => [0, 0, v, 255],       // Blue
+                        _ => {                     // 16-step gray
+                            let step = (t * 16.0).floor().min(15.0) as u8;
+                            let sv = step * 17;
+                            [sv, sv, sv, 255]
+                        }
+                    };
+                }
+                // === Grid zone (top 70% of interior) ===
+                else {
+                    let gx_norm = (x - inset) as f32 / inner_w.max(1) as f32;
+                    let gy_norm = (y - inset) as f32 / grid_h.max(1) as f32;
+
+                    // 8×8 grid
+                    let gx_frac = (gx_norm * 8.0).fract();
+                    let gy_frac = (gy_norm * 8.0).fract();
+                    if gx_frac < 0.02 || gx_frac > 0.98 || gy_frac < 0.02 || gy_frac > 0.98 {
+                        color = grid_color;
+                    }
+
+                    // Sub-grid
+                    if (gx_frac - 0.5).abs() < 0.01 || (gy_frac - 0.5).abs() < 0.01 {
+                        color = [grid_color[0] / 2, grid_color[1] / 2, grid_color[2] / 2, 180];
+                    }
+                }
+            }
+
+            // Center crosshair — spans full card, drawn on top of everything except corners
+            if (x.abs_diff(cx) <= cross_thick && y.abs_diff(cy) <= cross_len)
+                || (y.abs_diff(cy) <= cross_thick && x.abs_diff(cx) <= cross_len)
+            {
+                color = center_color;
+            }
+
+            // Center circle
+            let dx = x as f32 - cx as f32;
+            let dy = y as f32 - cy as f32;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if (dist - cross_len as f32 * 0.6).abs() < 1.5 {
+                color = border_color;
+            }
+
+            // Edge midpoint markers (on the border itself)
+            let edge_pts = [
+                (cx, 0u32),              // top center
+                (cx, height - 1),        // bottom center
+                (0u32, cy),              // left center
+                (width - 1, cy),         // right center
+            ];
+            for (ex, ey) in edge_pts {
+                if (x.abs_diff(ex) <= cross_thick * 3 && y.abs_diff(ey) <= border_w + 4)
+                    || (y.abs_diff(ey) <= cross_thick * 3 && x.abs_diff(ex) <= border_w + 4)
+                {
+                    color = grid_bright;
+                }
+            }
+
+            // Border
+            if x < border_w || x >= width - border_w || y < border_w || y >= height - border_w {
+                color = border_color;
+            }
+
+            // Corner brackets at the very edge (pixel 0) — drawn LAST, on top of border
+            let at_tl = x < bracket_len && y < bracket_len;
+            let at_tr = x >= width - bracket_len && y < bracket_len;
+            let at_br = x >= width - bracket_len && y >= height - bracket_len;
+            let at_bl = x < bracket_len && y >= height - bracket_len;
+            if at_tl || at_tr || at_br || at_bl {
+                let on_h = y < bracket_thick || y >= height - bracket_thick;
+                let on_v = x < bracket_thick || x >= width - bracket_thick;
+                if on_h || on_v {
+                    color = corner_color;
+                }
+            }
+
+            pixels[idx..idx + 4].copy_from_slice(&color);
+        }
+    }
+    pixels
+}
+
+/// Create calibration card textures for N colors, returning (texture, view) pairs.
+pub fn create_calibration_textures(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    count: usize,
+) -> Vec<(wgpu::Texture, wgpu::TextureView)> {
+    let card_w = 512u32;
+    let card_h = 512u32;
+
+    (0..count)
+        .map(|i| {
+            let pixels = generate_calibration_card(card_w, card_h, i);
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("Calibration Card {}", i)),
+                size: wgpu::Extent3d {
+                    width: card_w,
+                    height: card_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * card_w),
+                    rows_per_image: Some(card_h),
+                },
+                wgpu::Extent3d {
+                    width: card_w,
+                    height: card_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            (texture, view)
+        })
+        .collect()
+}

@@ -10,6 +10,37 @@
 use crate::renderer::context::OutputSource;
 use serde::{Deserialize, Serialize};
 
+/// Metadata that marks a surface as a "true circle" with editable radius/sides.
+///
+/// When present, the surface's vertices are generated from this hint.
+/// Editing radius or sides regenerates vertices automatically.
+/// Converting to polygon clears the hint, keeping vertices as-is.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CircleHint {
+    pub center: [f32; 2],
+    pub radius: f32,
+    pub sides: u32,
+    /// Canvas aspect ratio used when generating vertices (width/height).
+    /// Stored so regeneration produces the same visual shape.
+    pub aspect_ratio: f32,
+}
+
+impl CircleHint {
+    /// Generate polygon vertices from this circle hint.
+    pub fn generate_vertices(&self) -> Vec<[f32; 2]> {
+        let sides = self.sides.max(3);
+        (0..sides)
+            .map(|i| {
+                let angle = 2.0 * std::f32::consts::PI * i as f32 / sides as f32;
+                [
+                    (self.center[0] + angle.cos() * self.radius).clamp(0.0, 1.0),
+                    (self.center[1] + angle.sin() * self.radius * self.aspect_ratio).clamp(0.0, 1.0),
+                ]
+            })
+            .collect()
+    }
+}
+
 /// A polygon surface in the 2D stage layout.
 ///
 /// Represents a physical screen, LED panel, or projection area in the venue.
@@ -29,6 +60,10 @@ pub struct Surface {
     pub content_mapping: ContentMapping,
     /// Output type determines how this surface connects to physical hardware
     pub output_type: SurfaceOutputType,
+    /// If present, this surface was created as a circle and supports radius/sides editing.
+    /// Vertices are regenerated from the hint when radius or sides change.
+    #[serde(default)]
+    pub circle_hint: Option<CircleHint>,
 }
 
 /// How content is mapped onto a surface.
@@ -86,7 +121,25 @@ impl Surface {
             source,
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
+            circle_hint: None,
         }
+    }
+
+    /// Whether this surface is a circle (has a `CircleHint`).
+    pub fn is_circle(&self) -> bool {
+        self.circle_hint.is_some()
+    }
+
+    /// Regenerate vertices from the circle hint. No-op if not a circle.
+    pub fn regenerate_circle_vertices(&mut self) {
+        if let Some(hint) = &self.circle_hint {
+            self.vertices = hint.generate_vertices();
+        }
+    }
+
+    /// Drop circle identity, keeping current vertices as a plain polygon.
+    pub fn convert_to_polygon(&mut self) {
+        self.circle_hint = None;
     }
 
     /// Axis-aligned bounding box of the polygon.
@@ -214,6 +267,21 @@ impl SurfaceManager {
             source,
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
+            circle_hint: None,
+        });
+        self.surfaces.len() - 1
+    }
+
+    /// Add a circle surface with a `CircleHint`. Vertices are generated from the hint.
+    pub fn add_circle_surface(&mut self, name: String, hint: CircleHint, source: OutputSource) -> usize {
+        let vertices = hint.generate_vertices();
+        self.surfaces.push(Surface {
+            name,
+            vertices,
+            source,
+            content_mapping: ContentMapping::default(),
+            output_type: SurfaceOutputType::Projection,
+            circle_hint: Some(hint),
         });
         self.surfaces.len() - 1
     }

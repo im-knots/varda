@@ -4,8 +4,7 @@
     "ISFVSN": "2.0",
     "CATEGORIES": ["Generator"],
     "INPUTS": [
-        {"NAME": "color", "TYPE": "color", "DEFAULT": [1.0, 0.0, 0.5, 1.0], "LABEL": "Color"},
-        {"NAME": "audio_pulse", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0, "LABEL": "Audio Pulse"}
+        {"NAME": "color", "TYPE": "color", "DEFAULT": [1.0, 0.0, 0.5, 1.0], "LABEL": "Color"}
     ]
 }*/
 
@@ -31,7 +30,6 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
 
 layout(set = 0, binding = 1) uniform UserParams {
     vec4 color;
-    float audio_pulse;
 };
 
 void main() {
@@ -39,13 +37,5 @@ void main() {
     float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
-    vec3 col = color.rgb;
-
-    // Audio pulse: brightness modulation
-    if (audio_pulse > 0.01) {
-        float pulse = 1.0 + audio_level * audio_pulse;
-        col *= pulse;
-    }
-
-    fragColor = vec4(col * color.a, color.a);
+    fragColor = vec4(color.rgb * color.a, color.a);
 }

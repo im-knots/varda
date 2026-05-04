@@ -64,9 +64,6 @@ void main() {
     float edge = smoothstep(0.5 - ring_width * 0.5, 0.5, rings) - smoothstep(0.5, 0.5 + ring_width * 0.5, rings);
     float ring = smoothstep(1.0 - ring_width, 1.0, rings);
 
-    // Audio reactivity - pulse ring width with bass
-    ring = clamp(ring * (1.0 + audio_bass * 0.5), 0.0, 1.0);
-
     // Color based on distance
     vec3 col = mix(color1.rgb, color2.rgb, fract(dist * ring_count * 0.5 - t * 0.1));
 

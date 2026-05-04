@@ -34,8 +34,9 @@ struct App {
     // OSC state
     osc_receiver: Option<OscReceiver>,
     // MIDI state
-    midi_input: Option<MidiInput>,
+    midi_devices: Option<midi::MidiDeviceManager>,
     midi_mappings: midi::MidiMappingStore,
+    apc_mini_mgr: midi::apc_mini::ApcMiniManager,
     // Notification system
     notifications: NotificationSystem,
     // Currently selected deck for bottom bar detail view
@@ -58,6 +59,9 @@ struct App {
     stage_editor_open: bool,
     stage_editor_grid_size: f32,
     stage_editor_snap: bool,
+    library_panel_open: bool,
+    // Calibration card textures (one per color, created on init)
+    calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
 }
 
 impl App {
@@ -104,14 +108,17 @@ impl App {
             }
         };
 
-        // Initialize MIDI input
-        let midi_input = match MidiInput::new() {
-            Ok(midi) => {
-                log::info!("MIDI input initialized");
-                Some(midi)
+        // Initialize MIDI device manager (handles N devices, input + output)
+        let mut apc_mini_mgr = midi::apc_mini::ApcMiniManager::new();
+        let midi_devices = match midi::MidiDeviceManager::new() {
+            Ok(mgr) => {
+                let count = mgr.devices.len();
+                log::info!("MIDI initialized: {} device(s)", count);
+                apc_mini_mgr.sync_devices(&mgr);
+                Some(mgr)
             }
             Err(e) => {
-                log::warn!("Failed to initialize MIDI input: {}", e);
+                log::warn!("Failed to initialize MIDI: {}", e);
                 None
             }
         };
@@ -131,8 +138,9 @@ impl App {
             audio_textures: None,
             audio_data: AudioData::default(),
             osc_receiver,
-            midi_input,
+            midi_devices,
             midi_mappings: midi::MidiMappingStore::new(),
+            apc_mini_mgr,
             notifications: NotificationSystem::new(),
             selected_deck: None,
             selected_channel: None,
@@ -145,6 +153,8 @@ impl App {
             stage_editor_open: false,
             stage_editor_grid_size: 0.05,
             stage_editor_snap: true,
+            library_panel_open: true,
+            calibration_textures: Vec::new(),
         }
     }
 }
@@ -236,6 +246,14 @@ impl ApplicationHandler for App {
                             // Create audio textures
                             self.audio_textures = Some(AudioTextures::new(&context.device));
                             log::info!("Audio textures created");
+
+                            // Create calibration card textures (8 colors for distinct surfaces)
+                            self.calibration_textures = varda::renderer::context::create_calibration_textures(
+                                &context.device,
+                                &context.queue,
+                                8,
+                            );
+                            log::info!("Calibration card textures created ({} colors)", self.calibration_textures.len());
 
                             // Register deck textures with egui for previews
                             if let (Some(mixer), Some(egui_renderer)) = (&self.mixer, &mut self.egui_renderer) {
@@ -508,8 +526,10 @@ impl App {
                 source: s.source.clone(),
                 content_mapping: s.content_mapping,
                 output_type: s.output_type,
+                circle_hint: s.circle_hint,
             }).collect(),
             stage_editor_open: self.stage_editor_open,
+            library_panel_open: self.library_panel_open,
             stage_editor_grid_size: self.stage_editor_grid_size,
             stage_editor_snap: self.stage_editor_snap,
             available_monitors: self.cached_monitors.iter().enumerate().map(|(i, (name, handle))| {
@@ -521,6 +541,30 @@ impl App {
                     height: size.height,
                 }
             }).collect(),
+            midi_devices: self.midi_devices.as_ref().map(|mgr| {
+                mgr.device_list().iter().map(|d| ui::MidiDeviceUI {
+                    id: d.id,
+                    name: d.name.clone(),
+                    enabled: d.enabled,
+                    has_output: d.has_output,
+                    profile: format!("{:?}", d.profile),
+                }).collect()
+            }).unwrap_or_default(),
+            midi_mappings: {
+                let mappings = self.midi_mappings.sorted_mappings();
+                mappings.iter().map(|(key, path)| {
+                    let dev_name = self.midi_devices.as_ref()
+                        .and_then(|mgr| mgr.device(key.device_id()))
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| format!("Device {}", key.device_id()));
+                    ui::MidiMappingUI {
+                        key: *key,
+                        key_display: format!("{}", key),
+                        device_name: dev_name,
+                        param_path: path.clone(),
+                    }
+                }).collect()
+            },
         }
     }
 
@@ -593,7 +637,7 @@ impl App {
         }
 
         // Process MIDI messages → apply to mixer via mapping store
-        if let Some(midi) = &self.midi_input {
+        if let Some(midi) = &self.midi_devices {
             while let Some(msg) = midi.try_recv() {
                 let key = msg.mapping_key();
                 let value = msg.normalized_value();
@@ -601,15 +645,15 @@ impl App {
                 // Learn mode: map next MIDI input to the learn target
                 if self.midi_mappings.learn_mode {
                     self.midi_mappings.process_learn(key);
-                    continue;
+                    // Fall through to apply — mapped controls should still move sliders
                 }
 
-                // Normal mode: apply mapped value to mixer
+                // Apply mapped value to mixer (both normal and learn mode)
                 if let Some(path) = self.midi_mappings.get(&key).cloned() {
                     if let Some(mixer) = &mut self.mixer {
                         midi::apply_midi_to_param(mixer, &path, value);
                     }
-                } else {
+                } else if !self.midi_mappings.learn_mode {
                     log::debug!("Unmapped MIDI: {} value={:.2}", key, value);
                 }
             }
@@ -673,11 +717,11 @@ impl App {
         }
 
         // Handle MIDI learn actions from UI
-        if let Some(ref path) = ui_actions.midi_learn_start {
-            self.midi_mappings.start_learn(path.clone());
+        if ui_actions.midi_learn_toggle {
+            self.midi_mappings.toggle_learn();
         }
-        if ui_actions.midi_learn_cancel {
-            self.midi_mappings.cancel_learn();
+        if let Some(ref path) = ui_actions.midi_learn_select {
+            self.midi_mappings.select_learn_target(path.clone());
         }
 
         // Handle notification dismissals (process in reverse to keep indices valid)
@@ -696,6 +740,9 @@ impl App {
         }
         if ui_actions.toggle_snap {
             self.stage_editor_snap = !self.stage_editor_snap;
+        }
+        if ui_actions.toggle_library_panel {
+            self.library_panel_open = !self.library_panel_open;
         }
     }
 
@@ -739,6 +786,38 @@ impl App {
         self.apply_output_actions(&ui_actions);
         self.apply_surface_actions(&ui_actions);
 
+        // Update APC Mini LEDs based on current state
+        if let (Some(mgr), Some(mixer)) = (&self.midi_devices, &self.mixer) {
+            self.apc_mini_mgr.update_leds(
+                mgr,
+                &self.midi_mappings,
+                mixer,
+                self.midi_mappings.learn_mode,
+                self.midi_mappings.learn_target.as_deref(),
+            );
+        }
+
+        // Handle MIDI device actions from UI
+        if ui_actions.midi_rescan {
+            if let Some(mgr) = &mut self.midi_devices {
+                if let Err(e) = mgr.scan_devices() {
+                    log::warn!("MIDI rescan failed: {}", e);
+                }
+                self.apc_mini_mgr.sync_devices(mgr);
+            }
+        }
+        for (dev_id, enabled) in &ui_actions.midi_device_toggles {
+            if let Some(mgr) = &mut self.midi_devices {
+                mgr.set_device_enabled(*dev_id, *enabled);
+            }
+        }
+        if ui_actions.midi_clear_mappings {
+            self.midi_mappings.clear_all();
+        }
+        for key in &ui_actions.midi_remove_mapping {
+            self.midi_mappings.remove(key);
+        }
+
         // Handle deferred file dialogs (must happen outside egui frame for macOS Finder focus)
         if let Some(ch_idx) = ui_actions.open_image_dialog_for_channel {
             if let Some(path) = rfd::FileDialog::new()
@@ -747,6 +826,28 @@ impl App {
             {
                 ui_actions.image_to_add = Some((ch_idx, path));
                 // Re-apply deck actions so the image gets loaded this frame
+                if let (Some(context), Some(mixer), Some(egui_renderer)) =
+                    (&self.context, &mut self.mixer, &mut self.egui_renderer)
+                {
+                    ui::state::apply_deck_and_effect_actions(
+                        mixer,
+                        context,
+                        &self.registry,
+                        &mut ui_actions,
+                        egui_renderer,
+                        &mut self.deck_preview_textures,
+                    );
+                }
+            }
+        }
+
+        // Handle deferred video file dialog
+        if let Some(ch_idx) = ui_actions.open_video_dialog_for_channel {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm"])
+                .pick_file()
+            {
+                ui_actions.video_to_add = Some((ch_idx, path));
                 if let (Some(context), Some(mixer), Some(egui_renderer)) =
                     (&self.context, &mut self.mixer, &mut self.egui_renderer)
                 {
@@ -916,6 +1017,14 @@ impl App {
                 }
                 ui::SurfaceAction::UpdateVertices { idx, vertices } => {
                     if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        // If this is a circle, update the hint center to match the moved vertices
+                        if let Some(ref mut hint) = surface.circle_hint {
+                            let n = vertices.len().max(1) as f32;
+                            let sum = vertices.iter().fold([0.0f32, 0.0], |acc, v| {
+                                [acc[0] + v[0], acc[1] + v[1]]
+                            });
+                            hint.center = [sum[0] / n, sum[1] / n];
+                        }
                         surface.vertices = vertices.clone();
                     }
                 }
@@ -953,6 +1062,11 @@ impl App {
                             v[0] = (v[0] + offset).min(1.0);
                             v[1] = (v[1] + offset).min(1.0);
                         }
+                        // Offset circle hint center too
+                        if let Some(ref mut hint) = dup.circle_hint {
+                            hint.center[0] = (hint.center[0] + offset).min(1.0);
+                            hint.center[1] = (hint.center[1] + offset).min(1.0);
+                        }
                         let name = dup.name.clone();
                         self.surface_manager.surfaces.push(dup);
                         log::info!("Duplicated surface '{}' → '{}'", self.surface_manager.surfaces[*idx].name, name);
@@ -965,6 +1079,9 @@ impl App {
                         for v in &mut surface.vertices {
                             v[0] = cx + (cx - v[0]);
                         }
+                        if let Some(ref mut hint) = surface.circle_hint {
+                            hint.center[0] = cx + (cx - hint.center[0]);
+                        }
                         log::info!("Flipped surface '{}' horizontally", surface.name);
                     }
                 }
@@ -975,15 +1092,48 @@ impl App {
                         for v in &mut surface.vertices {
                             v[1] = cy + (cy - v[1]);
                         }
+                        if let Some(ref mut hint) = surface.circle_hint {
+                            hint.center[1] = cy + (cy - hint.center[1]);
+                        }
                         log::info!("Flipped surface '{}' vertically", surface.name);
                     }
                 }
                 ui::SurfaceAction::InsertVertex { idx, after_vert_idx, position } => {
                     if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        // Inserting a vertex breaks circle identity
+                        surface.convert_to_polygon();
                         if *after_vert_idx < surface.vertices.len() {
                             surface.vertices.insert(after_vert_idx + 1, *position);
                             log::info!("Inserted vertex on surface '{}' after vertex {}", surface.name, after_vert_idx);
                         }
+                    }
+                }
+                ui::SurfaceAction::AddCircle { name, hint, source } => {
+                    let idx = self.surface_manager.add_circle_surface(name.clone(), *hint, source.clone());
+                    log::info!("Added circle surface '{}' (index {}, radius={:.3}, sides={})", name, idx, hint.radius, hint.sides);
+                }
+                ui::SurfaceAction::SetCircleRadius { idx, radius } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        if let Some(ref mut hint) = surface.circle_hint {
+                            hint.radius = *radius;
+                            surface.vertices = hint.generate_vertices();
+                            log::info!("Circle '{}' radius set to {:.3}", surface.name, radius);
+                        }
+                    }
+                }
+                ui::SurfaceAction::SetCircleSides { idx, sides } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        if let Some(ref mut hint) = surface.circle_hint {
+                            hint.sides = *sides;
+                            surface.vertices = hint.generate_vertices();
+                            log::info!("Circle '{}' sides set to {}", surface.name, sides);
+                        }
+                    }
+                }
+                ui::SurfaceAction::ConvertToPolygon { idx } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        surface.convert_to_polygon();
+                        log::info!("Converted surface '{}' to polygon", surface.name);
                     }
                 }
             }
@@ -1013,24 +1163,42 @@ impl App {
         let Some(mixer) = &self.mixer else { return };
 
         for output in &self.output_windows {
-            if self.surface_manager.surfaces.is_empty() {
+            if output.calibration_mode && !self.calibration_textures.is_empty() && self.surface_manager.surfaces.is_empty() {
+                // Calibration mode with no surfaces — show a single fullscreen test card
+                output.render(context, &self.calibration_textures[0].1);
+            } else if self.surface_manager.surfaces.is_empty() {
                 // No surfaces — show master mix as fullscreen quad
                 output.render(context, &mixer.composite_view);
             } else if !output.surface_assignments.is_empty() {
                 // Render only assigned surfaces, with per-surface warp
                 let render_infos: Vec<SurfaceRenderInfo<'_>> = output.surface_assignments.iter()
-                    .filter(|a| a.enabled)
-                    .filter_map(|assignment| {
+                    .enumerate()
+                    .filter(|(_, a)| a.enabled)
+                    .filter_map(|(ai, assignment)| {
                         let surface = self.surface_manager.surfaces.get(assignment.surface_idx)?;
-                        let content_view = Self::resolve_source(mixer, &surface.source)?;
                         let bb = surface.bounding_box();
-                        let (uv_scale, uv_offset) = match surface.content_mapping {
-                            ContentMapping::Fill => ([1.0, 1.0], [0.0, 0.0]),
-                            ContentMapping::Mapped => (
-                                [bb.width, bb.height],
-                                [bb.x, bb.y],
-                            ),
+
+                        // In calibration mode, use the test card instead of content
+                        let content_view = if output.calibration_mode && !self.calibration_textures.is_empty() {
+                            let color_idx = ai % self.calibration_textures.len();
+                            &self.calibration_textures[color_idx].1
+                        } else {
+                            Self::resolve_source(mixer, &surface.source)?
                         };
+
+                        // In calibration mode, always use Fill so the full test card is visible
+                        let (uv_scale, uv_offset) = if output.calibration_mode {
+                            ([1.0, 1.0], [0.0, 0.0])
+                        } else {
+                            match surface.content_mapping {
+                                ContentMapping::Fill => ([1.0, 1.0], [0.0, 0.0]),
+                                ContentMapping::Mapped => (
+                                    [bb.width, bb.height],
+                                    [bb.x, bb.y],
+                                ),
+                            }
+                        };
+
                         Some(SurfaceRenderInfo {
                             content_view,
                             vertices: &surface.vertices,
@@ -1046,16 +1214,30 @@ impl App {
             } else {
                 // No assignments — render all surfaces without warp (fallback)
                 let render_infos: Vec<SurfaceRenderInfo<'_>> = self.surface_manager.surfaces.iter()
-                    .filter_map(|surface| {
-                        let content_view = Self::resolve_source(mixer, &surface.source)?;
+                    .enumerate()
+                    .filter_map(|(si, surface)| {
                         let bb = surface.bounding_box();
-                        let (uv_scale, uv_offset) = match surface.content_mapping {
-                            ContentMapping::Fill => ([1.0, 1.0], [0.0, 0.0]),
-                            ContentMapping::Mapped => (
-                                [bb.width, bb.height],
-                                [bb.x, bb.y],
-                            ),
+
+                        // In calibration mode, use test cards
+                        let content_view = if output.calibration_mode && !self.calibration_textures.is_empty() {
+                            let color_idx = si % self.calibration_textures.len();
+                            &self.calibration_textures[color_idx].1
+                        } else {
+                            Self::resolve_source(mixer, &surface.source)?
                         };
+
+                        let (uv_scale, uv_offset) = if output.calibration_mode {
+                            ([1.0, 1.0], [0.0, 0.0])
+                        } else {
+                            match surface.content_mapping {
+                                ContentMapping::Fill => ([1.0, 1.0], [0.0, 0.0]),
+                                ContentMapping::Mapped => (
+                                    [bb.width, bb.height],
+                                    [bb.x, bb.y],
+                                ),
+                            }
+                        };
+
                         Some(SurfaceRenderInfo {
                             content_view,
                             vertices: &surface.vertices,

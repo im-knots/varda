@@ -1,5 +1,11 @@
 //! Video playback support for Varda
-//! Uses FFmpeg for decoding video files to frames
+//!
+//! Two codec paths:
+//! - **HAP path**: GPU-native BCn compressed textures — near-zero CPU decode cost.
+//!   Supports Hap (BC1), Hap Alpha (BC3), Hap R (BC7).
+//! - **ffmpeg path**: CPU decode for H.264, ProRes, VP9, etc. — fallback for all other codecs.
+
+pub mod hap;
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -11,107 +17,243 @@ use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context as Scaler, flag::Flags};
 use ffmpeg::util::frame::video::Video;
 
-/// A video player that decodes frames from a video file
+/// Loop mode for video playback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopMode {
+    /// Standard loop — restart from in-point when reaching out-point.
+    Loop,
+    /// Play forward then reverse repeatedly.
+    PingPong,
+    /// Play once and stop at the out-point.
+    OneShot,
+    /// Play once and hold the last frame.
+    HoldLast,
+}
+
+/// Shared playback state for all video sources (ffmpeg and HAP).
+#[derive(Debug, Clone)]
+pub struct PlaybackState {
+    /// Whether the video is currently playing.
+    pub playing: bool,
+    /// Loop mode.
+    pub loop_mode: LoopMode,
+    /// Speed multiplier (1.0 = normal, 0.5 = half, 2.0 = double, negative = reverse).
+    pub speed: f64,
+    /// In-point in seconds (start of playback range). 0.0 = beginning.
+    pub in_point: f64,
+    /// Out-point in seconds (end of playback range). 0.0 = use duration.
+    pub out_point: f64,
+    /// Current playback position in seconds.
+    pub position: f64,
+    /// Whether we're currently playing in reverse (for ping-pong).
+    pub reverse: bool,
+    /// Video duration in seconds.
+    pub duration: f64,
+    /// Video frame rate.
+    pub frame_rate: f64,
+}
+
+impl PlaybackState {
+    pub fn new(duration: f64, frame_rate: f64) -> Self {
+        Self {
+            playing: true,
+            loop_mode: LoopMode::Loop,
+            speed: 1.0,
+            in_point: 0.0,
+            out_point: 0.0,
+            position: 0.0,
+            reverse: false,
+            duration,
+            frame_rate,
+        }
+    }
+
+    /// Effective out-point (uses duration if out_point is 0).
+    pub fn effective_out(&self) -> f64 {
+        if self.out_point > 0.0 { self.out_point } else { self.duration }
+    }
+
+    /// Advance position by one frame at current speed. Returns true if a seek is needed.
+    pub fn advance_frame(&mut self) -> bool {
+        if !self.playing {
+            return false;
+        }
+        let frame_time = 1.0 / self.frame_rate;
+        let delta = frame_time * self.speed.abs() * if self.reverse { -1.0 } else { 1.0 };
+        self.position += delta;
+
+        let in_pt = self.in_point;
+        let out_pt = self.effective_out();
+
+        if self.position >= out_pt {
+            match self.loop_mode {
+                LoopMode::Loop => { self.position = in_pt; return true; }
+                LoopMode::PingPong => { self.reverse = true; self.position = out_pt - frame_time; }
+                LoopMode::OneShot => { self.playing = false; self.position = out_pt; }
+                LoopMode::HoldLast => { self.position = out_pt; }
+            }
+        } else if self.position < in_pt {
+            match self.loop_mode {
+                LoopMode::Loop | LoopMode::OneShot | LoopMode::HoldLast => {
+                    self.position = in_pt;
+                    return true;
+                }
+                LoopMode::PingPong => { self.reverse = false; self.position = in_pt + frame_time; }
+            }
+        }
+        false
+    }
+}
+
+/// GPU-compressed texture format for HAP video frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HapTextureFormat {
+    /// BC1 / DXT1 — RGB, no alpha (Hap)
+    Bc1,
+    /// BC3 / DXT5 — RGBA with interpolated alpha (Hap Alpha)
+    Bc3,
+    /// BC3 / DXT5 storing Scaled YCoCg color (Hap Q) — needs shader conversion to RGB
+    Bc3YCoCg,
+    /// BC4 / RGTC1 — single-channel alpha (Hap Alpha-Only, or alpha plane of Hap Q Alpha)
+    Bc4,
+    /// BC7 / BPTC — RGBA, best quality (Hap R)
+    Bc7,
+}
+
+impl HapTextureFormat {
+    /// Bytes per 4×4 block for this format.
+    pub fn block_bytes(self) -> u32 {
+        match self {
+            Self::Bc1 | Self::Bc4 => 8,
+            Self::Bc3 | Self::Bc3YCoCg | Self::Bc7 => 16,
+        }
+    }
+
+    /// Corresponding wgpu texture format.
+    pub fn wgpu_format(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Bc1 => wgpu::TextureFormat::Bc1RgbaUnorm,
+            Self::Bc3 | Self::Bc3YCoCg => wgpu::TextureFormat::Bc3RgbaUnorm,
+            Self::Bc4 => wgpu::TextureFormat::Bc4RUnorm,
+            Self::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
+        }
+    }
+
+    /// Whether this format requires YCoCg→RGB conversion in a shader.
+    pub fn needs_ycocg_convert(self) -> bool {
+        matches!(self, Self::Bc3YCoCg)
+    }
+
+    /// Calculate the byte size of a full frame in this compressed format.
+    pub fn frame_byte_size(self, width: u32, height: u32) -> usize {
+        let blocks_x = (width + 3) / 4;
+        let blocks_y = (height + 3) / 4;
+        (blocks_x * blocks_y * self.block_bytes()) as usize
+    }
+}
+
+/// A decoded video frame — either CPU-decoded RGBA or GPU-compressed BCn.
+pub enum VideoFrame<'a> {
+    /// Standard RGBA pixel data (from ffmpeg CPU decode).
+    Rgba(&'a [u8]),
+    /// GPU-compressed BCn texture data (from HAP decode).
+    Compressed {
+        data: &'a [u8],
+        format: HapTextureFormat,
+    },
+}
+
+/// Detect whether a video file uses a HAP codec.
+/// Returns the HAP texture format if it is HAP, or None for standard codecs.
+pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureFormat>> {
+    ffmpeg::init().context("Failed to initialize FFmpeg")?;
+    let ictx = input(&path).context("Failed to open video file for codec detection")?;
+
+    let video_stream = ictx
+        .streams()
+        .best(Type::Video)
+        .context("No video stream found")?;
+
+    // Get the codec tag (FourCC) from stream parameters
+    let params = video_stream.parameters();
+    let codec_ctx = ffmpeg::codec::context::Context::from_parameters(params)?;
+    let codec_id = codec_ctx.id();
+
+    // Check if codec is HAP by examining the codec ID
+    // ffmpeg maps HAP variants to AV_CODEC_ID_HAP
+    let codec_name = codec_id.name();
+    if codec_name == "hap" {
+        // Determine the specific HAP variant from the codec tag
+        // We need to probe the first frame to determine the exact texture format
+        // since ffmpeg groups all HAP variants under one codec ID.
+        // We'll determine the format when we parse the first frame in HapPlayer.
+        return Ok(Some(HapTextureFormat::Bc7)); // default; HapPlayer refines this
+    }
+
+    Ok(None)
+}
+
+/// A video player that decodes frames from a video file using ffmpeg (CPU decode).
 pub struct VideoPlayer {
     ictx: ffmpeg::format::context::Input,
     decoder: ffmpeg::decoder::Video,
     scaler: Scaler,
     video_stream_index: usize,
-    
-    // Video properties
     width: u32,
     height: u32,
-    frame_rate: f64,
-    duration: f64,
-    
-    // Playback state
-    current_time: f64,
-    is_playing: bool,
-    is_looping: bool,
-    
-    // Current frame data (RGBA)
+    /// Shared playback state (loop mode, speed, in/out points, position).
+    pub playback: PlaybackState,
+    /// Current frame data (RGBA).
     frame_data: Vec<u8>,
 }
 
 impl VideoPlayer {
-    /// Create a new video player from a file path
+    /// Create a new video player from a file path.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         ffmpeg::init().context("Failed to initialize FFmpeg")?;
-        
         let ictx = input(&path).context("Failed to open video file")?;
-        
-        let video_stream = ictx
-            .streams()
-            .best(Type::Video)
-            .context("No video stream found")?;
+        let video_stream = ictx.streams().best(Type::Video).context("No video stream found")?;
         let video_stream_index = video_stream.index();
-        
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())?;
         let decoder = context_decoder.decoder().video()?;
-        
         let width = decoder.width();
         let height = decoder.height();
-        
-        // Get frame rate
-        let frame_rate = video_stream.rate();
-        let fps = frame_rate.0 as f64 / frame_rate.1 as f64;
-        
-        // Get duration in seconds
+        let rate = video_stream.rate();
+        let fps = rate.0 as f64 / rate.1 as f64;
         let duration = if ictx.duration() > 0 {
             ictx.duration() as f64 / ffmpeg::ffi::AV_TIME_BASE as f64
-        } else {
-            0.0
-        };
-        
-        // Create scaler to convert to RGBA
+        } else { 0.0 };
         let scaler = Scaler::get(
-            decoder.format(),
-            width,
-            height,
-            Pixel::RGBA,
-            width,
-            height,
-            Flags::BILINEAR,
+            decoder.format(), width, height,
+            Pixel::RGBA, width, height, Flags::BILINEAR,
         )?;
-        
         let frame_data = vec![0u8; (width * height * 4) as usize];
-        
-        log::info!(
-            "Loaded video: {}x{} @ {:.2} fps, duration: {:.2}s",
-            width, height, fps, duration
-        );
-        
+        log::info!("Loaded video: {}x{} @ {:.2} fps, duration: {:.2}s", width, height, fps, duration);
         Ok(Self {
-            ictx,
-            decoder,
-            scaler,
-            video_stream_index,
-            width,
-            height,
-            frame_rate: fps,
-            duration,
-            current_time: 0.0,
-            is_playing: true,
-            is_looping: true,
+            ictx, decoder, scaler, video_stream_index, width, height,
+            playback: PlaybackState::new(duration, fps),
             frame_data,
         })
     }
-    
-    /// Get the next frame as RGBA data
-    /// Returns the frame data if a new frame is available
+
+    /// Get the next frame as RGBA data.
     pub fn next_frame(&mut self) -> Result<Option<&[u8]>> {
+        if !self.playback.playing {
+            return Ok(None);
+        }
+        // Check if playback state says we need a seek (loop restart, etc.)
+        let needs_seek = self.playback.advance_frame();
+        if needs_seek {
+            self.seek(self.playback.position)?;
+        }
+
         loop {
-            // Try to receive a decoded frame
             let mut decoded = Video::empty();
             if self.decoder.receive_frame(&mut decoded).is_ok() {
-                // Scale to RGBA
                 let mut rgb_frame = Video::empty();
                 self.scaler.run(&decoded, &mut rgb_frame)?;
-                
-                // Copy frame data
                 let data = rgb_frame.data(0);
                 let stride = rgb_frame.stride(0);
-                
                 for y in 0..self.height as usize {
                     let src_offset = y * stride;
                     let dst_offset = y * (self.width as usize * 4);
@@ -119,11 +261,8 @@ impl VideoPlayer {
                     self.frame_data[dst_offset..dst_offset + row_bytes]
                         .copy_from_slice(&data[src_offset..src_offset + row_bytes]);
                 }
-                
                 return Ok(Some(&self.frame_data));
             }
-            
-            // Need more packets
             match self.ictx.packets().next() {
                 Some((stream, packet)) => {
                     if stream.index() == self.video_stream_index {
@@ -131,33 +270,150 @@ impl VideoPlayer {
                     }
                 }
                 None => {
-                    // End of file
-                    if self.is_looping {
-                        self.seek(0.0)?;
-                        continue;
-                    }
+                    // End of stream — PlaybackState already handled loop logic
                     return Ok(None);
                 }
             }
         }
     }
-    
-    /// Seek to a specific time in seconds
+
+    /// Seek to a specific time in seconds.
     pub fn seek(&mut self, time_secs: f64) -> Result<()> {
         let timestamp = (time_secs * ffmpeg::ffi::AV_TIME_BASE as f64) as i64;
         self.ictx.seek(timestamp, ..timestamp)?;
         self.decoder.flush();
-        self.current_time = time_secs;
+        self.playback.position = time_secs;
         Ok(())
     }
-    
+
     pub fn width(&self) -> u32 { self.width }
     pub fn height(&self) -> u32 { self.height }
-    pub fn frame_rate(&self) -> f64 { self.frame_rate }
-    pub fn duration(&self) -> f64 { self.duration }
-    pub fn is_playing(&self) -> bool { self.is_playing }
-    pub fn set_playing(&mut self, playing: bool) { self.is_playing = playing; }
-    pub fn is_looping(&self) -> bool { self.is_looping }
-    pub fn set_looping(&mut self, looping: bool) { self.is_looping = looping; }
+    pub fn frame_rate(&self) -> f64 { self.playback.frame_rate }
+    pub fn duration(&self) -> f64 { self.playback.duration }
+    pub fn is_playing(&self) -> bool { self.playback.playing }
+    pub fn set_playing(&mut self, playing: bool) { self.playback.playing = playing; }
+    pub fn is_looping(&self) -> bool { self.playback.loop_mode == LoopMode::Loop }
+    pub fn set_looping(&mut self, looping: bool) {
+        self.playback.loop_mode = if looping { LoopMode::Loop } else { LoopMode::OneShot };
+    }
 }
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_playback_state_defaults() {
+        let ps = PlaybackState::new(10.0, 30.0);
+        assert!(ps.playing);
+        assert_eq!(ps.loop_mode, LoopMode::Loop);
+        assert_eq!(ps.speed, 1.0);
+        assert_eq!(ps.in_point, 0.0);
+        assert_eq!(ps.out_point, 0.0);
+        assert_eq!(ps.position, 0.0);
+        assert!(!ps.reverse);
+        assert_eq!(ps.effective_out(), 10.0);
+    }
+
+    #[test]
+    fn test_playback_state_advance_normal() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        let needs_seek = ps.advance_frame();
+        assert!(!needs_seek);
+        assert!((ps.position - 1.0 / 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_playback_state_loop_restart() {
+        let mut ps = PlaybackState::new(1.0, 30.0);
+        ps.position = 0.99;
+        let needs_seek = ps.advance_frame();
+        assert!(needs_seek);
+        assert_eq!(ps.position, 0.0);
+    }
+
+    #[test]
+    fn test_playback_state_one_shot_stops() {
+        let mut ps = PlaybackState::new(1.0, 30.0);
+        ps.loop_mode = LoopMode::OneShot;
+        ps.position = 0.99;
+        ps.advance_frame();
+        assert!(!ps.playing);
+        assert_eq!(ps.position, 1.0);
+    }
+
+    #[test]
+    fn test_playback_state_hold_last() {
+        let mut ps = PlaybackState::new(1.0, 30.0);
+        ps.loop_mode = LoopMode::HoldLast;
+        ps.position = 0.99;
+        ps.advance_frame();
+        assert!(ps.playing);
+        assert_eq!(ps.position, 1.0);
+    }
+
+    #[test]
+    fn test_playback_state_ping_pong() {
+        let mut ps = PlaybackState::new(1.0, 30.0);
+        ps.loop_mode = LoopMode::PingPong;
+        ps.position = 0.99;
+        ps.advance_frame();
+        assert!(ps.reverse);
+        assert!(ps.position < 1.0);
+    }
+
+    #[test]
+    fn test_playback_state_in_out_points() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.in_point = 2.0;
+        ps.out_point = 5.0;
+        ps.position = 4.99;
+        let needs_seek = ps.advance_frame();
+        assert!(needs_seek);
+        assert_eq!(ps.position, 2.0);
+    }
+
+    #[test]
+    fn test_playback_state_speed_multiplier() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.speed = 2.0;
+        ps.advance_frame();
+        assert!((ps.position - 2.0 / 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_playback_state_not_playing() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.playing = false;
+        let needs_seek = ps.advance_frame();
+        assert!(!needs_seek);
+        assert_eq!(ps.position, 0.0);
+    }
+
+    #[test]
+    fn test_hap_texture_format_block_bytes() {
+        assert_eq!(HapTextureFormat::Bc1.block_bytes(), 8);
+        assert_eq!(HapTextureFormat::Bc3.block_bytes(), 16);
+        assert_eq!(HapTextureFormat::Bc3YCoCg.block_bytes(), 16);
+        assert_eq!(HapTextureFormat::Bc4.block_bytes(), 8);
+        assert_eq!(HapTextureFormat::Bc7.block_bytes(), 16);
+    }
+
+    #[test]
+    fn test_hap_texture_format_frame_byte_size() {
+        assert_eq!(HapTextureFormat::Bc1.frame_byte_size(8, 8), 4 * 8);
+        assert_eq!(HapTextureFormat::Bc7.frame_byte_size(8, 8), 4 * 16);
+        assert_eq!(HapTextureFormat::Bc1.frame_byte_size(5, 5), 4 * 8);
+    }
+
+    #[test]
+    fn test_hap_texture_format_needs_ycocg() {
+        assert!(!HapTextureFormat::Bc1.needs_ycocg_convert());
+        assert!(!HapTextureFormat::Bc3.needs_ycocg_convert());
+        assert!(HapTextureFormat::Bc3YCoCg.needs_ycocg_convert());
+        assert!(!HapTextureFormat::Bc4.needs_ycocg_convert());
+        assert!(!HapTextureFormat::Bc7.needs_ycocg_convert());
+    }
+}

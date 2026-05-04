@@ -3232,6 +3232,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "snap"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b6b67fb9a61334225b5b790716f609cd58395f895b3fe8b328786812a40bc3b"
+
+[[package]]
 name = "spirv"
 version = "0.3.0+sdk-1.3.268.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3565,6 +3571,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shaderc",
+ "snap",
  "thiserror 2.0.18",
  "walkdir",
  "wgpu",

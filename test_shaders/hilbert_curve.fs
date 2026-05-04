@@ -157,8 +157,7 @@ void main() {
     // Convert distance from grid space to NDC
     minDist *= scale * 2.0 / nf;
 
-    // Audio-reactive line width
-    float lw = line_width * (1.0 + audio_bass * 0.3);
+    float lw = line_width;
 
     // Soft fade at the growth front
     float frontFade = 1.0 - smoothstep(growRadius * 0.85, growOuter, closestRadial);
@@ -181,11 +180,9 @@ void main() {
         gColor = mix(gColor, rainbowCol * 0.5, rainbow);
     }
 
-    float pulse = 1.0 + audio_level * 0.3;
-
     vec3 color = bg_color.rgb * bg_color.a;
-    color += gColor * glow * pulse;
-    color += cColor * curve * pulse;
+    color += gColor * glow;
+    color += cColor * curve;
 
     float alpha = clamp(max(curve, glow * 0.5) * curve_color.a + bg_color.a, 0.0, 1.0);
 
