@@ -3,7 +3,7 @@ use shaderc::{Compiler, ShaderKind};
 
 /// Compile GLSL fragment shader to SPIR-V
 pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec<u32>> {
-    let mut compiler = Compiler::new()
+    let compiler = Compiler::new()
         .context("Failed to create shaderc compiler")?;
     
     let mut options = shaderc::CompileOptions::new()

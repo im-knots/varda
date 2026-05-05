@@ -466,7 +466,7 @@ pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) ->
     let corner_color = [255u8, 255, 255, 255];
 
     let border_w = (width.min(height) / 40).max(2);
-    let corner_size = (width.min(height) / 8).max(8);
+    let _corner_size = (width.min(height) / 8).max(8);
 
     // Interior content region (inside border)
     let inset = border_w + 1;

@@ -184,6 +184,8 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
         .show_separator_line(true)
         .show(ctx, |ui| {
             render_bottom_panel(ui, data, &mut actions);
+            // Claim full available space so the panel doesn't shrink
+            ui.allocate_space(ui.available_size());
         });
 
     // === TOP BAR: Save button + status ===
@@ -563,7 +565,7 @@ fn render_notifications(ctx: &egui::Context, notifications: &[NotificationUI], a
         );
 
         // Message text (truncated)
-        let max_msg_width = toast_width - 50.0;
+        let _max_msg_width = toast_width - 50.0;
         let msg = if notif.message.len() > 60 {
             format!("{}…", &notif.message[..59])
         } else {
@@ -585,13 +587,13 @@ fn render_notifications(ctx: &egui::Context, notifications: &[NotificationUI], a
         );
         painter.rect_filled(progress_rect, 0.0, accent_color.linear_multiply(0.5));
 
-        // Dismiss button ("✕") — use an Area so it's clickable
+        // Dismiss button ("x") — use an Area so it's clickable
         let dismiss_id = egui::Id::new(format!("dismiss_notif_{}", i));
         egui::Area::new(dismiss_id)
             .fixed_pos(egui::pos2(toast_rect.right() - 24.0, toast_rect.top() + 4.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                if ui.add(egui::Button::new(egui::RichText::new("✕").size(12.0).color(egui::Color32::GRAY))
+                if ui.add(egui::Button::new(egui::RichText::new("x").size(12.0).color(egui::Color32::GRAY))
                     .frame(false)
                 ).clicked() {
                     actions.notifications_to_dismiss.push(i);
@@ -723,13 +725,6 @@ fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
             }
         });
 
-        ui.add_space(4.0);
-
-        // === AUDIO (placeholder) ===
-        let audio_header = egui::RichText::new("🔊 Audio").strong();
-        egui::CollapsingHeader::new(audio_header).default_open(false).show(ui, |ui| {
-            ui.label(egui::RichText::new("Audio sources (coming soon)").small().weak());
-        });
     });
 }
 
@@ -1065,7 +1060,7 @@ fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
                     ui.label(egui::RichText::new(&surface.name).strong().size(11.0));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("🗑").clicked() {
+                        if ui.small_button("x").clicked() {
                             actions.surface_actions.push(SurfaceAction::Remove { idx: i });
                         }
                     });
@@ -1322,7 +1317,7 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
         });
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("✕ Close Editor").clicked() {
+            if ui.button("x Close Editor").clicked() {
                 actions.toggle_stage_editor = true;
             }
         });
@@ -2040,7 +2035,7 @@ fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(&output.name).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("✕").on_hover_text("Close output").clicked() {
+                            if ui.small_button("x").on_hover_text("Close output").clicked() {
                                 actions.output_actions.push(OutputAction::Close { idx });
                             }
                         });
@@ -2119,7 +2114,7 @@ fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
                                     assignment_idx: ai,
                                 });
                             }
-                            if ui.small_button("✕").on_hover_text("Unassign").clicked() {
+                            if ui.small_button("x").on_hover_text("Unassign").clicked() {
                                 actions.output_actions.push(OutputAction::UnassignSurface {
                                     output_idx: idx,
                                     assignment_idx: ai,
@@ -2294,7 +2289,7 @@ fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                             .strong().color(egui::Color32::WHITE));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("✕ Exit MIDI Learn").clicked() {
+                        if ui.button("x Exit MIDI Learn").clicked() {
                             actions.midi_learn_toggle = true;
                         }
                     });
@@ -2460,7 +2455,7 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                         VideoAction::SetOutPoint(vp.position)));
                                 }
                                 if has_range {
-                                    if ui.small_button("✕ Clear").on_hover_text("Reset to full clip").clicked() {
+                                    if ui.small_button("x Clear").on_hover_text("Reset to full clip").clicked() {
                                         actions.video_actions.push((ch_idx, deck_idx,
                                             VideoAction::ClearInOutPoints));
                                     }
@@ -2485,227 +2480,251 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 ui.separator();
             }
 
-            // Column: Auto-Transition controls
+            // Column: Auto-Transition controls (collapsible column, default closed)
             {
-                egui::Frame::default()
-                    .inner_margin(6.0)
-                    .corner_radius(4.0)
-                    .fill(ui.visuals().faint_bg_color)
-                    .show(ui, |ui| {
-                        ui.set_min_width(200.0);
-                        ui.set_max_width(260.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            // Header with enable toggle
-                            ui.horizontal(|ui| {
-                                let enabled = deck.auto_transition.as_ref().map_or(false, |at| at.enabled);
-                                let mut en = enabled;
-                                ui.checkbox(&mut en, "");
-                                if en != enabled {
-                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                        AutoTransitionAction::SetEnabled(en)));
+                let at_open_id = egui::Id::new("at_col_open").with((ch_idx, deck_idx));
+                let at_open = ui.ctx().memory(|mem| mem.data.get_temp::<bool>(at_open_id).unwrap_or(false));
+                if at_open {
+                    egui::Frame::default()
+                        .inner_margin(6.0)
+                        .corner_radius(4.0)
+                        .fill(ui.visuals().faint_bg_color)
+                        .show(ui, |ui| {
+                            ui.set_min_width(200.0);
+                            ui.set_max_width(260.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                                // Clickable full-width header to collapse
+                                let header_rect = ui.available_rect_before_wrap();
+                                let header_rect = egui::Rect::from_min_size(header_rect.min, egui::vec2(ui.available_width(), 20.0));
+                                let header_resp = ui.allocate_rect(header_rect, egui::Sense::click());
+                                ui.painter().text(header_rect.left_center(), egui::Align2::LEFT_CENTER, "Auto Transition", egui::FontId::proportional(13.0), ui.visuals().strong_text_color());
+                                if header_resp.clicked() {
+                                    ui.ctx().memory_mut(|mem| mem.data.insert_temp(at_open_id, false));
                                 }
-                                // Phase indicator
-                                let phase_icon = if let Some(ref at) = deck.auto_transition {
-                                    match at.phase {
-                                        crate::channel::DeckTransitionPhase::Inactive => "⏹",
-                                        crate::channel::DeckTransitionPhase::Playing { .. } => "▶",
-                                        crate::channel::DeckTransitionPhase::Transitioning { .. } => "🔄",
-                                        crate::channel::DeckTransitionPhase::Done => "✓",
+                                if header_resp.hovered() {
+                                    ui.painter().rect_filled(header_rect, 2.0, ui.visuals().widgets.hovered.bg_fill.linear_multiply(0.3));
+                                }
+                                ui.separator();
+                                // Enable toggle
+                                ui.horizontal(|ui| {
+                                    let enabled = deck.auto_transition.as_ref().map_or(false, |at| at.enabled);
+                                    let mut en = enabled;
+                                    ui.checkbox(&mut en, "Enabled");
+                                    if en != enabled {
+                                        actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                            AutoTransitionAction::SetEnabled(en)));
                                     }
-                                } else { "⏹" };
-                                ui.label(egui::RichText::new(format!("{} Auto Transition", phase_icon)).strong());
-                            });
+                                });
 
-                            if let Some(ref at) = deck.auto_transition {
-                                if at.enabled {
-                                    // Trigger mode
-                                    ui.horizontal(|ui| {
-                                        ui.label("Trigger:");
-                                        let mut clip_end = at.trigger_is_clip_end;
-                                        if ui.selectable_label(!clip_end, "Timer").clicked() && clip_end {
-                                            clip_end = false;
-                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                AutoTransitionAction::SetTrigger(false)));
-                                        }
-                                        if ui.selectable_label(clip_end, "Clip End").clicked() && !clip_end {
-                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                AutoTransitionAction::SetTrigger(true)));
-                                        }
-                                    });
-
-                                    // Play duration
-                                    ui.horizontal(|ui| {
-                                        ui.label("Play:");
-                                        let mut val = at.play_duration_value as f32;
-                                        let max = if at.play_duration_is_beats { 128.0 } else { 300.0 };
-                                        if ui.add(egui::Slider::new(&mut val, 0.5..=max)
-                                            .logarithmic(true)
-                                            .suffix(if at.play_duration_is_beats { " beats" } else { " sec" })
-                                        ).changed() {
-                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                AutoTransitionAction::SetPlayDuration(val as f64)));
-                                        }
-                                        if ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
-                                            .on_hover_text("Toggle beats/seconds").clicked()
-                                        {
-                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                AutoTransitionAction::TogglePlayDurationUnit));
-                                        }
-                                    });
-
-                                    // Transition duration
-                                    ui.horizontal(|ui| {
-                                        ui.label("Trans:");
-                                        let mut val = at.transition_duration_value as f32;
-                                        let max = if at.transition_duration_is_beats { 32.0 } else { 30.0 };
-                                        if ui.add(egui::Slider::new(&mut val, 0.1..=max)
-                                            .logarithmic(true)
-                                            .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" })
-                                        ).changed() {
-                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                AutoTransitionAction::SetTransitionDuration(val as f64)));
-                                        }
-                                        if ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
-                                            .on_hover_text("Toggle beats/seconds").clicked()
-                                        {
-                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                AutoTransitionAction::ToggleTransitionDurationUnit));
-                                        }
-                                    });
-
-                                    // Transition shader selector
-                                    ui.horizontal(|ui| {
-                                        ui.label("Shader:");
-                                        let current = at.transition_shader_name.as_deref().unwrap_or("(fade)");
-                                        egui::ComboBox::from_id_salt(format!("at_shader_{}_{}", ch_idx, deck_idx))
-                                            .selected_text(current)
-                                            .width(120.0)
-                                            .show_ui(ui, |ui| {
-                                                if ui.selectable_label(at.transition_shader_name.is_none(), "(fade)").clicked() {
-                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                        AutoTransitionAction::SetTransitionShader(None)));
-                                                }
-                                                for name in &data.transition_names {
-                                                    let selected = at.transition_shader_name.as_deref() == Some(name.as_str());
-                                                    if ui.selectable_label(selected, name).clicked() && !selected {
+                                if let Some(ref at) = deck.auto_transition {
+                                    if at.enabled {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Trigger:");
+                                            let mut clip_end = at.trigger_is_clip_end;
+                                            if ui.selectable_label(!clip_end, "Timer").clicked() && clip_end {
+                                                clip_end = false;
+                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                    AutoTransitionAction::SetTrigger(false)));
+                                            }
+                                            if ui.selectable_label(clip_end, "Clip End").clicked() && !clip_end {
+                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                    AutoTransitionAction::SetTrigger(true)));
+                                            }
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.label("Play:");
+                                            let mut val = at.play_duration_value as f32;
+                                            let max = if at.play_duration_is_beats { 128.0 } else { 300.0 };
+                                            if ui.add(egui::Slider::new(&mut val, 0.5..=max)
+                                                .logarithmic(true)
+                                                .suffix(if at.play_duration_is_beats { " beats" } else { " sec" })
+                                            ).changed() {
+                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                    AutoTransitionAction::SetPlayDuration(val as f64)));
+                                            }
+                                            if ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
+                                                .on_hover_text("Toggle beats/seconds").clicked()
+                                            {
+                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                    AutoTransitionAction::TogglePlayDurationUnit));
+                                            }
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.label("Trans:");
+                                            let mut val = at.transition_duration_value as f32;
+                                            let max = if at.transition_duration_is_beats { 32.0 } else { 30.0 };
+                                            if ui.add(egui::Slider::new(&mut val, 0.1..=max)
+                                                .logarithmic(true)
+                                                .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" })
+                                            ).changed() {
+                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                    AutoTransitionAction::SetTransitionDuration(val as f64)));
+                                            }
+                                            if ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
+                                                .on_hover_text("Toggle beats/seconds").clicked()
+                                            {
+                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                    AutoTransitionAction::ToggleTransitionDurationUnit));
+                                            }
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.label("Shader:");
+                                            let current = at.transition_shader_name.as_deref().unwrap_or("(fade)");
+                                            egui::ComboBox::from_id_salt(format!("at_shader_{}_{}", ch_idx, deck_idx))
+                                                .selected_text(current)
+                                                .width(120.0)
+                                                .show_ui(ui, |ui| {
+                                                    if ui.selectable_label(at.transition_shader_name.is_none(), "(fade)").clicked() {
                                                         actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                            AutoTransitionAction::SetTransitionShader(Some(name.clone()))));
+                                                            AutoTransitionAction::SetTransitionShader(None)));
                                                     }
-                                                }
-                                            });
-                                    });
+                                                    for name in &data.transition_names {
+                                                        let selected = at.transition_shader_name.as_deref() == Some(name.as_str());
+                                                        if ui.selectable_label(selected, name).clicked() && !selected {
+                                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                                AutoTransitionAction::SetTransitionShader(Some(name.clone()))));
+                                                        }
+                                                    }
+                                                });
+                                        });
+                                    }
                                 }
-                            }
+                            });
                         });
-                    });
+                } else {
+                    // Collapsed: narrow vertical strip with vertical text
+                    render_collapsed_column(ui, "Auto Transition", at_open_id);
+                }
                 ui.separator();
             }
 
-            // Column: Generator parameters + blend/scale
-            egui::Frame::default()
-                .inner_margin(6.0)
-                .corner_radius(4.0)
-                .fill(ui.visuals().faint_bg_color)
-                .show(ui, |ui| {
-                    ui.set_min_width(200.0);
-                    ui.set_max_width(280.0);
-                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                    egui::ScrollArea::vertical().id_salt("deck_gen_scroll").show(ui, |ui| {
-                        // Blend mode
-                        let blend_modes = ["Norm", "Add", "Mult", "Scrn", "Ovly", "Diff"];
-                        let current_blend = match deck.blend_mode {
-                            BlendMode::Normal => 0, BlendMode::Add => 1, BlendMode::Multiply => 2,
-                            BlendMode::Screen => 3, BlendMode::Overlay => 4, BlendMode::Difference => 5,
-                        };
-                        let mut selected = current_blend;
-                        ui.horizontal(|ui| {
-                            ui.label("Blend:");
-                            egui::ComboBox::from_id_salt("sel_deck_blend")
-                                .selected_text(blend_modes[selected])
-                                .width(60.0)
-                                .show_ui(ui, |ui| {
-                                    for (i, mode_name) in blend_modes.iter().enumerate() {
-                                        ui.selectable_value(&mut selected, i, *mode_name);
-                                    }
-                                });
-                        });
-                        if selected != current_blend {
-                            let new_blend = match selected {
-                                1 => BlendMode::Add, 2 => BlendMode::Multiply, 3 => BlendMode::Screen,
-                                4 => BlendMode::Overlay, 5 => BlendMode::Difference, _ => BlendMode::Normal,
-                            };
-                            actions.deck_updates.push((ch_idx, deck_idx, deck.opacity, new_blend, deck.solo, deck.mute));
-                        }
-
-                        // Scaling mode
-                        if let Some(current_scaling) = deck.scaling_mode {
-                            let scaling_modes = ["Fill", "Fit", "Stretch", "Center"];
-                            let current_idx = match current_scaling {
-                                ScalingMode::Fill => 0, ScalingMode::Fit => 1,
-                                ScalingMode::Stretch => 2, ScalingMode::Center => 3,
-                            };
-                            let mut selected_scaling = current_idx;
-                            ui.horizontal(|ui| {
-                                ui.label("Scale:");
-                                egui::ComboBox::from_id_salt("sel_deck_scale")
-                                    .selected_text(scaling_modes[selected_scaling])
-                                    .width(60.0)
-                                    .show_ui(ui, |ui| {
-                                        for (i, mode_name) in scaling_modes.iter().enumerate() {
-                                            ui.selectable_value(&mut selected_scaling, i, *mode_name);
-                                        }
-                                    });
-                            });
-                            if selected_scaling != current_idx {
-                                let new_scaling = match selected_scaling {
-                                    1 => ScalingMode::Fit, 2 => ScalingMode::Stretch,
-                                    3 => ScalingMode::Center, _ => ScalingMode::Fill,
+            // Column: Generator parameters + blend/scale (collapsible column, default open)
+            {
+                let params_open_id = egui::Id::new("params_col_open").with((ch_idx, deck_idx));
+                let params_open = ui.ctx().memory(|mem| mem.data.get_temp::<bool>(params_open_id).unwrap_or(true));
+                if params_open {
+                    egui::Frame::default()
+                        .inner_margin(6.0)
+                        .corner_radius(4.0)
+                        .fill(ui.visuals().faint_bg_color)
+                        .show(ui, |ui| {
+                            ui.set_min_width(200.0);
+                            ui.set_max_width(280.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                                // Clickable full-width header to collapse
+                                let header_rect = ui.available_rect_before_wrap();
+                                let header_rect = egui::Rect::from_min_size(header_rect.min, egui::vec2(ui.available_width(), 20.0));
+                                let header_resp = ui.allocate_rect(header_rect, egui::Sense::click());
+                                let params_label = format!("Params: {}", deck.generator.shader_name);
+                                ui.painter().text(header_rect.left_center(), egui::Align2::LEFT_CENTER, &params_label, egui::FontId::proportional(13.0), ui.visuals().strong_text_color());
+                                if header_resp.clicked() {
+                                    ui.ctx().memory_mut(|mem| mem.data.insert_temp(params_open_id, false));
+                                }
+                                if header_resp.hovered() {
+                                    ui.painter().rect_filled(header_rect, 2.0, ui.visuals().widgets.hovered.bg_fill.linear_multiply(0.3));
+                                }
+                                ui.separator();
+                            egui::ScrollArea::vertical().id_salt("deck_gen_scroll").show(ui, |ui| {
+                                // Blend mode
+                                let blend_modes = ["Norm", "Add", "Mult", "Scrn", "Ovly", "Diff"];
+                                let current_blend = match deck.blend_mode {
+                                    BlendMode::Normal => 0, BlendMode::Add => 1, BlendMode::Multiply => 2,
+                                    BlendMode::Screen => 3, BlendMode::Overlay => 4, BlendMode::Difference => 5,
                                 };
-                                actions.scaling_mode_updates.push((ch_idx, deck_idx, new_scaling));
-                            }
-                        }
+                                let mut selected = current_blend;
+                                ui.horizontal(|ui| {
+                                    ui.label("Blend:");
+                                    egui::ComboBox::from_id_salt("sel_deck_blend")
+                                        .selected_text(blend_modes[selected])
+                                        .width(60.0)
+                                        .show_ui(ui, |ui| {
+                                            for (i, mode_name) in blend_modes.iter().enumerate() {
+                                                ui.selectable_value(&mut selected, i, *mode_name);
+                                            }
+                                        });
+                                });
+                                if selected != current_blend {
+                                    let new_blend = match selected {
+                                        1 => BlendMode::Add, 2 => BlendMode::Multiply, 3 => BlendMode::Screen,
+                                        4 => BlendMode::Overlay, 5 => BlendMode::Difference, _ => BlendMode::Normal,
+                                    };
+                                    actions.deck_updates.push((ch_idx, deck_idx, deck.opacity, new_blend, deck.solo, deck.mute));
+                                }
 
-                        // Generator parameters
-                        let gen_params = &deck.generator;
-                        if !gen_params.params.is_empty() {
-                            ui.add_space(4.0);
-                            ui.label(egui::RichText::new(format!("🎨 {}", gen_params.shader_name)).strong());
-                            let midi_path_prefix = format!("ch/{}/deck/{}", ch_idx, deck_idx);
-                            widgets::render_params(
-                                ui,
-                                &gen_params.params,
-                                &data.modulation_sources,
-                                &|name: &str, val: ParamValue| match val {
-                                    ParamValue::Float(v) => ParamUpdate::GeneratorFloat { ch_idx, deck_idx, name: name.to_string(), value: v },
-                                    ParamValue::Bool(v) => ParamUpdate::GeneratorBool { ch_idx, deck_idx, name: name.to_string(), value: v },
-                                    ParamValue::Color(v) => ParamUpdate::GeneratorColor { ch_idx, deck_idx, name: name.to_string(), value: v },
-                                    _ => unreachable!(),
-                                },
-                                Some(&|name: &str, src_idx: usize| ModulationAction::AssignModulation {
-                                    ch_idx, deck_idx, param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
-                                }),
-                                Some(&|name: &str| ModulationAction::RemoveAssignment {
-                                    ch_idx, deck_idx, param_name: name.to_string(), source_idx: 0,
-                                }),
-                                &mut actions.param_updates,
-                                &mut actions.modulation_actions,
-                                &format!("sel_{}_{}", ch_idx, deck_idx),
-                                Some(&midi_path_prefix),
-                                data.midi_learn_active,
-                                &mut actions.midi_learn_select,
-                                data.midi_learn_target.as_deref(),
-                                &data.modulation_assignments,
-                                &data.modulation_current_values,
-                                &format!("ch{}_deck{}", ch_idx, deck_idx),
-                            );
-                            ui.add_space(4.0);
-                            if ui.button("🔄 Reset").clicked() {
-                                actions.param_updates.push(ParamUpdate::GeneratorResetToDefaults { ch_idx, deck_idx });
-                            }
-                        }
-                    });
-                    });
-                });
+                                // Scaling mode
+                                if let Some(current_scaling) = deck.scaling_mode {
+                                    let scaling_modes = ["Fill", "Fit", "Stretch", "Center"];
+                                    let current_idx = match current_scaling {
+                                        ScalingMode::Fill => 0, ScalingMode::Fit => 1,
+                                        ScalingMode::Stretch => 2, ScalingMode::Center => 3,
+                                    };
+                                    let mut selected_scaling = current_idx;
+                                    ui.horizontal(|ui| {
+                                        ui.label("Scale:");
+                                        egui::ComboBox::from_id_salt("sel_deck_scale")
+                                            .selected_text(scaling_modes[selected_scaling])
+                                            .width(60.0)
+                                            .show_ui(ui, |ui| {
+                                                for (i, mode_name) in scaling_modes.iter().enumerate() {
+                                                    ui.selectable_value(&mut selected_scaling, i, *mode_name);
+                                                }
+                                            });
+                                    });
+                                    if selected_scaling != current_idx {
+                                        let new_scaling = match selected_scaling {
+                                            1 => ScalingMode::Fit, 2 => ScalingMode::Stretch,
+                                            3 => ScalingMode::Center, _ => ScalingMode::Fill,
+                                        };
+                                        actions.scaling_mode_updates.push((ch_idx, deck_idx, new_scaling));
+                                    }
+                                }
+
+                                // Generator parameters
+                                let gen_params = &deck.generator;
+                                if !gen_params.params.is_empty() {
+                                    ui.add_space(4.0);
+                                    ui.label(egui::RichText::new(&gen_params.shader_name).strong());
+                                    let midi_path_prefix = format!("ch/{}/deck/{}", ch_idx, deck_idx);
+                                    widgets::render_params(
+                                        ui,
+                                        &gen_params.params,
+                                        &data.modulation_sources,
+                                        &|name: &str, val: ParamValue| match val {
+                                            ParamValue::Float(v) => ParamUpdate::GeneratorFloat { ch_idx, deck_idx, name: name.to_string(), value: v },
+                                            ParamValue::Bool(v) => ParamUpdate::GeneratorBool { ch_idx, deck_idx, name: name.to_string(), value: v },
+                                            ParamValue::Color(v) => ParamUpdate::GeneratorColor { ch_idx, deck_idx, name: name.to_string(), value: v },
+                                            _ => unreachable!(),
+                                        },
+                                        Some(&|name: &str, src_idx: usize| ModulationAction::AssignModulation {
+                                            ch_idx, deck_idx, param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
+                                        }),
+                                        Some(&|name: &str| ModulationAction::RemoveAssignment {
+                                            ch_idx, deck_idx, param_name: name.to_string(), source_idx: 0,
+                                        }),
+                                        &mut actions.param_updates,
+                                        &mut actions.modulation_actions,
+                                        &format!("sel_{}_{}", ch_idx, deck_idx),
+                                        Some(&midi_path_prefix),
+                                        data.midi_learn_active,
+                                        &mut actions.midi_learn_select,
+                                        data.midi_learn_target.as_deref(),
+                                        &data.modulation_assignments,
+                                        &data.modulation_current_values,
+                                        &format!("ch{}_deck{}", ch_idx, deck_idx),
+                                    );
+                                    ui.add_space(4.0);
+                                    if ui.button("Reset").clicked() {
+                                        actions.param_updates.push(ParamUpdate::GeneratorResetToDefaults { ch_idx, deck_idx });
+                                    }
+                                }
+                            });
+                            });
+                        });
+                } else {
+                    // Collapsed: narrow vertical strip with vertical text
+                    render_collapsed_column(ui, &format!("Params: {}", deck.generator.shader_name), params_open_id);
+                }
+            }
 
             ui.separator();
 
@@ -2715,7 +2734,9 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                     // Drop zone before this effect (for reordering)
                     render_effect_drop_zone(ui, &format!("deck_{}_{}", ch_idx, deck_idx), eff_idx);
 
-                    // Effect card
+                    // Effect card (entire card is drag source)
+                    let drag_id = egui::Id::new(("eff_drag", ch_idx, deck_idx, eff_idx));
+                    let card_resp = ui.dnd_drag_source(drag_id, EffectDrag::Deck(ch_idx, deck_idx, eff_idx), |ui| {
                     egui::Frame::default()
                         .inner_margin(6.0)
                         .corner_radius(4.0)
@@ -2724,27 +2745,13 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             ui.set_min_width(180.0);
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}_{}",ch_idx,deck_idx,eff_idx)).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}_{}",ch_idx,deck_idx,eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    let grip = ui.add(egui::Label::new(egui::RichText::new("⠿").weak().size(14.0)).sense(egui::Sense::drag()));
-                                    if grip.drag_started() {
-                                        egui::DragAndDrop::set_payload(ui.ctx(), EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
-                                        });
-                                    } else if grip.dragged() {
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
-                                        });
-                                    }
                                     let mut enabled = *eff_enabled;
                                     if ui.checkbox(&mut enabled, "").changed() {
                                         actions.effect_to_toggle = Some((ch_idx, deck_idx, eff_idx));
                                     }
-                                    ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong());
-                                    if ui.small_button("✕").clicked() {
-                                        actions.effect_to_remove = Some((ch_idx, deck_idx, eff_idx));
-                                    }
+                                    ui.label(egui::RichText::new(eff_name).strong());
                                 });
 
                                 if !eff_params.params.is_empty() {
@@ -2785,6 +2792,25 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             });
                             });
                         });
+                    });
+                    // X button overlay at top-right of card, outside drag source
+                    {
+                        let card_rect = card_resp.response.rect;
+                        let btn_size = egui::vec2(16.0, 16.0);
+                        let btn_pos = egui::pos2(card_rect.right() - btn_size.x - 4.0, card_rect.top() + 4.0);
+                        let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
+                        let btn_resp = ui.allocate_rect(btn_rect, egui::Sense::click());
+                        let color = if btn_resp.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().text_color() };
+                        ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "x", egui::FontId::proportional(12.0), color);
+                        if btn_resp.clicked() {
+                            actions.effect_to_remove = Some((ch_idx, deck_idx, eff_idx));
+                        }
+                    }
+                    if ui.ctx().is_being_dragged(drag_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
+                        });
+                    }
                     ui.separator();
                 }
 
@@ -2837,6 +2863,8 @@ fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 for (eff_idx, (eff_name, eff_enabled, eff_params)) in data.master_effect_info.iter().enumerate() {
                     render_effect_drop_zone(ui, "master", eff_idx);
 
+                    let drag_id = egui::Id::new(("eff_drag_master", eff_idx));
+                    let card_resp = ui.dnd_drag_source(drag_id, EffectDrag::Master(eff_idx), |ui| {
                     egui::Frame::default()
                         .inner_margin(6.0)
                         .corner_radius(4.0)
@@ -2845,27 +2873,13 @@ fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             ui.set_min_width(180.0);
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            egui::ScrollArea::vertical().id_salt(format!("master_fx_scroll_{}", eff_idx)).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(format!("master_fx_scroll_{}", eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    let grip = ui.add(egui::Label::new(egui::RichText::new("⠿").weak().size(14.0)).sense(egui::Sense::drag()));
-                                    if grip.drag_started() {
-                                        egui::DragAndDrop::set_payload(ui.ctx(), EffectDrag::Master(eff_idx));
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Master(eff_idx));
-                                        });
-                                    } else if grip.dragged() {
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Master(eff_idx));
-                                        });
-                                    }
                                     let mut enabled = *eff_enabled;
                                     if ui.checkbox(&mut enabled, "").changed() {
                                         actions.master_effect_to_toggle = Some(eff_idx);
                                     }
-                                    ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong());
-                                    if ui.small_button("✕").clicked() {
-                                        actions.master_effect_to_remove = Some(eff_idx);
-                                    }
+                                    ui.label(egui::RichText::new(eff_name).strong());
                                 });
 
                                 if !eff_params.params.is_empty() {
@@ -2904,6 +2918,24 @@ fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             });
                             });
                         });
+                    });
+                    {
+                        let card_rect = card_resp.response.rect;
+                        let btn_size = egui::vec2(16.0, 16.0);
+                        let btn_pos = egui::pos2(card_rect.right() - btn_size.x - 4.0, card_rect.top() + 4.0);
+                        let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
+                        let btn_resp = ui.allocate_rect(btn_rect, egui::Sense::click());
+                        let color = if btn_resp.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().text_color() };
+                        ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "x", egui::FontId::proportional(12.0), color);
+                        if btn_resp.clicked() {
+                            actions.master_effect_to_remove = Some(eff_idx);
+                        }
+                    }
+                    if ui.ctx().is_being_dragged(drag_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Master(eff_idx));
+                        });
+                    }
                     ui.separator();
                 }
 
@@ -2962,6 +2994,8 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
                 for (eff_idx, (eff_name, eff_enabled, eff_params)) in ch.effects.iter().enumerate() {
                     render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), eff_idx);
 
+                    let drag_id = egui::Id::new(("eff_drag_ch", ch_idx, eff_idx));
+                    let card_resp = ui.dnd_drag_source(drag_id, EffectDrag::Channel(ch_idx, eff_idx), |ui| {
                     egui::Frame::default()
                         .inner_margin(6.0)
                         .corner_radius(4.0)
@@ -2970,27 +3004,13 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
                             ui.set_min_width(180.0);
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            egui::ScrollArea::vertical().id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx)).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    let grip = ui.add(egui::Label::new(egui::RichText::new("⠿").weak().size(14.0)).sense(egui::Sense::drag()));
-                                    if grip.drag_started() {
-                                        egui::DragAndDrop::set_payload(ui.ctx(), EffectDrag::Channel(ch_idx, eff_idx));
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Channel(ch_idx, eff_idx));
-                                        });
-                                    } else if grip.dragged() {
-                                        ui.ctx().memory_mut(|mem| {
-                                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Channel(ch_idx, eff_idx));
-                                        });
-                                    }
                                     let mut enabled = *eff_enabled;
                                     if ui.checkbox(&mut enabled, "").changed() {
                                         actions.ch_effect_to_toggle = Some((ch_idx, eff_idx));
                                     }
-                                    ui.label(egui::RichText::new(format!("🔮 {}", eff_name)).strong().color(accent));
-                                    if ui.small_button("✕").clicked() {
-                                        actions.ch_effect_to_remove = Some((ch_idx, eff_idx));
-                                    }
+                                    ui.label(egui::RichText::new(eff_name).strong().color(accent));
                                 });
 
                                 if !eff_params.params.is_empty() {
@@ -3030,6 +3050,24 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
                             });
                             });
                         });
+                    });
+                    {
+                        let card_rect = card_resp.response.rect;
+                        let btn_size = egui::vec2(16.0, 16.0);
+                        let btn_pos = egui::pos2(card_rect.right() - btn_size.x - 4.0, card_rect.top() + 4.0);
+                        let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
+                        let btn_resp = ui.allocate_rect(btn_rect, egui::Sense::click());
+                        let color = if btn_resp.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().text_color() };
+                        ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "x", egui::FontId::proportional(12.0), color);
+                        if btn_resp.clicked() {
+                            actions.ch_effect_to_remove = Some((ch_idx, eff_idx));
+                        }
+                    }
+                    if ui.ctx().is_being_dragged(drag_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Channel(ch_idx, eff_idx));
+                        });
+                    }
                     ui.separator();
                 }
 
@@ -3132,7 +3170,7 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                             ModSourceUI::LFO { waveform, frequency, phase, amplitude, bipolar } => {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(format!("LFO {}", idx + 1)).strong().color(mod_color));
-                                    if ui.small_button("✕").clicked() {
+                                    if ui.small_button("x").clicked() {
                                         actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
                                     }
                                 });
@@ -3228,7 +3266,7 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                             ModSourceUI::Audio { band, smoothing } => {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(format!("Audio {}", idx + 1)).strong().color(mod_color));
-                                    if ui.small_button("✕").clicked() {
+                                    if ui.small_button("x").clicked() {
                                         actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
                                     }
                                 });
@@ -3264,7 +3302,7 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                         crate::modulation::ADSRStage::Release => "↘",
                                     };
                                     ui.label(egui::RichText::new(stage_text).small());
-                                    if ui.small_button("✕").clicked() {
+                                    if ui.small_button("x").clicked() {
                                         actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
                                     }
                                 });
@@ -3341,7 +3379,7 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                             ModSourceUI::StepSequencer { steps, rate, interpolation, bipolar } => {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(format!("StepSeq {}", idx + 1)).strong().color(mod_color));
-                                    if ui.small_button("✕").clicked() {
+                                    if ui.small_button("x").clicked() {
                                         actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
                                     }
                                 });
@@ -3510,7 +3548,7 @@ fn render_mod_on_mod_dropdown(
             }
             if has_assignment {
                 ui.separator();
-                if ui.button(egui::RichText::new("✕ Remove").small().color(egui::Color32::from_rgb(255, 100, 100))).clicked() {
+                if ui.button(egui::RichText::new("x Remove").small().color(egui::Color32::from_rgb(255, 100, 100))).clicked() {
                     actions.modulation_actions.push(ModulationAction::RemoveModOnMod {
                         target_source_idx: target_idx,
                         param_name: param_name.to_string(),
@@ -3569,7 +3607,7 @@ fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
             egui::ScrollArea::vertical().max_height(150.0).id_salt("midi_mappings_scroll").show(ui, |ui| {
                 for mapping in &data.midi_mappings {
                     ui.horizontal(|ui| {
-                        if ui.small_button("✕").clicked() {
+                        if ui.small_button("x").clicked() {
                             actions.midi_remove_mapping.push(mapping.key);
                         }
                         ui.label(egui::RichText::new(&mapping.device_name).small().color(egui::Color32::from_rgb(180, 180, 255)));
@@ -3588,6 +3626,39 @@ fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
 
 /// Render a thin drop zone for effect reordering within a chain.
 /// Stores the zone rect in temp memory for deferred drop detection.
+/// Render a narrow vertical strip with vertical text for a collapsed column.
+/// Clicking anywhere on it toggles the column open.
+fn render_collapsed_column(ui: &mut egui::Ui, label: &str, open_id: egui::Id) {
+    let strip_width = 20.0;
+    let min_height = ui.available_height().max(60.0);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(strip_width, min_height),
+        egui::Sense::click(),
+    );
+    if response.clicked() {
+        ui.ctx().memory_mut(|mem| mem.data.insert_temp(open_id, true));
+    }
+    let painter = ui.painter_at(rect);
+    // Background
+    let bg = if response.hovered() {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        ui.visuals().faint_bg_color
+    };
+    painter.rect_filled(rect, 4.0, bg);
+    // Draw each character vertically, centered in the strip
+    let font_id = egui::FontId::proportional(10.0);
+    let text_color = ui.visuals().text_color();
+    let chars: Vec<char> = label.chars().collect();
+    let char_height = 12.0;
+    let total_text_height = chars.len() as f32 * char_height;
+    let start_y = rect.center().y - total_text_height / 2.0;
+    for (i, ch) in chars.iter().enumerate() {
+        let pos = egui::pos2(rect.center().x, start_y + i as f32 * char_height);
+        painter.text(pos, egui::Align2::CENTER_TOP, ch.to_string(), font_id.clone(), text_color);
+    }
+}
+
 /// `chain_key` identifies the chain (e.g. "deck_0_1", "ch_0", "master").
 /// `position` is the insert index in the chain.
 fn render_effect_drop_zone(ui: &mut egui::Ui, chain_key: &str, position: usize) {
@@ -3731,7 +3802,7 @@ fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
                             ui.label(egui::RichText::new(&ch.name).strong().color(color).size(11.0));
                             // Show remove button only if more than 2 channels
                             if num_channels > 2 {
-                                if ui.small_button("✕").on_hover_text(format!("Remove channel {}", ch.name)).clicked() {
+                                if ui.small_button("x").on_hover_text(format!("Remove channel {}", ch.name)).clicked() {
                                     actions.remove_channel = Some(ch_idx);
                                 }
                             }
@@ -3983,7 +4054,7 @@ fn render_channel_column(ui: &mut egui::Ui, ch: &super::ChannelUIInfo, data: &UI
             // Deck grid
             egui::ScrollArea::vertical()
                 .id_salt(format!("ch_scroll_{}", ch_idx))
-                .drag_to_scroll(false)
+                .scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true })
                 .show(ui, |ui| {
                 if ch.decks.is_empty() {
                     ui.label(egui::RichText::new("No decks — drag generator here").weak().small());
@@ -4045,7 +4116,7 @@ fn render_channel_column(ui: &mut egui::Ui, ch: &super::ChannelUIInfo, data: &UI
 /// Render a compact deck thumbnail (clickable cell in the deck grid)
 /// Layout: [ preview | opacity slider (vertical) ]
 ///         [ name                                 ]
-///         [ M  S  ✕                              ]
+///         [ M  S  x                              ]
 fn render_deck_thumbnail(
     ui: &mut egui::Ui,
     ch_idx: usize,
@@ -4259,7 +4330,7 @@ fn render_deck_thumbnail(
             accent,
         );
 
-        // Row 3: M S ✕ buttons — use a child ui placed at the button row
+        // Row 3: M S x buttons — use a child ui placed at the button row
         let btn_y = name_y + name_row_h + spacing;
         let btn_rect = egui::Rect::from_min_size(
             egui::pos2(card_rect.min.x + padding, btn_y),
@@ -4274,7 +4345,7 @@ fn render_deck_thumbnail(
             if ui.selectable_label(solo, egui::RichText::new("S").small()).clicked() {
                 solo = !solo;
             }
-            if ui.small_button(egui::RichText::new("✕").small()).clicked() {
+            if ui.small_button(egui::RichText::new("x").small()).clicked() {
                 actions.deck_to_remove = Some((ch_idx, idx));
             }
         });
