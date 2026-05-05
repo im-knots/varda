@@ -415,6 +415,21 @@ impl OutputWindow {
         }
         self.target = target;
     }
+
+    /// Destroy this output window, closing the OS window and reclaiming leaked memory.
+    /// Must be called instead of just dropping the struct if you want the window to close.
+    pub fn destroy(self) {
+        // Reclaim the leaked Box<Window> so it gets dropped, which closes the OS window.
+        // Safety: the pointer was created by Box::leak in create_pending_outputs,
+        // and we are the sole owner (no other references exist after removal from the vec).
+        let window_ptr = self.window as *const Window as *mut Window;
+        // Drop surface first (it references the window)
+        drop(self.surface);
+        // Now reclaim and drop the window
+        unsafe {
+            let _ = Box::from_raw(window_ptr);
+        }
+    }
 }
 
 use super::blit::{BlitPipeline, PolygonBlitPipeline};

@@ -455,10 +455,11 @@ impl ApplicationHandler for App {
             // Output window events
             match event {
                 WindowEvent::CloseRequested => {
-                    // Find and remove the output window
+                    // Find and remove the output window, destroying the OS window
                     if let Some(idx) = self.output_windows.iter().position(|o| o.window.id() == window_id) {
                         let name = self.output_windows[idx].name.clone();
-                        self.output_windows.remove(idx);
+                        let output = self.output_windows.remove(idx);
+                        output.destroy();
                         log::info!("Output window '{}' closed", name);
                     }
                 }
@@ -1057,7 +1058,8 @@ impl App {
                 ui::OutputAction::Close { idx } => {
                     if *idx < self.output_windows.len() {
                         let name = self.output_windows[*idx].name.clone();
-                        self.output_windows.remove(*idx);
+                        let output = self.output_windows.remove(*idx);
+                        output.destroy();
                         log::info!("Closed output window '{}'", name);
                     }
                 }
