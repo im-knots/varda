@@ -189,6 +189,29 @@ pub fn snapshot_scene(
                 }
             }).collect();
 
+            // Snapshot auto-transition config
+            let auto_transition = slot.auto_transition.as_ref()
+                .filter(|at| at.enabled)
+                .map(|at| {
+                    use crate::channel::{DurationSpec, TransitionTrigger};
+                    AutoTransitionConfig {
+                        enabled: at.enabled,
+                        trigger: match at.trigger {
+                            TransitionTrigger::Timer => TriggerConfig::Timer,
+                            TransitionTrigger::ClipEnd => TriggerConfig::ClipEnd,
+                        },
+                        play_duration: match at.play_duration {
+                            DurationSpec::Beats(v) => DurationSpecConfig::Beats(v),
+                            DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(v),
+                        },
+                        transition_duration: match at.transition_duration {
+                            DurationSpec::Beats(v) => DurationSpecConfig::Beats(v),
+                            DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(v),
+                        },
+                        transition_shader: at.transition_shader_name.clone(),
+                    }
+                });
+
             Some(DeckConfig {
                 name: slot.deck.source_name().to_string(),
                 source,
@@ -198,6 +221,7 @@ pub fn snapshot_scene(
                 mute: slot.mute,
                 solo: slot.solo,
                 z_index: slot.z_index,
+                auto_transition,
             })
         }).flatten().collect();
 
@@ -321,6 +345,41 @@ pub fn restore_scene(
                     slot.mute = deck_config.mute;
                     slot.solo = deck_config.solo;
                     slot.z_index = deck_config.z_index;
+
+                    // Restore auto-transition config
+                    if let Some(at_config) = &deck_config.auto_transition {
+                        use crate::channel::{DeckAutoTransition, DurationSpec, TransitionTrigger};
+                        let mut at = DeckAutoTransition::new();
+                        at.enabled = at_config.enabled;
+                        at.trigger = match at_config.trigger {
+                            TriggerConfig::Timer => TransitionTrigger::Timer,
+                            TriggerConfig::ClipEnd => TransitionTrigger::ClipEnd,
+                        };
+                        at.play_duration = match at_config.play_duration {
+                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(v),
+                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(v),
+                        };
+                        at.transition_duration = match at_config.transition_duration {
+                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(v),
+                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(v),
+                        };
+                        at.transition_shader_name = at_config.transition_shader.clone();
+                        slot.auto_transition = Some(at);
+
+                        // Compile transition shader if specified
+                        if let Some(shader_name) = &at_config.transition_shader {
+                            if let Some(shader) = registry.transitions().iter()
+                                .find(|s| s.name() == *shader_name)
+                            {
+                                if let Err(e) = slot.set_transition_shader(context, (*shader).clone()) {
+                                    log::warn!("Failed to restore deck transition shader '{}': {}", shader_name, e);
+                                }
+                            } else {
+                                log::warn!("Deck transition shader '{}' not found in registry", shader_name);
+                            }
+                        }
+                    }
+
                     channel.add_deck_slot(slot);
                 }
                 Err(e) => {

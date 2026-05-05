@@ -1,9 +1,11 @@
 //! Channel - Groups multiple decks into a composited layer with its own effect chain
 
 use crate::deck::{Deck, Effect};
+use crate::isf::ISFShader;
 use crate::modulation::ModulationEngine;
-use crate::renderer::{RenderContext, BlitPipeline, ISFUniforms};
-use anyhow::Result;
+use crate::params::ShaderParams;
+use crate::renderer::{RenderContext, BlitPipeline, ISFUniforms, TransitionPipeline};
+use anyhow::{Context as _, Result};
 
 /// Blend modes for compositing decks and channels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -59,6 +61,91 @@ impl BlendMode {
     }
 }
 
+// ── Auto-Transition Types ──────────────────────────────────────────
+
+/// Duration specified in beats or wall-clock seconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DurationSpec {
+    Beats(f64),
+    Seconds(f64),
+}
+
+impl DurationSpec {
+    /// Resolve to seconds given the current BPM (falls back to 120 if unknown).
+    pub fn to_seconds(&self, bpm: Option<f64>) -> f64 {
+        match self {
+            DurationSpec::Beats(b) => b * 60.0 / bpm.unwrap_or(120.0),
+            DurationSpec::Seconds(s) => *s,
+        }
+    }
+
+    /// Get the raw numeric value (beats or seconds).
+    pub fn value(&self) -> f64 {
+        match self {
+            DurationSpec::Beats(v) | DurationSpec::Seconds(v) => *v,
+        }
+    }
+
+    pub fn is_beats(&self) -> bool { matches!(self, DurationSpec::Beats(_)) }
+}
+
+/// What starts the transition countdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionTrigger {
+    /// Timer-based: starts counting when deck becomes the active (topmost visible) deck.
+    Timer,
+    /// Content-aware: starts when video hits its out-point or end-of-file.
+    /// Falls back to Timer for non-video sources.
+    ClipEnd,
+}
+
+/// Runtime phase of a deck's auto-transition.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DeckTransitionPhase {
+    /// Not the active top deck, or auto-transition disabled.
+    Inactive,
+    /// Playing content, countdown running.
+    Playing { elapsed: f64 },
+    /// Transition shader active, progress 0.0 → 1.0.
+    Transitioning { progress: f64 },
+    /// Transition complete — deck is effectively invisible.
+    Done,
+}
+
+/// Per-deck auto-transition configuration.
+pub struct DeckAutoTransition {
+    pub enabled: bool,
+    pub play_duration: DurationSpec,
+    pub transition_duration: DurationSpec,
+    pub trigger: TransitionTrigger,
+    /// Name of the transition shader (None = simple opacity fade).
+    pub transition_shader_name: Option<String>,
+    /// Runtime phase (not persisted).
+    pub phase: DeckTransitionPhase,
+}
+
+impl DeckAutoTransition {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            play_duration: DurationSpec::Beats(16.0),
+            transition_duration: DurationSpec::Seconds(2.0),
+            trigger: TransitionTrigger::Timer,
+            transition_shader_name: None,
+            phase: DeckTransitionPhase::Inactive,
+        }
+    }
+}
+
+/// Compiled transition shader for a deck (separate from config for GPU resource lifecycle).
+pub struct DeckTransitionEffect {
+    pub shader: ISFShader,
+    pub pipeline: TransitionPipeline,
+    pub params: ShaderParams,
+}
+
+// ── DeckSlot ───────────────────────────────────────────────────────
+
 /// A deck slot in a channel with compositing properties
 pub struct DeckSlot {
     pub deck: Deck,
@@ -67,6 +154,10 @@ pub struct DeckSlot {
     pub solo: bool,
     pub mute: bool,
     pub z_index: i32,
+    /// Auto-transition config (None = no auto-transition).
+    pub auto_transition: Option<DeckAutoTransition>,
+    /// Compiled transition effect for this deck's auto-transition.
+    pub transition_effect: Option<DeckTransitionEffect>,
 }
 
 impl DeckSlot {
@@ -78,7 +169,56 @@ impl DeckSlot {
             solo: false,
             mute: false,
             z_index: 0,
+            auto_transition: None,
+            transition_effect: None,
         }
+    }
+
+    /// Set the transition shader for this deck's auto-transition.
+    /// Compiles the shader and stores the pipeline.
+    pub fn set_transition_shader(
+        &mut self,
+        context: &RenderContext,
+        shader: ISFShader,
+    ) -> Result<()> {
+        let spirv = crate::isf::compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
+            .context("Failed to compile transition shader to SPIR-V")?;
+        let pipeline = TransitionPipeline::new(
+            &context.device,
+            &spirv,
+            context.surface_config.format,
+        )?;
+        let name = shader.name();
+        let inputs = shader.metadata.inputs.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let mut params = ShaderParams::from_inputs(inputs);
+        params.ensure_buffer(&context.device);
+
+        // Ensure auto_transition config exists
+        if self.auto_transition.is_none() {
+            self.auto_transition = Some(DeckAutoTransition::new());
+        }
+        if let Some(at) = &mut self.auto_transition {
+            at.transition_shader_name = Some(name);
+        }
+
+        self.transition_effect = Some(DeckTransitionEffect { shader, pipeline, params });
+        Ok(())
+    }
+
+    /// Clear the transition shader (revert to opacity fade).
+    pub fn clear_transition_shader(&mut self) {
+        self.transition_effect = None;
+        if let Some(at) = &mut self.auto_transition {
+            at.transition_shader_name = None;
+        }
+    }
+
+    /// Get the current auto-transition phase.
+    pub fn transition_phase(&self) -> DeckTransitionPhase {
+        self.auto_transition.as_ref()
+            .filter(|at| at.enabled)
+            .map(|at| at.phase)
+            .unwrap_or(DeckTransitionPhase::Inactive)
     }
 }
 
@@ -189,6 +329,7 @@ impl Channel {
 
     /// Render all decks in this channel and composite them, then apply channel effects
     /// `channel_idx` is used for modulation key addressing (e.g., "ch0_deck0:paramname")
+    /// `dt` is the frame delta in seconds (for auto-transition tick).
     pub fn render(
         &mut self,
         context: &RenderContext,
@@ -196,7 +337,12 @@ impl Channel {
         modulation: &ModulationEngine,
         channel_idx: usize,
         time: f32,
+        dt: f32,
     ) -> Result<()> {
+        // Tick auto-transition state before rendering
+        let bpm = audio_data.bpm.map(|b| b as f64);
+        self.tick_auto_transitions(dt as f64, bpm);
+
         // Sort decks by z-index
         let mut deck_indices: Vec<usize> = (0..self.decks.len()).collect();
         deck_indices.sort_by_key(|&i| self.decks[i].z_index);
@@ -211,8 +357,8 @@ impl Channel {
             }
         }
 
-        // Render each deck to its texture (skip muted, non-solo'd, and zero-opacity decks)
-        // Collect command buffers for batch submission to reduce CPU-GPU sync overhead
+        // Render each deck to its texture (skip muted, non-solo'd, zero-opacity)
+        // Done decks still render — they serve as visible background for transitioning decks above.
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
         for (deck_idx, slot) in self.decks.iter_mut().enumerate() {
             if !slot.mute && (!any_solo || slot.solo) && slot.opacity > 0.0 {
@@ -225,28 +371,146 @@ impl Channel {
             context.queue.submit(cmd_buffers);
         }
 
-        // Create bind groups and blend modes for all visible decks BEFORE the render pass
-        let deck_render_info: Vec<(usize, BlendMode, f32, wgpu::BindGroup)> = deck_indices.iter()
+        // Collect render info for visible decks, including transition phase
+        struct DeckCompositeInfo {
+            deck_idx: usize,
+            blend_mode: BlendMode,
+            opacity: f32,
+            transition_progress: Option<f64>, // Some = transitioning with shader
+        }
+
+        let deck_composite_info: Vec<DeckCompositeInfo> = deck_indices.iter()
             .filter_map(|&idx| {
                 let slot = &self.decks[idx];
+                let phase = slot.transition_phase();
                 if slot.mute || (any_solo && !slot.solo) || slot.opacity <= 0.0 {
-                    None
-                } else {
-                    let blend_mode = slot.blend_mode;
-                    let opacity = slot.opacity;
-                    let pipeline = self.blend_blit_pipelines.get(&blend_mode)
-                        .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
-                    let bind_group = pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
-                    Some((idx, blend_mode, opacity, bind_group))
+                    return None;
                 }
+                // Inactive and Done auto-transition decks don't composite.
+                // Inactive = waiting for turn. Done = already played, no longer needed
+                // (the next deck in sequence gets re-activated to Playing when needed).
+                let has_at = slot.auto_transition.as_ref().map_or(false, |at| at.enabled);
+                if has_at && (phase == DeckTransitionPhase::Inactive || phase == DeckTransitionPhase::Done) {
+                    return None;
+                }
+                let transition_progress = match phase {
+                    DeckTransitionPhase::Transitioning { progress } => Some(progress),
+                    // Done decks composite normally (full opacity) — they serve
+                    // as the visible background that transitioning decks reveal.
+                    _ => None,
+                };
+                Some(DeckCompositeInfo {
+                    deck_idx: idx,
+                    blend_mode: slot.blend_mode,
+                    opacity: slot.opacity,
+                    transition_progress,
+                })
             })
             .collect();
 
+        // Reorder compositing: non-transitioning decks first, then transitioning.
+        // This ensures composite-so-far always contains all "revealed" content
+        // before the transitioning deck is rendered.
+        let mut non_transitioning: Vec<&DeckCompositeInfo> = Vec::new();
+        let mut transitioning: Vec<&DeckCompositeInfo> = Vec::new();
+        for info in &deck_composite_info {
+            if info.transition_progress.is_some() {
+                transitioning.push(info);
+            } else {
+                non_transitioning.push(info);
+            }
+        }
+        let ordered: Vec<&DeckCompositeInfo> = non_transitioning.into_iter()
+            .chain(transitioning.into_iter())
+            .collect();
+
         // Composite all decks to the composite texture
-        for (i, (_idx, blend_mode, opacity, bind_group)) in deck_render_info.iter().enumerate() {
-            let pipeline = self.blend_blit_pipelines.get(blend_mode)
+        let width = self.composite_texture.width();
+        let height = self.composite_texture.height();
+
+        for (i, info) in ordered.iter().enumerate() {
+            let slot = &mut self.decks[info.deck_idx];
+
+            // Check if this deck is transitioning with a shader
+            if let Some(progress) = info.transition_progress {
+                if slot.transition_effect.is_some() && i > 0 {
+                    // Snapshot composite-so-far into effect_ping_texture
+                    let mut copy_encoder = context.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("AT Snapshot Copy") },
+                    );
+                    copy_encoder.copy_texture_to_texture(
+                        self.composite_texture.as_image_copy(),
+                        self.effect_ping_texture.as_image_copy(),
+                        self.composite_texture.size(),
+                    );
+                    context.queue.submit(std::iter::once(copy_encoder.finish()));
+
+                    // Run transition shader: start=deck (outgoing), end=composite-below (incoming)
+                    let effect = slot.transition_effect.as_mut().unwrap();
+                    let uniforms = ISFUniforms {
+                        time,
+                        time_delta: dt,
+                        frame_index: self.frame_count,
+                        pass_index: 0,
+                        render_size: [width as f32, height as f32],
+                        ..Default::default()
+                    };
+
+                    // Set progress on the transition shader
+                    effect.params.set("progress", crate::params::ParamValue::Float(progress as f32));
+                    let params_data = effect.params.build_buffer_data();
+                    if let Some(buf) = effect.params.buffer() {
+                        context.queue.write_buffer(buf, 0, &params_data);
+                    }
+
+                    effect.pipeline.render_to(
+                        context,
+                        &slot.deck.texture_view,      // startImage: outgoing deck
+                        &self.effect_ping_view,         // endImage: composite below
+                        &self.composite_view,           // output: back to composite
+                        &uniforms,
+                        effect.params.buffer(),
+                    );
+                    continue;
+                }
+
+                // Opacity fade fallback (no shader or first deck)
+                let fade_opacity = info.opacity * (1.0 - progress as f32);
+                let pipeline = self.blend_blit_pipelines.get(&info.blend_mode)
+                    .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
+                pipeline.set_opacity(&context.queue, fade_opacity);
+                let bind_group = pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
+
+                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Channel Composite Encoder (AT fade)"),
+                });
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Channel Composite Pass (AT fade)"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &self.composite_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: if i == 0 { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    pipeline.render(&mut render_pass, &bind_group);
+                }
+                context.queue.submit(std::iter::once(encoder.finish()));
+                continue;
+            }
+
+            // Normal compositing (no transition)
+            let pipeline = self.blend_blit_pipelines.get(&info.blend_mode)
                 .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
-            pipeline.set_opacity(&context.queue, *opacity);
+            pipeline.set_opacity(&context.queue, info.opacity);
+            let bind_group = pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
 
             let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Channel Composite Encoder"),
@@ -260,8 +524,6 @@ impl Channel {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: if i == 0 {
-                                // Clear to transparent black so empty channels
-                                // don't occlude other channels during mixer compositing
                                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                             } else {
                                 wgpu::LoadOp::Load
@@ -275,14 +537,14 @@ impl Channel {
                     occlusion_query_set: None,
                 });
 
-                pipeline.render(&mut render_pass, bind_group);
+                pipeline.render(&mut render_pass, &bind_group);
             }
 
             context.queue.submit(std::iter::once(encoder.finish()));
         }
 
         // If no decks, clear the composite texture to transparent
-        if deck_render_info.is_empty() {
+        if deck_composite_info.is_empty() {
             let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Channel Clear Encoder"),
             });
@@ -420,6 +682,145 @@ impl Channel {
     pub fn set_deck_blend_mode(&mut self, index: usize, blend_mode: BlendMode) {
         if let Some(slot) = self.decks.get_mut(index) {
             slot.blend_mode = blend_mode;
+        }
+    }
+
+    /// Tick auto-transition state for all decks in this channel.
+    /// Called once per frame before rendering.
+    /// `dt` is the frame delta in seconds, `bpm` is the current detected BPM (if any).
+    pub fn tick_auto_transitions(&mut self, dt: f64, bpm: Option<f64>) {
+        // Determine the "active" deck — topmost visible with auto-transition enabled.
+        // Sort by z-index descending to find the top deck.
+        let mut sorted: Vec<usize> = (0..self.decks.len()).collect();
+        sorted.sort_by_key(|&i| std::cmp::Reverse(self.decks[i].z_index));
+
+        // Find the topmost deck that is visible and has auto-transition enabled
+        let active_idx = sorted.iter().copied().find(|&i| {
+            let slot = &self.decks[i];
+            let has_at = slot.auto_transition.as_ref().map_or(false, |at| at.enabled);
+            let phase = slot.transition_phase();
+            has_at && !slot.mute && phase != DeckTransitionPhase::Done
+        });
+
+        // Update phase for each deck, collecting indices that just started transitioning
+        let mut just_started_transitioning: Vec<usize> = Vec::new();
+
+        for i in 0..self.decks.len() {
+            let is_active = active_idx == Some(i);
+            let slot = &mut self.decks[i];
+            let at = match &mut slot.auto_transition {
+                Some(at) if at.enabled => at,
+                _ => continue,
+            };
+
+            match at.phase {
+                DeckTransitionPhase::Inactive => {
+                    if is_active {
+                        at.phase = DeckTransitionPhase::Playing { elapsed: 0.0 };
+                    }
+                }
+                DeckTransitionPhase::Playing { ref mut elapsed } => {
+                    *elapsed += dt;
+                    let play_secs = at.play_duration.to_seconds(bpm);
+
+                    // Check trigger condition
+                    let should_transition = match at.trigger {
+                        TransitionTrigger::Timer => *elapsed >= play_secs,
+                        TransitionTrigger::ClipEnd => {
+                            // Check if video reached end
+                            let clip_ended = slot.deck.playback_state()
+                                .map_or(false, |ps| ps.reached_end);
+                            // Also respect timer as fallback for non-video sources
+                            clip_ended || (slot.deck.playback_state().is_none() && *elapsed >= play_secs)
+                        }
+                    };
+
+                    if should_transition {
+                        at.phase = DeckTransitionPhase::Transitioning { progress: 0.0 };
+                        just_started_transitioning.push(i);
+                    }
+                }
+                DeckTransitionPhase::Transitioning { ref mut progress } => {
+                    let trans_secs = at.transition_duration.to_seconds(bpm);
+                    if trans_secs > 0.0 {
+                        *progress += dt / trans_secs;
+                    } else {
+                        *progress = 1.0;
+                    }
+                    if *progress >= 1.0 {
+                        at.phase = DeckTransitionPhase::Done;
+                    }
+                }
+                DeckTransitionPhase::Done => {
+                    // Stay done until loop reset
+                }
+            }
+        }
+
+        // Activate the next deck for each deck that just started transitioning.
+        // This makes the next deck visible as the background the transition reveals.
+        // First try Inactive decks; if none, wrap around to the first Done deck (loop).
+        for _trigger_idx in just_started_transitioning {
+            let mut activated = false;
+            // Try Inactive first
+            for j in 0..self.decks.len() {
+                let slot = &self.decks[j];
+                let is_candidate = slot.auto_transition.as_ref()
+                    .map_or(false, |at| at.enabled && at.phase == DeckTransitionPhase::Inactive);
+                if is_candidate && !slot.mute {
+                    self.decks[j].auto_transition.as_mut().unwrap().phase =
+                        DeckTransitionPhase::Playing { elapsed: 0.0 };
+                    activated = true;
+                    break;
+                }
+            }
+            // If no Inactive found, wrap around: re-activate the first Done deck
+            if !activated {
+                for j in 0..self.decks.len() {
+                    let slot = &self.decks[j];
+                    let is_candidate = slot.auto_transition.as_ref()
+                        .map_or(false, |at| at.enabled && at.phase == DeckTransitionPhase::Done);
+                    if is_candidate && !slot.mute {
+                        self.decks[j].auto_transition.as_mut().unwrap().phase =
+                            DeckTransitionPhase::Playing { elapsed: 0.0 };
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Check if all auto-transition decks are now Done → loop reset.
+        // Done AFTER phase updates so the reset happens in the same frame
+        // a deck transitions to Done, preventing a flash of stale content.
+        let all_done = self.decks.iter().all(|slot| {
+            match &slot.auto_transition {
+                Some(at) if at.enabled => at.phase == DeckTransitionPhase::Done,
+                _ => true,
+            }
+        });
+        let any_at = self.decks.iter().any(|slot| {
+            slot.auto_transition.as_ref().map_or(false, |at| at.enabled)
+        });
+
+        if all_done && any_at {
+            // Reset all AT decks to Inactive, then immediately activate the first one
+            for slot in &mut self.decks {
+                if let Some(at) = &mut slot.auto_transition {
+                    if at.enabled {
+                        at.phase = DeckTransitionPhase::Inactive;
+                    }
+                }
+            }
+            for slot in &mut self.decks {
+                let dominated = slot.mute;
+                let is_inactive_at = slot.auto_transition.as_ref()
+                    .map_or(false, |at| at.enabled && at.phase == DeckTransitionPhase::Inactive);
+                if is_inactive_at && !dominated {
+                    slot.auto_transition.as_mut().unwrap().phase =
+                        DeckTransitionPhase::Playing { elapsed: 0.0 };
+                    break;
+                }
+            }
         }
     }
 }

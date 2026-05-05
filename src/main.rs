@@ -519,10 +519,36 @@ impl App {
                             frame_rate: ps.frame_rate,
                         }
                     });
+                    let auto_transition = slot.auto_transition.as_ref().map(|at| {
+                        use crate::channel::{DurationSpec, TransitionTrigger};
+                        ui::AutoTransitionUI {
+                            enabled: at.enabled,
+                            trigger_is_clip_end: at.trigger == TransitionTrigger::ClipEnd,
+                            play_duration_value: match at.play_duration {
+                                DurationSpec::Beats(v) | DurationSpec::Seconds(v) => v,
+                            },
+                            play_duration_is_beats: matches!(at.play_duration, DurationSpec::Beats(_)),
+                            transition_duration_value: match at.transition_duration {
+                                DurationSpec::Beats(v) | DurationSpec::Seconds(v) => v,
+                            },
+                            transition_duration_is_beats: matches!(at.transition_duration, DurationSpec::Beats(_)),
+                            transition_shader_name: at.transition_shader_name.clone(),
+                            phase: at.phase,
+                        }
+                    });
+                    // Compute effective opacity (for visual feedback on the slider).
+                    // Done decks remain visible as background, so they show full opacity.
+                    let effective_opacity = match slot.transition_phase() {
+                        crate::channel::DeckTransitionPhase::Transitioning { progress } => {
+                            slot.opacity * (1.0 - progress as f32)
+                        }
+                        _ => slot.opacity,
+                    };
                     DeckUIInfo {
                         deck_idx,
                         name: slot.deck.source_name().to_string(),
                         opacity: slot.opacity,
+                        effective_opacity,
                         blend_mode: slot.blend_mode,
                         solo: slot.solo,
                         mute: slot.mute,
@@ -530,6 +556,7 @@ impl App {
                         generator: gen_params,
                         effects,
                         video_playback,
+                        auto_transition,
                     }
                 }).collect();
                 let ch_effects = ch.effects.iter()
@@ -1462,6 +1489,7 @@ impl App {
             ui::state::apply_deck_updates(mixer, ui_actions);
             ui::state::apply_scaling_mode_updates(mixer, ui_actions);
             ui::state::apply_video_actions(mixer, ui_actions);
+            ui::state::apply_auto_transition_actions(mixer, ui_actions, context, &self.registry);
             ui::state::apply_param_updates(mixer, ui_actions);
             ui::state::apply_modulation_actions(mixer, ui_actions);
         }
@@ -1698,7 +1726,7 @@ fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .init();
 
-    log::info!("🎨 Varda VJ Software - Starting up...");
+    log::info!("Varda VJ Software - Starting up...");
 
     let event_loop = EventLoop::new()?;
     let mut app = App::new();

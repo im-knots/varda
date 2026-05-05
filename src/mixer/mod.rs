@@ -104,7 +104,7 @@ pub struct Mixer {
     /// Monotonic counter for generating unique channel names (never decremented)
     next_channel_index: usize,
 
-    /// Crossfader position (0.0 = Ch 1, 1.0 = Ch 2)
+    /// Crossfader position (0.0 = Ch 0, 1.0 = Ch 1)
     pub crossfader: f32,
 
     /// Active auto-crossfade (if any)
@@ -165,13 +165,13 @@ impl Mixer {
         }
 
         // Create two default channels
+        let channel_0 = Channel::new("Ch 0".to_string(), context, width, height)?;
         let channel_1 = Channel::new("Ch 1".to_string(), context, width, height)?;
-        let channel_2 = Channel::new("Ch 2".to_string(), context, width, height)?;
 
         let now = std::time::Instant::now();
         Ok(Self {
-            channels: vec![channel_1, channel_2],
-            next_channel_index: 2, // Ch 1=0, Ch 2=1 already used
+            channels: vec![channel_0, channel_1],
+            next_channel_index: 2, // Ch 0, Ch 1 already used
             crossfader: 0.0,
             auto_crossfade: None,
             beat_sync_crossfade: None,
@@ -253,7 +253,7 @@ impl Mixer {
 
         // Render each channel
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
-            channel.render(context, audio_data, &self.modulation, ch_idx, time)?;
+            channel.render(context, audio_data, &self.modulation, ch_idx, time, dt)?;
         }
 
         // Sync transition progress with crossfader before compositing
@@ -599,7 +599,7 @@ impl Mixer {
 }
 
 
-/// Generate a channel name from its index: 0→"Ch 1", 1→"Ch 2", 2→"Ch 3", etc.
+/// Generate a channel name from its index: 0→"Ch 0", 1→"Ch 1", 2→"Ch 2", etc.
 fn channel_name(index: usize) -> String {
-    format!("Ch {}", index + 1)
+    format!("Ch {}", index)
 }

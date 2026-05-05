@@ -111,6 +111,79 @@ pub fn apply_video_actions(mixer: &mut Mixer, actions: &UIActions) {
     }
 }
 
+/// Apply auto-transition configuration actions
+pub fn apply_auto_transition_actions(
+    mixer: &mut Mixer,
+    actions: &UIActions,
+    context: &RenderContext,
+    registry: &ShaderRegistry,
+) {
+    use super::AutoTransitionAction;
+    use crate::channel::{DeckAutoTransition, DurationSpec, TransitionTrigger};
+    for (ch_idx, deck_idx, action) in &actions.auto_transition_actions {
+        if let Some(ch) = mixer.channel_mut(*ch_idx) {
+            if *deck_idx < ch.decks.len() {
+                let slot = &mut ch.decks[*deck_idx];
+                // Ensure auto_transition config exists
+                if slot.auto_transition.is_none() {
+                    slot.auto_transition = Some(DeckAutoTransition::new());
+                }
+                let at = slot.auto_transition.as_mut().unwrap();
+                match action {
+                    AutoTransitionAction::SetEnabled(en) => {
+                        at.enabled = *en;
+                        if !*en {
+                            at.phase = crate::channel::DeckTransitionPhase::Inactive;
+                        }
+                    }
+                    AutoTransitionAction::SetTrigger(clip_end) => {
+                        at.trigger = if *clip_end { TransitionTrigger::ClipEnd } else { TransitionTrigger::Timer };
+                    }
+                    AutoTransitionAction::SetPlayDuration(val) => {
+                        at.play_duration = match at.play_duration {
+                            DurationSpec::Beats(_) => DurationSpec::Beats(*val),
+                            DurationSpec::Seconds(_) => DurationSpec::Seconds(*val),
+                        };
+                    }
+                    AutoTransitionAction::TogglePlayDurationUnit => {
+                        at.play_duration = match at.play_duration {
+                            DurationSpec::Beats(v) => DurationSpec::Seconds(v),
+                            DurationSpec::Seconds(v) => DurationSpec::Beats(v),
+                        };
+                    }
+                    AutoTransitionAction::SetTransitionDuration(val) => {
+                        at.transition_duration = match at.transition_duration {
+                            DurationSpec::Beats(_) => DurationSpec::Beats(*val),
+                            DurationSpec::Seconds(_) => DurationSpec::Seconds(*val),
+                        };
+                    }
+                    AutoTransitionAction::ToggleTransitionDurationUnit => {
+                        at.transition_duration = match at.transition_duration {
+                            DurationSpec::Beats(v) => DurationSpec::Seconds(v),
+                            DurationSpec::Seconds(v) => DurationSpec::Beats(v),
+                        };
+                    }
+                    AutoTransitionAction::SetTransitionShader(name_opt) => {
+                        at.transition_shader_name = name_opt.clone();
+                        // Compile or clear the transition shader
+                        if let Some(shader_name) = name_opt {
+                            if let Some(shader) = registry.transitions().iter()
+                                .find(|s| s.name() == *shader_name)
+                            {
+                                if let Err(e) = slot.set_transition_shader(context, (*shader).clone()) {
+                                    log::warn!("Failed to set deck transition shader: {}", e);
+                                }
+                            }
+                        } else {
+                            slot.transition_effect = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Apply parameter value updates (generator, effect, master effect params)
 pub fn apply_param_updates(mixer: &mut Mixer, actions: &UIActions) {
     for update in &actions.param_updates {

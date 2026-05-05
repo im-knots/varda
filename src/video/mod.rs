@@ -51,6 +51,9 @@ pub struct PlaybackState {
     pub duration: f64,
     /// Video frame rate.
     pub frame_rate: f64,
+    /// Set to true for one frame when playback reaches the out-point/EOF.
+    /// Used by auto-transition ClipEnd trigger. Cleared each frame before advance.
+    pub reached_end: bool,
 }
 
 impl PlaybackState {
@@ -65,6 +68,7 @@ impl PlaybackState {
             reverse: false,
             duration,
             frame_rate,
+            reached_end: false,
         }
     }
 
@@ -75,6 +79,7 @@ impl PlaybackState {
 
     /// Advance position by one frame at current speed. Returns true if a seek is needed.
     pub fn advance_frame(&mut self) -> bool {
+        self.reached_end = false;
         if !self.playing {
             return false;
         }
@@ -86,6 +91,7 @@ impl PlaybackState {
         let out_pt = self.effective_out();
 
         if self.position >= out_pt {
+            self.reached_end = true;
             match self.loop_mode {
                 LoopMode::Loop => { self.position = in_pt; return true; }
                 LoopMode::PingPong => { self.reverse = true; self.position = out_pt - frame_time; }

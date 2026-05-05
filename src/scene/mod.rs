@@ -25,7 +25,7 @@ pub struct SceneConfig {
     #[serde(default)]
     pub channels: Vec<ChannelConfig>,
 
-    /// Crossfader position (0.0 = Ch 1, 1.0 = Ch 2)
+    /// Crossfader position (0.0 = Ch 0, 1.0 = Ch 1)
     #[serde(default)]
     pub crossfader: f32,
 
@@ -101,7 +101,48 @@ pub struct DeckConfig {
     /// Z-index for layer ordering
     #[serde(default)]
     pub z_index: i32,
+
+    /// Auto-transition configuration (None = no auto-transition)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_transition: Option<AutoTransitionConfig>,
 }
+
+// ── Auto-Transition ────────────────────────────────────────────────
+
+/// Serializable auto-transition config for a deck.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoTransitionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    #[serde(default = "default_timer_trigger")]
+    pub trigger: TriggerConfig,
+
+    pub play_duration: DurationSpecConfig,
+    pub transition_duration: DurationSpecConfig,
+
+    /// Transition shader name (None = opacity fade)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_shader: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "unit", content = "value")]
+pub enum DurationSpecConfig {
+    #[serde(rename = "beats")]
+    Beats(f64),
+    #[serde(rename = "seconds")]
+    Seconds(f64),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerConfig {
+    Timer,
+    ClipEnd,
+}
+
+fn default_timer_trigger() -> TriggerConfig { TriggerConfig::Timer }
 
 // ── Source ──────────────────────────────────────────────────────────
 

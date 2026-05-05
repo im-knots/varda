@@ -87,7 +87,7 @@ impl ShaderRegistry {
                 match ISFShader::from_file(path) {
                     Ok(shader) => {
                         let name = shader.name();
-                        log::info!("  ✓ Loaded: {} ({})", name, path.display());
+                        log::info!("  Loaded: {} ({})", name, path.display());
                         self.path_to_name.insert(path.to_path_buf(), name.clone());
                         self.shaders.insert(name, shader);
                         count += 1;

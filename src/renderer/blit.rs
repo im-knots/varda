@@ -471,7 +471,8 @@ impl PolygonBlitPipeline {
         render_pass.draw(0..num_triangles * 3, 0..1);
     }
 
-    /// Build a fan-triangulated vertex buffer from polygon vertices.
+    /// Build an ear-clipping triangulated vertex buffer from polygon vertices.
+    /// Handles concave polygons correctly (fan triangulation only works for convex).
     /// Returns (buffer, num_triangles).
     /// UVs are set so that the bounding box maps to [0..1] (for Fill mode,
     /// the blit shader's uv_scale/uv_offset handle the rest).
@@ -481,26 +482,27 @@ impl PolygonBlitPipeline {
         bb_x: f32, bb_y: f32, bb_w: f32, bb_h: f32,
     ) -> (wgpu::Buffer, u32) {
         let n = canvas_verts.len();
-        let num_tris = if n >= 3 { (n - 2) as u32 } else { 0 };
+        if n < 3 {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Polygon Vertex Buffer (empty)"),
+                contents: &[],
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            return (buffer, 0);
+        }
 
-        let mut gpu_verts: Vec<PolygonVertex> = Vec::with_capacity(num_tris as usize * 3);
+        let indices = ear_clip_triangulate(canvas_verts);
+        let num_tris = (indices.len() / 3) as u32;
 
-        if n >= 3 {
-            // Fan triangulation from vertex 0
-            let to_vert = |v: &[f32; 2]| -> PolygonVertex {
-                let u = if bb_w > 0.0 { (v[0] - bb_x) / bb_w } else { 0.0 };
-                let t = if bb_h > 0.0 { (v[1] - bb_y) / bb_h } else { 0.0 };
-                PolygonVertex {
-                    position: *v,
-                    uv: [u, t],
-                }
-            };
+        let to_vert = |v: &[f32; 2]| -> PolygonVertex {
+            let u = if bb_w > 0.0 { (v[0] - bb_x) / bb_w } else { 0.0 };
+            let t = if bb_h > 0.0 { (v[1] - bb_y) / bb_h } else { 0.0 };
+            PolygonVertex { position: *v, uv: [u, t] }
+        };
 
-            for i in 1..n - 1 {
-                gpu_verts.push(to_vert(&canvas_verts[0]));
-                gpu_verts.push(to_vert(&canvas_verts[i]));
-                gpu_verts.push(to_vert(&canvas_verts[i + 1]));
-            }
+        let mut gpu_verts: Vec<PolygonVertex> = Vec::with_capacity(indices.len());
+        for &idx in &indices {
+            gpu_verts.push(to_vert(&canvas_verts[idx as usize]));
         }
 
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -513,3 +515,74 @@ impl PolygonBlitPipeline {
     }
 }
 
+
+// === Ear-clipping triangulation for concave polygons ===
+
+/// Ear-clipping triangulation for a simple (non-self-intersecting) polygon.
+/// Returns triangle indices into the vertex array.
+fn ear_clip_triangulate(verts: &[[f32; 2]]) -> Vec<u32> {
+    let n = verts.len();
+    if n < 3 { return Vec::new(); }
+
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut result = Vec::with_capacity((n - 2) * 3);
+
+    // Determine winding via signed area (y-down coords: negative = CCW)
+    let signed_area: f32 = (0..n).map(|i| {
+        let a = verts[i];
+        let b = verts[(i + 1) % n];
+        (b[0] - a[0]) * (b[1] + a[1])
+    }).sum();
+    let ccw = signed_area < 0.0;
+
+    let mut remaining = n;
+    let mut fail_count = 0;
+    let mut i = 0;
+
+    while remaining > 2 && fail_count < remaining {
+        let pi = idx[(i + remaining - 1) % remaining];
+        let ci = idx[i % remaining];
+        let ni = idx[(i + 1) % remaining];
+
+        if ear_clip_is_ear(verts, &idx, pi, ci, ni, ccw) {
+            result.push(pi as u32);
+            result.push(ci as u32);
+            result.push(ni as u32);
+            idx.remove(i % remaining);
+            remaining -= 1;
+            fail_count = 0;
+            if i >= remaining && remaining > 0 { i = 0; }
+        } else {
+            i = (i + 1) % remaining;
+            fail_count += 1;
+        }
+    }
+
+    result
+}
+
+fn ear_clip_cross(o: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+}
+
+fn ear_clip_is_ear(verts: &[[f32; 2]], idx: &[usize], prev: usize, curr: usize, next: usize, ccw: bool) -> bool {
+    let cross = ear_clip_cross(verts[prev], verts[curr], verts[next]);
+    if ccw { if cross <= 0.0 { return false; } } else { if cross >= 0.0 { return false; } }
+
+    for &vi in idx {
+        if vi == prev || vi == curr || vi == next { continue; }
+        if ear_clip_point_in_tri(verts[vi], verts[prev], verts[curr], verts[next]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn ear_clip_point_in_tri(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {
+    let d0 = ear_clip_cross(a, b, p);
+    let d1 = ear_clip_cross(b, c, p);
+    let d2 = ear_clip_cross(c, a, p);
+    let has_neg = (d0 < 0.0) || (d1 < 0.0) || (d2 < 0.0);
+    let has_pos = (d0 > 0.0) || (d1 > 0.0) || (d2 > 0.0);
+    !(has_neg && has_pos)
+}

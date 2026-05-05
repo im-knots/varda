@@ -135,12 +135,27 @@ pub struct VideoPlaybackUI {
     pub frame_rate: f64,
 }
 
+/// Auto-transition state snapshot for UI display
+#[derive(Clone)]
+pub struct AutoTransitionUI {
+    pub enabled: bool,
+    pub trigger_is_clip_end: bool,
+    pub play_duration_value: f64,
+    pub play_duration_is_beats: bool,
+    pub transition_duration_value: f64,
+    pub transition_duration_is_beats: bool,
+    pub transition_shader_name: Option<String>,
+    pub phase: crate::channel::DeckTransitionPhase,
+}
+
 /// Deck info for UI display
 #[derive(Clone)]
 pub struct DeckUIInfo {
     pub deck_idx: usize,
     pub name: String,
     pub opacity: f32,
+    /// Effective opacity accounting for auto-transition state (for visual feedback only)
+    pub effective_opacity: f32,
     pub blend_mode: BlendMode,
     pub solo: bool,
     pub mute: bool,
@@ -149,6 +164,8 @@ pub struct DeckUIInfo {
     pub effects: Vec<EffectInfo>,
     /// Video playback state (only present for video decks)
     pub video_playback: Option<VideoPlaybackUI>,
+    /// Auto-transition state (None = no auto-transition configured)
+    pub auto_transition: Option<AutoTransitionUI>,
 }
 
 /// Channel info for UI display
@@ -467,6 +484,8 @@ pub struct UIActions {
     pub camera_rescan: bool,
     /// Video playback actions: (ch_idx, deck_idx, action)
     pub video_actions: Vec<(usize, usize, VideoAction)>,
+    /// Auto-transition actions: (ch_idx, deck_idx, action)
+    pub auto_transition_actions: Vec<(usize, usize, AutoTransitionAction)>,
     /// Save workspace requested (Ctrl+S / Cmd+S)
     pub save_requested: bool,
 }
@@ -488,6 +507,25 @@ pub enum VideoAction {
     SetOutPoint(f64),
     /// Clear in/out points (reset to full clip)
     ClearInOutPoints,
+}
+
+/// Action for configuring deck auto-transitions
+#[derive(Debug, Clone)]
+pub enum AutoTransitionAction {
+    /// Toggle enabled state
+    SetEnabled(bool),
+    /// Set trigger mode (false = Timer, true = ClipEnd)
+    SetTrigger(bool),
+    /// Set play duration value
+    SetPlayDuration(f64),
+    /// Toggle play duration unit (beats ↔ seconds)
+    TogglePlayDurationUnit,
+    /// Set transition duration value
+    SetTransitionDuration(f64),
+    /// Toggle transition duration unit (beats ↔ seconds)
+    ToggleTransitionDurationUnit,
+    /// Set transition shader by name (None = opacity fade)
+    SetTransitionShader(Option<String>),
 }
 
 impl UIActions {
@@ -541,6 +579,7 @@ impl UIActions {
             camera_to_add: None,
             camera_rescan: false,
             video_actions: Vec::new(),
+            auto_transition_actions: Vec::new(),
             save_requested: false,
         }
     }

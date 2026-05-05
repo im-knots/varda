@@ -4,7 +4,7 @@ use crate::modulation::{LFOWaveform, StepInterpolation};
 use crate::{BlendMode, ScalingMode};
 use crate::renderer::context::{OutputSource, OutputTarget};
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
-use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, OutputAction, SurfaceAction, ModSourceUI, NotificationUI, modulator_color, LibraryDrag, EffectDrag, VideoAction};
+use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, OutputAction, SurfaceAction, ModSourceUI, NotificationUI, modulator_color, LibraryDrag, EffectDrag, VideoAction, AutoTransitionAction};
 use super::widgets;
 
 /// Format seconds as MM:SS
@@ -622,7 +622,7 @@ fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     }).show(ui, |ui| {
         // === GENERATORS ===
         let gen_header = egui::RichText::new(format!("🎨 Generators ({})", data.generators.len())).strong();
-        egui::CollapsingHeader::new(gen_header).default_open(true).show(ui, |ui| {
+        egui::CollapsingHeader::new(gen_header).default_open(false).show(ui, |ui| {
             for (name, gen_idx) in &data.generators {
                 let item_id = egui::Id::new(("lib_gen", *gen_idx));
                 let resp = ui.dnd_drag_source(item_id, LibraryDrag::Generator(*gen_idx), |ui| {
@@ -638,7 +638,7 @@ fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
                 if resp.double_clicked() {
                     actions.shader_to_add = Some((0, *gen_idx));
                 }
-                resp.on_hover_text("Drag to a channel to create a deck, or double-click to add to Ch 1");
+                resp.on_hover_text("Drag to a channel to create a deck, or double-click to add to Ch 0");
             }
         });
 
@@ -646,7 +646,7 @@ fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
 
         // === EFFECTS ===
         let fx_header = egui::RichText::new(format!("🔮 Effects ({})", data.filters.len())).strong();
-        egui::CollapsingHeader::new(fx_header).default_open(true).show(ui, |ui| {
+        egui::CollapsingHeader::new(fx_header).default_open(false).show(ui, |ui| {
             for (name, filter_idx) in &data.filters {
                 let item_id = egui::Id::new(("lib_fx", *filter_idx));
                 ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
@@ -703,7 +703,7 @@ fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
 
         // === CAMERAS ===
         let cam_header = egui::RichText::new(format!("📹 Cameras ({})", data.cameras.len())).strong();
-        egui::CollapsingHeader::new(cam_header).default_open(true).show(ui, |ui| {
+        egui::CollapsingHeader::new(cam_header).default_open(false).show(ui, |ui| {
             if ui.small_button("🔄 Rescan").clicked() {
                 actions.camera_rescan = true;
             }
@@ -2332,7 +2332,7 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
     };
 
     let accent = channel_color(ch_idx);
-    ui.label(egui::RichText::new(format!("Ch {} / Deck {} — {}", ch.name, deck_idx + 1, deck.name))
+    ui.label(egui::RichText::new(format!("{} / Deck {} — {}", ch.name, deck_idx + 1, deck.name))
         .strong().color(accent));
 
     // Horizontal columns: Preview | Generator | Effect 1 | Effect 2 | ... | Add Effect
@@ -2480,6 +2480,122 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             ui.label(egui::RichText::new(format!(
                                 "{:.0} fps • {}", vp.frame_rate, format_time(duration)
                             )).small().weak());
+                        });
+                    });
+                ui.separator();
+            }
+
+            // Column: Auto-Transition controls
+            {
+                egui::Frame::default()
+                    .inner_margin(6.0)
+                    .corner_radius(4.0)
+                    .fill(ui.visuals().faint_bg_color)
+                    .show(ui, |ui| {
+                        ui.set_min_width(200.0);
+                        ui.set_max_width(260.0);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            // Header with enable toggle
+                            ui.horizontal(|ui| {
+                                let enabled = deck.auto_transition.as_ref().map_or(false, |at| at.enabled);
+                                let mut en = enabled;
+                                ui.checkbox(&mut en, "");
+                                if en != enabled {
+                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                        AutoTransitionAction::SetEnabled(en)));
+                                }
+                                // Phase indicator
+                                let phase_icon = if let Some(ref at) = deck.auto_transition {
+                                    match at.phase {
+                                        crate::channel::DeckTransitionPhase::Inactive => "⏹",
+                                        crate::channel::DeckTransitionPhase::Playing { .. } => "▶",
+                                        crate::channel::DeckTransitionPhase::Transitioning { .. } => "🔄",
+                                        crate::channel::DeckTransitionPhase::Done => "✓",
+                                    }
+                                } else { "⏹" };
+                                ui.label(egui::RichText::new(format!("{} Auto Transition", phase_icon)).strong());
+                            });
+
+                            if let Some(ref at) = deck.auto_transition {
+                                if at.enabled {
+                                    // Trigger mode
+                                    ui.horizontal(|ui| {
+                                        ui.label("Trigger:");
+                                        let mut clip_end = at.trigger_is_clip_end;
+                                        if ui.selectable_label(!clip_end, "Timer").clicked() && clip_end {
+                                            clip_end = false;
+                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                AutoTransitionAction::SetTrigger(false)));
+                                        }
+                                        if ui.selectable_label(clip_end, "Clip End").clicked() && !clip_end {
+                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                AutoTransitionAction::SetTrigger(true)));
+                                        }
+                                    });
+
+                                    // Play duration
+                                    ui.horizontal(|ui| {
+                                        ui.label("Play:");
+                                        let mut val = at.play_duration_value as f32;
+                                        let max = if at.play_duration_is_beats { 128.0 } else { 300.0 };
+                                        if ui.add(egui::Slider::new(&mut val, 0.5..=max)
+                                            .logarithmic(true)
+                                            .suffix(if at.play_duration_is_beats { " beats" } else { " sec" })
+                                        ).changed() {
+                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                AutoTransitionAction::SetPlayDuration(val as f64)));
+                                        }
+                                        if ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
+                                            .on_hover_text("Toggle beats/seconds").clicked()
+                                        {
+                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                AutoTransitionAction::TogglePlayDurationUnit));
+                                        }
+                                    });
+
+                                    // Transition duration
+                                    ui.horizontal(|ui| {
+                                        ui.label("Trans:");
+                                        let mut val = at.transition_duration_value as f32;
+                                        let max = if at.transition_duration_is_beats { 32.0 } else { 30.0 };
+                                        if ui.add(egui::Slider::new(&mut val, 0.1..=max)
+                                            .logarithmic(true)
+                                            .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" })
+                                        ).changed() {
+                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                AutoTransitionAction::SetTransitionDuration(val as f64)));
+                                        }
+                                        if ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
+                                            .on_hover_text("Toggle beats/seconds").clicked()
+                                        {
+                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                AutoTransitionAction::ToggleTransitionDurationUnit));
+                                        }
+                                    });
+
+                                    // Transition shader selector
+                                    ui.horizontal(|ui| {
+                                        ui.label("Shader:");
+                                        let current = at.transition_shader_name.as_deref().unwrap_or("(fade)");
+                                        egui::ComboBox::from_id_salt(format!("at_shader_{}_{}", ch_idx, deck_idx))
+                                            .selected_text(current)
+                                            .width(120.0)
+                                            .show_ui(ui, |ui| {
+                                                if ui.selectable_label(at.transition_shader_name.is_none(), "(fade)").clicked() {
+                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                        AutoTransitionAction::SetTransitionShader(None)));
+                                                }
+                                                for name in &data.transition_names {
+                                                    let selected = at.transition_shader_name.as_deref() == Some(name.as_str());
+                                                    if ui.selectable_label(selected, name).clicked() && !selected {
+                                                        actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                            AutoTransitionAction::SetTransitionShader(Some(name.clone()))));
+                                                    }
+                                                }
+                                            });
+                                    });
+                                }
+                            }
                         });
                     });
                 ui.separator();
@@ -2838,7 +2954,7 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
     };
 
     let accent = channel_color(ch_idx);
-    ui.heading(egui::RichText::new(format!("🔮 Channel {} Effects", ch.name)).color(accent));
+    ui.heading(egui::RichText::new(format!("🔮 {} Effects", ch.name)).color(accent));
 
     egui::ScrollArea::horizontal().id_salt("channel_fx_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
@@ -3495,8 +3611,8 @@ fn render_effect_drop_zone(ui: &mut egui::Ui, chain_key: &str, position: usize) 
 /// Channel accent colors
 fn channel_color(ch_idx: usize) -> egui::Color32 {
     match ch_idx {
-        0 => egui::Color32::from_rgb(160, 100, 255), // Purple — Ch 1
-        1 => egui::Color32::from_rgb(100, 160, 255), // Blue — Ch 2
+        0 => egui::Color32::from_rgb(160, 100, 255), // Purple — Ch 0
+        1 => egui::Color32::from_rgb(100, 160, 255), // Blue — Ch 1
         2 => egui::Color32::from_rgb(255, 160, 60),  // Orange
         3 => egui::Color32::from_rgb(80, 200, 120),   // Green
         _ => egui::Color32::from_rgb(180, 180, 180),  // Gray for extras
@@ -3855,7 +3971,7 @@ fn render_channel_column(ui: &mut egui::Ui, ch: &super::ChannelUIInfo, data: &UI
                 egui::Frame::default().inner_margin(2.0)
             };
             header_frame.show(ui, |ui| {
-                let header_resp = ui.label(egui::RichText::new(format!("▌ Channel {}", ch.name)).strong().color(accent).size(16.0));
+                let header_resp = ui.label(egui::RichText::new(format!("▌ {}", ch.name)).strong().color(accent).size(16.0));
                 let header_resp = header_resp.interact(egui::Sense::click());
                 if header_resp.clicked() {
                     actions.select_channel = Some(ch_idx);
@@ -4036,6 +4152,48 @@ fn render_deck_thumbnail(
             );
         }
 
+        // Auto-transition indicator overlay on preview
+        if let Some(ref at) = deck.auto_transition {
+            if at.enabled {
+                let (icon, color) = match at.phase {
+                    crate::channel::DeckTransitionPhase::Inactive => ("⏹", egui::Color32::GRAY),
+                    crate::channel::DeckTransitionPhase::Playing { .. } => ("▶", egui::Color32::from_rgb(80, 200, 80)),
+                    crate::channel::DeckTransitionPhase::Transitioning { .. } => ("🔄", egui::Color32::from_rgb(200, 160, 40)),
+                    crate::channel::DeckTransitionPhase::Done => ("✓", egui::Color32::from_rgb(100, 100, 100)),
+                };
+                // Small badge in top-right of preview
+                ui.painter().text(
+                    egui::pos2(preview_rect.max.x - 2.0, preview_rect.min.y + 2.0),
+                    egui::Align2::RIGHT_TOP,
+                    icon,
+                    egui::FontId::proportional(10.0),
+                    color,
+                );
+                // Progress bar at bottom of preview during transition
+                if let crate::channel::DeckTransitionPhase::Transitioning { progress } = at.phase {
+                    let bar_h = 3.0;
+                    let bar_rect = egui::Rect::from_min_size(
+                        egui::pos2(preview_rect.min.x, preview_rect.max.y - bar_h),
+                        egui::vec2(preview_rect.width() * progress as f32, bar_h),
+                    );
+                    ui.painter().rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(200, 160, 40));
+                }
+                // Countdown bar during playing phase
+                if let crate::channel::DeckTransitionPhase::Playing { elapsed } = at.phase {
+                    let total = at.play_duration_value;
+                    if total > 0.0 {
+                        let frac = (elapsed / total).min(1.0) as f32;
+                        let bar_h = 3.0;
+                        let bar_rect = egui::Rect::from_min_size(
+                            egui::pos2(preview_rect.min.x, preview_rect.max.y - bar_h),
+                            egui::vec2(preview_rect.width() * frac, bar_h),
+                        );
+                        ui.painter().rect_filled(bar_rect, 0.0, egui::Color32::from_rgb(80, 200, 80));
+                    }
+                }
+            }
+        }
+
         // Click on card to select deck (only when not in learn mode — learn mode click selects trigger)
         if !data.midi_learn_active && card_resp.clicked() {
             actions.select_deck = Some((ch_idx, idx));
@@ -4073,6 +4231,17 @@ fn render_deck_thumbnail(
             if click_resp.clicked() {
                 actions.midi_learn_select = Some(opacity_path);
             }
+        }
+
+        // Effective opacity overlay (shows auto-transition fading as a filled bar)
+        if deck.effective_opacity < deck.opacity - 0.01 {
+            let frac = deck.effective_opacity / deck.opacity.max(0.001);
+            let bar_h = op_slider_rect.height() * (1.0 - frac);
+            let bar_rect = egui::Rect::from_min_size(
+                op_slider_rect.min,
+                egui::vec2(op_slider_rect.width(), bar_h),
+            );
+            ui.painter().rect_filled(bar_rect, 2.0, egui::Color32::from_rgba_unmultiplied(200, 60, 60, 80));
         }
 
         // Row 2: Deck name
