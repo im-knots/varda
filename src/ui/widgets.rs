@@ -81,7 +81,9 @@ pub fn render_params(
                                     total_offset += mod_current_values[a.source_idx] * a.amount;
                                 }
                             }
-                            let modulated_val = (v + total_offset).clamp(min, max);
+                            // Scale by param range to match GPU-side modulation
+                            let range = max - min;
+                            let modulated_val = (v + total_offset * range).clamp(min, max);
                             let frac = (modulated_val - min) / (max - min);
                             let x = slider_rect.left() + frac * slider_rect.width();
                             let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
@@ -217,7 +219,9 @@ pub fn render_effect_params(
                                     total_offset += mod_current_values[a.source_idx] * a.amount;
                                 }
                             }
-                            let modulated_val = (v + total_offset).clamp(min, max);
+                            // Scale by param range to match GPU-side modulation
+                            let range = max - min;
+                            let modulated_val = (v + total_offset * range).clamp(min, max);
                             let frac = (modulated_val - min) / (max - min);
                             let x = slider_rect.left() + frac * slider_rect.width();
                             let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);

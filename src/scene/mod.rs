@@ -1,12 +1,12 @@
 //! Scene configuration — serializable snapshot of the full VJ performance state.
 //!
 //! This is the data model for `.varda/scene.json`. It captures everything needed
-//! to reconstruct a show: channels, decks, effects, surfaces, outputs, warp, modulation.
+//! to reconstruct a show: channels, decks, effects, modulation.
+//! Surfaces and outputs live in `stage.json` (venue-specific, not show-specific).
 
 use crate::channel::BlendMode;
 use crate::modulation::ModulationEngine;
 use crate::params::ParamValue;
-use crate::surface::SurfaceManager;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -36,14 +36,6 @@ pub struct SceneConfig {
     /// Master effect chain
     #[serde(default)]
     pub master_effects: Vec<EffectConfig>,
-
-    /// 2D stage surface layout (already Serialize/Deserialize)
-    #[serde(default)]
-    pub surfaces: SurfaceManager,
-
-    /// Output window configurations
-    #[serde(default)]
-    pub outputs: Vec<OutputConfig>,
 
     /// Modulation engine state (sources + assignments, already Serialize/Deserialize)
     #[serde(default)]

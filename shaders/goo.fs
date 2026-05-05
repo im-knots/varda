@@ -8,8 +8,7 @@
         {"NAME": "amount", "LABEL": "Amount", "TYPE": "float", "DEFAULT": 0.03, "MIN": 0.0, "MAX": 0.15},
         {"NAME": "goo_scale", "LABEL": "Scale", "TYPE": "float", "DEFAULT": 3.0, "MIN": 0.5, "MAX": 15.0},
         {"NAME": "goo_speed", "LABEL": "Speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 5.0},
-        {"NAME": "complexity", "LABEL": "Complexity", "TYPE": "float", "DEFAULT": 3.0, "MIN": 1.0, "MAX": 6.0},
-        {"NAME": "audio_reactive", "LABEL": "Audio Reactive", "TYPE": "bool", "DEFAULT": true}
+        {"NAME": "complexity", "LABEL": "Complexity", "TYPE": "float", "DEFAULT": 3.0, "MIN": 1.0, "MAX": 6.0}
     ]
 }*/
 
@@ -41,7 +40,6 @@ layout(set = 0, binding = 3) uniform UserParams {
     float goo_scale;
     float goo_speed;
     float complexity;
-    float audio_reactive;
 };
 
 // Simple hash noise
@@ -81,9 +79,6 @@ void main() {
     int oct = int(clamp(complexity, 1.0, 6.0));
 
     float amt = amount;
-    if (audio_reactive > 0.5) {
-        amt *= (1.0 + audio_bass * 3.0);
-    }
 
     // Distortion offset from noise
     float dx = fbm2(uv * goo_scale + vec2(t, 0.0), oct);

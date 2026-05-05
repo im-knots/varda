@@ -303,8 +303,10 @@ pub enum SurfaceAction {
     AddPolygon { name: String, vertices: Vec<[f32; 2]>, source: OutputSource },
     /// Remove a surface by index
     Remove { idx: usize },
-    /// Update the vertices of a surface
-    UpdateVertices { idx: usize, vertices: Vec<[f32; 2]> },
+    /// Update the vertices of a surface (specific contour: 0=primary, 1+=extra)
+    UpdateVertices { idx: usize, contour: usize, vertices: Vec<[f32; 2]> },
+    /// Move a surface by a delta (moves all contours)
+    MoveDelta { idx: usize, dx: f32, dy: f32 },
     /// Change the content source for a surface
     SetSource { idx: usize, source: OutputSource },
     /// Change the output type for a surface
@@ -329,6 +331,8 @@ pub enum SurfaceAction {
     SetCircleSides { idx: usize, sides: u32 },
     /// Convert a circle surface to a plain polygon (drop circle hint)
     ConvertToPolygon { idx: usize },
+    /// Combine multiple surfaces into one (overlapping → merge, non-overlapping → multi-contour)
+    Combine { indices: Vec<usize> },
 }
 
 /// Snapshot of a surface for UI display
@@ -336,6 +340,7 @@ pub enum SurfaceAction {
 pub struct SurfaceUI {
     pub name: String,
     pub vertices: Vec<[f32; 2]>,
+    pub extra_contours: Vec<Vec<[f32; 2]>>,
     pub source: OutputSource,
     pub content_mapping: ContentMapping,
     pub output_type: SurfaceOutputType,

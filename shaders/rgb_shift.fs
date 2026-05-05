@@ -23,12 +23,6 @@
             "DEFAULT": 0.0,
             "MIN": 0.0,
             "MAX": 6.283
-        },
-        {
-            "NAME": "audio_reactive",
-            "LABEL": "Audio Reactive",
-            "TYPE": "bool",
-            "DEFAULT": true
         }
     ]
 }*/
@@ -59,14 +53,10 @@ layout(set = 0, binding = 2) uniform texture2D inputImage;
 layout(set = 0, binding = 3) uniform UserParams {
     float amount;
     float angle;
-    float audio_reactive;
 };
 
 void main() {
     float shift = amount;
-    if (audio_reactive > 0.5) {
-        shift *= (1.0 + audio_bass * 3.0);
-    }
     
     vec2 dir = vec2(cos(angle), sin(angle)) * shift;
     

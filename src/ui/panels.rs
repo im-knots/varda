@@ -7,6 +7,132 @@ use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, OutputAction, SurfaceAction, ModSourceUI, NotificationUI, modulator_color, LibraryDrag, EffectDrag};
 use super::widgets;
 
+// ── Polygon triangulation (ear-clipping) ────────────────────────────
+
+/// Build an `egui::Shape` for an arbitrary (possibly concave) polygon using
+/// ear-clipping triangulation. Falls back to `convex_polygon` for ≤4 vertices
+/// where convexity is likely.
+fn polygon_shape(
+    verts: &[egui::Pos2],
+    fill: egui::Color32,
+    stroke: egui::Stroke,
+) -> egui::Shape {
+    if verts.len() < 3 {
+        return egui::Shape::Noop;
+    }
+
+    // Triangulate
+    let indices = triangulate_polygon(verts);
+    if indices.is_empty() {
+        // Fallback if triangulation fails
+        return egui::Shape::convex_polygon(verts.to_vec(), fill, stroke);
+    }
+
+    // Build mesh for the filled area
+    let mut mesh = egui::Mesh::default();
+    mesh.texture_id = egui::TextureId::default();
+    for &p in verts {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: p,
+            uv: egui::pos2(0.0, 0.0),
+            color: fill,
+        });
+    }
+    mesh.indices = indices;
+
+    let mut shapes = vec![egui::Shape::mesh(mesh)];
+
+    // Draw outline on top
+    if stroke.width > 0.0 {
+        let mut outline = verts.to_vec();
+        outline.push(verts[0]); // close the loop
+        shapes.push(egui::Shape::line(outline, stroke));
+    }
+
+    egui::Shape::Vec(shapes)
+}
+
+/// Ear-clipping triangulation for a simple polygon.
+/// Returns triangle indices into the vertex array.
+fn triangulate_polygon(verts: &[egui::Pos2]) -> Vec<u32> {
+    let n = verts.len();
+    if n < 3 { return Vec::new(); }
+
+    // Work with a mutable index list
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut result = Vec::with_capacity((n - 2) * 3);
+
+    // Determine winding: positive = CCW
+    let signed_area: f32 = idx.windows(2)
+        .map(|w| {
+            let a = verts[w[0]];
+            let b = verts[w[1]];
+            (b.x - a.x) * (b.y + a.y)
+        })
+        .sum::<f32>()
+        + {
+            let a = verts[*idx.last().unwrap()];
+            let b = verts[idx[0]];
+            (b.x - a.x) * (b.y + a.y)
+        };
+    let ccw = signed_area < 0.0; // screen coords: y-down, so negative area = CCW
+
+    let mut remaining = idx.len();
+    let mut fail_count = 0;
+    let mut i = 0;
+
+    while remaining > 2 && fail_count < remaining {
+        let prev = idx[(i + remaining - 1) % remaining];
+        let curr = idx[i % remaining];
+        let next = idx[(i + 1) % remaining];
+
+        if is_ear(verts, &idx, prev, curr, next, ccw) {
+            result.push(prev as u32);
+            result.push(curr as u32);
+            result.push(next as u32);
+            idx.remove(i % remaining);
+            remaining -= 1;
+            fail_count = 0;
+            if i >= remaining && remaining > 0 {
+                i = 0;
+            }
+        } else {
+            i = (i + 1) % remaining;
+            fail_count += 1;
+        }
+    }
+
+    result
+}
+
+fn cross_2d(o: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+}
+
+fn is_ear(verts: &[egui::Pos2], idx: &[usize], prev: usize, curr: usize, next: usize, ccw: bool) -> bool {
+    let cross = cross_2d(verts[prev], verts[curr], verts[next]);
+    // For CCW winding, an ear has positive cross product
+    if ccw { if cross <= 0.0 { return false; } } else { if cross >= 0.0 { return false; } }
+
+    // Check no other vertex is inside this triangle
+    for &vi in idx {
+        if vi == prev || vi == curr || vi == next { continue; }
+        if point_in_triangle(verts[vi], verts[prev], verts[curr], verts[next]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn point_in_triangle(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> bool {
+    let d0 = cross_2d(a, b, p);
+    let d1 = cross_2d(b, c, p);
+    let d2 = cross_2d(c, a, p);
+    let has_neg = (d0 < 0.0) || (d1 < 0.0) || (d2 < 0.0);
+    let has_pos = (d0 > 0.0) || (d1 > 0.0) || (d2 > 0.0);
+    !(has_neg && has_pos)
+}
+
 /// Render the complete UI and return all collected actions/intents.
 pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
     let mut actions = UIActions::new();
@@ -84,33 +210,33 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
 
                 // Check effect chain rects (for effect drops)
                 // Format: (target_type, ch_idx, deck_idx) — "deck"/(ch,dk), "channel"/(ch,0), "master"/(0,0)
+                // Only check the currently active bottom bar view to avoid stale rects
+                // from previously-rendered views (they share the same screen area).
                 let mut found_fx: Option<(String, usize, usize)> = None;
 
-                // Deck effect chains
-                if let Some((sel_ch, sel_dk)) = data.selected_deck {
-                    let key = egui::Id::new("deck_fx_drop_rect").with((sel_ch, sel_dk));
-                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
+                if data.selected_master {
+                    // Master effect chain
+                    let master_key = egui::Id::new("master_fx_drop_rect");
+                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(master_key)) {
                         if rect.contains(pos) {
-                            found_fx = Some(("deck".to_string(), sel_ch, sel_dk));
+                            found_fx = Some(("master".to_string(), 0, 0));
                         }
                     }
-                }
-
-                // Channel effect chains
-                for ch_idx in 0..data.channels.len() {
+                } else if let Some(ch_idx) = data.selected_channel {
+                    // Channel effect chain (only the selected channel)
                     let key = egui::Id::new("ch_fx_drop_rect").with(ch_idx);
                     if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
                         if rect.contains(pos) {
                             found_fx = Some(("channel".to_string(), ch_idx, 0));
                         }
                     }
-                }
-
-                // Master effect chain
-                let master_key = egui::Id::new("master_fx_drop_rect");
-                if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(master_key)) {
-                    if rect.contains(pos) {
-                        found_fx = Some(("master".to_string(), 0, 0));
+                } else if let Some((sel_ch, sel_dk)) = data.selected_deck {
+                    // Deck effect chain
+                    let key = egui::Id::new("deck_fx_drop_rect").with((sel_ch, sel_dk));
+                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
+                        if rect.contains(pos) {
+                            found_fx = Some(("deck".to_string(), sel_ch, sel_dk));
+                        }
                     }
                 }
 
@@ -742,11 +868,18 @@ fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
         }).collect();
 
         if pixel_verts.len() >= 3 {
-            // Draw filled polygon
-            let shape = egui::Shape::convex_polygon(pixel_verts.clone(), fill, egui::Stroke::new(1.5, color));
-            painter.add(shape);
+            painter.add(polygon_shape(&pixel_verts, fill, egui::Stroke::new(1.5, color)));
         } else if pixel_verts.len() == 2 {
             painter.line_segment([pixel_verts[0], pixel_verts[1]], egui::Stroke::new(1.5, color));
+        }
+        // Draw extra contours (combined non-overlapping surfaces)
+        for ec in &surface.extra_contours {
+            let ec_verts: Vec<egui::Pos2> = ec.iter().map(|v| {
+                egui::pos2(canvas_rect.left() + v[0] * canvas_width, canvas_rect.top() + v[1] * canvas_height)
+            }).collect();
+            if ec_verts.len() >= 3 {
+                painter.add(polygon_shape(&ec_verts, fill, egui::Stroke::new(1.5, color)));
+            }
         }
 
         // Surface label at center
@@ -865,15 +998,11 @@ fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
 
             match state {
                 SurfaceDragState::Moving { surf_idx, last_x, last_y } => {
-                    if let Some(surface) = data.surfaces.get(surf_idx) {
+                    if data.surfaces.get(surf_idx).is_some() {
                         let dx = nx - last_x;
                         let dy = ny - last_y;
-                        let new_verts: Vec<[f32; 2]> = surface.vertices.iter()
-                            .map(|v| [(v[0] + dx).clamp(0.0, 1.0), (v[1] + dy).clamp(0.0, 1.0)])
-                            .collect();
-                        actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                            idx: surf_idx,
-                            vertices: new_verts,
+                        actions.surface_actions.push(SurfaceAction::MoveDelta {
+                            idx: surf_idx, dx, dy,
                         });
                         ui.memory_mut(|mem| mem.data.insert_temp(drag_id,
                             SurfaceDragState::Moving { surf_idx, last_x: nx, last_y: ny }));
@@ -885,8 +1014,7 @@ fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
                         if vert_idx < new_verts.len() {
                             new_verts[vert_idx] = [nx, ny];
                             actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                idx: surf_idx,
-                                vertices: new_verts,
+                                idx: surf_idx, contour: 0, vertices: new_verts,
                             });
                         }
                     }
@@ -1049,7 +1177,7 @@ struct StageEditorState {
     /// Currently selected surface indices (supports multi-select)
     selected_surfaces: std::collections::BTreeSet<usize>,
     /// Drag state for vertex editing in select mode
-    dragging_vertex: Option<(usize, usize)>, // (surface_idx, vertex_idx)
+    dragging_vertex: Option<(usize, usize, usize)>, // (surface_idx, contour_idx, vertex_idx)
     /// Drag state for moving whole surface in select mode
     moving_surface: Option<(usize, f32, f32)>, // (surface_idx, last_x, last_y)
     /// Marquee selection: start position of drag rectangle in normalized coords
@@ -1165,6 +1293,13 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                     actions.surface_actions.push(SurfaceAction::FlipVertical { idx });
                 }
             }
+            if state.selected_surfaces.len() >= 2 {
+                if ui.button("🔗 Combine").on_hover_text("Combine selected surfaces (G)").clicked() {
+                    let indices: Vec<usize> = state.selected_surfaces.iter().copied().collect();
+                    actions.surface_actions.push(SurfaceAction::Combine { indices });
+                    state.selected_surfaces.clear();
+                }
+            }
         });
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1237,8 +1372,16 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
         }).collect();
 
         if pixel_verts.len() >= 3 {
-            let shape = egui::Shape::convex_polygon(pixel_verts.clone(), fill, egui::Stroke::new(stroke_width, color));
-            painter.add(shape);
+            painter.add(polygon_shape(&pixel_verts, fill, egui::Stroke::new(stroke_width, color)));
+        }
+        // Draw extra contours (combined non-overlapping surfaces)
+        for ec in &surface.extra_contours {
+            let ec_verts: Vec<egui::Pos2> = ec.iter().map(|v| {
+                egui::pos2(canvas_rect.left() + v[0] * canvas_width, canvas_rect.top() + v[1] * canvas_height)
+            }).collect();
+            if ec_verts.len() >= 3 {
+                painter.add(polygon_shape(&ec_verts, fill, egui::Stroke::new(stroke_width, color)));
+            }
         }
 
         // Label
@@ -1271,12 +1414,22 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
             painter.circle_filled(handle_pos, 6.0, egui::Color32::YELLOW);
             painter.circle_stroke(handle_pos, 6.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
         } else {
-            // Regular vertex handles
+            // Regular vertex handles (primary + extra contours)
             let handle_size = if is_selected { 10.0 } else { 7.0 };
-            for v in &pixel_verts {
-                let handle_rect = egui::Rect::from_center_size(*v, egui::vec2(handle_size, handle_size));
-                painter.rect_filled(handle_rect, 2.0, if is_selected { egui::Color32::WHITE } else { color });
-                painter.rect_stroke(handle_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::BLACK), egui::StrokeKind::Outside);
+            let handle_color = if is_selected { egui::Color32::WHITE } else { color };
+            let draw_handles = |verts: &[egui::Pos2]| {
+                for v in verts {
+                    let handle_rect = egui::Rect::from_center_size(*v, egui::vec2(handle_size, handle_size));
+                    painter.rect_filled(handle_rect, 2.0, handle_color);
+                    painter.rect_stroke(handle_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::BLACK), egui::StrokeKind::Outside);
+                }
+            };
+            draw_handles(&pixel_verts);
+            for ec in &surface.extra_contours {
+                let ec_px: Vec<egui::Pos2> = ec.iter().map(|v| {
+                    egui::pos2(canvas_rect.left() + v[0] * canvas_width, canvas_rect.top() + v[1] * canvas_height)
+                }).collect();
+                draw_handles(&ec_px);
             }
         }
     }
@@ -1375,54 +1528,61 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                 (dx_px * dx_px + dy_px * dy_px).sqrt()
             };
 
-            // Helper: find what's under the cursor (vertex, edge, or surface interior)
-            let hit_test = |nx: f32, ny: f32| -> (Option<(usize, usize)>, Option<(usize, usize, [f32; 2])>, Option<(usize, f32, f32)>) {
-                let vertex_threshold_px = 14.0; // pixels
-                let edge_threshold_px = 10.0;   // pixels
+            // Helper: find what's under the cursor
+            // vertex: (surface_idx, contour_idx, vertex_idx)
+            // edge: (surface_idx, contour_idx, edge_start_idx, projected_point)
+            // surface: (surface_idx, nx, ny)
+            let hit_test = |nx: f32, ny: f32| -> (Option<(usize, usize, usize)>, Option<(usize, usize, usize, [f32; 2])>, Option<(usize, f32, f32)>) {
+                let vertex_threshold_px = 14.0;
+                let edge_threshold_px = 10.0;
                 let mut found_vertex = None;
                 let mut found_edge = None;
                 let mut found_surface = None;
 
                 for (i, surface) in data.surfaces.iter().enumerate().rev() {
-                    // Check vertices (pixel-space distance for correct hit on non-square canvas)
-                    for (vi, v) in surface.vertices.iter().enumerate() {
-                        if pixel_dist(nx, ny, v[0], v[1]) < vertex_threshold_px {
-                            found_vertex = Some((i, vi));
-                            return (found_vertex, None, None);
-                        }
-                    }
-
-                    // Check edges (for double-click insert)
-                    if found_edge.is_none() {
-                        let verts = &surface.vertices;
-                        let n = verts.len();
-                        for ei in 0..n {
-                            let ej = (ei + 1) % n;
-                            let (ax, ay) = (verts[ei][0], verts[ei][1]);
-                            let (bx, by) = (verts[ej][0], verts[ej][1]);
-                            // Project point onto edge segment (in pixel space for accuracy)
-                            let dx = (bx - ax) * canvas_width;
-                            let dy = (by - ay) * canvas_height;
-                            let len_sq = dx * dx + dy * dy;
-                            if len_sq < 1e-6 { continue; }
-                            let px_nx = (nx - ax) * canvas_width;
-                            let px_ny = (ny - ay) * canvas_height;
-                            let t = (px_nx * dx + px_ny * dy) / len_sq;
-                            let t = t.clamp(0.0, 1.0);
-                            let proj_x = ax + t * (bx - ax);
-                            let proj_y = ay + t * (by - ay);
-                            if pixel_dist(nx, ny, proj_x, proj_y) < edge_threshold_px {
-                                found_edge = Some((i, ei, [proj_x, proj_y]));
-                                break;
+                    // Check all contours for vertex/edge hits
+                    let contours: Vec<&Vec<[f32; 2]>> = std::iter::once(&surface.vertices)
+                        .chain(surface.extra_contours.iter()).collect();
+                    for (ci, verts) in contours.iter().enumerate() {
+                        for (vi, v) in verts.iter().enumerate() {
+                            if pixel_dist(nx, ny, v[0], v[1]) < vertex_threshold_px {
+                                found_vertex = Some((i, ci, vi));
+                                return (found_vertex, None, None);
                             }
                         }
                     }
 
-                    // Point-in-polygon
+                    if found_edge.is_none() {
+                        for (ci, verts) in contours.iter().enumerate() {
+                            let n = verts.len();
+                            for ei in 0..n {
+                                let ej = (ei + 1) % n;
+                                let (ax, ay) = (verts[ei][0], verts[ei][1]);
+                                let (bx, by) = (verts[ej][0], verts[ej][1]);
+                                let dx = (bx - ax) * canvas_width;
+                                let dy = (by - ay) * canvas_height;
+                                let len_sq = dx * dx + dy * dy;
+                                if len_sq < 1e-6 { continue; }
+                                let px_nx = (nx - ax) * canvas_width;
+                                let px_ny = (ny - ay) * canvas_height;
+                                let t = (px_nx * dx + px_ny * dy) / len_sq;
+                                let t = t.clamp(0.0, 1.0);
+                                let proj_x = ax + t * (bx - ax);
+                                let proj_y = ay + t * (by - ay);
+                                if pixel_dist(nx, ny, proj_x, proj_y) < edge_threshold_px {
+                                    found_edge = Some((i, ci, ei, [proj_x, proj_y]));
+                                    break;
+                                }
+                            }
+                            if found_edge.is_some() { break; }
+                        }
+                    }
+
+                    // Point-in-polygon (any contour)
                     if found_surface.is_none() {
-                        let verts = &surface.vertices;
-                        let n = verts.len();
-                        if n >= 3 {
+                        let point_in = |verts: &[[f32; 2]]| -> bool {
+                            let n = verts.len();
+                            if n < 3 { return false; }
                             let mut inside = false;
                             let mut j = n - 1;
                             for k in 0..n {
@@ -1433,9 +1593,10 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                                 }
                                 j = k;
                             }
-                            if inside {
-                                found_surface = Some((i, nx, ny));
-                            }
+                            inside
+                        };
+                        if point_in(&surface.vertices) || surface.extra_contours.iter().any(|c| point_in(c)) {
+                            found_surface = Some((i, nx, ny));
                         }
                     }
                 }
@@ -1460,7 +1621,7 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
                     let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
-                    if let Some((si, _vi)) = found_vertex {
+                    if let Some((si, _ci, _vi)) = found_vertex {
                         if shift_held {
                             // Toggle selection with shift
                             if !state.selected_surfaces.remove(&si) {
@@ -1490,7 +1651,7 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
                     let (_found_vertex, found_edge, _found_surface) = hit_test(nx, ny);
-                    if let Some((si, ei, snap_pos)) = found_edge {
+                    if let Some((si, _ci, ei, snap_pos)) = found_edge {
                         let snapped = [snap(snap_pos[0]), snap(snap_pos[1])];
                         actions.surface_actions.push(SurfaceAction::InsertVertex {
                             idx: si,
@@ -1532,7 +1693,7 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                     } else {
                         let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
 
-                        if let Some((si, vi)) = found_vertex {
+                        if let Some((si, ci, vi)) = found_vertex {
                             // If vertex drag on a circle, auto-convert to polygon first
                             if data.surfaces.get(si).map_or(false, |s| s.circle_hint.is_some()) {
                                 actions.surface_actions.push(SurfaceAction::ConvertToPolygon { idx: si });
@@ -1541,7 +1702,7 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                                 state.selected_surfaces.clear();
                             }
                             state.selected_surfaces.insert(si);
-                            state.dragging_vertex = Some((si, vi));
+                            state.dragging_vertex = Some((si, ci, vi));
                             state.moving_surface = None;
                             state.selection_rect_start = None;
                         } else if let Some((si, lx, ly)) = found_surface {
@@ -1581,14 +1742,17 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                                 });
                             }
                         }
-                    } else if let Some((si, vi)) = state.dragging_vertex {
+                    } else if let Some((si, ci, vi)) = state.dragging_vertex {
                         if let Some(surface) = data.surfaces.get(si) {
-                            let mut new_verts = surface.vertices.clone();
-                            if vi < new_verts.len() {
-                                new_verts[vi] = [nx, ny];
-                                actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                    idx: si, vertices: new_verts,
-                                });
+                            let contour_verts = if ci == 0 { Some(&surface.vertices) } else { surface.extra_contours.get(ci - 1) };
+                            if let Some(verts) = contour_verts {
+                                let mut new_verts = verts.clone();
+                                if vi < new_verts.len() {
+                                    new_verts[vi] = [nx, ny];
+                                    actions.surface_actions.push(SurfaceAction::UpdateVertices {
+                                        idx: si, contour: ci, vertices: new_verts,
+                                    });
+                                }
                             }
                         }
                     } else if let Some((_si, lx, ly)) = state.moving_surface {
@@ -1596,12 +1760,9 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                         let dy = ny - ly;
                         // Move ALL selected surfaces by the same delta
                         for &surf_idx in &state.selected_surfaces {
-                            if let Some(surface) = data.surfaces.get(surf_idx) {
-                                let new_verts: Vec<[f32; 2]> = surface.vertices.iter()
-                                    .map(|v| [(v[0] + dx).clamp(0.0, 1.0), (v[1] + dy).clamp(0.0, 1.0)])
-                                    .collect();
-                                actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                    idx: surf_idx, vertices: new_verts,
+                            if data.surfaces.get(surf_idx).is_some() {
+                                actions.surface_actions.push(SurfaceAction::MoveDelta {
+                                    idx: surf_idx, dx, dy,
                                 });
                             }
                         }
@@ -1824,6 +1985,11 @@ fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
             for &idx in &state.selected_surfaces {
                 actions.surface_actions.push(SurfaceAction::FlipVertical { idx });
             }
+        }
+        if state.selected_surfaces.len() >= 2 && ui.input(|i| i.key_pressed(egui::Key::G)) {
+            let indices: Vec<usize> = state.selected_surfaces.iter().copied().collect();
+            actions.surface_actions.push(SurfaceAction::Combine { indices });
+            state.selected_surfaces.clear();
         }
     }
 

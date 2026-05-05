@@ -8,8 +8,7 @@
         {"NAME": "strobe_rate", "LABEL": "Rate (Hz)", "TYPE": "float", "DEFAULT": 4.0, "MIN": 0.5, "MAX": 30.0},
         {"NAME": "strobe_duty", "LABEL": "Duty Cycle", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.05, "MAX": 0.95},
         {"NAME": "strobe_color", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Flash Color"},
-        {"NAME": "mix_mode", "LABEL": "Mode (0=Replace 1=Add 2=Invert)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0},
-        {"NAME": "use_beat", "LABEL": "Use Beat Sync", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0}
+        {"NAME": "mix_mode", "LABEL": "Mode (0=Replace 1=Add 2=Invert)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0}
     ]
 }*/
 
@@ -41,7 +40,6 @@ layout(set = 0, binding = 3) uniform UserParams {
     float strobe_duty;
     vec4 strobe_color;
     float mix_mode;
-    float use_beat;
 };
 
 void main() {
@@ -52,12 +50,7 @@ void main() {
     vec4 src = texture(sampler2D(inputImage, texSampler), uv);
 
     // Determine strobe phase
-    float phase;
-    if (use_beat > 0.5) {
-        phase = fract(audio_beat_phase * strobe_rate);
-    } else {
-        phase = fract(TIME * strobe_rate);
-    }
+    float phase = fract(TIME * strobe_rate);
 
     float flash = step(phase, strobe_duty);
     int mode = int(floor(mix_mode + 0.5));

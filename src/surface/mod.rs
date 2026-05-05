@@ -52,8 +52,12 @@ impl CircleHint {
 pub struct Surface {
     /// Unique name (e.g., "Main Screen", "Left LED", "DJ Booth")
     pub name: String,
-    /// Ordered polygon vertices in normalized canvas coordinates [0..1]
+    /// Ordered polygon vertices in normalized canvas coordinates [0..1] (primary contour)
     pub vertices: Vec<[f32; 2]>,
+    /// Additional contours for combined non-overlapping surfaces.
+    /// Each entry is a separate polygon that is part of this same surface.
+    #[serde(default)]
+    pub extra_contours: Vec<Vec<[f32; 2]>>,
     /// What content this surface displays
     pub source: OutputSource,
     /// How the content maps onto this surface
@@ -118,6 +122,7 @@ impl Surface {
                 [x + w, y + h],
                 [x, y + h],
             ],
+            extra_contours: Vec::new(),
             source,
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
@@ -142,11 +147,11 @@ impl Surface {
         self.circle_hint = None;
     }
 
-    /// Axis-aligned bounding box of the polygon.
+    /// Axis-aligned bounding box of the polygon (including extra contours).
     pub fn bounding_box(&self) -> BoundingBox {
         let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
         let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
-        for v in &self.vertices {
+        for v in self.all_vertices() {
             min_x = min_x.min(v[0]);
             min_y = min_y.min(v[1]);
             max_x = max_x.max(v[0]);
@@ -158,6 +163,11 @@ impl Surface {
             width: max_x - min_x,
             height: max_y - min_y,
         }
+    }
+
+    /// Iterate over all vertices across all contours.
+    pub fn all_vertices(&self) -> impl Iterator<Item = &[f32; 2]> {
+        self.vertices.iter().chain(self.extra_contours.iter().flat_map(|c| c.iter()))
     }
 
     /// Center of the polygon (average of all vertices).
@@ -172,23 +182,32 @@ impl Surface {
         [sum[0] / n, sum[1] / n]
     }
 
-    /// Check if a point is inside this polygon (ray-casting algorithm).
+    /// Check if a point is inside this surface (any contour, ray-casting algorithm).
     pub fn contains(&self, px: f32, py: f32) -> bool {
-        let n = self.vertices.len();
-        if n < 3 {
-            return false;
-        }
+        Self::point_in_polygon(&self.vertices, px, py)
+            || self.extra_contours.iter().any(|c| Self::point_in_polygon(c, px, py))
+    }
+
+    /// Ray-casting point-in-polygon test for a single contour.
+    fn point_in_polygon(verts: &[[f32; 2]], px: f32, py: f32) -> bool {
+        let n = verts.len();
+        if n < 3 { return false; }
         let mut inside = false;
         let mut j = n - 1;
         for i in 0..n {
-            let (xi, yi) = (self.vertices[i][0], self.vertices[i][1]);
-            let (xj, yj) = (self.vertices[j][0], self.vertices[j][1]);
+            let (xi, yi) = (verts[i][0], verts[i][1]);
+            let (xj, yj) = (verts[j][0], verts[j][1]);
             if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
                 inside = !inside;
             }
             j = i;
         }
         inside
+    }
+
+    /// Iterator over all contours (primary + extra).
+    pub fn all_contours(&self) -> impl Iterator<Item = &Vec<[f32; 2]>> {
+        std::iter::once(&self.vertices).chain(self.extra_contours.iter())
     }
 
     /// Return the vertex index closest to a point, or None if not within threshold.
@@ -214,6 +233,36 @@ impl Surface {
             v[0] += dx;
             v[1] += dy;
         }
+        for contour in &mut self.extra_contours {
+            for v in contour.iter_mut() {
+                v[0] += dx;
+                v[1] += dy;
+            }
+        }
+    }
+
+    /// Get a mutable reference to a specific contour's vertices.
+    /// Contour 0 = primary vertices, 1+ = extra_contours[idx-1].
+    pub fn contour_mut(&mut self, contour_idx: usize) -> Option<&mut Vec<[f32; 2]>> {
+        if contour_idx == 0 {
+            Some(&mut self.vertices)
+        } else {
+            self.extra_contours.get_mut(contour_idx - 1)
+        }
+    }
+
+    /// Get a reference to a specific contour's vertices.
+    pub fn contour(&self, contour_idx: usize) -> Option<&Vec<[f32; 2]>> {
+        if contour_idx == 0 {
+            Some(&self.vertices)
+        } else {
+            self.extra_contours.get(contour_idx - 1)
+        }
+    }
+
+    /// Total number of contours (1 primary + extra).
+    pub fn contour_count(&self) -> usize {
+        1 + self.extra_contours.len()
     }
 }
 
@@ -264,6 +313,7 @@ impl SurfaceManager {
         self.surfaces.push(Surface {
             name,
             vertices,
+            extra_contours: Vec::new(),
             source,
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
@@ -278,6 +328,7 @@ impl SurfaceManager {
         self.surfaces.push(Surface {
             name,
             vertices,
+            extra_contours: Vec::new(),
             source,
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
@@ -302,5 +353,107 @@ impl SurfaceManager {
         self.surfaces.iter().enumerate().rev()
             .find(|(_, s)| s.contains(px, py))
             .map(|(i, _)| i)
+    }
+
+    /// Combine multiple surfaces into one using polygon boolean union.
+    /// Overlapping regions merge into a single outline. Disjoint regions
+    /// become extra_contours. Returns the index of the combined surface.
+    pub fn combine_surfaces(&mut self, indices: &[usize]) -> Option<usize> {
+        if indices.len() < 2 { return None; }
+
+        let first_idx = *indices.iter().min().unwrap();
+
+        // Collect all contours as geo polygons
+        let mut geo_polys: Vec<geo::Polygon<f64>> = Vec::new();
+        for &idx in indices {
+            if idx >= self.surfaces.len() { return None; }
+            let surface = &self.surfaces[idx];
+            if let Some(p) = verts_to_geo(&surface.vertices) {
+                geo_polys.push(p);
+            }
+            for ec in &surface.extra_contours {
+                if let Some(p) = verts_to_geo(ec) {
+                    geo_polys.push(p);
+                }
+            }
+        }
+
+        if geo_polys.is_empty() { return None; }
+
+        // Iteratively union all polygons
+        use geo::BooleanOps;
+        let mut result = geo::MultiPolygon::new(vec![geo_polys[0].clone()]);
+        for poly in &geo_polys[1..] {
+            let other = geo::MultiPolygon::new(vec![poly.clone()]);
+            result = result.union(&other);
+        }
+
+        // Convert back to vertex arrays
+        let mut all_contours: Vec<Vec<[f32; 2]>> = result.0.iter()
+            .map(|p| geo_to_verts(p.exterior()))
+            .collect();
+
+        if all_contours.is_empty() { return None; }
+
+        // Build combined surface name and properties from first selected
+        let name = {
+            let names: Vec<&str> = indices.iter()
+                .filter_map(|&i| self.surfaces.get(i).map(|s| s.name.as_str()))
+                .collect();
+            names.join(" + ")
+        };
+        let source = self.surfaces[first_idx].source.clone();
+        let content_mapping = self.surfaces[first_idx].content_mapping;
+        let output_type = self.surfaces[first_idx].output_type;
+
+        // Remove selected surfaces in reverse order to preserve indices
+        let mut sorted_indices: Vec<usize> = indices.to_vec();
+        sorted_indices.sort_unstable();
+        sorted_indices.dedup();
+        for &idx in sorted_indices.iter().rev() {
+            if idx < self.surfaces.len() {
+                self.surfaces.remove(idx);
+            }
+        }
+
+        let primary = all_contours.remove(0);
+        let combined = Surface {
+            name,
+            vertices: primary,
+            extra_contours: all_contours,
+            source,
+            content_mapping,
+            output_type,
+            circle_hint: None,
+        };
+
+        let insert_at = first_idx.min(self.surfaces.len());
+        self.surfaces.insert(insert_at, combined);
+        Some(insert_at)
+    }
+}
+
+// ── Geo conversion helpers ──────────────────────────────────────────
+
+/// Convert `[f32; 2]` vertices to a `geo::Polygon<f64>`.
+fn verts_to_geo(verts: &[[f32; 2]]) -> Option<geo::Polygon<f64>> {
+    if verts.len() < 3 { return None; }
+    let coords: Vec<geo::Coord<f64>> = verts.iter()
+        .map(|v| geo::coord! { x: v[0] as f64, y: v[1] as f64 })
+        .collect();
+    let ring = geo::LineString::new(coords);
+    Some(geo::Polygon::new(ring, vec![]))
+}
+
+/// Convert a `geo::LineString` exterior ring back to `Vec<[f32; 2]>`.
+fn geo_to_verts(ring: &geo::LineString<f64>) -> Vec<[f32; 2]> {
+    // geo rings are closed (last == first), drop the duplicate
+    let pts: Vec<[f32; 2]> = ring.coords()
+        .map(|c| [c.x as f32, c.y as f32])
+        .collect();
+    if pts.len() > 1 && pts.first() == pts.last() {
+        pts[..pts.len() - 1].to_vec()
+    } else {
+        pts
     }
 }

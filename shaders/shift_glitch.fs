@@ -9,8 +9,7 @@
         {"NAME": "block_size", "LABEL": "Block Size", "TYPE": "float", "DEFAULT": 0.05, "MIN": 0.01, "MAX": 0.3},
         {"NAME": "shift_intensity", "LABEL": "Shift Intensity", "TYPE": "float", "DEFAULT": 0.05, "MIN": 0.0, "MAX": 0.2},
         {"NAME": "color_shift", "LABEL": "Color Shift", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0},
-        {"NAME": "glitch_rate", "LABEL": "Rate", "TYPE": "float", "DEFAULT": 5.0, "MIN": 0.5, "MAX": 30.0},
-        {"NAME": "audio_reactive", "LABEL": "Audio Reactive", "TYPE": "bool", "DEFAULT": true}
+        {"NAME": "glitch_rate", "LABEL": "Rate", "TYPE": "float", "DEFAULT": 5.0, "MIN": 0.5, "MAX": 30.0}
     ]
 }*/
 
@@ -43,7 +42,6 @@ layout(set = 0, binding = 3) uniform UserParams {
     float shift_intensity;
     float color_shift;
     float glitch_rate;
-    float audio_reactive;
 };
 
 // Pseudo-random
@@ -56,9 +54,6 @@ void main() {
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     float amt = glitch_amount;
-    if (audio_reactive > 0.5) {
-        amt *= (1.0 + audio_bass * 2.0);
-    }
 
     // Time-quantized seed for glitch blocks
     float timeSeed = floor(TIME * glitch_rate);

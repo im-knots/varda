@@ -6,8 +6,7 @@
     "INPUTS": [
         {"NAME": "inputImage", "TYPE": "image"},
         {"NAME": "radius", "LABEL": "Blur Radius", "TYPE": "float", "DEFAULT": 5.0, "MIN": 0.0, "MAX": 20.0},
-        {"NAME": "quality", "LABEL": "Quality", "TYPE": "float", "DEFAULT": 3.0, "MIN": 1.0, "MAX": 5.0},
-        {"NAME": "audio_reactive", "LABEL": "Audio Reactive", "TYPE": "bool", "DEFAULT": false}
+        {"NAME": "quality", "LABEL": "Quality", "TYPE": "float", "DEFAULT": 3.0, "MIN": 1.0, "MAX": 5.0}
     ]
 }*/
 
@@ -37,7 +36,6 @@ layout(set = 0, binding = 2) uniform texture2D inputImage;
 layout(set = 0, binding = 3) uniform UserParams {
     float radius;
     float quality;
-    float audio_reactive;
 };
 
 #define TAU 6.28318530718
@@ -48,9 +46,6 @@ void main() {
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     float r = radius;
-    if (audio_reactive > 0.5) {
-        r *= (1.0 + audio_bass * 2.0);
-    }
 
     vec2 texelSize = 1.0 / RENDERSIZE;
     vec4 color = texture(sampler2D(inputImage, texSampler), uv);

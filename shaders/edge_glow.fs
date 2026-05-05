@@ -74,8 +74,13 @@ float luminance(vec3 c) {
 }
 
 void main() {
+    // Ensure all uniforms are referenced so the compiler doesn't strip them
+    float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
+
     vec2 texel = 1.0 / RENDERSIZE;
-    
+
     // Sobel edge detection
     float tl = luminance(texture(sampler2D(inputImage, texSampler), uv + vec2(-texel.x, texel.y)).rgb);
     float t  = luminance(texture(sampler2D(inputImage, texSampler), uv + vec2(0.0, texel.y)).rgb);
@@ -85,14 +90,14 @@ void main() {
     float bl = luminance(texture(sampler2D(inputImage, texSampler), uv + vec2(-texel.x, -texel.y)).rgb);
     float b  = luminance(texture(sampler2D(inputImage, texSampler), uv + vec2(0.0, -texel.y)).rgb);
     float br = luminance(texture(sampler2D(inputImage, texSampler), uv + vec2(texel.x, -texel.y)).rgb);
-    
+
     float gx = -tl - 2.0*l - bl + tr + 2.0*r + br;
     float gy = -tl - 2.0*t - tr + bl + 2.0*b + br;
     float edge = sqrt(gx*gx + gy*gy) * edge_strength;
-    
+
     vec4 original = texture(sampler2D(inputImage, texSampler), uv);
-    vec3 glow = glow_color.rgb * edge * glow_amount * (1.0 + audio_bass);
-    
+    vec3 glow = glow_color.rgb * edge * glow_amount;
+
     if (show_original > 0.5) {
         fragColor = vec4(original.rgb + glow, 1.0);
     } else {

@@ -9,8 +9,7 @@
         {"NAME": "frequency", "LABEL": "Frequency", "TYPE": "float", "DEFAULT": 10.0, "MIN": 1.0, "MAX": 50.0},
         {"NAME": "wave_speed", "LABEL": "Speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 5.0},
         {"NAME": "direction", "LABEL": "Direction (0=H 1=V 2=Both)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0},
-        {"NAME": "wave_type", "LABEL": "Type (0=Sine 1=Triangle 2=Square)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0},
-        {"NAME": "audio_reactive", "LABEL": "Audio Reactive", "TYPE": "bool", "DEFAULT": true}
+        {"NAME": "wave_type", "LABEL": "Type (0=Sine 1=Triangle 2=Square)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0}
     ]
 }*/
 
@@ -43,7 +42,6 @@ layout(set = 0, binding = 3) uniform UserParams {
     float wave_speed;
     float direction;
     float wave_type;
-    float audio_reactive;
 };
 
 #define PI 3.14159265359
@@ -65,9 +63,6 @@ void main() {
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     float amp = amplitude;
-    if (audio_reactive > 0.5) {
-        amp *= (1.0 + audio_bass * 2.0);
-    }
 
     float t = TIME * wave_speed;
     float dir = floor(direction + 0.5);

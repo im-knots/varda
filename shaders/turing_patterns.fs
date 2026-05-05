@@ -4,10 +4,12 @@
     "CATEGORIES": ["Generator", "Generative"],
     "INPUTS": [
         {
-            "NAME": "reset",
-            "LABEL": "Reset",
-            "TYPE": "bool",
-            "DEFAULT": false
+            "NAME": "seed",
+            "LABEL": "Seed (change to reseed)",
+            "TYPE": "float",
+            "DEFAULT": 0.0,
+            "MIN": 0.0,
+            "MAX": 1.0
         },
         {
             "NAME": "feed_rate",
@@ -26,6 +28,14 @@
             "MAX": 0.07
         },
         {
+            "NAME": "sim_speed",
+            "LABEL": "Speed",
+            "TYPE": "float",
+            "DEFAULT": 1.0,
+            "MIN": 0.1,
+            "MAX": 3.0
+        },
+        {
             "NAME": "perturbation",
             "LABEL": "Perturbation",
             "TYPE": "float",
@@ -39,7 +49,7 @@
             "TYPE": "float",
             "DEFAULT": 0.05,
             "MIN": 0.01,
-            "MAX": 0.2
+            "MAX": 0.3
         },
         {
             "NAME": "bg_color",
@@ -88,9 +98,10 @@ layout(set = 0, binding = 1) uniform sampler texSampler;
 layout(set = 0, binding = 2) uniform texture2D rdBuffer;
 
 layout(set = 0, binding = 3) uniform UserParams {
-    float reset;
+    float seed;
     float feed_rate;
     float kill_rate;
+    float sim_speed;
     float perturbation;
     float seed_size;
     vec4 bg_color;
@@ -116,113 +127,104 @@ void main() {
     if (PASSINDEX == 0) {
         // === SIMULATION PASS ===
 
-        // Sample previous state
         vec4 prev = texture(sampler2D(rdBuffer, texSampler), uv);
 
-        // Check if we need to initialize:
-        // - Buffer uninitialized (alpha = 0)
-        // - First few frames
-        // - Reset button pressed
-        bool needsInit = (prev.a < 0.5) || (FRAMEINDEX < 2u) || (reset > 0.5);
+        // Detect reseed: store seed value in .b channel.
+        // When seed slider changes, prev.b != seed → reinitialize.
+        // Also init on first frames or uninitialized buffer (alpha=0).
+        float prevSeed = prev.b;
+        bool needsInit = (prev.a < 0.5) || (FRAMEINDEX < 2u)
+                      || (abs(prevSeed - seed) > 0.001);
 
         if (needsInit) {
-            // Initialize: U=1 everywhere, V=0 everywhere
             float u = 1.0;
             float v = 0.0;
 
-            // Seed: small circle in center with V=1
+            // Use seed value for unique random patterns
+            float seedHash = seed * 1000.0;
+
+            // Central seed circle
             float dist = length(uv - 0.5);
             if (dist < seed_size) {
                 v = 1.0;
             }
 
-            // Add random noise spots to break symmetry
-            float n = hash12(uv * 237.0 + vec2(TIME * 0.1, 0.0));
-            if (dist < seed_size * 2.5 && dist > seed_size && n > 0.85) {
+            // Random spots around seed to break symmetry
+            float n = hash12(uv * 237.0 + vec2(seedHash, seedHash * 0.7));
+            if (dist < seed_size * 3.0 && n > 0.8) {
                 v = 1.0;
             }
 
-            fragColor = vec4(u, v, 0.0, 1.0);
+            // Scattered seeds for variety
+            float scatter = hash12(uv * 97.0 + vec2(seedHash * 1.3, seedHash * 0.4));
+            if (scatter > 0.995) {
+                v = 1.0;
+            }
+
+            // Store seed value in .b for change detection
+            fragColor = vec4(u, v, seed, 1.0);
             return;
         }
 
-        // Sample all 8 neighbors for 9-point Laplacian stencil
+        // --- Stable Gray-Scott simulation ---
         vec4 c  = prev;
-        vec4 n  = texture(sampler2D(rdBuffer, texSampler), uv + vec2(0.0, texel.y));
-        vec4 s  = texture(sampler2D(rdBuffer, texSampler), uv + vec2(0.0, -texel.y));
-        vec4 e  = texture(sampler2D(rdBuffer, texSampler), uv + vec2(texel.x, 0.0));
-        vec4 w  = texture(sampler2D(rdBuffer, texSampler), uv + vec2(-texel.x, 0.0));
-        vec4 ne = texture(sampler2D(rdBuffer, texSampler), uv + vec2(texel.x, texel.y));
-        vec4 nw = texture(sampler2D(rdBuffer, texSampler), uv + vec2(-texel.x, texel.y));
-        vec4 se = texture(sampler2D(rdBuffer, texSampler), uv + vec2(texel.x, -texel.y));
-        vec4 sw = texture(sampler2D(rdBuffer, texSampler), uv + vec2(-texel.x, -texel.y));
+        vec4 nb_n  = texture(sampler2D(rdBuffer, texSampler), uv + vec2(0.0, texel.y));
+        vec4 nb_s  = texture(sampler2D(rdBuffer, texSampler), uv + vec2(0.0, -texel.y));
+        vec4 nb_e  = texture(sampler2D(rdBuffer, texSampler), uv + vec2(texel.x, 0.0));
+        vec4 nb_w  = texture(sampler2D(rdBuffer, texSampler), uv + vec2(-texel.x, 0.0));
+        vec4 nb_ne = texture(sampler2D(rdBuffer, texSampler), uv + vec2(texel.x, texel.y));
+        vec4 nb_nw = texture(sampler2D(rdBuffer, texSampler), uv + vec2(-texel.x, texel.y));
+        vec4 nb_se = texture(sampler2D(rdBuffer, texSampler), uv + vec2(texel.x, -texel.y));
+        vec4 nb_sw = texture(sampler2D(rdBuffer, texSampler), uv + vec2(-texel.x, -texel.y));
 
-        float u = c.r;
-        float v = c.g;
+        // Clamp inputs to prevent NaN propagation from blown-up state
+        float u = clamp(c.r, 0.0, 1.0);
+        float v = clamp(c.g, 0.0, 1.0);
 
-        // Karl Sims 9-point weighted Laplacian:
-        // adjacent = 0.2, diagonal = 0.05, center = -1
-        float lapU = 0.2 * (n.r + s.r + e.r + w.r)
-                   + 0.05 * (ne.r + nw.r + se.r + sw.r)
+        // Karl Sims 9-point weighted Laplacian
+        float lapU = 0.2 * (nb_n.r + nb_s.r + nb_e.r + nb_w.r)
+                   + 0.05 * (nb_ne.r + nb_nw.r + nb_se.r + nb_sw.r)
                    - 1.0 * u;
-        float lapV = 0.2 * (n.g + s.g + e.g + w.g)
-                   + 0.05 * (ne.g + nw.g + se.g + sw.g)
+        float lapV = 0.2 * (nb_n.g + nb_s.g + nb_e.g + nb_w.g)
+                   + 0.05 * (nb_ne.g + nb_nw.g + nb_se.g + nb_sw.g)
                    - 1.0 * v;
 
-        // Gray-Scott parameters from sliders
         float F = feed_rate;
         float k = kill_rate;
-
-        // Standard diffusion rates
         float Da = 1.0;
         float Db = 0.5;
-        float dt = 1.0;
 
-        // Reaction term: U + 2V -> 3V
-        float uvv = u * v * v;
+        // Substep integration: split sim_speed into small stable steps.
+        // Each substep uses dt <= 0.5 to stay within CFL stability limit.
+        int steps = int(clamp(sim_speed * 2.0, 1.0, 6.0));
+        float dt = sim_speed / float(steps);
 
-        // Gray-Scott update equations
-        float newU = u + dt * (Da * lapU - uvv + F * (1.0 - u));
-        float newV = v + dt * (Db * lapV + uvv - (F + k) * v);
+        for (int i = 0; i < steps; i++) {
+            float uvv = u * v * v;
+            u += dt * (Da * lapU - uvv + F * (1.0 - u));
+            v += dt * (Db * lapV + uvv - (F + k) * v);
+            u = clamp(u, 0.0, 1.0);
+            v = clamp(v, 0.0, 1.0);
+        }
 
-        // Add perturbation to keep the system moving
+        // Perturbation: sparse V injection to seed new growth
         if (perturbation > 0.001) {
-            // Use 3D hash with frame index for true randomness per pixel per frame
             float rand1 = hash13(vec3(uv * 500.0, float(FRAMEINDEX) * 0.1));
-            float rand2 = hash13(vec3(uv * 500.0 + vec2(100.0, 50.0), float(FRAMEINDEX) * 0.1 + 10.0));
-
-            // Scale perturbation strength
             float perturbStrength = perturbation * 0.02;
-
-            // Randomly inject V chemical at sparse random locations
-            // Higher perturbation = more frequent injections
             float threshold = 0.998 - perturbation * 0.02;
             if (rand1 > threshold) {
-                newV += perturbStrength * 5.0;
-            }
-
-            // Add subtle random noise to destabilize edges
-            if (v > 0.05 && v < 0.95) {
-                newU += (rand1 - 0.5) * perturbStrength * 0.5;
-                newV += (rand2 - 0.5) * perturbStrength;
+                v = clamp(v + perturbStrength * 5.0, 0.0, 1.0);
             }
         }
 
-        // Store in buffer (alpha=1 marks as initialized)
-        fragColor = vec4(clamp(newU, 0.0, 1.0), clamp(newV, 0.0, 1.0), 0.0, 1.0);
+        // Preserve seed in .b for change detection
+        fragColor = vec4(u, v, seed, 1.0);
 
     } else {
         // === RENDER PASS ===
         vec4 state = texture(sampler2D(rdBuffer, texSampler), uv);
+        float pattern = smoothstep(0.1, 0.9, state.g);
 
-        // V is the pattern value (0 = background, 1 = growth)
-        float pattern = state.g;
-
-        // Apply slight contrast enhancement
-        pattern = smoothstep(0.1, 0.9, pattern);
-
-        // Mix between background and growth colors based on pattern
-        // Support transparent colors by mixing alpha too
         vec3 color = mix(bg_color.rgb, growth_color.rgb, pattern);
         float alpha = mix(bg_color.a, growth_color.a, pattern);
 

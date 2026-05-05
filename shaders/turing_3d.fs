@@ -124,7 +124,12 @@ float sdSphere(vec3 p, float r) {
 
 void main() {
     vec2 uv = (gl_FragCoord.xy - 0.5 * RENDERSIZE) / min(RENDERSIZE.x, RENDERSIZE.y);
-    
+
+    // Uniform guard — keep all ISF uniforms alive for SPIR-V compiler
+    float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
+
     float time = TIME * evolution;
     
     // Camera setup
@@ -212,8 +217,7 @@ void main() {
         color += glowColor * alpha * glow_intensity * 0.15;
     }
 
-    // Audio reactivity - subtle pulse with bass
-    color *= 1.0 + audio_bass * 0.2;
+
 
     fragColor = vec4(color * outAlpha, outAlpha);
 }

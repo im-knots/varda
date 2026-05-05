@@ -1,15 +1,17 @@
 //! Workspace persistence — save/load `.varda/` directory.
 //!
 //! The workspace is the current working directory. All state lives in `.varda/`:
-//! - `scene.json` — channels, decks, effects, surfaces, outputs, warp, modulation
+//! - `scene.json` — channels, decks, effects, modulation (show-specific, shareable)
+//! - `stage.json` — surfaces, outputs, warp, editor prefs (venue-specific)
 //! - `midi.json`  — MIDI controller mappings (device-name-keyed)
-//! - `stage.json` — editor preferences (grid, snap, panel state)
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Editor preferences persisted in `.varda/stage.json`.
+/// Stage configuration persisted in `.varda/stage.json`.
+/// Contains venue-specific data: surfaces, outputs, and editor preferences.
+/// Kept separate from scene.json so users can share deck layouts without stage geometry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagePrefs {
     #[serde(default = "default_grid_size")]
@@ -20,6 +22,12 @@ pub struct StagePrefs {
     pub library_panel_open: bool,
     #[serde(default)]
     pub stage_editor_open: bool,
+    /// 2D stage surface layout
+    #[serde(default)]
+    pub surfaces: crate::surface::SurfaceManager,
+    /// Output window configurations (surface assignments, warp calibration)
+    #[serde(default)]
+    pub outputs: Vec<crate::scene::OutputConfig>,
 }
 
 fn default_grid_size() -> f32 { 0.05 }
@@ -32,6 +40,8 @@ impl Default for StagePrefs {
             snap: true,
             library_panel_open: false,
             stage_editor_open: false,
+            surfaces: crate::surface::SurfaceManager::default(),
+            outputs: Vec::new(),
         }
     }
 }
@@ -135,11 +145,9 @@ use crate::mixer::Mixer;
 use crate::renderer::context::{OutputTarget, OutputWindow};
 use crate::scene::*;
 
-/// Build a SceneConfig snapshot from live app state.
+/// Build a SceneConfig snapshot from live app state (show-specific: channels, effects, modulation).
 pub fn snapshot_scene(
     mixer: &Mixer,
-    surface_manager: &crate::surface::SurfaceManager,
-    output_windows: &[OutputWindow],
 ) -> SceneConfig {
     let channels = mixer.channels.iter().map(|ch| {
         let decks = ch.decks.iter().map(|slot| {
@@ -214,6 +222,25 @@ pub fn snapshot_scene(
 
     let active_transition = mixer.active_transition.as_ref().map(|t| t.name.clone());
 
+    SceneConfig {
+        version: 2,
+        channels,
+        crossfader: mixer.crossfader,
+        active_transition,
+        master_effects,
+        modulation: mixer.modulation.clone(),
+    }
+}
+
+/// Build a StagePrefs snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
+pub fn snapshot_stage(
+    surface_manager: &crate::surface::SurfaceManager,
+    output_windows: &[OutputWindow],
+    grid_size: f32,
+    snap: bool,
+    library_panel_open: bool,
+    stage_editor_open: bool,
+) -> StagePrefs {
     let outputs = output_windows.iter().map(|o| {
         let target_display = match &o.target {
             OutputTarget::Windowed => None,
@@ -232,15 +259,13 @@ pub fn snapshot_scene(
         }
     }).collect();
 
-    SceneConfig {
-        version: 2,
-        channels,
-        crossfader: mixer.crossfader,
-        active_transition,
-        master_effects,
+    StagePrefs {
+        grid_size,
+        snap,
+        library_panel_open,
+        stage_editor_open,
         surfaces: surface_manager.clone(),
         outputs,
-        modulation: mixer.modulation.clone(),
     }
 }
 
@@ -251,12 +276,10 @@ use crate::isf::ISFShader;
 use crate::renderer::RenderContext;
 use crate::ui::{RENDER_WIDTH, RENDER_HEIGHT};
 
-/// Restore result — contains reconstructed mixer and surface manager.
-/// Output windows need to be created by the caller (requires ActiveEventLoop).
+/// Restore result — contains reconstructed mixer.
+/// Surfaces and outputs are loaded separately from stage.json.
 pub struct RestoreResult {
     pub mixer: Mixer,
-    pub surface_manager: crate::surface::SurfaceManager,
-    pub output_configs: Vec<OutputConfig>,
     pub warnings: Vec<String>,
 }
 
@@ -303,7 +326,7 @@ pub fn restore_scene(
 
         // Restore channel effects
         for eff_config in &ch_config.effects {
-            match restore_effect(eff_config, context) {
+            match restore_effect(eff_config, context, context.surface_config.format) {
                 Ok(eff) => channel.add_effect(eff),
                 Err(e) => {
                     let msg = format!("Failed to restore channel effect '{}': {}", eff_config.path, e);
@@ -318,7 +341,7 @@ pub fn restore_scene(
 
     // Restore master effects
     for eff_config in &config.master_effects {
-        match restore_effect(eff_config, context) {
+        match restore_effect(eff_config, context, context.surface_config.format) {
             Ok(eff) => mixer.master_effects.push(eff),
             Err(e) => {
                 let msg = format!("Failed to restore master effect '{}': {}", eff_config.path, e);
@@ -352,8 +375,6 @@ pub fn restore_scene(
 
     Ok(RestoreResult {
         mixer,
-        surface_manager: config.surfaces.clone(),
-        output_configs: config.outputs.clone(),
         warnings,
     })
 }
@@ -388,7 +409,7 @@ fn restore_deck(
 
     // Restore effects
     for eff_config in &config.effects {
-        match restore_effect(eff_config, context) {
+        match restore_effect(eff_config, context, wgpu::TextureFormat::Rgba8Unorm) {
             Ok(eff) => deck.effects.push(eff),
             Err(e) => log::warn!("Failed to restore deck effect '{}': {}", eff_config.path, e),
         }
@@ -398,10 +419,12 @@ fn restore_deck(
 }
 
 /// Restore a single effect from config.
-fn restore_effect(config: &EffectConfig, context: &RenderContext) -> Result<Effect> {
+/// `target_format` should be `Rgba8Unorm` for deck effects,
+/// or `context.surface_config.format` for channel/master effects.
+fn restore_effect(config: &EffectConfig, context: &RenderContext, target_format: wgpu::TextureFormat) -> Result<Effect> {
     let shader = ISFShader::from_file(&config.path)
         .with_context(|| format!("Failed to load effect shader: {}", config.path))?;
-    let mut effect = Effect::new(context, shader)?;
+    let mut effect = Effect::new_with_format(context, shader, target_format)?;
     effect.enabled = config.enabled;
     // Restore parameter values
     for (name, value) in &config.params {

@@ -174,13 +174,9 @@ impl App {
             return;
         }
 
-        // Save scene
+        // Save scene (show-specific: channels, decks, effects, modulation)
         if let Some(mixer) = &self.mixer {
-            let scene = varda::persistence::snapshot_scene(
-                mixer,
-                &self.surface_manager,
-                &self.output_windows,
-            );
+            let scene = varda::persistence::snapshot_scene(mixer);
             match scene.save(self.workspace.scene_path()) {
                 Ok(()) => log::info!("Saved scene to {}", self.workspace.scene_path().display()),
                 Err(e) => log::error!("Failed to save scene: {}", e),
@@ -196,16 +192,18 @@ impl App {
             }
         }
 
-        // Save stage prefs
-        let stage = varda::persistence::StagePrefs {
-            grid_size: self.stage_editor_grid_size,
-            snap: self.stage_editor_snap,
-            library_panel_open: self.library_panel_open,
-            stage_editor_open: self.stage_editor_open,
-        };
+        // Save stage (venue-specific: surfaces, outputs, editor prefs)
+        let stage = varda::persistence::snapshot_stage(
+            &self.surface_manager,
+            &self.output_windows,
+            self.stage_editor_grid_size,
+            self.stage_editor_snap,
+            self.library_panel_open,
+            self.stage_editor_open,
+        );
         match stage.save(self.workspace.stage_path()) {
-            Ok(()) => log::info!("Saved stage prefs to {}", self.workspace.stage_path().display()),
-            Err(e) => log::error!("Failed to save stage prefs: {}", e),
+            Ok(()) => log::info!("Saved stage to {}", self.workspace.stage_path().display()),
+            Err(e) => log::error!("Failed to save stage: {}", e),
         }
     }
 
@@ -216,7 +214,7 @@ impl App {
             return;
         }
 
-        // Load stage prefs first (doesn't need GPU)
+        // Load stage first (venue-specific: surfaces, outputs, editor prefs)
         if self.workspace.has_stage() {
             match varda::persistence::StagePrefs::load(self.workspace.stage_path()) {
                 Ok(prefs) => {
@@ -224,32 +222,32 @@ impl App {
                     self.stage_editor_snap = prefs.snap;
                     self.library_panel_open = prefs.library_panel_open;
                     self.stage_editor_open = prefs.stage_editor_open;
-                    log::info!("Loaded stage prefs");
+                    self.surface_manager = prefs.surfaces;
+                    // Output configs are stored but windows created lazily
+                    // (need ActiveEventLoop, handled in create_pending_outputs)
+                    for _output_config in &prefs.outputs {
+                        self.pending_output_creates.push(());
+                    }
+                    log::info!("Loaded stage with {} surfaces, {} outputs",
+                        self.surface_manager.surfaces.len(),
+                        prefs.outputs.len());
                 }
-                Err(e) => log::warn!("Failed to load stage prefs: {}", e),
+                Err(e) => log::warn!("Failed to load stage: {}", e),
             }
         }
 
-        // Load scene (channels, decks, effects, surfaces, modulation)
+        // Load scene (show-specific: channels, decks, effects, modulation)
         if self.workspace.has_scene() {
             match varda::scene::SceneConfig::load(self.workspace.scene_path()) {
                 Ok(scene_config) => {
                     match varda::persistence::restore_scene(&scene_config, context, &self.registry) {
                         Ok(result) => {
                             self.mixer = Some(result.mixer);
-                            self.surface_manager = result.surface_manager;
-                            // Output configs are stored but windows created lazily
-                            // (need ActiveEventLoop, handled in create_pending_outputs)
-                            for _output_config in &result.output_configs {
-                                self.pending_output_creates.push(());
-                            }
                             for warn in &result.warnings {
                                 self.notifications.warn(warn.clone());
                             }
-                            log::info!("Loaded scene with {} channels, {} surfaces, {} outputs",
-                                scene_config.channels.len(),
-                                scene_config.surfaces.surfaces.len(),
-                                scene_config.outputs.len());
+                            log::info!("Loaded scene with {} channels",
+                                scene_config.channels.len());
                         }
                         Err(e) => {
                             log::error!("Failed to restore scene: {}", e);
@@ -652,6 +650,7 @@ impl App {
             surfaces: self.surface_manager.surfaces.iter().map(|s| SurfaceUI {
                 name: s.name.clone(),
                 vertices: s.vertices.clone(),
+                extra_contours: s.extra_contours.clone(),
                 source: s.source.clone(),
                 content_mapping: s.content_mapping,
                 output_type: s.output_type,
@@ -1158,17 +1157,35 @@ impl App {
                         log::info!("Removed surface '{}'", name);
                     }
                 }
-                ui::SurfaceAction::UpdateVertices { idx, vertices } => {
+                ui::SurfaceAction::UpdateVertices { idx, contour, vertices } => {
                     if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
-                        // If this is a circle, update the hint center to match the moved vertices
-                        if let Some(ref mut hint) = surface.circle_hint {
-                            let n = vertices.len().max(1) as f32;
-                            let sum = vertices.iter().fold([0.0f32, 0.0], |acc, v| {
-                                [acc[0] + v[0], acc[1] + v[1]]
-                            });
-                            hint.center = [sum[0] / n, sum[1] / n];
+                        if *contour == 0 {
+                            // If this is a circle, update the hint center to match the moved vertices
+                            if let Some(ref mut hint) = surface.circle_hint {
+                                let n = vertices.len().max(1) as f32;
+                                let sum = vertices.iter().fold([0.0f32, 0.0], |acc, v| {
+                                    [acc[0] + v[0], acc[1] + v[1]]
+                                });
+                                hint.center = [sum[0] / n, sum[1] / n];
+                            }
+                            surface.vertices = vertices.clone();
+                        } else if let Some(c) = surface.extra_contours.get_mut(*contour - 1) {
+                            *c = vertices.clone();
                         }
-                        surface.vertices = vertices.clone();
+                    }
+                }
+                ui::SurfaceAction::MoveDelta { idx, dx, dy } => {
+                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                        surface.translate(*dx, *dy);
+                        // Recalculate circle hint center from vertices
+                        let n = surface.vertices.len().max(1) as f32;
+                        let sum = surface.vertices.iter().fold([0.0f32, 0.0], |acc, v| {
+                            [acc[0] + v[0], acc[1] + v[1]]
+                        });
+                        let new_center = [sum[0] / n, sum[1] / n];
+                        if let Some(ref mut hint) = surface.circle_hint {
+                            hint.center = new_center;
+                        }
                     }
                 }
                 ui::SurfaceAction::SetSource { idx, source } => {
@@ -1199,13 +1216,17 @@ impl App {
                     if let Some(surface) = self.surface_manager.surfaces.get(*idx).cloned() {
                         let mut dup = surface;
                         dup.name = format!("{} (copy)", dup.name);
-                        // Offset by one grid step so the duplicate snaps to grid
                         let offset = self.stage_editor_grid_size;
                         for v in &mut dup.vertices {
                             v[0] = (v[0] + offset).min(1.0);
                             v[1] = (v[1] + offset).min(1.0);
                         }
-                        // Offset circle hint center too
+                        for contour in &mut dup.extra_contours {
+                            for v in contour.iter_mut() {
+                                v[0] = (v[0] + offset).min(1.0);
+                                v[1] = (v[1] + offset).min(1.0);
+                            }
+                        }
                         if let Some(ref mut hint) = dup.circle_hint {
                             hint.center[0] = (hint.center[0] + offset).min(1.0);
                             hint.center[1] = (hint.center[1] + offset).min(1.0);
@@ -1222,6 +1243,11 @@ impl App {
                         for v in &mut surface.vertices {
                             v[0] = cx + (cx - v[0]);
                         }
+                        for contour in &mut surface.extra_contours {
+                            for v in contour.iter_mut() {
+                                v[0] = cx + (cx - v[0]);
+                            }
+                        }
                         if let Some(ref mut hint) = surface.circle_hint {
                             hint.center[0] = cx + (cx - hint.center[0]);
                         }
@@ -1234,6 +1260,11 @@ impl App {
                         let cy = bb.y + bb.height / 2.0;
                         for v in &mut surface.vertices {
                             v[1] = cy + (cy - v[1]);
+                        }
+                        for contour in &mut surface.extra_contours {
+                            for v in contour.iter_mut() {
+                                v[1] = cy + (cy - v[1]);
+                            }
                         }
                         if let Some(ref mut hint) = surface.circle_hint {
                             hint.center[1] = cy + (cy - hint.center[1]);
@@ -1277,6 +1308,14 @@ impl App {
                     if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
                         surface.convert_to_polygon();
                         log::info!("Converted surface '{}' to polygon", surface.name);
+                    }
+                }
+                ui::SurfaceAction::Combine { indices } => {
+                    if let Some(new_idx) = self.surface_manager.combine_surfaces(indices) {
+                        let name = self.surface_manager.surfaces[new_idx].name.clone();
+                        let contour_count = 1 + self.surface_manager.surfaces[new_idx].extra_contours.len();
+                        log::info!("Combined {} surfaces into '{}' ({} contours)", indices.len(), name, contour_count);
+                        self.notifications.info(format!("🔗 Combined {} surfaces → '{}'", indices.len(), name));
                     }
                 }
             }

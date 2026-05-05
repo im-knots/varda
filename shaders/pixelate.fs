@@ -15,12 +15,6 @@
             "DEFAULT": 8.0,
             "MIN": 1.0,
             "MAX": 64.0
-        },
-        {
-            "NAME": "audio_reactive",
-            "LABEL": "Audio Reactive",
-            "TYPE": "bool",
-            "DEFAULT": false
         }
     ]
 }*/
@@ -50,14 +44,10 @@ layout(set = 0, binding = 2) uniform texture2D inputImage;
 
 layout(set = 0, binding = 3) uniform UserParams {
     float pixel_size;
-    float audio_reactive;
 };
 
 void main() {
     float size = pixel_size;
-    if (audio_reactive > 0.5) {
-        size *= (1.0 + audio_bass * 2.0);
-    }
     
     vec2 pixelCount = RENDERSIZE / size;
     vec2 pixelUV = floor(uv * pixelCount) / pixelCount;
