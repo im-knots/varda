@@ -204,6 +204,13 @@ impl Channel {
         // Check if any deck is solo'd
         let any_solo = self.decks.iter().any(|slot| slot.solo);
 
+        // Update video frames for all video decks before rendering
+        for slot in self.decks.iter_mut() {
+            if let Err(e) = slot.deck.update_video_frame(context) {
+                log::warn!("Video frame update failed: {}", e);
+            }
+        }
+
         // Render each deck to its texture (skip muted, non-solo'd, and zero-opacity decks)
         // Collect command buffers for batch submission to reduce CPU-GPU sync overhead
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();

@@ -61,6 +61,56 @@ pub fn apply_scaling_mode_updates(mixer: &mut Mixer, actions: &UIActions) {
     }
 }
 
+/// Apply video playback actions (play/pause, seek, speed, loop mode)
+pub fn apply_video_actions(mixer: &mut Mixer, actions: &UIActions) {
+    use super::VideoAction;
+    for (ch_idx, deck_idx, action) in &actions.video_actions {
+        if let Some(ch) = mixer.channel_mut(*ch_idx) {
+            if *deck_idx < ch.decks.len() {
+                let deck = &mut ch.decks[*deck_idx].deck;
+                match action {
+                    VideoAction::TogglePlay => {
+                        if let Some(ps) = deck.playback_state_mut() {
+                            ps.playing = !ps.playing;
+                        }
+                    }
+                    VideoAction::Seek(pos) => {
+                        if let Err(e) = deck.video_seek(*pos) {
+                            log::warn!("Video seek failed: {}", e);
+                        }
+                    }
+                    VideoAction::SetSpeed(speed) => {
+                        if let Some(ps) = deck.playback_state_mut() {
+                            ps.speed = *speed;
+                        }
+                    }
+                    VideoAction::SetLoopMode(mode) => {
+                        if let Some(ps) = deck.playback_state_mut() {
+                            ps.loop_mode = *mode;
+                        }
+                    }
+                    VideoAction::SetInPoint(t) => {
+                        if let Some(ps) = deck.playback_state_mut() {
+                            ps.in_point = *t;
+                        }
+                    }
+                    VideoAction::SetOutPoint(t) => {
+                        if let Some(ps) = deck.playback_state_mut() {
+                            ps.out_point = *t;
+                        }
+                    }
+                    VideoAction::ClearInOutPoints => {
+                        if let Some(ps) = deck.playback_state_mut() {
+                            ps.in_point = 0.0;
+                            ps.out_point = 0.0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Apply parameter value updates (generator, effect, master effect params)
 pub fn apply_param_updates(mixer: &mut Mixer, actions: &UIActions) {
     for update in &actions.param_updates {

@@ -1235,6 +1235,33 @@ impl Deck {
         }
     }
 
+    /// Get a reference to the video playback state, if this is a video deck.
+    pub fn playback_state(&self) -> Option<&crate::video::PlaybackState> {
+        match &self.source {
+            DeckSource::Video { player, .. } => Some(&player.playback),
+            DeckSource::HapVideo { player, .. } => Some(&player.playback),
+            _ => None,
+        }
+    }
+
+    /// Get a mutable reference to the video playback state, if this is a video deck.
+    pub fn playback_state_mut(&mut self) -> Option<&mut crate::video::PlaybackState> {
+        match &mut self.source {
+            DeckSource::Video { player, .. } => Some(&mut player.playback),
+            DeckSource::HapVideo { player, .. } => Some(&mut player.playback),
+            _ => None,
+        }
+    }
+
+    /// Seek the video to a specific position in seconds (resets cache for ping-pong).
+    pub fn video_seek(&mut self, time_secs: f64) -> anyhow::Result<()> {
+        match &mut self.source {
+            DeckSource::Video { player, .. } => player.seek_and_reset(time_secs),
+            DeckSource::HapVideo { player, .. } => player.seek(time_secs),
+            _ => Ok(()),
+        }
+    }
+
     /// Get the solid color value (if source is a solid color)
     pub fn solid_color(&self) -> Option<[f32; 4]> {
         match &self.source {

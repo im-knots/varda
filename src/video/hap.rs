@@ -232,7 +232,7 @@ impl HapPlayer {
             return Ok(None);
         }
         let needs_seek = self.playback.advance_frame();
-        if needs_seek {
+        if self.playback.reverse || needs_seek {
             self.seek(self.playback.position)?;
         }
 
@@ -268,8 +268,32 @@ impl HapPlayer {
                     }
                 }
                 None => {
-                    // End of stream — PlaybackState already handled loop logic
-                    return Ok(None);
+                    // End of stream — handle loop modes inline
+                    match self.playback.loop_mode {
+                        LoopMode::Loop => {
+                            self.playback.position = self.playback.in_point;
+                            self.seek(self.playback.position)?;
+                            continue;
+                        }
+                        LoopMode::PingPong => {
+                            self.playback.reverse = !self.playback.reverse;
+                            let pos = if self.playback.reverse {
+                                self.playback.effective_out() - (1.0 / self.playback.frame_rate)
+                            } else {
+                                self.playback.in_point
+                            };
+                            self.playback.position = pos;
+                            self.seek(pos)?;
+                            continue;
+                        }
+                        LoopMode::OneShot => {
+                            self.playback.playing = false;
+                            return Ok(None);
+                        }
+                        LoopMode::HoldLast => {
+                            return Ok(None);
+                        }
+                    }
                 }
             }
         }

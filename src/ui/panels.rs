@@ -4,8 +4,15 @@ use crate::modulation::{LFOWaveform, StepInterpolation};
 use crate::{BlendMode, ScalingMode};
 use crate::renderer::context::{OutputSource, OutputTarget};
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
-use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, OutputAction, SurfaceAction, ModSourceUI, NotificationUI, modulator_color, LibraryDrag, EffectDrag};
+use super::{UIData, UIActions, ParamUpdate, ModulationAction, CrossfaderAction, OutputAction, SurfaceAction, ModSourceUI, NotificationUI, modulator_color, LibraryDrag, EffectDrag, VideoAction};
 use super::widgets;
+
+/// Format seconds as MM:SS
+fn format_time(secs: f64) -> String {
+    let m = (secs / 60.0).floor() as u32;
+    let s = (secs % 60.0).floor() as u32;
+    format!("{:02}:{:02}", m, s)
+}
 
 // ── Polygon triangulation (ear-clipping) ────────────────────────────
 
@@ -145,6 +152,18 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
             .resizable(true)
             .show(ctx, |ui| {
                 render_library_panel(ui, data, &mut actions);
+            });
+    } else {
+        egui::SidePanel::left("library_collapsed")
+            .exact_width(36.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.add_space(6.0);
+                    if ui.small_button("▶").on_hover_text("Open library (L)").clicked() {
+                        actions.toggle_library_panel = true;
+                    }
+                });
             });
     }
 
@@ -2339,7 +2358,134 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 ui.separator();
             }
 
-            // Column 1: Generator parameters + blend/scale
+            // Column: Video playback controls (only for video decks)
+            if let Some(ref vp) = deck.video_playback {
+                egui::Frame::default()
+                    .inner_margin(6.0)
+                    .corner_radius(4.0)
+                    .fill(ui.visuals().faint_bg_color)
+                    .show(ui, |ui| {
+                        ui.set_min_width(220.0);
+                        ui.set_max_width(280.0);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            ui.label(egui::RichText::new("▶ Playback").strong());
+
+                            // Play/Pause button
+                            let play_label = if vp.playing { "⏸ Pause" } else { "▶ Play" };
+                            if ui.button(play_label).clicked() {
+                                actions.video_actions.push((ch_idx, deck_idx, VideoAction::TogglePlay));
+                            }
+
+                            // Position scrub bar
+                            let duration = vp.duration.max(0.001);
+                            let mut pos = vp.position as f32;
+                            ui.horizontal(|ui| {
+                                ui.label(format_time(vp.position));
+                                let slider = egui::Slider::new(&mut pos, 0.0..=duration as f32)
+                                    .show_value(false)
+                                    .trailing_fill(true);
+                                if ui.add(slider).changed() {
+                                    actions.video_actions.push((ch_idx, deck_idx, VideoAction::Seek(pos as f64)));
+                                }
+                                ui.label(format_time(duration));
+                            });
+
+                            // Speed control
+                            let mut speed = vp.speed as f32;
+                            ui.horizontal(|ui| {
+                                ui.label("Speed:");
+                                if ui.add(egui::Slider::new(&mut speed, 0.1..=4.0).step_by(0.05).suffix("x")).changed() {
+                                    actions.video_actions.push((ch_idx, deck_idx, VideoAction::SetSpeed(speed as f64)));
+                                }
+                            });
+
+                            // Loop mode
+                            ui.horizontal(|ui| {
+                                ui.label("Loop:");
+                                let modes = [
+                                    ("🔁", crate::video::LoopMode::Loop, "Loop"),
+                                    ("🔄", crate::video::LoopMode::PingPong, "Ping-Pong"),
+                                    ("1️⃣", crate::video::LoopMode::OneShot, "One Shot"),
+                                    ("⏹", crate::video::LoopMode::HoldLast, "Hold Last"),
+                                ];
+                                for (icon, mode, tooltip) in &modes {
+                                    let selected = vp.loop_mode == *mode;
+                                    let btn = egui::Button::new(*icon).selected(selected);
+                                    if ui.add(btn).on_hover_text(*tooltip).clicked() && !selected {
+                                        actions.video_actions.push((ch_idx, deck_idx, VideoAction::SetLoopMode(*mode)));
+                                    }
+                                }
+                            });
+
+                            // In/Out points (bookshelf)
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new("📐 In/Out Points").strong());
+                            let effective_out = if vp.out_point > 0.0 { vp.out_point } else { duration };
+                            let has_range = vp.in_point > 0.0 || vp.out_point > 0.0;
+
+                            // In-point
+                            let mut in_pt = vp.in_point as f32;
+                            ui.horizontal(|ui| {
+                                ui.label("In:");
+                                if ui.add(egui::Slider::new(&mut in_pt, 0.0..=duration as f32)
+                                    .show_value(false).trailing_fill(true)).changed()
+                                {
+                                    actions.video_actions.push((ch_idx, deck_idx,
+                                        VideoAction::SetInPoint(in_pt as f64)));
+                                }
+                                ui.label(format_time(in_pt as f64));
+                            });
+
+                            // Out-point
+                            let mut out_pt = effective_out as f32;
+                            ui.horizontal(|ui| {
+                                ui.label("Out:");
+                                if ui.add(egui::Slider::new(&mut out_pt, 0.0..=duration as f32)
+                                    .show_value(false).trailing_fill(true)).changed()
+                                {
+                                    actions.video_actions.push((ch_idx, deck_idx,
+                                        VideoAction::SetOutPoint(out_pt as f64)));
+                                }
+                                ui.label(format_time(out_pt as f64));
+                            });
+
+                            // Set from current / clear buttons
+                            ui.horizontal(|ui| {
+                                if ui.small_button("[ Set In").on_hover_text("Set in-point to current position").clicked() {
+                                    actions.video_actions.push((ch_idx, deck_idx,
+                                        VideoAction::SetInPoint(vp.position)));
+                                }
+                                if ui.small_button("Set Out ]").on_hover_text("Set out-point to current position").clicked() {
+                                    actions.video_actions.push((ch_idx, deck_idx,
+                                        VideoAction::SetOutPoint(vp.position)));
+                                }
+                                if has_range {
+                                    if ui.small_button("✕ Clear").on_hover_text("Reset to full clip").clicked() {
+                                        actions.video_actions.push((ch_idx, deck_idx,
+                                            VideoAction::ClearInOutPoints));
+                                    }
+                                }
+                            });
+
+                            if has_range {
+                                ui.label(egui::RichText::new(format!(
+                                    "Range: {} → {} ({})",
+                                    format_time(vp.in_point),
+                                    format_time(effective_out),
+                                    format_time(effective_out - vp.in_point),
+                                )).small().weak());
+                            }
+
+                            // Info line
+                            ui.label(egui::RichText::new(format!(
+                                "{:.0} fps • {}", vp.frame_rate, format_time(duration)
+                            )).small().weak());
+                        });
+                    });
+                ui.separator();
+            }
+
+            // Column: Generator parameters + blend/scale
             egui::Frame::default()
                 .inner_margin(6.0)
                 .corner_radius(4.0)

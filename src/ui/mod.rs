@@ -122,6 +122,19 @@ pub struct ModAssignmentUI {
 /// Effect info tuple for UI: (name, enabled, params)
 pub type EffectInfo = (String, bool, ShaderParamsUI);
 
+/// Video playback state snapshot for UI display
+#[derive(Clone)]
+pub struct VideoPlaybackUI {
+    pub playing: bool,
+    pub position: f64,
+    pub duration: f64,
+    pub speed: f64,
+    pub loop_mode: crate::video::LoopMode,
+    pub in_point: f64,
+    pub out_point: f64,
+    pub frame_rate: f64,
+}
+
 /// Deck info for UI display
 #[derive(Clone)]
 pub struct DeckUIInfo {
@@ -134,6 +147,8 @@ pub struct DeckUIInfo {
     pub scaling_mode: Option<ScalingMode>,
     pub generator: ShaderParamsUI,
     pub effects: Vec<EffectInfo>,
+    /// Video playback state (only present for video decks)
+    pub video_playback: Option<VideoPlaybackUI>,
 }
 
 /// Channel info for UI display
@@ -450,8 +465,29 @@ pub struct UIActions {
     pub camera_to_add: Option<(usize, crate::camera::CameraId)>,
     /// Rescan for camera devices
     pub camera_rescan: bool,
+    /// Video playback actions: (ch_idx, deck_idx, action)
+    pub video_actions: Vec<(usize, usize, VideoAction)>,
     /// Save workspace requested (Ctrl+S / Cmd+S)
     pub save_requested: bool,
+}
+
+/// Action for controlling video deck playback
+#[derive(Debug, Clone)]
+pub enum VideoAction {
+    /// Toggle play/pause
+    TogglePlay,
+    /// Seek to position in seconds
+    Seek(f64),
+    /// Set playback speed multiplier
+    SetSpeed(f64),
+    /// Set loop mode
+    SetLoopMode(crate::video::LoopMode),
+    /// Set in-point (start of playback range) in seconds
+    SetInPoint(f64),
+    /// Set out-point (end of playback range) in seconds
+    SetOutPoint(f64),
+    /// Clear in/out points (reset to full clip)
+    ClearInOutPoints,
 }
 
 impl UIActions {
@@ -504,6 +540,7 @@ impl UIActions {
             master_effect_to_move: None,
             camera_to_add: None,
             camera_rescan: false,
+            video_actions: Vec::new(),
             save_requested: false,
         }
     }

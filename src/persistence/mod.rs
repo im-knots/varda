@@ -171,7 +171,13 @@ pub fn snapshot_scene(
                     let color = slot.deck.solid_color().unwrap_or([0.0, 0.0, 0.0, 1.0]);
                     SourceConfig::SolidColor { color }
                 }
-                // Camera decks are not persisted
+                "camera" => {
+                    // Store the camera display name (strip the 📹 prefix we add)
+                    let name = slot.deck.source_name()
+                        .trim_start_matches("📹 ")
+                        .to_string();
+                    SourceConfig::Camera { name }
+                }
                 _ => return None,
             };
 
@@ -288,6 +294,7 @@ pub fn restore_scene(
     config: &SceneConfig,
     context: &RenderContext,
     registry: &crate::registry::ShaderRegistry,
+    camera_manager: &mut crate::camera::CameraManager,
 ) -> Result<RestoreResult> {
     let mut warnings = Vec::new();
     let mut mixer = Mixer::new(context, RENDER_WIDTH, RENDER_HEIGHT)?;
@@ -306,7 +313,7 @@ pub fn restore_scene(
         channel.blend_mode = ch_config.blend_mode.into();
 
         for deck_config in &ch_config.decks {
-            match restore_deck(deck_config, context, registry) {
+            match restore_deck(deck_config, context, registry, camera_manager) {
                 Ok(deck) => {
                     let mut slot = crate::channel::DeckSlot::new(deck);
                     slot.opacity = deck_config.opacity;
@@ -384,6 +391,7 @@ fn restore_deck(
     config: &DeckConfig,
     context: &RenderContext,
     _registry: &crate::registry::ShaderRegistry,
+    camera_manager: &mut crate::camera::CameraManager,
 ) -> Result<Deck> {
     let mut deck = match &config.source {
         SourceConfig::Shader { path, params } => {
@@ -404,6 +412,19 @@ fn restore_deck(
         }
         SourceConfig::SolidColor { color } => {
             Deck::new_solid_color(context, *color, RENDER_WIDTH, RENDER_HEIGHT)?
+        }
+        SourceConfig::Camera { name } => {
+            // Find the camera by name in the manager's device list
+            let device = camera_manager.devices().iter()
+                .find(|d| d.name == *name)
+                .ok_or_else(|| anyhow::anyhow!("Camera '{}' not found — is it connected?", name))?;
+            let camera_id = device.id;
+            let cam_name = device.name.clone();
+
+            let (src_w, src_h) = camera_manager.open_camera(camera_id, &context.device)
+                .with_context(|| format!("Failed to open camera '{}'", name))?;
+
+            Deck::new_from_camera(context, camera_id, &cam_name, src_w, src_h, RENDER_WIDTH, RENDER_HEIGHT)?
         }
     };
 

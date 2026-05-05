@@ -240,7 +240,7 @@ impl App {
         if self.workspace.has_scene() {
             match varda::scene::SceneConfig::load(self.workspace.scene_path()) {
                 Ok(scene_config) => {
-                    match varda::persistence::restore_scene(&scene_config, context, &self.registry) {
+                    match varda::persistence::restore_scene(&scene_config, context, &self.registry, &mut self.camera_manager) {
                         Ok(result) => {
                             self.mixer = Some(result.mixer);
                             for warn in &result.warnings {
@@ -507,6 +507,18 @@ impl App {
                             (e.shader.name(), e.enabled, params)
                         })
                         .collect();
+                    let video_playback = slot.deck.playback_state().map(|ps| {
+                        ui::VideoPlaybackUI {
+                            playing: ps.playing,
+                            position: ps.position,
+                            duration: ps.duration,
+                            speed: ps.speed,
+                            loop_mode: ps.loop_mode,
+                            in_point: ps.in_point,
+                            out_point: ps.out_point,
+                            frame_rate: ps.frame_rate,
+                        }
+                    });
                     DeckUIInfo {
                         deck_idx,
                         name: slot.deck.source_name().to_string(),
@@ -517,6 +529,7 @@ impl App {
                         scaling_mode: slot.deck.scaling_mode(),
                         generator: gen_params,
                         effects,
+                        video_playback,
                     }
                 }).collect();
                 let ch_effects = ch.effects.iter()
@@ -1448,6 +1461,7 @@ impl App {
             ui::state::apply_channel_updates(mixer, ui_actions);
             ui::state::apply_deck_updates(mixer, ui_actions);
             ui::state::apply_scaling_mode_updates(mixer, ui_actions);
+            ui::state::apply_video_actions(mixer, ui_actions);
             ui::state::apply_param_updates(mixer, ui_actions);
             ui::state::apply_modulation_actions(mixer, ui_actions);
         }

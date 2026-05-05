@@ -127,7 +127,10 @@ pub enum SourceConfig {
     SolidColor {
         color: [f32; 4],
     },
-    // Note: Camera decks are NOT persisted — cameras are re-detected on startup
+    /// Live camera feed (matched by name on restore)
+    Camera {
+        name: String,
+    },
 }
 
 // ── Effect ─────────────────────────────────────────────────────────

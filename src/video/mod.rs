@@ -193,6 +193,11 @@ pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureForm
     Ok(None)
 }
 
+/// Maximum frame cache memory in bytes (2 GB).
+/// Frames are cached during forward playback and served in reverse for ping-pong.
+/// At 1080p (~2.5 MB/frame) this holds ~800 frames (~13s at 60fps).
+const MAX_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
 /// A video player that decodes frames from a video file using ffmpeg (CPU decode).
 pub struct VideoPlayer {
     ictx: ffmpeg::format::context::Input,
@@ -205,6 +210,17 @@ pub struct VideoPlayer {
     pub playback: PlaybackState,
     /// Current frame data (RGBA).
     frame_data: Vec<u8>,
+    /// Frame cache for reverse playback (ping-pong).
+    /// Filled during forward play, drained in reverse order.
+    frame_cache: Vec<Vec<u8>>,
+    /// Current read index into frame_cache during reverse playback.
+    cache_read_idx: usize,
+    /// Whether we're actively caching frames (disabled when memory cap hit).
+    caching_enabled: bool,
+    /// Set permanently once the cache overflows — prevents re-filling on subsequent passes.
+    cache_overflowed: bool,
+    /// Bytes per frame for cache budget calculation.
+    frame_byte_size: usize,
 }
 
 impl VideoPlayer {
@@ -227,12 +243,20 @@ impl VideoPlayer {
             decoder.format(), width, height,
             Pixel::RGBA, width, height, Flags::BILINEAR,
         )?;
-        let frame_data = vec![0u8; (width * height * 4) as usize];
-        log::info!("Loaded video: {}x{} @ {:.2} fps, duration: {:.2}s", width, height, fps, duration);
+        let frame_byte_size = (width * height * 4) as usize;
+        let frame_data = vec![0u8; frame_byte_size];
+        let max_cached_frames = MAX_CACHE_BYTES / frame_byte_size.max(1);
+        log::info!("Loaded video: {}x{} @ {:.2} fps, duration: {:.2}s (ping-pong cache: {} frames)",
+            width, height, fps, duration, max_cached_frames);
         Ok(Self {
             ictx, decoder, scaler, video_stream_index, width, height,
             playback: PlaybackState::new(duration, fps),
             frame_data,
+            frame_cache: Vec::new(),
+            cache_read_idx: 0,
+            caching_enabled: true,
+            cache_overflowed: false,
+            frame_byte_size,
         })
     }
 
@@ -241,12 +265,47 @@ impl VideoPlayer {
         if !self.playback.playing {
             return Ok(None);
         }
-        // Check if playback state says we need a seek (loop restart, etc.)
+        let was_reverse = self.playback.reverse;
         let needs_seek = self.playback.advance_frame();
-        if needs_seek {
+
+        // Detect ping-pong boundary flips from advance_frame:
+        if !was_reverse && self.playback.reverse {
+            // Forward→reverse flip (hit out-point). Serve from cache.
+            if !self.frame_cache.is_empty() {
+                self.cache_read_idx = self.frame_cache.len();
+                // Fall through to reverse branch
+            }
+        } else if was_reverse && !self.playback.reverse {
+            // Reverse→forward flip (hit in-point). Clear cache, seek to in-point.
+            self.frame_cache.clear();
+            self.caching_enabled = true;
+            self.seek(self.playback.position)?;
+            // Fall through to forward decode
+        }
+
+        // Reverse playback: serve frames from cache
+        if self.playback.reverse {
+            if self.cache_read_idx > 0 {
+                self.cache_read_idx -= 1;
+                self.frame_data.copy_from_slice(&self.frame_cache[self.cache_read_idx]);
+                return Ok(Some(&self.frame_data));
+            }
+            // Cache exhausted — flip back to forward
+            self.playback.reverse = false;
+            self.playback.position = self.playback.in_point;
+            self.frame_cache.clear();
+            self.caching_enabled = !self.cache_overflowed;
+            self.seek(self.playback.position)?;
+            // Fall through to forward decode below
+        } else if needs_seek {
+            // Forward seek (loop restart, etc.) — clear cache since we're
+            // starting a new forward pass
+            self.frame_cache.clear();
+            self.caching_enabled = !self.cache_overflowed;
             self.seek(self.playback.position)?;
         }
 
+        // Forward playback
         loop {
             let mut decoded = Video::empty();
             if self.decoder.receive_frame(&mut decoded).is_ok() {
@@ -261,6 +320,20 @@ impl VideoPlayer {
                     self.frame_data[dst_offset..dst_offset + row_bytes]
                         .copy_from_slice(&data[src_offset..src_offset + row_bytes]);
                 }
+                // Cache frame for potential reverse playback
+                if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
+                    if self.frame_cache.len() * self.frame_byte_size < MAX_CACHE_BYTES {
+                        self.frame_cache.push(self.frame_data.clone());
+                    } else {
+                        self.caching_enabled = false;
+                        if !self.cache_overflowed {
+                            self.cache_overflowed = true;
+                            log::warn!("Ping-pong frame cache full ({} frames, {} MB) — reverse will loop instead",
+                                self.frame_cache.len(),
+                                self.frame_cache.len() * self.frame_byte_size / (1024 * 1024));
+                        }
+                    }
+                }
                 return Ok(Some(&self.frame_data));
             }
             match self.ictx.packets().next() {
@@ -270,20 +343,57 @@ impl VideoPlayer {
                     }
                 }
                 None => {
-                    // End of stream — PlaybackState already handled loop logic
-                    return Ok(None);
+                    // End of stream
+                    match self.playback.loop_mode {
+                        LoopMode::Loop => {
+                            self.playback.position = self.playback.in_point;
+                            self.seek(self.playback.position)?;
+                            continue;
+                        }
+                        LoopMode::PingPong => {
+                            if !self.frame_cache.is_empty() {
+                                // Flip to reverse, start serving from cache end
+                                self.playback.reverse = true;
+                                self.cache_read_idx = self.frame_cache.len();
+                                // Recurse once to serve the first reverse frame
+                                return self.next_frame();
+                            }
+                            // No cache — fall back to loop
+                            self.playback.position = self.playback.in_point;
+                            self.seek(self.playback.position)?;
+                            continue;
+                        }
+                        LoopMode::OneShot => {
+                            self.playback.playing = false;
+                            return Ok(None);
+                        }
+                        LoopMode::HoldLast => {
+                            return Ok(Some(&self.frame_data));
+                        }
+                    }
                 }
             }
         }
     }
 
-    /// Seek to a specific time in seconds.
-    pub fn seek(&mut self, time_secs: f64) -> Result<()> {
+    /// Seek to a specific time in seconds (internal — does not clear cache).
+    fn seek(&mut self, time_secs: f64) -> Result<()> {
         let timestamp = (time_secs * ffmpeg::ffi::AV_TIME_BASE as f64) as i64;
         self.ictx.seek(timestamp, ..timestamp)?;
         self.decoder.flush();
         self.playback.position = time_secs;
         Ok(())
+    }
+
+    /// Seek to a specific time and reset the frame cache.
+    /// Use this for user-initiated seeks (scrub bar, etc.).
+    pub fn seek_and_reset(&mut self, time_secs: f64) -> Result<()> {
+        self.frame_cache.clear();
+        self.cache_read_idx = 0;
+        self.caching_enabled = true;
+        self.cache_overflowed = false;
+        self.playback.reverse = false;
+        self.seek(time_secs)
     }
 
     pub fn width(&self) -> u32 { self.width }
