@@ -256,6 +256,42 @@ pub struct UIData {
     pub midi_mappings: Vec<MidiMappingUI>,
     /// Available camera devices (name, id)
     pub cameras: Vec<(String, crate::camera::CameraId)>,
+    /// Transition sequences (multiple named sequences)
+    pub sequences: Vec<SequenceUIData>,
+    /// Number of channels (for channel dropdowns in sequence builder)
+    pub channel_count: usize,
+    /// Channel names (for labels in sequence builder)
+    pub channel_names: Vec<String>,
+}
+
+/// Read-only snapshot of a single transition sequence
+#[derive(Clone)]
+pub struct SequenceUIData {
+    /// Display name
+    pub name: String,
+    /// Whether the sequence is enabled
+    pub enabled: bool,
+    /// Whether the sequencer is currently playing
+    pub playing: bool,
+    /// Current step index (while playing)
+    pub current_step: usize,
+    /// Step descriptions for display
+    pub steps: Vec<SequenceStepUI>,
+}
+
+/// A single step displayed in the sequence builder
+#[derive(Clone)]
+pub struct SequenceStepUI {
+    pub label: String,
+    pub kind: SequenceStepKindUI,
+}
+
+/// UI-friendly step kind representation
+#[derive(Clone)]
+pub enum SequenceStepKindUI {
+    Fade { from_ch: usize, to_ch: usize, duration_val: f64, is_beats: bool, easing: String, transition_shader: Option<String> },
+    Wait { duration_val: f64, is_beats: bool },
+    GoTo { step_index: usize },
 }
 
 /// Info about an available display monitor (for UI display selector)
@@ -488,6 +524,8 @@ pub struct UIActions {
     pub auto_transition_actions: Vec<(usize, usize, AutoTransitionAction)>,
     /// Save workspace requested (Ctrl+S / Cmd+S)
     pub save_requested: bool,
+    /// Transition sequence actions
+    pub sequence_actions: Vec<SequenceAction>,
 }
 
 /// Action for controlling video deck playback
@@ -526,6 +564,46 @@ pub enum AutoTransitionAction {
     ToggleTransitionDurationUnit,
     /// Set transition shader by name (None = opacity fade)
     SetTransitionShader(Option<String>),
+}
+
+/// Action for controlling the transition sequence builder
+/// All sequence actions carry a `seq_idx` to identify which sequence they target.
+#[derive(Debug, Clone)]
+pub enum SequenceAction {
+    /// Create a new empty sequence
+    Create,
+    /// Delete a sequence by index
+    Delete(usize),
+    /// Toggle sequence enabled
+    ToggleEnabled(usize),
+    /// Start playing a sequence
+    Play(usize),
+    /// Stop playing a sequence
+    Stop(usize),
+    /// Add a Fade step to a sequence
+    AddFade { seq_idx: usize, from_ch: usize, to_ch: usize },
+    /// Add a Wait step to a sequence
+    AddWait(usize),
+    /// Add a GoTo step to a sequence
+    AddGoTo { seq_idx: usize, step_index: usize },
+    /// Remove a step by index from a sequence
+    RemoveStep { seq_idx: usize, step_idx: usize },
+    /// Move a step (from_idx, to_idx) within a sequence
+    MoveStep { seq_idx: usize, from: usize, to: usize },
+    /// Update fade/wait step duration value
+    SetStepDuration { seq_idx: usize, step_idx: usize, value: f64 },
+    /// Toggle step duration unit (beats <-> seconds)
+    ToggleStepDurationUnit { seq_idx: usize, step_idx: usize },
+    /// Set fade step easing
+    SetStepEasing { seq_idx: usize, step_idx: usize, easing: String },
+    /// Set fade step from_ch
+    SetStepFromCh { seq_idx: usize, step_idx: usize, ch: usize },
+    /// Set fade step to_ch
+    SetStepToCh { seq_idx: usize, step_idx: usize, ch: usize },
+    /// Set GoTo step target
+    SetGoToTarget { seq_idx: usize, step_idx: usize, target: usize },
+    /// Set fade step transition shader (None = opacity fade)
+    SetStepTransitionShader { seq_idx: usize, step_idx: usize, shader: Option<String> },
 }
 
 impl UIActions {
@@ -581,6 +659,7 @@ impl UIActions {
             video_actions: Vec::new(),
             auto_transition_actions: Vec::new(),
             save_requested: false,
+            sequence_actions: Vec::new(),
         }
     }
 }
@@ -597,7 +676,7 @@ pub enum LibraryDrag {
 }
 
 /// Drag payload for effect reordering within a chain
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EffectDrag {
     /// Deck effect: (ch_idx, deck_idx, effect_idx)
     Deck(usize, usize, usize),

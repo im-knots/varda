@@ -158,15 +158,34 @@ pub enum OutputSource {
     Master,
     /// A specific channel's composited output (by index)
     Channel(usize),
+    /// A subset of channels composited together (sub-mix).
+    /// Each channel contributes with its own opacity and blend mode.
+    /// Master effects are NOT applied to sub-mixes.
+    Channels(Vec<usize>),
     /// A specific deck's raw output (channel index, deck index)
     Deck(usize, usize),
+}
+
+impl OutputSource {
+    /// Returns the channel indices involved in this source, if any.
+    pub fn channel_indices(&self) -> Option<Vec<usize>> {
+        match self {
+            OutputSource::Channel(idx) => Some(vec![*idx]),
+            OutputSource::Channels(indices) => Some(indices.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for OutputSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OutputSource::Master => write!(f, "Master"),
-            OutputSource::Channel(idx) => write!(f, "Ch {}", idx + 1),
+            OutputSource::Channel(idx) => write!(f, "Ch {}", idx),
+            OutputSource::Channels(indices) => {
+                let names: Vec<String> = indices.iter().map(|i| format!("Ch {}", i)).collect();
+                write!(f, "{}", names.join("+"))
+            }
             OutputSource::Deck(ch, dk) => write!(f, "Ch {} Deck {}", ch + 1, dk + 1),
         }
     }

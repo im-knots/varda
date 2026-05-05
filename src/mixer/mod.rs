@@ -84,6 +84,71 @@ pub struct BeatSyncCrossfade {
     pub auto: Option<AutoCrossfade>,
 }
 
+// ── Transition Sequence (channel-to-channel automation) ──────────────
+
+/// A named sequence of channel transition steps for automated shows/installations.
+/// Stored on the Mixer. Persisted in scene.json.
+#[derive(Debug, Clone)]
+pub struct TransitionSequence {
+    pub name: String,
+    pub steps: Vec<TransitionStep>,
+    pub enabled: bool,
+    /// Runtime sequencer state — NOT persisted.
+    pub state: SequencerState,
+}
+
+impl TransitionSequence {
+    pub fn new(name: String) -> Self {
+        Self { name, steps: Vec::new(), enabled: true, state: SequencerState::new() }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransitionStep {
+    pub kind: StepKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum StepKind {
+    /// Fade from one channel to another over a duration.
+    Fade {
+        from_ch: usize,
+        to_ch: usize,
+        duration: crate::channel::DurationSpec,
+        easing: CrossfadeEasing,
+        /// Transition shader name (None = opacity fade). Only used in 2-channel mode.
+        transition_shader: Option<String>,
+    },
+    /// Wait/hold for a duration.
+    Wait {
+        duration: crate::channel::DurationSpec,
+    },
+    /// Jump to a step index (0-based). Enables looping.
+    GoTo {
+        step_index: usize,
+    },
+}
+
+/// Runtime sequencer state — NOT persisted, computed each frame.
+#[derive(Debug, Clone)]
+pub struct SequencerState {
+    pub playing: bool,
+    pub current_step: usize,
+    pub step_elapsed: f64,
+}
+
+impl SequencerState {
+    pub fn new() -> Self {
+        Self { playing: false, current_step: 0, step_elapsed: 0.0 }
+    }
+
+    pub fn reset(&mut self) {
+        self.playing = false;
+        self.current_step = 0;
+        self.step_elapsed = 0.0;
+    }
+}
+
 /// Active transition effect between channels A and B
 pub struct TransitionEffect {
     /// The ISF transition shader source
@@ -102,7 +167,7 @@ pub struct Mixer {
     pub channels: Vec<Channel>,
 
     /// Monotonic counter for generating unique channel names (never decremented)
-    next_channel_index: usize,
+    pub(crate) next_channel_index: usize,
 
     /// Crossfader position (0.0 = Ch 0, 1.0 = Ch 1)
     pub crossfader: f32,
@@ -141,6 +206,13 @@ pub struct Mixer {
 
     /// Active transition effect (replaces opacity-based crossfade when set)
     pub active_transition: Option<TransitionEffect>,
+
+    /// Transition sequences (channel-to-channel automation). Multiple named sequences supported.
+    pub transition_sequences: Vec<TransitionSequence>,
+
+    /// Cached sub-mix textures for multi-channel surface assignments.
+    /// Key: sorted channel indices, Value: (texture, view).
+    sub_mix_cache: std::collections::HashMap<Vec<usize>, (wgpu::Texture, wgpu::TextureView)>,
 }
 
 impl Mixer {
@@ -186,6 +258,8 @@ impl Mixer {
             frame_count: 0,
             blend_blit_pipelines,
             active_transition: None,
+            transition_sequences: Vec::new(),
+            sub_mix_cache: std::collections::HashMap::new(),
         })
     }
 
@@ -240,6 +314,10 @@ impl Mixer {
                 }
             }
         }
+
+        // Tick transition sequence (drives crossfader/opacities when playing)
+        let bpm = audio_data.bpm.map(|b| b as f64);
+        self.tick_sequence(dt, bpm);
 
         // Update global modulation engine
         let time = self.start_time.elapsed().as_secs_f32();
@@ -391,6 +469,131 @@ impl Mixer {
 
         Ok(())
     }
+
+    /// Prepare sub-mix textures for all unique multi-channel surface sources.
+    /// Call this after `composite_channels` and before output rendering.
+    pub fn prepare_sub_mixes(&mut self, sources: &[Vec<usize>], context: &RenderContext) {
+        // Remove cache entries no longer needed
+        let needed: std::collections::HashSet<Vec<usize>> = sources.iter().cloned().collect();
+        self.sub_mix_cache.retain(|k, _| needed.contains(k));
+
+        for mut indices in sources.iter().cloned() {
+            indices.sort();
+            indices.dedup();
+            if self.sub_mix_cache.contains_key(&indices) {
+                // Already cached, just re-composite into it
+            } else {
+                // Create new texture
+                let width = self.composite_texture.width();
+                let height = self.composite_texture.height();
+                let tex = context.create_render_texture(width, height);
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                self.sub_mix_cache.insert(indices.clone(), (tex, view));
+            }
+
+            // Composite the subset of channels into the cached texture
+            self.composite_sub_mix(&indices, context);
+        }
+    }
+
+    /// Composite a specific subset of channels into the cached sub-mix texture.
+    fn composite_sub_mix(&self, indices: &[usize], context: &RenderContext) {
+        let (_, view) = match self.sub_mix_cache.get(indices) {
+            Some(entry) => entry,
+            None => return,
+        };
+
+        let channel_count = self.channels.len();
+        let opacities: Vec<f32> = if channel_count == 2 {
+            vec![
+                (1.0 - self.crossfader) * self.channels[0].opacity,
+                self.crossfader * self.channels[1].opacity,
+            ]
+        } else {
+            self.channels.iter().map(|ch| ch.opacity).collect()
+        };
+
+        let mut is_first = true;
+        for &ch_idx in indices {
+            if ch_idx >= self.channels.len() {
+                continue;
+            }
+            let channel = &self.channels[ch_idx];
+            let opacity = opacities[ch_idx];
+            if opacity <= 0.0 {
+                continue;
+            }
+
+            let blend_mode = channel.blend_mode;
+            let pipeline = self.blend_blit_pipelines.get(&blend_mode)
+                .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
+
+            pipeline.set_opacity(&context.queue, opacity);
+            let bind_group = pipeline.create_bind_group(&context.device, &channel.composite_view);
+
+            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Sub-mix Composite Encoder"),
+            });
+
+            {
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Sub-mix Composite Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: if is_first {
+                                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                            } else {
+                                wgpu::LoadOp::Load
+                            },
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                pipeline.render(&mut render_pass, &bind_group);
+            }
+
+            context.queue.submit(std::iter::once(encoder.finish()));
+            is_first = false;
+        }
+
+        // If no channels were rendered, clear to black
+        if is_first {
+            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Sub-mix Clear Encoder"),
+            });
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Sub-mix Clear Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+            }
+            context.queue.submit(std::iter::once(encoder.finish()));
+        }
+    }
+
+    /// Get the sub-mix texture view for a given set of channel indices.
+    pub fn get_sub_mix_view(&self, indices: &[usize]) -> Option<&wgpu::TextureView> {
+        self.sub_mix_cache.get(indices).map(|(_, v)| v)
+    }
+
 
     fn apply_master_effects(&mut self, context: &RenderContext, audio_data: &crate::AudioData, time: f32) -> Result<()> {
         if self.master_effects.is_empty() {
@@ -594,6 +797,114 @@ impl Mixer {
     fn sync_transition_progress(&mut self) {
         if let Some(transition) = &mut self.active_transition {
             transition.params.set("progress", crate::params::ParamValue::Float(self.crossfader));
+        }
+    }
+
+    // ── Transition Sequence Control ──────────────────────────────────
+
+    /// Start playing a transition sequence by index from the beginning.
+    /// Multiple sequences can play simultaneously (e.g. for multi-surface setups).
+    pub fn start_sequence(&mut self, seq_idx: usize) {
+        if let Some(seq) = self.transition_sequences.get_mut(seq_idx) {
+            if seq.steps.is_empty() { return; }
+            // Cancel any manual crossfade in progress
+            self.auto_crossfade = None;
+            self.beat_sync_crossfade = None;
+            seq.state = SequencerState { playing: true, current_step: 0, step_elapsed: 0.0 };
+            log::info!("Transition sequence '{}' started", seq.name);
+        }
+    }
+
+    /// Stop a transition sequence by index (leaves channels at current state).
+    pub fn stop_sequence(&mut self, seq_idx: usize) {
+        if let Some(seq) = self.transition_sequences.get_mut(seq_idx) {
+            seq.state.playing = false;
+            log::info!("Transition sequence '{}' stopped at step {}", seq.name, seq.state.current_step);
+        }
+    }
+
+    /// Tick all transition sequences forward by dt seconds.
+    /// Multiple sequences may play simultaneously (e.g. multi-surface setups).
+    fn tick_sequence(&mut self, dt: f32, bpm: Option<f64>) {
+        let channel_count = self.channels.len();
+
+        for seq_idx in 0..self.transition_sequences.len() {
+            let seq = &mut self.transition_sequences[seq_idx];
+            if !seq.state.playing || !seq.enabled || seq.steps.is_empty() {
+                continue;
+            }
+            let num_steps = seq.steps.len();
+            if seq.state.current_step >= num_steps {
+                seq.state.playing = false;
+                continue;
+            }
+
+            // Extract step data we need (avoids holding borrow across channel writes)
+            let step = &seq.steps[seq.state.current_step];
+            let mutation = match &step.kind {
+                StepKind::Fade { from_ch, to_ch, duration, easing, .. } => {
+                    let duration_secs = duration.to_seconds(bpm);
+                    if duration_secs <= 0.0 {
+                        seq.state.current_step += 1;
+                        seq.state.step_elapsed = 0.0;
+                        if seq.state.current_step >= num_steps {
+                            seq.state.playing = false;
+                        }
+                        continue;
+                    }
+                    let progress = (seq.state.step_elapsed / duration_secs).clamp(0.0, 1.0) as f32;
+                    let eased = easing.apply(progress);
+                    let completed = seq.state.step_elapsed + dt as f64 >= duration_secs;
+                    seq.state.step_elapsed += dt as f64;
+                    if completed {
+                        seq.state.current_step += 1;
+                        seq.state.step_elapsed = 0.0;
+                        if seq.state.current_step >= num_steps {
+                            seq.state.playing = false;
+                        }
+                    }
+                    Some((*from_ch, *to_ch, eased, completed))
+                }
+                StepKind::Wait { duration } => {
+                    let duration_secs = duration.to_seconds(bpm);
+                    seq.state.step_elapsed += dt as f64;
+                    if seq.state.step_elapsed >= duration_secs {
+                        seq.state.current_step += 1;
+                        seq.state.step_elapsed = 0.0;
+                        if seq.state.current_step >= num_steps {
+                            seq.state.playing = false;
+                        }
+                    }
+                    None
+                }
+                StepKind::GoTo { step_index } => {
+                    let target = *step_index;
+                    if target < num_steps {
+                        seq.state.current_step = target;
+                        seq.state.step_elapsed = 0.0;
+                    } else {
+                        seq.state.playing = false;
+                    }
+                    None
+                }
+            };
+
+            // Apply channel/crossfader mutations outside the sequence borrow
+            if let Some((from, to, eased, completed)) = mutation {
+                if channel_count == 2 {
+                    let from_val = if from == 0 { 0.0f32 } else { 1.0f32 };
+                    let to_val = if to == 0 { 0.0f32 } else { 1.0f32 };
+                    self.crossfader = if completed { to_val } else { from_val + (to_val - from_val) * eased };
+                } else {
+                    if completed {
+                        if from < channel_count { self.channels[from].opacity = 0.0; }
+                        if to < channel_count { self.channels[to].opacity = 1.0; }
+                    } else {
+                        if from < channel_count { self.channels[from].opacity = 1.0 - eased; }
+                        if to < channel_count { self.channels[to].opacity = eased; }
+                    }
+                }
+            }
         }
     }
 }

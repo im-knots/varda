@@ -127,7 +127,7 @@ impl App {
             }
         };
 
-        Self {
+        let app = Self {
             window: None,
             context: None,
             registry,
@@ -162,7 +162,9 @@ impl App {
             camera_manager: varda::camera::CameraManager::new(),
             workspace: varda::persistence::Workspace::from_cwd()
                 .unwrap_or_else(|_| varda::persistence::Workspace::new(std::path::PathBuf::from("."))),
-        }
+        };
+
+        app
     }
 }
 
@@ -737,6 +739,51 @@ impl App {
             cameras: self.camera_manager.devices().iter()
                 .map(|d| (d.name.clone(), d.id))
                 .collect(),
+            sequences: self.mixer.as_ref().map(|m| {
+                let channel_names: Vec<String> = m.channels.iter().map(|c| c.name.clone()).collect();
+                m.transition_sequences.iter().map(|seq| {
+                    let steps = seq.steps.iter().map(|step| {
+                        let (label, kind) = match &step.kind {
+                            crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                                let unit = if duration.is_beats() { "beats" } else { "s" };
+                                let easing_name = format!("{:?}", easing);
+                                let label = format!("Fade {} -> {} ({:.1}{})",
+                                    channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?"),
+                                    channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?"),
+                                    duration.value(), unit);
+                                (label, ui::SequenceStepKindUI::Fade {
+                                    from_ch: *from_ch, to_ch: *to_ch,
+                                    duration_val: duration.value(), is_beats: duration.is_beats(),
+                                    easing: easing_name, transition_shader: transition_shader.clone(),
+                                })
+                            }
+                            crate::mixer::StepKind::Wait { duration } => {
+                                let unit = if duration.is_beats() { "beats" } else { "s" };
+                                let label = format!("Wait {:.1}{}", duration.value(), unit);
+                                (label, ui::SequenceStepKindUI::Wait {
+                                    duration_val: duration.value(), is_beats: duration.is_beats(),
+                                })
+                            }
+                            crate::mixer::StepKind::GoTo { step_index } => {
+                                let label = format!("GoTo step {}", step_index);
+                                (label, ui::SequenceStepKindUI::GoTo { step_index: *step_index })
+                            }
+                        };
+                        ui::SequenceStepUI { label, kind }
+                    }).collect();
+                    ui::SequenceUIData {
+                        name: seq.name.clone(),
+                        enabled: seq.enabled,
+                        playing: seq.state.playing,
+                        current_step: seq.state.current_step,
+                        steps,
+                    }
+                }).collect()
+            }).unwrap_or_default(),
+            channel_count: self.mixer.as_ref().map(|m| m.channels.len()).unwrap_or(0),
+            channel_names: self.mixer.as_ref()
+                .map(|m| m.channels.iter().map(|c| c.name.clone()).collect())
+                .unwrap_or_default(),
         }
     }
 
@@ -1371,6 +1418,12 @@ impl App {
             OutputSource::Channel(ch_idx) => {
                 mixer.channels.get(*ch_idx).map(|ch| &ch.composite_view)
             }
+            OutputSource::Channels(indices) => {
+                let mut sorted = indices.clone();
+                sorted.sort();
+                sorted.dedup();
+                mixer.get_sub_mix_view(&sorted)
+            }
             OutputSource::Deck(ch_idx, deck_idx) => {
                 mixer.channels.get(*ch_idx)
                     .and_then(|ch| ch.decks.get(*deck_idx))
@@ -1382,9 +1435,33 @@ impl App {
     /// Render content to all output windows using the surface layout.
     /// If the output has surface assignments, only those surfaces are rendered (with per-surface warp).
     /// If no assignments, all surfaces are rendered (no warp). If no surfaces at all, falls back to direct source blit.
-    fn render_output_windows(&self) {
+    fn render_output_windows(&mut self) {
         let Some(context) = &self.context else { return };
-        let Some(mixer) = &self.mixer else { return };
+        let Some(mixer) = &mut self.mixer else { return };
+
+        // Collect unique Channels(...) sources from all surfaces to prepare sub-mixes
+        {
+            let mut sub_mix_sources: Vec<Vec<usize>> = Vec::new();
+            for surface in &self.surface_manager.surfaces {
+                if let OutputSource::Channels(indices) = &surface.source {
+                    let mut sorted = indices.clone();
+                    sorted.sort();
+                    sorted.dedup();
+                    if !sub_mix_sources.contains(&sorted) {
+                        sub_mix_sources.push(sorted);
+                    }
+                }
+            }
+            if !sub_mix_sources.is_empty() {
+                mixer.prepare_sub_mixes(&sub_mix_sources, context);
+            } else {
+                // Clean up any stale cache entries
+                mixer.prepare_sub_mixes(&[], context);
+            }
+        }
+
+        // Reborrow as immutable for the rest
+        let mixer = self.mixer.as_ref().unwrap();
 
         for output in &self.output_windows {
             if output.calibration_mode && !self.calibration_textures.is_empty() && self.surface_manager.surfaces.is_empty() {
@@ -1492,6 +1569,7 @@ impl App {
             ui::state::apply_auto_transition_actions(mixer, ui_actions, context, &self.registry);
             ui::state::apply_param_updates(mixer, ui_actions);
             ui::state::apply_modulation_actions(mixer, ui_actions);
+            ui::state::apply_sequence_actions(mixer, ui_actions);
         }
         // Release camera references before deck removal
         if let Some((ch_idx, deck_idx)) = ui_actions.deck_to_remove {

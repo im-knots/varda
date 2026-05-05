@@ -252,6 +252,41 @@ pub fn snapshot_scene(
 
     let active_transition = mixer.active_transition.as_ref().map(|t| t.name.clone());
 
+    // Snapshot transition sequences
+    let transition_sequences = mixer.transition_sequences.iter().map(|seq| {
+        use crate::channel::DurationSpec;
+        use crate::scene::{TransitionSequenceConfig, TransitionStepConfig, DurationSpecConfig};
+        TransitionSequenceConfig {
+            name: seq.name.clone(),
+            enabled: seq.enabled,
+            steps: seq.steps.iter().map(|step| match &step.kind {
+                crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                    TransitionStepConfig::Fade {
+                        from_ch: *from_ch,
+                        to_ch: *to_ch,
+                        duration: match duration {
+                            DurationSpec::Beats(v) => DurationSpecConfig::Beats(*v),
+                            DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(*v),
+                        },
+                        easing: (*easing).into(),
+                        transition_shader: transition_shader.clone(),
+                    }
+                }
+                crate::mixer::StepKind::Wait { duration } => {
+                    TransitionStepConfig::Wait {
+                        duration: match duration {
+                            DurationSpec::Beats(v) => DurationSpecConfig::Beats(*v),
+                            DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(*v),
+                        },
+                    }
+                }
+                crate::mixer::StepKind::GoTo { step_index } => {
+                    TransitionStepConfig::GoTo { step_index: *step_index }
+                }
+            }).collect(),
+        }
+    }).collect();
+
     SceneConfig {
         version: 2,
         channels,
@@ -259,6 +294,7 @@ pub fn snapshot_scene(
         active_transition,
         master_effects,
         modulation: mixer.modulation.clone(),
+        transition_sequences,
     }
 }
 
@@ -405,6 +441,15 @@ pub fn restore_scene(
         mixer.channels.push(channel);
     }
 
+    // Update next_channel_index so new channels don't get duplicate names.
+    // Parse existing channel names to find the highest "Ch N" index.
+    let max_idx = mixer.channels.iter()
+        .filter_map(|ch| ch.name.strip_prefix("Ch ").and_then(|s| s.parse::<usize>().ok()))
+        .max()
+        .map(|n| n + 1)
+        .unwrap_or(mixer.channels.len());
+    mixer.next_channel_index = max_idx;
+
     // Restore master effects
     for eff_config in &config.master_effects {
         match restore_effect(eff_config, context, context.surface_config.format) {
@@ -437,6 +482,47 @@ pub fn restore_scene(
         } else {
             warnings.push(format!("Transition '{}' not found in registry", transition_name));
         }
+    }
+
+    // Restore transition sequences
+    for seq_config in &config.transition_sequences {
+        use crate::channel::DurationSpec;
+        use crate::mixer::{TransitionSequence, TransitionStep, StepKind, SequencerState};
+        use crate::scene::{TransitionStepConfig, DurationSpecConfig};
+        let steps = seq_config.steps.iter().map(|step| {
+            let kind = match step {
+                TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                    StepKind::Fade {
+                        from_ch: *from_ch,
+                        to_ch: *to_ch,
+                        duration: match duration {
+                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(*v),
+                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(*v),
+                        },
+                        easing: (*easing).into(),
+                        transition_shader: transition_shader.clone(),
+                    }
+                }
+                TransitionStepConfig::Wait { duration } => {
+                    StepKind::Wait {
+                        duration: match duration {
+                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(*v),
+                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(*v),
+                        },
+                    }
+                }
+                TransitionStepConfig::GoTo { step_index } => {
+                    StepKind::GoTo { step_index: *step_index }
+                }
+            };
+            TransitionStep { kind }
+        }).collect();
+        mixer.transition_sequences.push(TransitionSequence {
+            name: seq_config.name.clone(),
+            steps,
+            enabled: seq_config.enabled,
+            state: SequencerState::new(),
+        });
     }
 
     Ok(RestoreResult {

@@ -40,6 +40,10 @@ pub struct SceneConfig {
     /// Modulation engine state (sources + assignments, already Serialize/Deserialize)
     #[serde(default)]
     pub modulation: ModulationEngine,
+
+    /// Transition sequences (channel-to-channel automation). Multiple named sequences.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transition_sequences: Vec<TransitionSequenceConfig>,
 }
 
 fn default_version() -> u32 { 2 }
@@ -143,6 +147,77 @@ pub enum TriggerConfig {
 }
 
 fn default_timer_trigger() -> TriggerConfig { TriggerConfig::Timer }
+
+// ── Transition Sequence ──────────────────────────────────────────────
+
+/// Serializable transition sequence (channel-to-channel automation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransitionSequenceConfig {
+    #[serde(default = "default_sequence_name")]
+    pub name: String,
+
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    #[serde(default)]
+    pub steps: Vec<TransitionStepConfig>,
+}
+
+fn default_sequence_name() -> String { "Sequence 1".to_string() }
+
+/// A single step in a transition sequence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum TransitionStepConfig {
+    Fade {
+        from_ch: usize,
+        to_ch: usize,
+        duration: DurationSpecConfig,
+        #[serde(default = "default_easing")]
+        easing: EasingConfig,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transition_shader: Option<String>,
+    },
+    Wait {
+        duration: DurationSpecConfig,
+    },
+    GoTo {
+        step_index: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EasingConfig {
+    Linear,
+    EaseInOut,
+    EaseIn,
+    EaseOut,
+}
+
+fn default_easing() -> EasingConfig { EasingConfig::EaseInOut }
+
+impl From<crate::mixer::CrossfadeEasing> for EasingConfig {
+    fn from(e: crate::mixer::CrossfadeEasing) -> Self {
+        match e {
+            crate::mixer::CrossfadeEasing::Linear => EasingConfig::Linear,
+            crate::mixer::CrossfadeEasing::EaseInOut => EasingConfig::EaseInOut,
+            crate::mixer::CrossfadeEasing::EaseIn => EasingConfig::EaseIn,
+            crate::mixer::CrossfadeEasing::EaseOut => EasingConfig::EaseOut,
+        }
+    }
+}
+
+impl From<EasingConfig> for crate::mixer::CrossfadeEasing {
+    fn from(e: EasingConfig) -> Self {
+        match e {
+            EasingConfig::Linear => crate::mixer::CrossfadeEasing::Linear,
+            EasingConfig::EaseInOut => crate::mixer::CrossfadeEasing::EaseInOut,
+            EasingConfig::EaseIn => crate::mixer::CrossfadeEasing::EaseIn,
+            EasingConfig::EaseOut => crate::mixer::CrossfadeEasing::EaseOut,
+        }
+    }
+}
 
 // ── Source ──────────────────────────────────────────────────────────
 

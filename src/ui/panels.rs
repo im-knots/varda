@@ -144,6 +144,11 @@ fn point_in_triangle(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2, c: egui::Pos2)
 pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
     let mut actions = UIActions::new();
 
+    // Disable all egui animations — instant panel/widget transitions
+    ctx.style_mut(|style| {
+        style.animation_time = 0.0;
+    });
+
     // === LEFT PANEL: Library (collapsible) ===
     if data.library_panel_open {
         egui::SidePanel::left("library_panel")
@@ -183,9 +188,11 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
         .resizable(true)
         .show_separator_line(true)
         .show(ctx, |ui| {
+            // Force content to fill the full panel height from the start.
+            // This prevents egui from storing a smaller rect and slowly
+            // "growing" the panel back to default on content changes.
+            ui.set_min_height(ui.max_rect().height());
             render_bottom_panel(ui, data, &mut actions);
-            // Claim full available space so the panel doesn't shrink
-            ui.allocate_space(ui.available_size());
         });
 
     // === TOP BAR: Save button + status ===
@@ -1069,28 +1076,55 @@ fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActio
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Source:").weak().size(10.0));
                     let current_label = format!("{}", surface.source);
-                    egui::ComboBox::from_id_salt(format!("surf_src_{}", i))
-                        .selected_text(&current_label)
-                        .width(120.0)
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_label(surface.source == OutputSource::Master, "Master").clicked() {
+                    let response = ui.button(format!("{} ▼", current_label));
+                    let popup_id = response.id.with("surf_src_popup");
+                    if response.clicked() {
+                        #[allow(deprecated)]
+                        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+                    }
+                    #[allow(deprecated)]
+                    egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                        ui.set_min_width(150.0);
+                        // Master option
+                        if ui.selectable_label(surface.source == OutputSource::Master, "Master").clicked() {
+                            actions.surface_actions.push(SurfaceAction::SetSource {
+                                idx: i,
+                                source: OutputSource::Master,
+                            });
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("Channels:").weak().size(10.0));
+                        // Get currently selected channel indices
+                        let selected_indices: Vec<usize> = match &surface.source {
+                            OutputSource::Channel(idx) => vec![*idx],
+                            OutputSource::Channels(indices) => indices.clone(),
+                            _ => vec![],
+                        };
+                        for ch in &data.channels {
+                            let is_selected = selected_indices.contains(&ch.ch_idx);
+                            let mut checked = is_selected;
+                            if ui.checkbox(&mut checked, &ch.name).changed() {
+                                let mut new_indices = selected_indices.clone();
+                                if checked {
+                                    if !new_indices.contains(&ch.ch_idx) {
+                                        new_indices.push(ch.ch_idx);
+                                    }
+                                } else {
+                                    new_indices.retain(|&idx| idx != ch.ch_idx);
+                                }
+                                new_indices.sort();
+                                let new_source = match new_indices.len() {
+                                    0 => OutputSource::Master,
+                                    1 => OutputSource::Channel(new_indices[0]),
+                                    _ => OutputSource::Channels(new_indices),
+                                };
                                 actions.surface_actions.push(SurfaceAction::SetSource {
                                     idx: i,
-                                    source: OutputSource::Master,
+                                    source: new_source,
                                 });
                             }
-                            for ch in &data.channels {
-                                if ui.selectable_label(
-                                    surface.source == OutputSource::Channel(ch.ch_idx),
-                                    &ch.name,
-                                ).clicked() {
-                                    actions.surface_actions.push(SurfaceAction::SetSource {
-                                        idx: i,
-                                        source: OutputSource::Channel(ch.ch_idx),
-                                    });
-                                }
-                            }
-                        });
+                        }
+                    });
                 });
 
                 ui.horizontal(|ui| {
@@ -2734,10 +2768,8 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                     // Drop zone before this effect (for reordering)
                     render_effect_drop_zone(ui, &format!("deck_{}_{}", ch_idx, deck_idx), eff_idx);
 
-                    // Effect card (entire card is drag source)
-                    let drag_id = egui::Id::new(("eff_drag", ch_idx, deck_idx, eff_idx));
-                    let card_resp = ui.dnd_drag_source(drag_id, EffectDrag::Deck(ch_idx, deck_idx, eff_idx), |ui| {
-                    egui::Frame::default()
+                    // Effect card with drag handle in header only
+                    let card_resp = egui::Frame::default()
                         .inner_margin(6.0)
                         .corner_radius(4.0)
                         .fill(ui.visuals().faint_bg_color)
@@ -2747,6 +2779,7 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}_{}",ch_idx,deck_idx,eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
+                                    render_effect_drag_handle(ui, EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
                                     let mut enabled = *eff_enabled;
                                     if ui.checkbox(&mut enabled, "").changed() {
                                         actions.effect_to_toggle = Some((ch_idx, deck_idx, eff_idx));
@@ -2792,8 +2825,7 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             });
                             });
                         });
-                    });
-                    // X button overlay at top-right of card, outside drag source
+                    // X button overlay at top-right of card
                     {
                         let card_rect = card_resp.response.rect;
                         let btn_size = egui::vec2(16.0, 16.0);
@@ -2806,11 +2838,12 @@ fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             actions.effect_to_remove = Some((ch_idx, deck_idx, eff_idx));
                         }
                     }
-                    if ui.ctx().is_being_dragged(drag_id) {
-                        ui.ctx().memory_mut(|mem| {
-                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
-                        });
-                    }
+                    render_effect_drag_ghost(
+                        ui,
+                        egui::Id::new(("eff_ghost", ch_idx, deck_idx, eff_idx)),
+                        EffectDrag::Deck(ch_idx, deck_idx, eff_idx),
+                        eff_name,
+                    );
                     ui.separator();
                 }
 
@@ -2863,9 +2896,7 @@ fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 for (eff_idx, (eff_name, eff_enabled, eff_params)) in data.master_effect_info.iter().enumerate() {
                     render_effect_drop_zone(ui, "master", eff_idx);
 
-                    let drag_id = egui::Id::new(("eff_drag_master", eff_idx));
-                    let card_resp = ui.dnd_drag_source(drag_id, EffectDrag::Master(eff_idx), |ui| {
-                    egui::Frame::default()
+                    let card_resp = egui::Frame::default()
                         .inner_margin(6.0)
                         .corner_radius(4.0)
                         .fill(ui.visuals().faint_bg_color)
@@ -2875,6 +2906,8 @@ fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             egui::ScrollArea::vertical().id_salt(format!("master_fx_scroll_{}", eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
+                                    // Drag handle
+                                    render_effect_drag_handle(ui, EffectDrag::Master(eff_idx));
                                     let mut enabled = *eff_enabled;
                                     if ui.checkbox(&mut enabled, "").changed() {
                                         actions.master_effect_to_toggle = Some(eff_idx);
@@ -2918,7 +2951,6 @@ fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             });
                             });
                         });
-                    });
                     {
                         let card_rect = card_resp.response.rect;
                         let btn_size = egui::vec2(16.0, 16.0);
@@ -2931,11 +2963,12 @@ fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             actions.master_effect_to_remove = Some(eff_idx);
                         }
                     }
-                    if ui.ctx().is_being_dragged(drag_id) {
-                        ui.ctx().memory_mut(|mem| {
-                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Master(eff_idx));
-                        });
-                    }
+                    render_effect_drag_ghost(
+                        ui,
+                        egui::Id::new(("eff_ghost_master", eff_idx)),
+                        EffectDrag::Master(eff_idx),
+                        eff_name,
+                    );
                     ui.separator();
                 }
 
@@ -2994,9 +3027,7 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
                 for (eff_idx, (eff_name, eff_enabled, eff_params)) in ch.effects.iter().enumerate() {
                     render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), eff_idx);
 
-                    let drag_id = egui::Id::new(("eff_drag_ch", ch_idx, eff_idx));
-                    let card_resp = ui.dnd_drag_source(drag_id, EffectDrag::Channel(ch_idx, eff_idx), |ui| {
-                    egui::Frame::default()
+                    let card_resp = egui::Frame::default()
                         .inner_margin(6.0)
                         .corner_radius(4.0)
                         .fill(ui.visuals().faint_bg_color)
@@ -3006,6 +3037,7 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             egui::ScrollArea::vertical().id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
+                                    render_effect_drag_handle(ui, EffectDrag::Channel(ch_idx, eff_idx));
                                     let mut enabled = *eff_enabled;
                                     if ui.checkbox(&mut enabled, "").changed() {
                                         actions.ch_effect_to_toggle = Some((ch_idx, eff_idx));
@@ -3050,7 +3082,6 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
                             });
                             });
                         });
-                    });
                     {
                         let card_rect = card_resp.response.rect;
                         let btn_size = egui::vec2(16.0, 16.0);
@@ -3063,11 +3094,12 @@ fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData,
                             actions.ch_effect_to_remove = Some((ch_idx, eff_idx));
                         }
                     }
-                    if ui.ctx().is_being_dragged(drag_id) {
-                        ui.ctx().memory_mut(|mem| {
-                            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), EffectDrag::Channel(ch_idx, eff_idx));
-                        });
-                    }
+                    render_effect_drag_ghost(
+                        ui,
+                        egui::Id::new(("eff_ghost_ch", ch_idx, eff_idx)),
+                        EffectDrag::Channel(ch_idx, eff_idx),
+                        eff_name,
+                    );
                     ui.separator();
                 }
 
@@ -3679,6 +3711,68 @@ fn render_effect_drop_zone(ui: &mut egui::Ui, chain_key: &str, position: usize) 
     }
 }
 
+/// Render a drag handle that initiates effect drag-and-drop.
+/// Returns the handle response. Uses painted dots instead of text to avoid selection.
+fn render_effect_drag_handle(ui: &mut egui::Ui, payload: EffectDrag) {
+    let handle_size = egui::vec2(12.0, 16.0);
+    let (handle_rect, handle_resp) = ui.allocate_exact_size(handle_size, egui::Sense::drag());
+    let color = if handle_resp.dragged() || handle_resp.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    // Draw 6 grip dots (3 rows x 2 cols)
+    let cx = handle_rect.center().x;
+    let cy = handle_rect.center().y;
+    let r = 1.5;
+    let dx = 3.0;
+    let dy = 4.0;
+    for row in -1..=1 {
+        for col in [-1.0_f32, 1.0] {
+            let x = cx + col * dx;
+            let y = cy + row as f32 * dy;
+            ui.painter().circle_filled(egui::pos2(x, y), r, color);
+        }
+    }
+    if handle_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    if handle_resp.dragged() {
+        egui::DragAndDrop::set_payload(ui.ctx(), payload);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+}
+
+/// Show a floating ghost card while an effect is being dragged.
+fn render_effect_drag_ghost(ui: &mut egui::Ui, ghost_id: egui::Id, payload: EffectDrag, name: &str) {
+    if egui::DragAndDrop::payload::<EffectDrag>(ui.ctx())
+        .map(|p| *p == payload).unwrap_or(false)
+    {
+        // Store source in temp memory for deferred drop handler
+        ui.ctx().memory_mut(|mem| {
+            mem.data.insert_temp(egui::Id::new("__eff_dnd_src"), payload);
+        });
+        // Paint floating ghost at pointer using Area (avoids cross-order sublayer panic)
+        if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+            egui::Area::new(ghost_id)
+                .order(egui::Order::Tooltip)
+                .fixed_pos(egui::pos2(pos.x + 12.0, pos.y + 12.0))
+                .interactable(false)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::default()
+                        .inner_margin(4.0)
+                        .corner_radius(4.0)
+                        .fill(egui::Color32::from_rgba_premultiplied(40, 40, 55, 220))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(name).strong().size(11.0));
+                        });
+                });
+        }
+    }
+}
+
+
 /// Channel accent colors
 fn channel_color(ch_idx: usize) -> egui::Color32 {
     match ch_idx {
@@ -3701,11 +3795,13 @@ fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     }
 
     let available = ui.available_width();
-    let mixer_width = 160.0;
+    let has_sequences = !data.sequences.is_empty();
+    // Widen the center column when sequences are present so steps don't wrap
+    let center_width = if has_sequences { 400.0_f32.min(available * 0.45) } else { 160.0 };
     let num_channels = data.channels.len();
     let left_count = (num_channels + 1) / 2; // ceil(N/2)
     let right_count = num_channels / 2;       // floor(N/2)
-    let side_width = ((available - mixer_width) / 2.0) - 8.0;
+    let side_width = ((available - center_width) / 2.0) - 8.0;
 
     ui.horizontal_top(|ui| {
         // Left side channels
@@ -3729,10 +3825,26 @@ fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
 
         ui.separator();
 
-        // Center mixer box
+        // Center column: mixer box (centered) + sequence builder below
         ui.vertical(|ui| {
-            ui.set_width(mixer_width);
-            render_mixer_box(ui, data, actions);
+            ui.set_width(center_width);
+
+            // Center the mixer box within the wider column
+            let mixer_width = 160.0;
+            let mixer_pad = ((center_width - mixer_width) / 2.0).max(0.0);
+            ui.horizontal(|ui| {
+                ui.add_space(mixer_pad);
+                ui.vertical(|ui| {
+                    ui.set_width(mixer_width);
+                    render_mixer_box(ui, data, actions);
+                });
+            });
+
+            // Sequence builder below mixer, uses full center_width
+            if has_sequences || data.channel_count >= 2 {
+                ui.add_space(4.0);
+                render_sequence_builder(ui, data, actions);
+            }
         });
 
         ui.separator();
@@ -4010,6 +4122,7 @@ fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
                     }
                 }
             }
+
         });
 }
 
@@ -4359,3 +4472,251 @@ fn render_deck_thumbnail(
     });
 }
 
+
+
+/// Render the transition sequence builder below the mixer box
+fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    use super::SequenceAction;
+
+    for (seq_idx, seq) in data.sequences.iter().enumerate() {
+        ui.push_id(format!("seq_{}", seq_idx), |ui| {
+            let border_color = if seq.playing {
+                egui::Color32::from_rgb(80, 160, 80)
+            } else {
+                egui::Color32::from_rgb(50, 50, 70)
+            };
+            egui::Frame::default()
+                .inner_margin(4.0)
+                .corner_radius(4.0)
+                .fill(egui::Color32::from_rgb(18, 18, 28))
+                .stroke(egui::Stroke::new(1.0, border_color))
+                .show(ui, |ui| {
+                    // Header: name | enable | play/stop | delete
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.label(egui::RichText::new(&seq.name).strong().size(11.0));
+
+                        let (en_label, en_color) = if seq.enabled {
+                            ("On", egui::Color32::from_rgb(80, 200, 80))
+                        } else {
+                            ("Off", egui::Color32::from_rgb(120, 120, 120))
+                        };
+                        if ui.small_button(egui::RichText::new(en_label).color(en_color)).on_hover_text("Toggle enabled").clicked() {
+                            actions.sequence_actions.push(SequenceAction::ToggleEnabled(seq_idx));
+                        }
+
+                        if seq.playing {
+                            if ui.small_button("Stop").on_hover_text("Stop playback").clicked() {
+                                actions.sequence_actions.push(SequenceAction::Stop(seq_idx));
+                            }
+                        } else if seq.enabled && !seq.steps.is_empty() {
+                            if ui.small_button("Play").on_hover_text("Start playback").clicked() {
+                                actions.sequence_actions.push(SequenceAction::Play(seq_idx));
+                            }
+                        }
+
+                        if ui.small_button("x").on_hover_text("Delete sequence").clicked() {
+                            actions.sequence_actions.push(SequenceAction::Delete(seq_idx));
+                        }
+                    });
+
+                    // Step list
+                    let mut step_to_remove: Option<usize> = None;
+                    if seq.steps.is_empty() {
+                        ui.label(egui::RichText::new("No steps").small().weak());
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt(format!("seq_scroll_{}", seq_idx))
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                            for (i, step) in seq.steps.iter().enumerate() {
+                                let is_current = seq.playing && i == seq.current_step;
+                                let bg = if is_current {
+                                    egui::Color32::from_rgba_premultiplied(30, 70, 30, 220)
+                                } else if i % 2 == 0 {
+                                    egui::Color32::from_rgb(22, 22, 32)
+                                } else {
+                                    egui::Color32::from_rgb(26, 26, 36)
+                                };
+
+                                egui::Frame::default()
+                                    .fill(bg)
+                                    .inner_margin(egui::Margin::symmetric(2, 1))
+                                    .corner_radius(2.0)
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            let idx_color = if is_current {
+                                                egui::Color32::from_rgb(100, 220, 100)
+                                            } else {
+                                                egui::Color32::from_rgb(80, 80, 100)
+                                            };
+                                            ui.label(egui::RichText::new(format!("{}", i + 1)).monospace().small().color(idx_color));
+                                            render_sequence_step_editor(ui, seq_idx, i, step, data, actions);
+                                            if ui.small_button("x").on_hover_text("Remove step").clicked() {
+                                                step_to_remove = Some(i);
+                                            }
+                                        });
+                                    });
+                            }
+                        });
+                    }
+
+                    if let Some(idx) = step_to_remove {
+                        actions.sequence_actions.push(SequenceAction::RemoveStep { seq_idx, step_idx: idx });
+                    }
+
+                    ui.add_space(2.0);
+                    // Add step buttons
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 3.0;
+                        let from = 0.min(data.channel_count.saturating_sub(1));
+                        let to = 1.min(data.channel_count.saturating_sub(1));
+                        if ui.small_button("+Fade").clicked() {
+                            actions.sequence_actions.push(SequenceAction::AddFade { seq_idx, from_ch: from, to_ch: to });
+                        }
+                        if ui.small_button("+Wait").clicked() {
+                            actions.sequence_actions.push(SequenceAction::AddWait(seq_idx));
+                        }
+                        if ui.small_button("+Loop").clicked() {
+                            actions.sequence_actions.push(SequenceAction::AddGoTo { seq_idx, step_index: 0 });
+                        }
+                    });
+                });
+            ui.add_space(2.0);
+        });
+    }
+
+    // Add sequence button
+    if ui.small_button("+ Sequence").on_hover_text("Create a new transition sequence").clicked() {
+        actions.sequence_actions.push(SequenceAction::Create);
+    }
+}
+
+/// Render inline editor for a single sequence step
+fn render_sequence_step_editor(
+    ui: &mut egui::Ui,
+    seq_idx: usize,
+    step_idx: usize,
+    step: &super::SequenceStepUI,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    use super::SequenceAction;
+    let channel_count = data.channel_count;
+    let channel_names = &data.channel_names;
+    let seq = &data.sequences[seq_idx];
+
+    match &step.kind {
+        super::SequenceStepKindUI::Fade { from_ch, to_ch, duration_val, is_beats, easing, transition_shader } => {
+            // From channel selector
+            let from_label = channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?");
+            egui::ComboBox::from_id_salt(format!("seq{}_from_{}", seq_idx, step_idx))
+                .selected_text(egui::RichText::new(from_label).small())
+                .width(45.0)
+                .show_ui(ui, |ui| {
+                    for i in 0..channel_count {
+                        let name = channel_names.get(i).map(|s| s.as_str()).unwrap_or("?");
+                        if ui.selectable_label(i == *from_ch, name).clicked() {
+                            actions.sequence_actions.push(SequenceAction::SetStepFromCh { seq_idx, step_idx, ch: i });
+                        }
+                    }
+                });
+            ui.label(egui::RichText::new("->").small());
+            // To channel selector
+            let to_label = channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?");
+            egui::ComboBox::from_id_salt(format!("seq{}_to_{}", seq_idx, step_idx))
+                .selected_text(egui::RichText::new(to_label).small())
+                .width(45.0)
+                .show_ui(ui, |ui| {
+                    for i in 0..channel_count {
+                        let name = channel_names.get(i).map(|s| s.as_str()).unwrap_or("?");
+                        if ui.selectable_label(i == *to_ch, name).clicked() {
+                            actions.sequence_actions.push(SequenceAction::SetStepToCh { seq_idx, step_idx, ch: i });
+                        }
+                    }
+                });
+
+            // Duration
+            let mut dur = *duration_val;
+            let unit_label = if *is_beats { "b" } else { "s" };
+            let slider = egui::Slider::new(&mut dur, 0.1..=60.0)
+                .logarithmic(true)
+                .suffix(unit_label)
+                .max_decimals(1);
+            if ui.add_sized([70.0, 16.0], slider).changed() {
+                actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
+            }
+            if ui.small_button(unit_label).on_hover_text("Toggle beats/seconds").clicked() {
+                actions.sequence_actions.push(SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx });
+            }
+
+            // Easing
+            egui::ComboBox::from_id_salt(format!("seq{}_ease_{}", seq_idx, step_idx))
+                .selected_text(egui::RichText::new(easing.as_str()).small())
+                .width(55.0)
+                .show_ui(ui, |ui| {
+                    for e in &["Linear", "EaseInOut", "EaseIn", "EaseOut"] {
+                        if ui.selectable_label(*e == easing.as_str(), *e).clicked() {
+                            actions.sequence_actions.push(SequenceAction::SetStepEasing {
+                                seq_idx, step_idx, easing: e.to_string(),
+                            });
+                        }
+                    }
+                });
+
+            // Transition shader selector (truncated label + tooltip)
+            let shader_full = transition_shader.as_deref().unwrap_or("Opacity");
+            let max_chars = 8;
+            let shader_short = if shader_full.len() > max_chars {
+                format!("{}...", &shader_full[..max_chars])
+            } else {
+                shader_full.to_string()
+            };
+            let combo = egui::ComboBox::from_id_salt(format!("seq{}_shader_{}", seq_idx, step_idx))
+                .selected_text(egui::RichText::new(&shader_short).small())
+                .width(60.0)
+                .show_ui(ui, |ui| {
+                    let is_opacity = transition_shader.is_none();
+                    if ui.selectable_label(is_opacity, "Opacity").clicked() {
+                        actions.sequence_actions.push(SequenceAction::SetStepTransitionShader {
+                            seq_idx, step_idx, shader: None,
+                        });
+                    }
+                    for name in &data.transition_names {
+                        let selected = transition_shader.as_ref() == Some(name);
+                        if ui.selectable_label(selected, name).clicked() {
+                            actions.sequence_actions.push(SequenceAction::SetStepTransitionShader {
+                                seq_idx, step_idx, shader: Some(name.clone()),
+                            });
+                        }
+                    }
+                });
+            combo.response.on_hover_text(shader_full);
+        }
+        super::SequenceStepKindUI::Wait { duration_val, is_beats } => {
+            ui.label(egui::RichText::new("Wait").small());
+            let mut dur = *duration_val;
+            let unit_label = if *is_beats { "b" } else { "s" };
+            let slider = egui::Slider::new(&mut dur, 0.1..=60.0)
+                .logarithmic(true)
+                .suffix(unit_label)
+                .max_decimals(1);
+            if ui.add_sized([90.0, 16.0], slider).changed() {
+                actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
+            }
+            if ui.small_button(unit_label).on_hover_text("Toggle beats/seconds").clicked() {
+                actions.sequence_actions.push(SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx });
+            }
+        }
+        super::SequenceStepKindUI::GoTo { step_index } => {
+            ui.label(egui::RichText::new("GoTo").small());
+            let mut target = *step_index as i32;
+            let max = seq.steps.len().saturating_sub(1) as i32;
+            if ui.add(egui::DragValue::new(&mut target).range(0..=max).speed(0.1)).changed() {
+                actions.sequence_actions.push(SequenceAction::SetGoToTarget {
+                    seq_idx, step_idx, target: target.max(0) as usize,
+                });
+            }
+        }
+    }
+}
