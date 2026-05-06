@@ -75,10 +75,12 @@ pub struct ClockSnapshot {
     pub osc_bpm: Option<f32>,
     /// Current audio BPM (always available as fallback).
     pub audio_bpm: Option<f32>,
-    /// Current preference label: "Auto", "ForceMidi(<name>)", "ForceOsc", "ForceAudio".
+    /// Current preference label: "Auto", "ForceMidi(<name>)", "ForceOsc", "ForceAudio", "ForceManual".
     pub preference_label: String,
     /// Device ID if preference is ForceMidi.
     pub preference_force_device_id: Option<crate::midi::DeviceId>,
+    /// Manual BPM value (if preference is ForceManual).
+    pub manual_bpm: Option<f32>,
 }
 
 // ── Registry Snapshot ──────────────────────────────────────────────
@@ -413,7 +415,7 @@ mod tests {
                 device_name: None, active: false,
                 detected_midi_sources: vec![], osc_active: false, osc_bpm: None,
                 audio_bpm: None, preference_label: "Auto".into(),
-                preference_force_device_id: None,
+                preference_force_device_id: None, manual_bpm: None,
             },
             fps: 60.0,
             frame_count: 0,
@@ -456,7 +458,7 @@ mod tests {
                 device_name: None, active: true,
                 detected_midi_sources: vec![], osc_active: false, osc_bpm: None,
                 audio_bpm: Some(120.0), preference_label: "Auto".into(),
-                preference_force_device_id: None,
+                preference_force_device_id: None, manual_bpm: None,
             },
             fps: 59.9,
             frame_count: 42,

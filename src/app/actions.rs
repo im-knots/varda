@@ -180,6 +180,9 @@ impl VardaApp {
         if let Some(ref pref) = ui_actions.clock_preference {
             self.clock_manager.set_preference(pref.clone());
         }
+        if let Some(bpm) = ui_actions.manual_bpm {
+            self.clock_manager.set_manual_bpm(bpm);
+        }
     }
 
     /// Apply MIDI/audio/camera device actions from UI.

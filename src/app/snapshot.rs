@@ -246,6 +246,7 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
             ("MIDI".to_string(), Some(device_name.clone()))
         }
         crate::clock::ClockSource::OscClock => ("OSC".to_string(), None),
+        crate::clock::ClockSource::Manual => ("Manual".to_string(), None),
     };
 
     let detected_midi_sources = app.clock_manager.detected_midi_sources()
@@ -265,6 +266,7 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
         }
         crate::clock::ClockPreference::ForceOsc => ("ForceOsc".to_string(), None),
         crate::clock::ClockPreference::ForceAudio => ("ForceAudio".to_string(), None),
+        crate::clock::ClockPreference::ForceManual { .. } => ("ForceManual".to_string(), None),
     };
 
     ClockSnapshot {
@@ -283,6 +285,7 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
         },
         preference_label,
         preference_force_device_id,
+        manual_bpm: app.clock_manager.manual_bpm(),
     }
 }
 
@@ -471,6 +474,7 @@ pub(crate) fn build_ui_data(
         clock_audio_bpm: engine.clock.audio_bpm,
         clock_preference: engine.clock.preference_label,
         clock_preference_force_device_id: engine.clock.preference_force_device_id,
+        clock_manual_bpm: engine.clock.manual_bpm,
     }
 }
 

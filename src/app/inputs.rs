@@ -117,9 +117,19 @@ impl VardaApp {
                     self.midi_mappings.process_learn(key);
                 }
 
-                // Apply mapped value to mixer (both normal and learn mode)
+                // Apply mapped value to mixer or clock (both normal and learn mode)
                 if let Some(path) = self.midi_mappings.get(&key).cloned() {
-                    crate::midi::apply_midi_to_param(&mut self.mixer, &path, value);
+                    if path == "clock/bpm" {
+                        // Map normalized 0.0–1.0 → 20–300 BPM range
+                        let bpm = 20.0 + value * 280.0;
+                        if !matches!(self.clock_manager.preference(), crate::clock::ClockPreference::ForceManual { .. }) {
+                            self.clock_manager.set_preference(crate::clock::ClockPreference::ForceManual { bpm });
+                        } else {
+                            self.clock_manager.set_manual_bpm(bpm);
+                        }
+                    } else {
+                        crate::midi::apply_midi_to_param(&mut self.mixer, &path, value);
+                    }
                 } else if !self.midi_mappings.learn_mode {
                     log::debug!("Unmapped MIDI: {} value={:.2}", key, value);
                 }

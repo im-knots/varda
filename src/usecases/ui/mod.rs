@@ -396,6 +396,8 @@ pub struct UIData {
     pub clock_preference: String,
     /// Device ID if preference is ForceMidi
     pub clock_preference_force_device_id: Option<crate::midi::DeviceId>,
+    /// Manual BPM value (if preference is ForceManual)
+    pub clock_manual_bpm: Option<f32>,
 }
 
 /// Read-only snapshot of a single transition sequence
@@ -666,6 +668,8 @@ pub struct UIActions {
     pub sequence_actions: Vec<SequenceAction>,
     /// Clock source preference change
     pub clock_preference: Option<crate::clock::ClockPreference>,
+    /// Manual BPM change (from UI DragValue)
+    pub manual_bpm: Option<f32>,
 }
 
 /// Action for controlling video deck playback
@@ -803,6 +807,7 @@ impl UIActions {
             save_requested: false,
             sequence_actions: Vec::new(),
             clock_preference: None,
+            manual_bpm: None,
         }
     }
 }
@@ -1044,6 +1049,7 @@ impl UIData {
             clock_audio_bpm: None,
             clock_preference: "Auto".to_string(),
             clock_preference_force_device_id: None,
+            clock_manual_bpm: None,
         }
     }
 }

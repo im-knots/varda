@@ -29,6 +29,8 @@ pub enum ClockSource {
     MidiClock { device_id: DeviceId, device_name: String },
     /// BPM received via OSC messages.
     OscClock,
+    /// BPM set manually by the user.
+    Manual,
 }
 
 /// User preference for which clock source to use.
@@ -42,6 +44,8 @@ pub enum ClockPreference {
     ForceOsc,
     /// Force audio-only (ignore external clocks).
     ForceAudio,
+    /// Force a manually set BPM (user beatmatches by ear).
+    ForceManual { bpm: f32 },
 }
 
 impl Default for ClockPreference {
@@ -103,6 +107,9 @@ pub struct ClockManager {
     audio_bpm: Option<f32>,
     audio_beat_phase: f32,
 
+    // ── Manual BPM ────────────────────────────────────────────────
+    manual_start_time: Option<Instant>,
+
     // ── User preference ─────────────────────────────────────────
     preference: ClockPreference,
 
@@ -119,6 +126,7 @@ impl ClockManager {
             osc_last_message: None,
             audio_bpm: None,
             audio_beat_phase: 0.0,
+            manual_start_time: None,
             preference: ClockPreference::Auto,
             state: ClockState::default(),
         }
@@ -128,12 +136,36 @@ impl ClockManager {
 
     /// Set the user's clock source preference.
     pub fn set_preference(&mut self, pref: ClockPreference) {
+        // Initialize manual start time when entering manual mode.
+        if matches!(pref, ClockPreference::ForceManual { .. }) && self.manual_start_time.is_none() {
+            self.manual_start_time = Some(Instant::now());
+        } else if !matches!(pref, ClockPreference::ForceManual { .. }) {
+            self.manual_start_time = None;
+        }
         self.preference = pref;
     }
 
     /// Get the current clock preference.
     pub fn preference(&self) -> &ClockPreference {
         &self.preference
+    }
+
+    // ── Manual BPM methods ──────────────────────────────────────
+
+    /// Update the manual BPM value (clamped 20–300). Only effective in ForceManual mode.
+    pub fn set_manual_bpm(&mut self, bpm: f32) {
+        let bpm = bpm.clamp(20.0, 300.0);
+        if let ClockPreference::ForceManual { bpm: ref mut stored } = self.preference {
+            *stored = bpm;
+        }
+    }
+
+    /// Get the current manual BPM (if in ForceManual mode).
+    pub fn manual_bpm(&self) -> Option<f32> {
+        match &self.preference {
+            ClockPreference::ForceManual { bpm } => Some(*bpm),
+            _ => None,
+        }
     }
 
     // ── MIDI clock methods ──────────────────────────────────────
@@ -259,6 +291,19 @@ impl ClockManager {
         let now = Instant::now();
 
         match &self.preference {
+            ClockPreference::ForceManual { bpm } => {
+                let bpm = *bpm;
+                let start = *self.manual_start_time.get_or_insert(now);
+                let elapsed = now.duration_since(start).as_secs_f64();
+                let phase = ((elapsed * bpm as f64 / 60.0) % 1.0) as f32;
+                self.state = ClockState {
+                    bpm,
+                    beat_phase: phase,
+                    source: ClockSource::Manual,
+                    active: true,
+                };
+                return;
+            }
             ClockPreference::ForceAudio => {
                 self.resolve_audio();
                 return;
@@ -491,5 +536,105 @@ mod tests {
     fn test_preference_default_is_auto() {
         let mgr = ClockManager::new();
         assert_eq!(*mgr.preference(), ClockPreference::Auto);
+    }
+
+    #[test]
+    fn test_force_manual_bpm() {
+        let mut mgr = ClockManager::new();
+        mgr.set_preference(ClockPreference::ForceManual { bpm: 128.0 });
+        mgr.update();
+        assert!(mgr.state().active);
+        assert!((mgr.state().bpm - 128.0).abs() < 0.01);
+        assert!(matches!(mgr.state().source, ClockSource::Manual));
+    }
+
+    #[test]
+    fn test_set_manual_bpm_updates_preference() {
+        let mut mgr = ClockManager::new();
+        mgr.set_preference(ClockPreference::ForceManual { bpm: 120.0 });
+        mgr.set_manual_bpm(140.0);
+        assert_eq!(mgr.manual_bpm(), Some(140.0));
+        mgr.update();
+        assert!((mgr.state().bpm - 140.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_manual_bpm_clamped() {
+        let mut mgr = ClockManager::new();
+        mgr.set_preference(ClockPreference::ForceManual { bpm: 120.0 });
+        mgr.set_manual_bpm(5.0);
+        assert_eq!(mgr.manual_bpm(), Some(20.0));
+        mgr.set_manual_bpm(999.0);
+        assert_eq!(mgr.manual_bpm(), Some(300.0));
+    }
+
+    #[test]
+    fn test_manual_beat_phase_advances() {
+        let mut mgr = ClockManager::new();
+        // 120 BPM = 2 beats/sec, so after some time phase should be non-zero
+        mgr.set_preference(ClockPreference::ForceManual { bpm: 120.0 });
+        // Sleep briefly so elapsed > 0
+        std::thread::sleep(Duration::from_millis(50));
+        mgr.update();
+        assert!(mgr.state().active);
+        assert!(mgr.state().beat_phase > 0.0, "beat phase should advance over time");
+        assert!(mgr.state().beat_phase < 1.0, "beat phase should be in 0..1");
+    }
+
+    #[test]
+    fn test_manual_ignores_other_sources() {
+        let mut mgr = ClockManager::new();
+        mgr.set_preference(ClockPreference::ForceManual { bpm: 100.0 });
+        // Feed audio and OSC — they should be ignored
+        mgr.update_audio(Some(140.0), 0.5);
+        mgr.process_osc_bpm(160.0);
+        mgr.update();
+        assert!(matches!(mgr.state().source, ClockSource::Manual));
+        assert!((mgr.state().bpm - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_set_manual_bpm_noop_when_not_manual() {
+        let mut mgr = ClockManager::new();
+        // Default is Auto — set_manual_bpm should be a no-op
+        mgr.set_manual_bpm(140.0);
+        assert_eq!(mgr.manual_bpm(), None);
+    }
+
+    #[test]
+    fn test_manual_bpm_none_when_not_manual() {
+        let mgr = ClockManager::new();
+        assert_eq!(mgr.manual_bpm(), None);
+
+        let mut mgr2 = ClockManager::new();
+        mgr2.set_preference(ClockPreference::ForceAudio);
+        assert_eq!(mgr2.manual_bpm(), None);
+    }
+
+    #[test]
+    fn test_switching_away_from_manual_clears_start_time() {
+        let mut mgr = ClockManager::new();
+        mgr.set_preference(ClockPreference::ForceManual { bpm: 120.0 });
+        assert!(mgr.manual_start_time.is_some());
+        mgr.set_preference(ClockPreference::Auto);
+        assert!(mgr.manual_start_time.is_none());
+    }
+
+    #[test]
+    fn test_re_entering_manual_resets_phase() {
+        let mut mgr = ClockManager::new();
+        mgr.set_preference(ClockPreference::ForceManual { bpm: 120.0 });
+        std::thread::sleep(Duration::from_millis(50));
+        mgr.update();
+        let phase1 = mgr.state().beat_phase;
+        assert!(phase1 > 0.0);
+
+        // Switch away and back — start time should reset
+        mgr.set_preference(ClockPreference::Auto);
+        mgr.set_preference(ClockPreference::ForceManual { bpm: 120.0 });
+        mgr.update();
+        let phase2 = mgr.state().beat_phase;
+        // phase2 should be very close to 0 since we just re-entered
+        assert!(phase2 < phase1, "phase should reset when re-entering manual mode");
     }
 }

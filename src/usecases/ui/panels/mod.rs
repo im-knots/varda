@@ -96,6 +96,7 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                         "MIDI" => egui::Color32::from_rgb(180, 100, 255),
                         "OSC" => egui::Color32::from_rgb(100, 150, 255),
                         "Audio" => egui::Color32::from_rgb(100, 220, 100),
+                        "Manual" => egui::Color32::from_rgb(255, 165, 0),
                         _ => egui::Color32::from_rgb(120, 120, 120),
                     };
                     if let Some(dev) = &data.clock_device_name {
@@ -472,6 +473,26 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
         actions.clock_preference = Some(crate::clock::ClockPreference::ForceAudio);
     }
 
+    // Manual BPM option
+    let is_manual = data.clock_preference == "ForceManual";
+    let mut manual_bpm = data.clock_manual_bpm.unwrap_or(120.0);
+    ui.horizontal(|ui| {
+        if ui.radio(is_manual, "🟠 Manual").clicked() && !is_manual {
+            actions.clock_preference = Some(crate::clock::ClockPreference::ForceManual { bpm: manual_bpm });
+        }
+        if is_manual {
+            let drag = ui.add(
+                egui::DragValue::new(&mut manual_bpm)
+                    .range(20.0..=300.0)
+                    .speed(0.5)
+                    .suffix(" BPM"),
+            );
+            if drag.changed() {
+                actions.manual_bpm = Some(manual_bpm);
+            }
+        }
+    });
+
     // Current status line
     ui.separator();
     let status = match data.clock_source.as_str() {
@@ -481,6 +502,7 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
         }
         "OSC" => format!("Currently: OSC ({})", if is_auto { "auto" } else { "forced" }),
         "Audio" => format!("Currently: Audio ({})", if is_auto { "auto" } else { "forced" }),
+        "Manual" => format!("Currently: Manual ({:.0} BPM)", manual_bpm),
         _ => "Currently: No clock".to_string(),
     };
     ui.label(egui::RichText::new(status).weak().small());
