@@ -1,10 +1,12 @@
 //! Workspace persistence — save/load from `.varda/` directory.
 
 use super::VardaApp;
+use crate::usecases::ui::UILayoutState;
 
 impl VardaApp {
     /// Save the entire workspace to `.varda/`.
-    pub fn save_workspace(&self) {
+    /// `layout` is UI-consumer-owned state persisted in stage.json.
+    pub fn save_workspace(&self, layout: &UILayoutState) {
         if let Err(e) = self.workspace.ensure_dir() {
             log::error!("Failed to create .varda directory: {}", e);
             return;
@@ -25,8 +27,8 @@ impl VardaApp {
         }
         let stage = crate::persistence::snapshot_stage(
             &self.surface_manager, &self.output_windows,
-            self.stage_editor_grid_size, self.stage_editor_snap,
-            self.library_panel_open, self.stage_editor_open,
+            layout.stage_editor_grid_size, layout.stage_editor_snap,
+            layout.library_panel_open, layout.stage_editor_open,
         );
         match stage.save(self.workspace.stage_path()) {
             Ok(()) => log::info!("Saved stage to {}", self.workspace.stage_path().display()),
@@ -36,18 +38,23 @@ impl VardaApp {
 
     /// Load workspace from `.varda/` if it exists.
     /// If a scene is found, replaces the default mixer with the restored one.
-    pub fn load_workspace(&mut self) {
+    /// Returns layout preferences loaded from stage.json (if any).
+    pub fn load_workspace(&mut self) -> Option<UILayoutState> {
         if !self.workspace.exists() {
             log::info!("No .varda/ directory found, starting fresh");
-            return;
+            return None;
         }
+        let mut loaded_layout: Option<UILayoutState> = None;
         if self.workspace.has_stage() {
             match crate::persistence::StagePrefs::load(self.workspace.stage_path()) {
                 Ok(prefs) => {
-                    self.stage_editor_grid_size = prefs.grid_size;
-                    self.stage_editor_snap = prefs.snap;
-                    self.library_panel_open = prefs.library_panel_open;
-                    self.stage_editor_open = prefs.stage_editor_open;
+                    loaded_layout = Some(UILayoutState {
+                        stage_editor_grid_size: prefs.grid_size,
+                        stage_editor_snap: prefs.snap,
+                        library_panel_open: prefs.library_panel_open,
+                        stage_editor_open: prefs.stage_editor_open,
+                        ..UILayoutState::default()
+                    });
                     self.surface_manager = prefs.surfaces;
                     for _output_config in &prefs.outputs {
                         self.pending_output_creates.push(());
@@ -94,5 +101,6 @@ impl VardaApp {
                 Err(e) => log::warn!("Failed to load MIDI config: {}", e),
             }
         }
+        loaded_layout
     }
 }

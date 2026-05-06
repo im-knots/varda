@@ -21,7 +21,6 @@ pub use types::*;
 pub enum EngineCommand {
     // ── Mixer ──────────────────────────────────────────────────
     SetCrossfader(f32),
-    SnapCrossfader(f32),
     AutoCrossfade { target: f32, duration_secs: f32, easing: CrossfadeEasing },
     BeatCrossfade { target: f32, beats: f32 },
     AddDeck { channel_idx: usize, shader_name: String },

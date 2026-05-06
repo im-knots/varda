@@ -329,7 +329,7 @@ impl ControllerLedManager {
 fn read_param_value(mixer: &Mixer, path: &str) -> f32 {
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
-        ["crossfader"] => mixer.crossfader,
+        ["crossfader"] => mixer.crossfader(),
         ["ch", ch_s, "opacity"] => {
             ch_s.parse::<usize>().ok()
                 .and_then(|ch| mixer.channel(ch))

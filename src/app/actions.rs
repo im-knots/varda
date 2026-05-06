@@ -9,24 +9,9 @@ use crate::usecases::ui;
 
 
 impl VardaApp {
-    /// Apply UI-driven state changes: selection, MIDI learn, notifications, stage editor.
+    /// Apply UI-driven engine state changes: MIDI learn, notifications.
+    /// Selection and layout state is handled by the UI consumer (UIRunner).
     pub fn apply_ui_actions(&mut self, ui_actions: &ui::UIActions) {
-        if let Some(sel) = ui_actions.select_deck {
-            self.selected_deck = Some(sel);
-            self.selected_channel = None;
-            self.selected_master = false;
-        }
-        if let Some(ch) = ui_actions.select_channel {
-            self.selected_channel = Some(ch);
-            self.selected_deck = None;
-            self.selected_master = false;
-        }
-        if ui_actions.select_master {
-            self.selected_master = true;
-            self.selected_deck = None;
-            self.selected_channel = None;
-        }
-
         if ui_actions.midi_learn_toggle {
             self.midi_mappings.toggle_learn();
         }
@@ -39,40 +24,30 @@ impl VardaApp {
         for idx in dismissals {
             self.notifications.dismiss(idx);
         }
-
-        if ui_actions.toggle_stage_editor {
-            self.stage_editor_open = !self.stage_editor_open;
-        }
-        if let Some(size) = ui_actions.set_grid_size {
-            self.stage_editor_grid_size = size;
-        }
-        if ui_actions.toggle_snap {
-            self.stage_editor_snap = !self.stage_editor_snap;
-        }
-        if ui_actions.toggle_library_panel {
-            self.library_panel_open = !self.library_panel_open;
-        }
     }
 
     /// Apply engine mutations: mixer, decks, effects, transitions, channels, cameras.
     /// Routes through engine trait methods where possible, VardaApp methods otherwise.
     /// `egui_renderer` and `deck_preview_textures` are passed in because they are
     /// egui-specific state owned by the window layer.
+    ///
+    /// Returns the index of a removed channel (if any) so the UI consumer can
+    /// fix up selection state.
     pub fn apply_engine_actions(
         &mut self,
         ui_actions: &mut ui::UIActions,
         egui_renderer: &mut egui_wgpu::Renderer,
         deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
-    ) {
+    ) -> Option<usize> {
         use crate::engine::traits::*;
         use crate::usecases::ui::CrossfaderAction;
 
         // Crossfader — dispatch through trait methods
         if let Some(action) = &ui_actions.crossfader_action {
             match action {
-                CrossfaderAction::SetPosition(pos) => self.snap_crossfader(*pos),
-                CrossfaderAction::SnapA => self.snap_crossfader(0.0),
-                CrossfaderAction::SnapB => self.snap_crossfader(1.0),
+                CrossfaderAction::SetPosition(pos) => self.set_crossfader(*pos),
+                CrossfaderAction::SnapA => self.set_crossfader(0.0),
+                CrossfaderAction::SnapB => self.set_crossfader(1.0),
                 CrossfaderAction::AutoTransition { target, duration_secs, easing } => {
                     self.start_auto_crossfade(*target, *duration_secs, *easing);
                 }
@@ -122,7 +97,9 @@ impl VardaApp {
         // Channel add/remove + camera
         self.apply_add_channel(ui_actions);
         self.apply_camera_add(ui_actions, egui_renderer, deck_preview_textures);
-        self.apply_remove_channel(ui_actions);
+        let removed_channel = self.apply_remove_channel(ui_actions);
+
+        removed_channel
     }
 
 
@@ -131,7 +108,7 @@ impl VardaApp {
         match self.mixer.add_channel(&self.context, crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT) {
             Ok(idx) => {
                 self.notifications.info(format!("Added channel {} (index {})",
-                    self.mixer.channels[idx].name, idx));
+                    self.mixer.channels()[idx].name, idx));
             }
             Err(e) => {
                 log::error!("Failed to add channel: {}", e);
@@ -184,27 +161,17 @@ impl VardaApp {
         }
     }
 
-    fn apply_remove_channel(&mut self, ui_actions: &ui::UIActions) {
-        let Some(ch_idx) = ui_actions.remove_channel else { return };
-        let name = self.mixer.channels.get(ch_idx).map(|c| c.name.clone()).unwrap_or_default();
+    /// Returns the index of the removed channel (if any) so the UI consumer
+    /// can fix up selection state.
+    fn apply_remove_channel(&mut self, ui_actions: &ui::UIActions) -> Option<usize> {
+        let ch_idx = ui_actions.remove_channel?;
+        let name = self.mixer.channels().get(ch_idx).map(|c| c.name.clone()).unwrap_or_default();
         if self.mixer.remove_channel(ch_idx) {
             self.notifications.info(format!("Removed channel {}", name));
-            if let Some((sel_ch, _)) = self.selected_deck {
-                if sel_ch == ch_idx {
-                    self.selected_deck = None;
-                } else if sel_ch > ch_idx {
-                    self.selected_deck = Some((sel_ch - 1, self.selected_deck.unwrap().1));
-                }
-            }
-            if let Some(sel_ch) = self.selected_channel {
-                if sel_ch == ch_idx {
-                    self.selected_channel = None;
-                } else if sel_ch > ch_idx {
-                    self.selected_channel = Some(sel_ch - 1);
-                }
-            }
+            Some(ch_idx)
         } else {
             self.notifications.error("Cannot remove channel (minimum 2 required)".to_string());
+            None
         }
     }
 

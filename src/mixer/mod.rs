@@ -18,22 +18,22 @@ use anyhow::Result;
 /// Mixer - Top-level compositor
 pub struct Mixer {
     /// Channels (default 2: A and B)
-    pub channels: Vec<Channel>,
+    channels: Vec<Channel>,
 
     /// Monotonic counter for generating unique channel names (never decremented)
-    pub(crate) next_channel_index: usize,
+    next_channel_index: usize,
 
     /// Crossfader position (0.0 = Ch 0, 1.0 = Ch 1)
-    pub crossfader: f32,
+    crossfader: f32,
 
     /// Active auto-crossfade (if any)
-    pub auto_crossfade: Option<AutoCrossfade>,
+    auto_crossfade: Option<AutoCrossfade>,
 
     /// Pending beat-synced crossfade (if any)
-    pub beat_sync_crossfade: Option<BeatSyncCrossfade>,
+    beat_sync_crossfade: Option<BeatSyncCrossfade>,
 
     /// Global modulation engine
-    pub modulation: ModulationEngine,
+    modulation: ModulationEngine,
 
     /// Start time for TIME-based modulation
     start_time: std::time::Instant,
@@ -42,15 +42,15 @@ pub struct Mixer {
     last_render_time: std::time::Instant,
 
     /// Composite output texture (all channels mixed, pre-master effects)
-    pub composite_texture: wgpu::Texture,
-    pub composite_view: wgpu::TextureView,
+    composite_texture: wgpu::Texture,
+    composite_view: wgpu::TextureView,
 
     /// Ping-pong texture for master effect chain
-    pub effect_ping_texture: wgpu::Texture,
-    pub effect_ping_view: wgpu::TextureView,
+    effect_ping_texture: wgpu::Texture,
+    effect_ping_view: wgpu::TextureView,
 
     /// Master effect chain (applied to final composite)
-    pub master_effects: Vec<Effect>,
+    master_effects: Vec<Effect>,
 
     /// Frame counter
     frame_count: u32,
@@ -59,10 +59,10 @@ pub struct Mixer {
     blend_blit_pipelines: std::collections::HashMap<BlendMode, BlitPipeline>,
 
     /// Active transition effect (replaces opacity-based crossfade when set)
-    pub active_transition: Option<TransitionEffect>,
+    active_transition: Option<TransitionEffect>,
 
     /// Transition sequences (channel-to-channel automation). Multiple named sequences supported.
-    pub transition_sequences: Vec<TransitionSequence>,
+    transition_sequences: Vec<TransitionSequence>,
 
     /// Cached sub-mix textures for multi-channel surface assignments.
     /// Key: sorted channel indices, Value: (texture, view).
@@ -175,6 +175,107 @@ impl Mixer {
     /// Get a mutable reference to channel by index
     pub fn channel_mut(&mut self, index: usize) -> Option<&mut Channel> {
         self.channels.get_mut(index)
+    }
+
+    // ── Accessor methods ─────────────────────────────────────────────
+
+    /// Read-only access to all channels.
+    pub fn channels(&self) -> &[Channel] {
+        &self.channels
+    }
+
+    /// Mutable access to all channels.
+    pub fn channels_mut(&mut self) -> &mut Vec<Channel> {
+        &mut self.channels
+    }
+
+    /// Number of channels.
+    pub fn channel_count(&self) -> usize {
+        self.channels.len()
+    }
+
+    /// Current crossfader position (0.0 = Ch 0, 1.0 = Ch 1).
+    pub fn crossfader(&self) -> f32 {
+        self.crossfader
+    }
+
+    /// Read-only access to the auto-crossfade state.
+    pub fn auto_crossfade(&self) -> Option<&AutoCrossfade> {
+        self.auto_crossfade.as_ref()
+    }
+
+    /// Read-only access to master effects.
+    pub fn master_effects(&self) -> &[Effect] {
+        &self.master_effects
+    }
+
+    /// Mutable access to master effects.
+    pub fn master_effects_mut(&mut self) -> &mut Vec<Effect> {
+        &mut self.master_effects
+    }
+
+    /// Read-only access to the modulation engine.
+    pub fn modulation(&self) -> &ModulationEngine {
+        &self.modulation
+    }
+
+    /// Mutable access to the modulation engine.
+    pub fn modulation_mut(&mut self) -> &mut ModulationEngine {
+        &mut self.modulation
+    }
+
+    /// Read-only access to the active transition effect.
+    pub fn active_transition(&self) -> Option<&TransitionEffect> {
+        self.active_transition.as_ref()
+    }
+
+    /// Read-only access to transition sequences.
+    pub fn transition_sequences(&self) -> &[TransitionSequence] {
+        &self.transition_sequences
+    }
+
+    /// Mutable access to transition sequences.
+    pub fn transition_sequences_mut(&mut self) -> &mut Vec<TransitionSequence> {
+        &mut self.transition_sequences
+    }
+
+    /// The composited output texture view (post-crossfade, post-master-effects).
+    pub fn composite_view(&self) -> &wgpu::TextureView {
+        &self.composite_view
+    }
+
+    // ── Persistence restore helpers ──────────────────────────────────
+
+    /// Replace all channels (used by persistence restore).
+    /// Also updates next_channel_index based on the highest "Ch N" name.
+    pub fn replace_channels(&mut self, channels: Vec<Channel>) {
+        let max_idx = channels.iter()
+            .filter_map(|ch| ch.name.strip_prefix("Ch ").and_then(|s| s.parse::<usize>().ok()))
+            .max()
+            .map(|n| n + 1)
+            .unwrap_or(channels.len());
+        self.next_channel_index = max_idx;
+        self.channels = channels;
+    }
+
+    /// Set the crossfader position directly (used by persistence restore).
+    pub fn set_crossfader(&mut self, value: f32) {
+        self.crossfader = value.clamp(0.0, 1.0);
+    }
+
+    /// Replace the modulation engine (used by persistence restore).
+    pub fn set_modulation(&mut self, engine: ModulationEngine) {
+        self.modulation = engine;
+    }
+
+    /// Replace transition sequences (used by persistence restore).
+    pub fn set_transition_sequences(&mut self, sequences: Vec<TransitionSequence>) {
+        self.transition_sequences = sequences;
+    }
+
+    /// Set the next_channel_index counter (used by persistence restore).
+    pub fn set_next_channel_index(&mut self, idx: usize) {
+        self.next_channel_index = idx;
     }
 
 }

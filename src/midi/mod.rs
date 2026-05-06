@@ -693,8 +693,8 @@ pub fn apply_midi_to_param(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         // master/effect/<k>/param/<name>
         ["master", "effect", ek_s, "param", name] => {
             if let Ok(ek) = ek_s.parse::<usize>() {
-                if ek < mixer.master_effects.len() {
-                    apply_float_param_scaled(&mut mixer.master_effects[ek].params, name, value);
+                if ek < mixer.master_effects().len() {
+                    apply_float_param_scaled(&mut mixer.master_effects_mut()[ek].params, name, value);
                     return true;
                 }
             }
@@ -703,8 +703,8 @@ pub fn apply_midi_to_param(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         // mod/<idx>/<param_name> — modulation source params
         ["mod", idx_s, param_name] => {
             if let Ok(idx) = idx_s.parse::<usize>() {
-                if idx < mixer.modulation.sources.len() {
-                    apply_mod_param(&mut mixer.modulation.sources[idx], param_name, value);
+                if idx < mixer.modulation_mut().sources.len() {
+                    apply_mod_param(&mut mixer.modulation_mut().sources[idx], param_name, value);
                     return true;
                 }
             }
@@ -713,8 +713,8 @@ pub fn apply_midi_to_param(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         // mod/<idx>/step/<step_idx> — step sequencer step values
         ["mod", idx_s, "step", step_s] => {
             if let (Ok(idx), Ok(step_idx)) = (idx_s.parse::<usize>(), step_s.parse::<usize>()) {
-                if idx < mixer.modulation.sources.len() {
-                    if let ModulationSource::StepSequencer { steps, .. } = &mut mixer.modulation.sources[idx] {
+                if idx < mixer.modulation_mut().sources.len() {
+                    if let ModulationSource::StepSequencer { steps, .. } = &mut mixer.modulation_mut().sources[idx] {
                         if step_idx < steps.len() {
                             steps[step_idx] = value.clamp(0.0, 1.0);
                             return true;

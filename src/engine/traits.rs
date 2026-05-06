@@ -14,7 +14,6 @@ use super::types::*;
 /// Commands for controlling the mixer, channels, decks, and effects.
 pub trait MixerCommands {
     fn set_crossfader(&mut self, position: f32);
-    fn snap_crossfader(&mut self, position: f32);
     fn start_auto_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing);
     fn start_beat_crossfade(&mut self, target: f32, beats: f32);
     fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<()>;

@@ -1,4 +1,11 @@
 //! Snapshot builder — constructs engine state snapshots from live VardaApp state.
+//!
+//! PERF: Every frame clones the full EngineState (params, effects, FFT data,
+//! modulation assignments). At 8+ decks with effects, this is dozens of heap
+//! allocations per frame. Not a bottleneck at 60fps with current deck counts,
+//! but worth profiling if deck/effect counts grow significantly (16+ decks).
+//! Mitigation options: dirty-flag retained snapshots, arena allocation, or
+//! COW wrappers on heavy fields.
 
 use super::VardaApp;
 use crate::engine::types::*;
@@ -9,7 +16,7 @@ use crate::usecases::ui::{ShaderParamsUI, ParamUIInfo, EffectInfo};
 pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
     let mixer = &app.mixer;
 
-    let channels = mixer.channels.iter().enumerate().map(|(ch_idx, ch)| {
+    let channels = mixer.channels().iter().enumerate().map(|(ch_idx, ch)| {
         let decks = ch.decks.iter().enumerate().map(|(deck_idx, slot)| {
             let gen_params = build_shader_params(&slot.deck.source_name(), &slot.deck.generator_params);
             let effects = slot.deck.effects.iter().map(|e| {
@@ -87,7 +94,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
         }
     }).collect();
 
-    let master_effects = mixer.master_effects.iter().map(|e| {
+    let master_effects = mixer.master_effects().iter().map(|e| {
         EffectSnapshot {
             name: e.shader.name(),
             enabled: e.enabled,
@@ -96,16 +103,16 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
     }).collect();
 
     let auto_crossfade_active = mixer.is_crossfading();
-    let auto_crossfade_progress = mixer.auto_crossfade.as_ref().map_or(0.0, |a| a.progress());
+    let auto_crossfade_progress = mixer.auto_crossfade().as_ref().map_or(0.0, |a| a.progress());
 
     let transition_names = app.registry.transitions().iter().map(|s| s.name()).collect();
-    let active_transition_name = mixer.active_transition.as_ref().map(|t| t.name.clone());
+    let active_transition_name = mixer.active_transition().as_ref().map(|t| t.name.clone());
 
     let sequences = build_sequence_snapshots(mixer);
 
     MixerSnapshot {
         channels,
-        crossfader: mixer.crossfader,
+        crossfader: mixer.crossfader(),
         auto_crossfade_active,
         auto_crossfade_progress,
         master_effects,
@@ -135,8 +142,8 @@ fn build_shader_params(shader_name: &str, params: &crate::params::ShaderParams) 
 }
 
 fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot> {
-    let channel_names: Vec<String> = mixer.channels.iter().map(|c| c.name.clone()).collect();
-    mixer.transition_sequences.iter().map(|seq| {
+    let channel_names: Vec<String> = mixer.channels().iter().map(|c| c.name.clone()).collect();
+    mixer.transition_sequences().iter().map(|seq| {
         let steps = seq.steps.iter().map(|step| {
             let (label, kind) = match &step.kind {
                 crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
@@ -244,10 +251,11 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
     }
 }
 
-/// Build a UIData snapshot from VardaApp state + egui texture IDs.
+/// Build a UIData snapshot from VardaApp state + UI layout state + egui texture IDs.
 /// Constructs EngineState first, then derives UIData from it.
 pub(crate) fn build_ui_data(
     app: &VardaApp,
+    layout: &crate::usecases::ui::UILayoutState,
     deck_preview_textures: &std::collections::HashMap<(usize, usize), egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
 ) -> crate::usecases::ui::UIData {
@@ -390,12 +398,12 @@ pub(crate) fn build_ui_data(
         midi_learn_target: engine.midi.learn_target,
         transition_names: engine.mixer.transition_names,
         active_transition_name: engine.mixer.active_transition_name,
-        // UI-only selection/layout state — not in EngineState
-        selected_deck: app.selected_deck, selected_channel: app.selected_channel,
-        selected_master: app.selected_master,
+        // UI layout/selection state — owned by the UI consumer, not the engine
+        selected_deck: layout.selected_deck, selected_channel: layout.selected_channel,
+        selected_master: layout.selected_master,
         output_windows, surfaces,
-        stage_editor_open: app.stage_editor_open, library_panel_open: app.library_panel_open,
-        stage_editor_grid_size: app.stage_editor_grid_size, stage_editor_snap: app.stage_editor_snap,
+        stage_editor_open: layout.stage_editor_open, library_panel_open: layout.library_panel_open,
+        stage_editor_grid_size: layout.stage_editor_grid_size, stage_editor_snap: layout.stage_editor_snap,
         available_monitors, midi_devices, midi_mappings,
         cameras: engine.cameras.devices, sequences,
         channel_count: engine.mixer.channels.len(),

@@ -65,15 +65,6 @@ pub struct VardaApp {
     // ── Persistence ────────────────────────────────────────────
     workspace: Workspace,
 
-    // ── UI state (owned here for trait access, not egui-specific) ──
-    selected_deck: Option<(usize, usize)>,
-    selected_channel: Option<usize>,
-    selected_master: bool,
-    stage_editor_open: bool,
-    stage_editor_grid_size: f32,
-    stage_editor_snap: bool,
-    library_panel_open: bool,
-
     // ── Pending actions (deferred to event loop) ───────────────
     pending_output_creates: Vec<()>,
     cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
@@ -162,13 +153,6 @@ impl VardaApp {
             calibration_textures,
             notifications: NotificationSystem::new(),
             workspace,
-            selected_deck: None,
-            selected_channel: None,
-            selected_master: false,
-            stage_editor_open: false,
-            stage_editor_grid_size: 0.05,
-            stage_editor_snap: true,
-            library_panel_open: true,
             pending_output_creates: Vec::new(),
             cached_monitors: Vec::new(),
             audio_textures,
@@ -193,12 +177,15 @@ impl VardaApp {
     }
 
     /// Process all queued cross-thread commands. Called once per frame.
+    ///
+    /// Exhaustive match — the compiler enforces that every EngineCommand variant
+    /// is handled. Adding a new variant requires wiring it here.
     pub fn process_commands(&mut self) {
         use crate::engine::traits::*;
         while let Ok(cmd) = self.command_rx.try_recv() {
             match cmd {
+                // ── Mixer ────────────────────────────────────────
                 EngineCommand::SetCrossfader(pos) => self.set_crossfader(pos),
-                EngineCommand::SnapCrossfader(pos) => self.snap_crossfader(pos),
                 EngineCommand::AutoCrossfade { target, duration_secs, easing } => {
                     self.start_auto_crossfade(target, duration_secs, easing);
                 }
@@ -210,16 +197,56 @@ impl VardaApp {
                         log::error!("Command AddDeck failed: {}", e);
                     }
                 }
+                EngineCommand::AddImageDeck { channel_idx, path } => {
+                    if let Err(e) = self.add_image_deck(channel_idx, &path) {
+                        log::error!("Command AddImageDeck failed: {}", e);
+                    }
+                }
+                EngineCommand::AddVideoDeck { channel_idx, path } => {
+                    if let Err(e) = self.add_video_deck(channel_idx, &path) {
+                        log::error!("Command AddVideoDeck failed: {}", e);
+                    }
+                }
+                EngineCommand::AddSolidColorDeck { channel_idx, color } => {
+                    if let Err(e) = self.add_solid_color_deck(channel_idx, color) {
+                        log::error!("Command AddSolidColorDeck failed: {}", e);
+                    }
+                }
+                EngineCommand::AddCameraDeck { channel_idx, camera_id } => {
+                    if let Err(e) = self.add_camera_deck(channel_idx, camera_id) {
+                        log::error!("Command AddCameraDeck failed: {}", e);
+                    }
+                }
                 EngineCommand::RemoveDeck { channel_idx, deck_idx } => {
                     if let Err(e) = self.remove_deck(channel_idx, deck_idx) {
                         log::error!("Command RemoveDeck failed: {}", e);
                     }
                 }
+                EngineCommand::MoveDeck { src_ch, src_deck, dst_ch } => {
+                    if let Err(e) = self.move_deck(src_ch, src_deck, dst_ch) {
+                        log::error!("Command MoveDeck failed: {}", e);
+                    }
+                }
                 EngineCommand::SetDeckOpacity { channel_idx, deck_idx, opacity } => {
                     self.set_deck_opacity(channel_idx, deck_idx, opacity);
                 }
+                EngineCommand::SetDeckBlendMode { channel_idx, deck_idx, mode } => {
+                    self.set_deck_blend_mode(channel_idx, deck_idx, mode);
+                }
+                EngineCommand::SetDeckSolo { channel_idx, deck_idx, solo } => {
+                    self.set_deck_solo(channel_idx, deck_idx, solo);
+                }
+                EngineCommand::SetDeckMute { channel_idx, deck_idx, mute } => {
+                    self.set_deck_mute(channel_idx, deck_idx, mute);
+                }
+                EngineCommand::SetDeckScalingMode { channel_idx, deck_idx, mode } => {
+                    self.set_deck_scaling_mode(channel_idx, deck_idx, mode);
+                }
                 EngineCommand::SetChannelOpacity { channel_idx, opacity } => {
                     self.set_channel_opacity(channel_idx, opacity);
+                }
+                EngineCommand::SetChannelBlendMode { channel_idx, mode } => {
+                    self.set_channel_blend_mode(channel_idx, mode);
                 }
                 EngineCommand::AddChannel => {
                     let _ = self.add_channel();
@@ -227,8 +254,34 @@ impl VardaApp {
                 EngineCommand::RemoveChannel { channel_idx } => {
                     let _ = self.remove_channel(channel_idx);
                 }
+                EngineCommand::AddEffect { target, shader_name } => {
+                    if let Err(e) = self.add_effect(target, &shader_name) {
+                        log::error!("Command AddEffect failed: {}", e);
+                    }
+                }
+                EngineCommand::RemoveEffect { target, effect_idx } => {
+                    self.remove_effect(target, effect_idx);
+                }
+                EngineCommand::ToggleEffect { target, effect_idx } => {
+                    self.toggle_effect(target, effect_idx);
+                }
+                EngineCommand::MoveEffect { target, from_idx, to_idx } => {
+                    self.move_effect(target, from_idx, to_idx);
+                }
+                EngineCommand::SetTransition { shader_name } => {
+                    if let Err(e) = self.set_transition(shader_name.as_deref()) {
+                        log::error!("Command SetTransition failed: {}", e);
+                    }
+                }
+                EngineCommand::SetParam { path, value } => {
+                    self.set_param(&path, value);
+                }
+
+                // ── Audio ────────────────────────────────────────
                 EngineCommand::OpenAudioSource { source_id } => {
-                    let _ = self.open_audio_source(source_id);
+                    if let Err(e) = self.open_audio_source(source_id) {
+                        log::error!("Command OpenAudioSource failed: {}", e);
+                    }
                 }
                 EngineCommand::CloseAudioSource { source_id } => {
                     self.close_audio_source(source_id);
@@ -236,12 +289,39 @@ impl VardaApp {
                 EngineCommand::ScanAudioDevices => {
                     self.scan_audio_devices();
                 }
+
+                // ── Modulation ───────────────────────────────────
+                EngineCommand::AddLfo { waveform, frequency } => {
+                    self.add_lfo(waveform, frequency);
+                }
+                EngineCommand::AddAudioBand { preset, source_id } => {
+                    self.add_audio_band(preset, source_id);
+                }
+                EngineCommand::AddAdsr { attack, decay, sustain, release } => {
+                    self.add_adsr(attack, decay, sustain, release);
+                }
+                EngineCommand::AddStepSequencer { num_steps, rate } => {
+                    self.add_step_sequencer(num_steps, rate);
+                }
+                EngineCommand::RemoveModulationSource { idx } => {
+                    self.remove_modulation_source(idx);
+                }
+                EngineCommand::AssignModulation { target, source_idx, amount } => {
+                    self.assign_modulation(&target, source_idx, amount);
+                }
+                EngineCommand::ClearModulation { target } => {
+                    self.clear_modulation(&target);
+                }
+
+                // ── Output ───────────────────────────────────────
                 EngineCommand::CreateOutput => {
                     self.request_create_output();
                 }
-                // Remaining commands routed through traits
-                _ => {
-                    log::debug!("Unhandled engine command: {:?}", cmd);
+                EngineCommand::CloseOutput { idx } => {
+                    self.close_output(idx);
+                }
+                EngineCommand::SetOutputDisplay { idx, monitor_name } => {
+                    self.set_output_display(idx, &monitor_name);
                 }
             }
         }
@@ -261,13 +341,15 @@ impl VardaApp {
     }
 
     /// Collect all data needed by the UI into a read-only snapshot.
+    /// `layout` is UI-consumer-owned selection/layout state.
     /// `deck_preview_textures` and `main_output_texture` are egui-owned state passed in.
     pub fn collect_ui_data(
         &self,
+        layout: &crate::usecases::ui::UILayoutState,
         deck_preview_textures: &std::collections::HashMap<(usize, usize), egui::TextureId>,
         main_output_texture: Option<egui::TextureId>,
     ) -> crate::usecases::ui::UIData {
-        snapshot::build_ui_data(self, deck_preview_textures, main_output_texture)
+        snapshot::build_ui_data(self, layout, deck_preview_textures, main_output_texture)
     }
 
     // ── Public accessors (controlled access for delivery layers) ─────

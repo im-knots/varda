@@ -13,10 +13,6 @@ impl MixerCommands for VardaApp {
         self.mixer.snap_crossfader(position);
     }
 
-    fn snap_crossfader(&mut self, position: f32) {
-        self.mixer.snap_crossfader(position);
-    }
-
     fn start_auto_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing) {
         self.mixer.start_crossfade(target, duration_secs, easing);
     }
@@ -79,7 +75,7 @@ impl MixerCommands for VardaApp {
 
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()> {
         // Release camera if applicable
-        if let Some(ch) = self.mixer.channels.get(channel_idx) {
+        if let Some(ch) = self.mixer.channels().get(channel_idx) {
             if let Some(slot) = ch.decks.get(deck_idx) {
                 if let Some(cam_id) = slot.deck.camera_id() {
                     self.camera_manager.release_camera(cam_id);
@@ -95,13 +91,22 @@ impl MixerCommands for VardaApp {
     }
 
     fn move_deck(&mut self, src_ch: usize, src_deck: usize, dst_ch: usize) -> Result<()> {
-        if src_ch != dst_ch && src_ch < self.mixer.channels.len() && dst_ch < self.mixer.channels.len() {
-            if src_deck < self.mixer.channels[src_ch].decks.len() {
-                let slot = self.mixer.channels[src_ch].remove_deck_slot(src_deck).unwrap();
-                let new_idx = self.mixer.channels[dst_ch].add_deck_slot(slot);
-                log::info!("Moved deck {} from ch{} to ch{} (new idx {})", src_deck, src_ch, dst_ch, new_idx);
-            }
+        if src_ch == dst_ch {
+            return Ok(());
         }
+        let channels = self.mixer.channels_mut();
+        if src_ch >= channels.len() || dst_ch >= channels.len() {
+            return Ok(());
+        }
+        if src_deck >= channels[src_ch].decks.len() {
+            return Ok(());
+        }
+        // Two mutable borrows into different vec elements require raw indexing
+        // (split_at_mut or index — Rust's borrow checker doesn't allow two
+        //  channel_mut() calls in the same scope)
+        let slot = channels[src_ch].remove_deck_slot(src_deck).unwrap();
+        let new_idx = channels[dst_ch].add_deck_slot(slot);
+        log::info!("Moved deck {} from ch{} to ch{} (new idx {})", src_deck, src_ch, dst_ch, new_idx);
         Ok(())
     }
 
@@ -159,17 +164,7 @@ impl MixerCommands for VardaApp {
 
     fn remove_channel(&mut self, channel_idx: usize) -> Result<()> {
         if self.mixer.remove_channel(channel_idx) {
-            // Fix selections
-            if let Some((sel_ch, _)) = self.selected_deck {
-                if sel_ch == channel_idx { self.selected_deck = None; }
-                else if sel_ch > channel_idx {
-                    self.selected_deck = Some((sel_ch - 1, self.selected_deck.unwrap().1));
-                }
-            }
-            if let Some(sel_ch) = self.selected_channel {
-                if sel_ch == channel_idx { self.selected_channel = None; }
-                else if sel_ch > channel_idx { self.selected_channel = Some(sel_ch - 1); }
-            }
+            // Selection fixup is handled by the UI consumer (UIRunner)
             Ok(())
         } else {
             anyhow::bail!("Cannot remove channel (minimum 2 required)")
@@ -245,8 +240,8 @@ impl MixerCommands for VardaApp {
                 }
             }
             EffectTarget::Master => {
-                if effect_idx < self.mixer.master_effects.len() {
-                    self.mixer.master_effects[effect_idx].enabled = !self.mixer.master_effects[effect_idx].enabled;
+                if effect_idx < self.mixer.master_effects().len() {
+                    self.mixer.master_effects_mut()[effect_idx].enabled = !self.mixer.master_effects_mut()[effect_idx].enabled;
                 }
             }
         }
@@ -275,9 +270,9 @@ impl MixerCommands for VardaApp {
                 }
             }
             EffectTarget::Master => {
-                if from_idx < self.mixer.master_effects.len() && to_idx < self.mixer.master_effects.len() {
-                    let effect = self.mixer.master_effects.remove(from_idx);
-                    self.mixer.master_effects.insert(to_idx, effect);
+                if from_idx < self.mixer.master_effects().len() && to_idx < self.mixer.master_effects().len() {
+                    let effect = self.mixer.master_effects_mut().remove(from_idx);
+                    self.mixer.master_effects_mut().insert(to_idx, effect);
                 }
             }
         }
@@ -354,7 +349,7 @@ impl ModulationCommands for VardaApp {
         let source = ModulationSource::LFO {
             waveform, frequency, phase: 0.0, amplitude: 1.0, bipolar: false,
         };
-        self.mixer.modulation.add_source(source)
+        self.mixer.modulation_mut().add_source(source)
     }
 
     fn add_audio_band(&mut self, preset: AudioBandPreset, source_id: Option<AudioSourceId>) -> usize {
@@ -363,36 +358,36 @@ impl ModulationCommands for VardaApp {
             source_id, freq_low, freq_high, gain: 1.0, smoothing: 0.6,
             mode: crate::modulation::AudioReactMode::Direct, noise_gate: 0.1,
         };
-        self.mixer.modulation.add_source(source)
+        self.mixer.modulation_mut().add_source(source)
     }
 
     fn add_adsr(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) -> usize {
         let source = ModulationSource::adsr(attack, decay, sustain, release);
-        self.mixer.modulation.add_source(source)
+        self.mixer.modulation_mut().add_source(source)
     }
 
     fn add_step_sequencer(&mut self, num_steps: usize, rate: f32) -> usize {
         let source = ModulationSource::step_sequencer(num_steps, rate);
-        self.mixer.modulation.add_source(source)
+        self.mixer.modulation_mut().add_source(source)
     }
 
     fn remove_modulation_source(&mut self, idx: usize) {
-        self.mixer.modulation.remove_source(idx);
+        self.mixer.modulation_mut().remove_source(idx);
     }
 
     fn assign_modulation(&mut self, target: &str, source_idx: usize, amount: f32) {
-        self.mixer.modulation.assign(target, source_idx, amount, None);
+        self.mixer.modulation_mut().assign(target, source_idx, amount, None);
     }
 
     fn clear_modulation(&mut self, target: &str) {
-        self.mixer.modulation.clear_assignments(target);
+        self.mixer.modulation_mut().clear_assignments(target);
     }
 }
 
 impl ModulationQueries for VardaApp {
     fn modulation_snapshot(&self) -> ModulationSnapshot {
         let m = &self.mixer;
-        let sources = m.modulation.sources.iter().map(|src| {
+        let sources = m.modulation().sources.iter().map(|src| {
             match src {
                 ModulationSource::LFO { waveform, frequency, phase, amplitude, bipolar } => {
                     ModulationSourceSnapshot::LFO {
@@ -420,8 +415,8 @@ impl ModulationQueries for VardaApp {
                 }
             }
         }).collect();
-        let current_values = m.modulation.current_values().to_vec();
-        let assignments = m.modulation.assignments.iter().map(|(k, v)| {
+        let current_values = m.modulation().current_values().to_vec();
+        let assignments = m.modulation().assignments.iter().map(|(k, v)| {
             (k.clone(), v.iter().map(|pm| ModulationAssignmentSnapshot {
                 source_idx: pm.source_idx,
                 amount: pm.amount,

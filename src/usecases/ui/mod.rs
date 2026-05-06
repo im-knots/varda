@@ -14,6 +14,94 @@ use crate::{BlendMode, ScalingMode, ShaderParams};
 // Re-export render resolution constants from the engine layer for backwards compatibility
 pub use crate::app::{RENDER_WIDTH, RENDER_HEIGHT};
 
+/// UI-consumer-owned layout and selection state.
+///
+/// These fields are presentation concerns that don't belong in the engine.
+/// Each UI consumer (egui, CLI, HTTP API) maintains its own instance.
+/// Persisted in `stage.json` via the `StagePrefs` struct.
+#[derive(Clone, Debug)]
+pub struct UILayoutState {
+    /// Currently selected deck for detail view in bottom bar (ch_idx, deck_idx)
+    pub selected_deck: Option<(usize, usize)>,
+    /// Currently selected channel for detail view in bottom bar (ch_idx)
+    pub selected_channel: Option<usize>,
+    /// Whether the master output is selected for detail view in bottom bar
+    pub selected_master: bool,
+    /// Whether the full-screen stage editor is open (replaces deck view)
+    pub stage_editor_open: bool,
+    /// Stage editor grid size (normalized, e.g. 0.05 = 20 divisions)
+    pub stage_editor_grid_size: f32,
+    /// Whether snap-to-grid is enabled in the stage editor
+    pub stage_editor_snap: bool,
+    /// Whether the library panel (left sidebar) is open
+    pub library_panel_open: bool,
+}
+
+impl Default for UILayoutState {
+    fn default() -> Self {
+        Self {
+            selected_deck: None,
+            selected_channel: None,
+            selected_master: false,
+            stage_editor_open: false,
+            stage_editor_grid_size: 0.05,
+            stage_editor_snap: true,
+            library_panel_open: true,
+        }
+    }
+}
+
+impl UILayoutState {
+    /// Apply selection actions from UIActions.
+    pub fn apply_selections(&mut self, ui_actions: &UIActions) {
+        if let Some(sel) = ui_actions.select_deck {
+            self.selected_deck = Some(sel);
+            self.selected_channel = None;
+            self.selected_master = false;
+        }
+        if let Some(ch) = ui_actions.select_channel {
+            self.selected_channel = Some(ch);
+            self.selected_deck = None;
+            self.selected_master = false;
+        }
+        if ui_actions.select_master {
+            self.selected_master = true;
+            self.selected_deck = None;
+            self.selected_channel = None;
+        }
+        if ui_actions.toggle_stage_editor {
+            self.stage_editor_open = !self.stage_editor_open;
+        }
+        if let Some(size) = ui_actions.set_grid_size {
+            self.stage_editor_grid_size = size;
+        }
+        if ui_actions.toggle_snap {
+            self.stage_editor_snap = !self.stage_editor_snap;
+        }
+        if ui_actions.toggle_library_panel {
+            self.library_panel_open = !self.library_panel_open;
+        }
+    }
+
+    /// Fix up selection indices after a channel is removed.
+    pub fn fixup_channel_removal(&mut self, removed_ch: usize) {
+        if let Some((sel_ch, _)) = self.selected_deck {
+            if sel_ch == removed_ch {
+                self.selected_deck = None;
+            } else if sel_ch > removed_ch {
+                self.selected_deck = Some((sel_ch - 1, self.selected_deck.unwrap().1));
+            }
+        }
+        if let Some(sel_ch) = self.selected_channel {
+            if sel_ch == removed_ch {
+                self.selected_channel = None;
+            } else if sel_ch > removed_ch {
+                self.selected_channel = Some(sel_ch - 1);
+            }
+        }
+    }
+}
+
 /// Parameter info for UI rendering (collected before egui to avoid borrow conflicts)
 #[derive(Clone)]
 pub struct ParamUIInfo {

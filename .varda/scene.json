@@ -3,7 +3,7 @@
   "channels": [
     {
       "name": "Ch 0",
-      "opacity": 0.4103522,
+      "opacity": 1.0,
       "blend_mode": "normal",
       "decks": [
         {
@@ -13,23 +13,23 @@
             "path": "shaders/turing_patterns.fs",
             "params": {
               "seed": 0.15,
+              "perturbation": 0.0,
+              "seed_size": 0.05,
               "bg_color": [
                 1.0,
                 1.0,
                 1.0,
                 0.0
               ],
-              "sim_speed": 1.0,
-              "kill_rate": 0.062,
-              "feed_rate": 0.038,
-              "perturbation": 0.0,
-              "seed_size": 0.05,
               "growth_color": [
                 0.0,
                 0.0,
                 0.0,
                 1.0
-              ]
+              ],
+              "feed_rate": 0.038,
+              "sim_speed": 1.0,
+              "kill_rate": 0.062
             }
           },
           "effects": [
@@ -37,27 +37,27 @@
               "path": "shaders/ripple.fs",
               "enabled": true,
               "params": {
-                "ripple_amount": 0.02,
                 "anim_speed": 0.4,
-                "decay": 0.0,
                 "center_x": 0.5,
-                "center_y": 0.5,
-                "frequency": 7.0
+                "ripple_amount": 0.02,
+                "decay": 0.0,
+                "frequency": 7.0,
+                "center_y": 0.5
               }
             },
             {
               "path": "shaders/edge_glow.fs",
               "enabled": true,
               "params": {
-                "glow_amount": 1.0,
-                "edge_strength": 3.0,
-                "show_original": true,
                 "glow_color": [
                   1.0,
                   1.0,
                   1.0,
                   1.0
-                ]
+                ],
+                "show_original": true,
+                "glow_amount": 1.0,
+                "edge_strength": 3.0
               }
             }
           ],
@@ -73,8 +73,13 @@
             "type": "Shader",
             "path": "shaders/voronoi.fs",
             "params": {
+              "edge_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
               "anim_speed": 1.0,
-              "style": 0.0,
               "color2": [
                 0.9,
                 0.2,
@@ -82,19 +87,14 @@
                 1.0
               ],
               "edge_width": 0.0,
-              "edge_color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ],
+              "cell_count": 9.5,
+              "style": 0.0,
               "color1": [
                 0.1,
                 0.4,
                 0.9,
                 1.0
-              ],
-              "cell_count": 9.5
+              ]
             }
           },
           "effects": [
@@ -103,10 +103,10 @@
               "enabled": true,
               "params": {
                 "rotation": 0.0,
-                "segments": 4.0,
                 "center_x": 0.5,
+                "center_y": 0.5,
                 "zoom": 1.0,
-                "center_y": 0.5
+                "segments": 4.0
               }
             }
           ],
@@ -122,28 +122,28 @@
           "path": "shaders/kaleidoscope.fs",
           "enabled": true,
           "params": {
+            "segments": 2.0,
             "rotation": 0.0,
             "center_x": 0.5,
             "center_y": 0.5,
-            "zoom": 1.0,
-            "segments": 2.0
+            "zoom": 1.0
           }
         },
         {
           "path": "shaders/hue_shift.fs",
           "enabled": true,
           "params": {
+            "hue_shift": 0.0,
             "saturation": 1.0,
             "auto_cycle": false,
-            "cycle_speed": 0.5,
-            "hue_shift": 0.0
+            "cycle_speed": 0.5
           }
         }
       ]
     },
     {
       "name": "Ch 1",
-      "opacity": 0.58964777,
+      "opacity": 1.0,
       "blend_mode": "normal",
       "decks": [
         {
@@ -152,6 +152,18 @@
             "type": "Shader",
             "path": "shaders/dark_matter.fs",
             "params": {
+              "web_scale": 1.0,
+              "speed": 0.1,
+              "color_filament": [
+                0.08,
+                0.12,
+                0.5,
+                1.0
+              ],
+              "rot_x": 0.0,
+              "filament_sharpness": 12.0,
+              "zoom": 1.5,
+              "rot_speed_z": 0.0,
               "color_cluster": [
                 1.0,
                 0.35,
@@ -164,29 +176,17 @@
                 0.02,
                 1.0
               ],
-              "brightness": 2.5,
-              "web_scale": 1.0,
-              "rot_z": 0.0,
-              "zoom": 1.5,
-              "speed": 0.1,
-              "rot_speed_z": 0.0,
               "rot_speed_y": 0.03,
-              "rot_x": 0.0,
               "rot_speed_x": 0.02,
+              "rot_y": 0.0,
               "color_warm": [
                 0.7,
                 0.75,
                 1.0,
                 1.0
               ],
-              "filament_sharpness": 12.0,
-              "color_filament": [
-                0.08,
-                0.12,
-                0.5,
-                1.0
-              ],
-              "rot_y": 0.0
+              "rot_z": 0.0,
+              "brightness": 2.5
             }
           },
           "effects": [],
@@ -200,7 +200,7 @@
       "effects": []
     }
   ],
-  "crossfader": 1.0,
+  "crossfader": 0.0,
   "active_transition": null,
   "master_effects": [],
   "modulation": {
@@ -259,6 +259,13 @@
           "component": null
         }
       ],
+      "ch0_deck0:feed_rate": [
+        {
+          "source_idx": 2,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
       "ch0_deck0:perturbation": [
         {
           "source_idx": 2,
@@ -276,13 +283,6 @@
       "ch0_fx1:hue_shift": [
         {
           "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0:feed_rate": [
-        {
-          "source_idx": 2,
           "amount": 0.5,
           "component": null
         }

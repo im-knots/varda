@@ -20,7 +20,7 @@ impl VardaApp {
         // Remove deck if requested
         if let Some((ch_idx, deck_idx)) = actions.deck_to_remove {
             // Release camera before removal
-            if let Some(ch) = mixer.channels.get(ch_idx) {
+            if let Some(ch) = mixer.channels().get(ch_idx) {
                 if let Some(slot) = ch.decks.get(deck_idx) {
                     if let Some(cam_id) = slot.deck.camera_id() {
                         self.camera_manager.release_camera(cam_id);
@@ -55,10 +55,10 @@ impl VardaApp {
 
         // Move deck between channels if requested
         if let Some((src_ch, src_deck, dst_ch)) = actions.deck_to_move {
-            if src_ch != dst_ch && src_ch < mixer.channels.len() && dst_ch < mixer.channels.len() {
-                if src_deck < mixer.channels[src_ch].decks.len() {
-                    let slot = mixer.channels[src_ch].remove_deck_slot(src_deck).unwrap();
-                    let new_idx = mixer.channels[dst_ch].add_deck_slot(slot);
+            if src_ch != dst_ch && src_ch < mixer.channel_count() && dst_ch < mixer.channel_count() {
+                if src_deck < mixer.channels_mut()[src_ch].decks.len() {
+                    let slot = mixer.channels_mut()[src_ch].remove_deck_slot(src_deck).unwrap();
+                    let new_idx = mixer.channels_mut()[dst_ch].add_deck_slot(slot);
 
                     log::info!("Moved deck {} from channel {} to channel {} (new index {})", src_deck, src_ch, dst_ch, new_idx);
 
@@ -71,7 +71,7 @@ impl VardaApp {
                             egui_renderer.free_texture(&tex_id);
                         }
                     }
-                    for (i, deck_slot) in mixer.channels[src_ch].decks.iter().enumerate() {
+                    for (i, deck_slot) in mixer.channels_mut()[src_ch].decks.iter().enumerate() {
                         let tex_id = egui_renderer.register_native_texture(
                             &context.device,
                             &deck_slot.deck.texture_view,
@@ -89,7 +89,7 @@ impl VardaApp {
                             egui_renderer.free_texture(&tex_id);
                         }
                     }
-                    for (i, deck_slot) in mixer.channels[dst_ch].decks.iter().enumerate() {
+                    for (i, deck_slot) in mixer.channels_mut()[dst_ch].decks.iter().enumerate() {
                         let tex_id = egui_renderer.register_native_texture(
                             &context.device,
                             &deck_slot.deck.texture_view,
@@ -281,8 +281,8 @@ impl VardaApp {
 
         // Toggle master effect
         if let Some(effect_idx) = actions.master_effect_to_toggle {
-            if effect_idx < mixer.master_effects.len() {
-                mixer.master_effects[effect_idx].enabled = !mixer.master_effects[effect_idx].enabled;
+            if effect_idx < mixer.master_effects().len() {
+                mixer.master_effects_mut()[effect_idx].enabled = !mixer.master_effects_mut()[effect_idx].enabled;
             }
         }
 
@@ -320,9 +320,9 @@ impl VardaApp {
 
         // Move (reorder) master effect
         if let Some((from_idx, to_idx)) = actions.master_effect_to_move {
-            if from_idx < mixer.master_effects.len() && to_idx < mixer.master_effects.len() && from_idx != to_idx {
-                let effect = mixer.master_effects.remove(from_idx);
-                mixer.master_effects.insert(to_idx, effect);
+            if from_idx < mixer.master_effects().len() && to_idx < mixer.master_effects().len() && from_idx != to_idx {
+                let effect = mixer.master_effects_mut().remove(from_idx);
+                mixer.master_effects_mut().insert(to_idx, effect);
                 log::info!("Moved master effect {} -> {}", from_idx, to_idx);
             }
         }
@@ -337,19 +337,19 @@ impl VardaApp {
         for action in &actions.sequence_actions {
             match action {
                 SequenceAction::Create => {
-                    let n = mixer.transition_sequences.len() + 1;
-                    mixer.transition_sequences.push(TransitionSequence::new(format!("Sequence {}", n)));
+                    let n = mixer.transition_sequences().len() + 1;
+                    mixer.transition_sequences_mut().push(TransitionSequence::new(format!("Sequence {}", n)));
                     log::info!("Created transition sequence {}", n);
                 }
                 SequenceAction::Delete(idx) => {
-                    if *idx < mixer.transition_sequences.len() {
-                        let name = mixer.transition_sequences[*idx].name.clone();
-                        mixer.transition_sequences.remove(*idx);
+                    if *idx < mixer.transition_sequences().len() {
+                        let name = mixer.transition_sequences_mut()[*idx].name.clone();
+                        mixer.transition_sequences_mut().remove(*idx);
                         log::info!("Deleted transition sequence '{}'", name);
                     }
                 }
                 SequenceAction::ToggleEnabled(idx) => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*idx) {
                         seq.enabled = !seq.enabled;
                         if !seq.enabled { seq.state.reset(); }
                     }
@@ -357,7 +357,7 @@ impl VardaApp {
                 SequenceAction::Play(idx) => { mixer.start_sequence(*idx); }
                 SequenceAction::Stop(idx) => { mixer.stop_sequence(*idx); }
                 SequenceAction::AddFade { seq_idx, from_ch, to_ch } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         seq.steps.push(TransitionStep { kind: StepKind::Fade {
                             from_ch: *from_ch, to_ch: *to_ch,
                             duration: DurationSpec::Seconds(2.0),
@@ -366,24 +366,24 @@ impl VardaApp {
                     }
                 }
                 SequenceAction::AddWait(idx) => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*idx) {
                         seq.steps.push(TransitionStep { kind: StepKind::Wait {
                             duration: DurationSpec::Seconds(2.0),
                         }});
                     }
                 }
                 SequenceAction::AddGoTo { seq_idx, step_index } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         seq.steps.push(TransitionStep { kind: StepKind::GoTo { step_index: *step_index } });
                     }
                 }
                 SequenceAction::RemoveStep { seq_idx, step_idx } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if *step_idx < seq.steps.len() { seq.steps.remove(*step_idx); }
                     }
                 }
                 SequenceAction::MoveStep { seq_idx, from, to } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if *from < seq.steps.len() && *to < seq.steps.len() && from != to {
                             let step = seq.steps.remove(*from);
                             seq.steps.insert(*to, step);
@@ -391,7 +391,7 @@ impl VardaApp {
                     }
                 }
                 SequenceAction::SetStepDuration { seq_idx, step_idx, value } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             match &mut step.kind {
                                 StepKind::Fade { duration, .. } | StepKind::Wait { duration } => {
@@ -406,7 +406,7 @@ impl VardaApp {
                     }
                 }
                 SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             match &mut step.kind {
                                 StepKind::Fade { duration, .. } | StepKind::Wait { duration } => {
@@ -421,7 +421,7 @@ impl VardaApp {
                     }
                 }
                 SequenceAction::SetStepEasing { seq_idx, step_idx, easing } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             if let StepKind::Fade { easing: e, .. } = &mut step.kind {
                                 *e = match easing.as_str() {
@@ -435,28 +435,28 @@ impl VardaApp {
                     }
                 }
                 SequenceAction::SetStepFromCh { seq_idx, step_idx, ch } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             if let StepKind::Fade { from_ch, .. } = &mut step.kind { *from_ch = *ch; }
                         }
                     }
                 }
                 SequenceAction::SetStepToCh { seq_idx, step_idx, ch } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             if let StepKind::Fade { to_ch, .. } = &mut step.kind { *to_ch = *ch; }
                         }
                     }
                 }
                 SequenceAction::SetGoToTarget { seq_idx, step_idx, target } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             if let StepKind::GoTo { step_index } = &mut step.kind { *step_index = *target; }
                         }
                     }
                 }
                 SequenceAction::SetStepTransitionShader { seq_idx, step_idx, shader } => {
-                    if let Some(seq) = mixer.transition_sequences.get_mut(*seq_idx) {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             if let StepKind::Fade { transition_shader, .. } = &mut step.kind {
                                 *transition_shader = shader.clone();

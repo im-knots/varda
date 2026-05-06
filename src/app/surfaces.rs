@@ -5,7 +5,8 @@ use crate::usecases::ui;
 
 impl VardaApp {
     /// Apply surface actions from UI.
-    pub fn apply_surface_actions(&mut self, ui_actions: &ui::UIActions) {
+    /// `grid_size` is the UI-consumer-owned grid size for duplicate offset.
+    pub fn apply_surface_actions(&mut self, ui_actions: &ui::UIActions, grid_size: f32) {
         for action in &ui_actions.surface_actions {
             match action {
                 ui::SurfaceAction::Add { name, source } => {
@@ -80,7 +81,7 @@ impl VardaApp {
                     if let Some(surface) = self.surface_manager.surfaces.get(*idx).cloned() {
                         let mut dup = surface;
                         dup.name = format!("{} (copy)", dup.name);
-                        let offset = self.stage_editor_grid_size;
+                        let offset = grid_size;
                         for v in &mut dup.vertices {
                             v[0] = (v[0] + offset).min(1.0);
                             v[1] = (v[1] + offset).min(1.0);

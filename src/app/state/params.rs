@@ -90,18 +90,18 @@ impl VardaApp {
                     }
                 }
                 ParamUpdate::MasterEffectFloat { effect_idx, name, value } => {
-                    if *effect_idx < mixer.master_effects.len() {
-                        mixer.master_effects[*effect_idx].params.set(name, ParamValue::Float(*value));
+                    if *effect_idx < mixer.master_effects().len() {
+                        mixer.master_effects_mut()[*effect_idx].params.set(name, ParamValue::Float(*value));
                     }
                 }
                 ParamUpdate::MasterEffectBool { effect_idx, name, value } => {
-                    if *effect_idx < mixer.master_effects.len() {
-                        mixer.master_effects[*effect_idx].params.set(name, ParamValue::Bool(*value));
+                    if *effect_idx < mixer.master_effects().len() {
+                        mixer.master_effects_mut()[*effect_idx].params.set(name, ParamValue::Bool(*value));
                     }
                 }
                 ParamUpdate::MasterEffectColor { effect_idx, name, value } => {
-                    if *effect_idx < mixer.master_effects.len() {
-                        mixer.master_effects[*effect_idx].params.set(name, ParamValue::Color(*value));
+                    if *effect_idx < mixer.master_effects().len() {
+                        mixer.master_effects_mut()[*effect_idx].params.set(name, ParamValue::Color(*value));
                     }
                 }
             }

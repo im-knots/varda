@@ -26,7 +26,7 @@ impl VardaApp {
     pub fn render_mixer_frame(&mut self) {
         // Update camera frames
         self.camera_manager.update(&self.context.queue);
-        for channel in &mut self.mixer.channels {
+        for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
                 if let Some(cam_id) = slot.deck.camera_id() {
                     slot.deck.camera_source_view = self.camera_manager
@@ -83,7 +83,7 @@ impl VardaApp {
             if output.calibration_mode && !self.calibration_textures.is_empty() && self.surface_manager.surfaces.is_empty() {
                 output.render(context, &self.calibration_textures[0].1);
             } else if self.surface_manager.surfaces.is_empty() {
-                output.render(context, &mixer.composite_view);
+                output.render(context, mixer.composite_view());
             } else if !output.surface_assignments.is_empty() {
                 let render_infos: Vec<SurfaceRenderInfo<'_>> = output.surface_assignments.iter()
                     .enumerate()
@@ -141,9 +141,9 @@ impl VardaApp {
 
     fn resolve_source<'a>(mixer: &'a Mixer, source: &OutputSource) -> Option<&'a wgpu::TextureView> {
         match source {
-            OutputSource::Master => Some(&mixer.composite_view),
+            OutputSource::Master => Some(mixer.composite_view()),
             OutputSource::Channel(ch_idx) => {
-                mixer.channels.get(*ch_idx).map(|ch| &ch.composite_view)
+                mixer.channels().get(*ch_idx).map(|ch| &ch.composite_view)
             }
             OutputSource::Channels(indices) => {
                 let mut sorted = indices.clone();
@@ -152,7 +152,7 @@ impl VardaApp {
                 mixer.get_sub_mix_view(&sorted)
             }
             OutputSource::Deck(ch_idx, deck_idx) => {
-                mixer.channels.get(*ch_idx)
+                mixer.channels().get(*ch_idx)
                     .and_then(|ch| ch.decks.get(*deck_idx))
                     .map(|slot| &slot.deck.texture_view)
             }

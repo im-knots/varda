@@ -28,6 +28,9 @@ pub struct UIRunner {
     main_output_texture: Option<egui::TextureId>,
     main_window_id: Option<WindowId>,
 
+    // ── UI-consumer-owned layout/selection state ─────────────────────
+    layout: super::UILayoutState,
+
     // ── Engine (created after GPU init in resumed()) ─────────────────
     varda: Option<VardaApp>,
 }
@@ -44,6 +47,7 @@ impl UIRunner {
             deck_preview_textures: std::collections::HashMap::new(),
             main_output_texture: None,
             main_window_id: None,
+            layout: super::UILayoutState::default(),
             varda: None,
         }
     }
@@ -92,7 +96,9 @@ impl ApplicationHandler for UIRunner {
         log::info!("Varda initialized: {} shaders", varda.shader_count());
 
         // Load workspace (may replace default mixer with saved scene)
-        varda.load_workspace();
+        if let Some(loaded_layout) = varda.load_workspace() {
+            self.layout = loaded_layout;
+        }
 
         self.varda = Some(varda);
 
@@ -109,7 +115,7 @@ impl ApplicationHandler for UIRunner {
             match event {
                 WindowEvent::CloseRequested => {
                     log::info!("Close requested, saving workspace and exiting...");
-                    self.varda.as_mut().unwrap().save_workspace();
+                    self.varda.as_mut().unwrap().save_workspace(&self.layout);
                     event_loop.exit();
                 }
                 WindowEvent::Resized(new_size) => {
@@ -150,7 +156,7 @@ impl UIRunner {
         let context = varda.gpu_context();
         let mixer = varda.mixer_ref();
 
-        for (ch_idx, ch) in mixer.channels.iter().enumerate() {
+        for (ch_idx, ch) in mixer.channels().iter().enumerate() {
             for (deck_idx, slot) in ch.decks.iter().enumerate() {
                 let tid = egui_renderer.register_native_texture(
                     &context.device, &slot.deck.texture_view, wgpu::FilterMode::Linear,
@@ -159,7 +165,7 @@ impl UIRunner {
             }
         }
         self.main_output_texture = Some(egui_renderer.register_native_texture(
-            &context.device, &mixer.composite_view, wgpu::FilterMode::Linear,
+            &context.device, &mixer.composite_view(), wgpu::FilterMode::Linear,
         ));
     }
 
@@ -172,10 +178,10 @@ impl UIRunner {
 
         if self.main_output_texture.is_none() {
             self.main_output_texture = Some(egui_renderer.register_native_texture(
-                &context.device, &mixer.composite_view, wgpu::FilterMode::Linear,
+                &context.device, &mixer.composite_view(), wgpu::FilterMode::Linear,
             ));
         }
-        for (ch_idx, ch) in mixer.channels.iter().enumerate() {
+        for (ch_idx, ch) in mixer.channels().iter().enumerate() {
             for (deck_idx, slot) in ch.decks.iter().enumerate() {
                 let key = (ch_idx, deck_idx);
                 if !self.deck_preview_textures.contains_key(&key) {
@@ -213,9 +219,9 @@ impl UIRunner {
             varda.refresh_monitors(event_loop);
         }
 
-        // 4. Collect UI data snapshot (engine → UI)
+        // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
         let ui_data = self.varda.as_ref().unwrap()
-            .collect_ui_data(&self.deck_preview_textures, self.main_output_texture);
+            .collect_ui_data(&self.layout, &self.deck_preview_textures, self.main_output_texture);
 
         // 5. Run egui frame
         let raw_input = {
@@ -231,19 +237,28 @@ impl UIRunner {
             egui_state.handle_platform_output(window, full_output.platform_output);
         }
 
-        // 6. Apply all UI actions (delegated to VardaApp)
+        // 6. Apply all UI actions
+        // 6a. UI-consumer-owned selection/layout state
+        self.layout.apply_selections(&ui_actions);
+
+        // 6b. Engine actions (delegated to VardaApp)
         {
             let varda = self.varda.as_mut().unwrap();
             let egui_renderer = self.egui_renderer.as_mut().unwrap();
-            varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
+            let removed_ch = varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
             varda.apply_ui_actions(&ui_actions);
             varda.apply_output_actions(&ui_actions);
-            varda.apply_surface_actions(&ui_actions);
+            varda.apply_surface_actions(&ui_actions, self.layout.stage_editor_grid_size);
             varda.apply_device_actions(&ui_actions);
             varda.update_controller_leds();
 
+            // Fix up selection state after channel removal
+            if let Some(ch_idx) = removed_ch {
+                self.layout.fixup_channel_removal(ch_idx);
+            }
+
             if ui_actions.save_requested {
-                varda.save_workspace();
+                varda.save_workspace(&self.layout);
                 varda.notify_info("💾 Workspace saved");
             }
 
@@ -293,7 +308,7 @@ impl UIRunner {
 
         let bind_group = if let Some(blit) = &self.blit_pipeline {
             let mixer = varda.mixer_ref();
-            Some(blit.create_bind_group(&context.device, &mixer.composite_view))
+            Some(blit.create_bind_group(&context.device, &mixer.composite_view()))
         } else { None };
 
         let screen_desc = egui_wgpu::ScreenDescriptor {

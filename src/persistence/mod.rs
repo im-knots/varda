@@ -154,7 +154,7 @@ use crate::scene::*;
 pub fn snapshot_scene(
     mixer: &Mixer,
 ) -> SceneConfig {
-    let channels = mixer.channels.iter().map(|ch| {
+    let channels = mixer.channels().iter().map(|ch| {
         let decks = ch.decks.iter().map(|slot| {
             let source = match slot.deck.source_type() {
                 "shader" => {
@@ -247,7 +247,7 @@ pub fn snapshot_scene(
         }
     }).collect();
 
-    let master_effects = mixer.master_effects.iter().map(|eff| {
+    let master_effects = mixer.master_effects().iter().map(|eff| {
         EffectConfig {
             path: eff.shader.file_path.clone().unwrap_or_default(),
             enabled: eff.enabled,
@@ -255,10 +255,10 @@ pub fn snapshot_scene(
         }
     }).collect();
 
-    let active_transition = mixer.active_transition.as_ref().map(|t| t.name.clone());
+    let active_transition = mixer.active_transition().as_ref().map(|t| t.name.clone());
 
     // Snapshot transition sequences
-    let transition_sequences = mixer.transition_sequences.iter().map(|seq| {
+    let transition_sequences = mixer.transition_sequences().iter().map(|seq| {
         use crate::channel::DurationSpec;
         use crate::scene::{TransitionSequenceConfig, TransitionStepConfig, DurationSpecConfig};
         TransitionSequenceConfig {
@@ -295,10 +295,10 @@ pub fn snapshot_scene(
     SceneConfig {
         version: 2,
         channels,
-        crossfader: mixer.crossfader,
+        crossfader: mixer.crossfader(),
         active_transition,
         master_effects,
-        modulation: mixer.modulation.clone(),
+        modulation: mixer.modulation().clone(),
         transition_sequences,
     }
 }
@@ -365,7 +365,7 @@ pub fn restore_scene(
     let mut mixer = Mixer::new(context, RENDER_WIDTH, RENDER_HEIGHT)?;
 
     // Clear default channels — we'll create from config
-    mixer.channels.clear();
+    mixer.channels_mut().clear();
 
     for ch_config in &config.channels {
         let mut channel = crate::channel::Channel::new(
@@ -443,22 +443,22 @@ pub fn restore_scene(
             }
         }
 
-        mixer.channels.push(channel);
+        mixer.channels_mut().push(channel);
     }
 
     // Update next_channel_index so new channels don't get duplicate names.
     // Parse existing channel names to find the highest "Ch N" index.
-    let max_idx = mixer.channels.iter()
+    let max_idx = mixer.channels().iter()
         .filter_map(|ch| ch.name.strip_prefix("Ch ").and_then(|s| s.parse::<usize>().ok()))
         .max()
         .map(|n| n + 1)
-        .unwrap_or(mixer.channels.len());
-    mixer.next_channel_index = max_idx;
+        .unwrap_or(mixer.channel_count());
+    mixer.set_next_channel_index(max_idx);
 
     // Restore master effects
     for eff_config in &config.master_effects {
         match restore_effect(eff_config, context, context.texture_format) {
-            Ok(eff) => mixer.master_effects.push(eff),
+            Ok(eff) => mixer.master_effects_mut().push(eff),
             Err(e) => {
                 let msg = format!("Failed to restore master effect '{}': {}", eff_config.path, e);
                 log::warn!("{}", msg);
@@ -468,10 +468,10 @@ pub fn restore_scene(
     }
 
     // Restore crossfader
-    mixer.crossfader = config.crossfader;
+    mixer.set_crossfader(config.crossfader);
 
     // Restore modulation engine
-    mixer.modulation = config.modulation.clone();
+    mixer.set_modulation(config.modulation.clone());
 
     // Restore active transition
     if let Some(transition_name) = &config.active_transition {
@@ -522,7 +522,7 @@ pub fn restore_scene(
             };
             TransitionStep { kind }
         }).collect();
-        mixer.transition_sequences.push(TransitionSequence {
+        mixer.transition_sequences_mut().push(TransitionSequence {
             name: seq_config.name.clone(),
             steps,
             enabled: seq_config.enabled,

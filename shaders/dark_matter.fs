@@ -122,15 +122,15 @@ void main() {
     float fov = 0.9 / max(zoom, 0.3);
     vec3 rd = normalize(forward + p.x * right * fov + p.y * up * fov);
 
-    // Volumetric raymarch — 48 steps, single voronoi per step
+    // Volumetric raymarch — 24 steps, single voronoi per step
     vec3 col = vec3(0.0);
     float totalA = 0.0;
     float maxDist = 8.0;
-    float step = maxDist / 48.0;
+    float step = maxDist / 24.0;
     float sharp = filament_sharpness;
 
-    for (int i = 0; i < 48; i++) {
-        if (totalA > 0.95) break;
+    for (int i = 0; i < 24; i++) {
+        if (totalA > 0.85) break;
 
         float dist = (float(i) + 0.5) * step;
         vec3 pos = (ro + rd * dist) * web_scale * 0.6;
