@@ -175,6 +175,13 @@ impl VardaApp {
         }
     }
 
+    /// Apply clock preference changes from UI.
+    pub fn apply_clock_actions(&mut self, ui_actions: &ui::UIActions) {
+        if let Some(ref pref) = ui_actions.clock_preference {
+            self.clock_manager.set_preference(pref.clone());
+        }
+    }
+
     /// Apply MIDI/audio/camera device actions from UI.
     pub fn apply_device_actions(&mut self, ui_actions: &ui::UIActions) {
         if ui_actions.camera_rescan {

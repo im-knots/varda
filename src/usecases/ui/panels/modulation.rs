@@ -4,14 +4,6 @@ use crate::modulation::{LFOWaveform, StepInterpolation};
 use super::super::{UIData, UIActions, ModulationAction, ModSourceUI, modulator_color, widgets};
 
 pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    ui.heading("🎛 Modulation");
-
-    // Audio levels (integrated into modulation)
-    ui.collapsing("🎵 Audio Input", |ui| {
-        widgets::render_audio_levels(ui, &data.audio);
-    });
-    ui.add_space(4.0);
-
     ui.horizontal(|ui| {
         if ui.button("➕ LFO").clicked() {
             actions.modulation_actions.push(ModulationAction::AddLFO {
@@ -41,32 +33,47 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
     if data.modulation_sources.is_empty() {
         ui.label(egui::RichText::new("No modulation sources").small().weak());
     } else {
-        egui::ScrollArea::horizontal().id_salt("mod_sources_hscroll").max_height(220.0).show(ui, |ui| {
-            ui.horizontal_top(|ui| {
+        egui::ScrollArea::vertical().id_salt("mod_sources_vscroll").show(ui, |ui| {
             for (idx, src) in data.modulation_sources.iter().enumerate() {
                 let mod_color = modulator_color(idx);
                 let dim_color = egui::Color32::from_rgba_premultiplied(
                     mod_color.r() / 4, mod_color.g() / 4, mod_color.b() / 4, 40
                 );
+                let header_label = match src {
+                    ModSourceUI::LFO { .. } => format!("LFO {}", idx + 1),
+                    ModSourceUI::Audio { .. } => format!("Audio {}", idx + 1),
+                    ModSourceUI::ADSR { stage, .. } => {
+                        let stage_icon = match stage {
+                            crate::modulation::ADSRStage::Idle => "⏹",
+                            crate::modulation::ADSRStage::Attack => "▲",
+                            crate::modulation::ADSRStage::Decay => "▼",
+                            crate::modulation::ADSRStage::Sustain => "━",
+                            crate::modulation::ADSRStage::Release => "↘",
+                        };
+                        format!("ADSR {} {}", idx + 1, stage_icon)
+                    }
+                    ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", idx + 1),
+                };
+                // Show current value in header if available
+                let value_text = data.modulation_current_values.get(idx)
+                    .map(|v| format!(" ({:.2})", v))
+                    .unwrap_or_default();
+
                 egui::Frame::default()
                     .inner_margin(4.0)
                     .corner_radius(4.0)
                     .fill(dim_color)
                     .stroke(egui::Stroke::new(1.0, mod_color))
                     .show(ui, |ui| {
-                        ui.set_min_width(140.0);
-                        ui.set_max_width(190.0);
                         ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("{}{}", header_label, value_text)).strong().color(mod_color));
+                            if ui.small_button("x").clicked() {
+                                actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
+                            }
+                        });
                         match src {
                             ModSourceUI::LFO { waveform, frequency, phase, amplitude, bipolar } => {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("LFO {}", idx + 1)).strong().color(mod_color));
-                                    if ui.small_button("x").clicked() {
-                                        actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
-                                    }
-                                });
                                 let waveforms = ["Sine", "Square", "Triangle", "Saw", "Random"];
                                 let current_wf = match waveform {
                                     LFOWaveform::Sine => 0,
@@ -157,12 +164,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 }
                             }
                             ModSourceUI::Audio { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } => {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("Audio {}", idx + 1)).strong().color(mod_color));
-                                    if ui.small_button("x").clicked() {
-                                        actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
-                                    }
-                                });
                                 // Mode selector (Direct/Increase/Decrease)
                                 use crate::modulation::AudioReactMode;
                                 let mode_label = match mode {
@@ -282,21 +283,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.add(egui::ProgressBar::new(cur_val).desired_width(140.0).fill(mod_color));
                                 }
                             }
-                            ModSourceUI::ADSR { attack, decay, sustain, release, stage } => {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("ADSR {}", idx + 1)).strong().color(mod_color));
-                                    let stage_text = match stage {
-                                        crate::modulation::ADSRStage::Idle => "⏹",
-                                        crate::modulation::ADSRStage::Attack => "▲",
-                                        crate::modulation::ADSRStage::Decay => "▼",
-                                        crate::modulation::ADSRStage::Sustain => "━",
-                                        crate::modulation::ADSRStage::Release => "↘",
-                                    };
-                                    ui.label(egui::RichText::new(stage_text).small());
-                                    if ui.small_button("x").clicked() {
-                                        actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
-                                    }
-                                });
+                            ModSourceUI::ADSR { attack, decay, sustain, release, stage: _ } => {
                                 ui.horizontal(|ui| {
                                     if ui.button(egui::RichText::new("▶ Gate").small()).clicked() {
                                         actions.modulation_actions.push(ModulationAction::TriggerADSR { idx });
@@ -368,12 +355,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 }
                             }
                             ModSourceUI::StepSequencer { steps, rate, interpolation, bipolar } => {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("StepSeq {}", idx + 1)).strong().color(mod_color));
-                                    if ui.small_button("x").clicked() {
-                                        actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
-                                    }
-                                });
                                 let mut r = *rate;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Rate:").small());
@@ -445,11 +426,9 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 });
                             }
                         }
-                        });
                     });
-                ui.separator();
+                ui.add_space(4.0);
             }
-            });
         });
     }
 }

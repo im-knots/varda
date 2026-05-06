@@ -280,7 +280,7 @@ impl ShaderParams {
             }));
             self.dirty = false;
         }
-        self.buffer.as_ref().unwrap()
+        self.buffer.as_ref().expect("ensure_buffer must be called before buffer() access")
     }
 
     /// Update GPU buffer if dirty

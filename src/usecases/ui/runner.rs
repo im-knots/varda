@@ -92,7 +92,14 @@ impl ApplicationHandler for UIRunner {
 
         // Create engine now that GPU is ready — mixer, audio textures,
         // calibration textures all initialized immediately.
-        let mut varda = VardaApp::new(gpu);
+        let mut varda = match VardaApp::new(gpu) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("Failed to initialize engine: {}", e);
+                event_loop.exit();
+                return;
+            }
+        };
         log::info!("Varda initialized: {} shaders", varda.shader_count());
 
         // Load workspace (may replace default mixer with saved scene)
@@ -251,6 +258,7 @@ impl UIRunner {
             varda.apply_output_actions(&ui_actions);
             varda.apply_surface_actions(&ui_actions, self.layout.stage_editor_grid_size);
             varda.apply_device_actions(&ui_actions);
+            varda.apply_clock_actions(&ui_actions);
             varda.update_controller_leds();
 
             // Fix up selection state after channel removal

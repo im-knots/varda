@@ -3,8 +3,6 @@
 use super::super::{UIData, UIActions};
 
 pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    ui.heading("🎹 MIDI");
-
     ui.horizontal(|ui| {
         ui.label(format!("{} device(s)", data.midi_devices.len()));
         if ui.button("🔄 Rescan").clicked() {

@@ -235,6 +235,57 @@ pub(crate) fn build_camera_snapshot(app: &VardaApp) -> CameraSnapshot {
     }
 }
 
+/// Build a ClockSnapshot from the current clock manager state.
+pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
+    use crate::engine::types::DetectedClockSourceSnapshot;
+
+    let clock = app.clock_manager.state();
+    let (source_label, device_name) = match &clock.source {
+        crate::clock::ClockSource::Audio => ("Audio".to_string(), None),
+        crate::clock::ClockSource::MidiClock { device_name, .. } => {
+            ("MIDI".to_string(), Some(device_name.clone()))
+        }
+        crate::clock::ClockSource::OscClock => ("OSC".to_string(), None),
+    };
+
+    let detected_midi_sources = app.clock_manager.detected_midi_sources()
+        .into_iter()
+        .map(|s| DetectedClockSourceSnapshot {
+            device_id: s.device_id,
+            device_name: s.device_name,
+            bpm: s.bpm,
+        })
+        .collect();
+
+    let preference = app.clock_manager.preference();
+    let (preference_label, preference_force_device_id) = match preference {
+        crate::clock::ClockPreference::Auto => ("Auto".to_string(), None),
+        crate::clock::ClockPreference::ForceMidi { device_id } => {
+            (format!("ForceMidi({})", device_id), Some(*device_id))
+        }
+        crate::clock::ClockPreference::ForceOsc => ("ForceOsc".to_string(), None),
+        crate::clock::ClockPreference::ForceAudio => ("ForceAudio".to_string(), None),
+    };
+
+    ClockSnapshot {
+        bpm: if clock.active { Some(clock.bpm) } else { None },
+        beat_phase: clock.beat_phase,
+        source_label,
+        device_name,
+        active: clock.active,
+        detected_midi_sources,
+        osc_active: app.clock_manager.osc_active(),
+        osc_bpm: app.clock_manager.osc_bpm(),
+        audio_bpm: if clock.active && matches!(clock.source, crate::clock::ClockSource::Audio) {
+            Some(clock.bpm)
+        } else {
+            None
+        },
+        preference_label,
+        preference_force_device_id,
+    }
+}
+
 /// Build a full EngineState from all subsystem snapshots.
 pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
     use crate::engine::traits::*;
@@ -246,6 +297,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         registry: build_registry_snapshot(app),
         midi: build_midi_snapshot(app),
         cameras: build_camera_snapshot(app),
+        clock: build_clock_snapshot(app),
         fps: app.fps_smoothed,
         frame_count: app.frame_count,
     }
@@ -409,6 +461,16 @@ pub(crate) fn build_ui_data(
         channel_count: engine.mixer.channels.len(),
         channel_names: engine.mixer.channels.iter().map(|c| c.name.clone()).collect(),
         fps: engine.fps,
+        clock_source: engine.clock.source_label,
+        clock_bpm: engine.clock.bpm,
+        clock_active: engine.clock.active,
+        clock_device_name: engine.clock.device_name,
+        clock_detected_midi: engine.clock.detected_midi_sources,
+        clock_osc_active: engine.clock.osc_active,
+        clock_osc_bpm: engine.clock.osc_bpm,
+        clock_audio_bpm: engine.clock.audio_bpm,
+        clock_preference: engine.clock.preference_label,
+        clock_preference_force_device_id: engine.clock.preference_force_device_id,
     }
 }
 

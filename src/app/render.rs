@@ -51,7 +51,15 @@ impl VardaApp {
             av
         };
 
-        let primary_audio = self.audio_manager.get_primary_data().clone();
+        let mut primary_audio = self.audio_manager.get_primary_data().clone();
+
+        // Override audio BPM/beat with clock-resolved values (MIDI > OSC > Audio)
+        let clock = self.clock_manager.state();
+        if clock.active {
+            primary_audio.bpm = Some(clock.bpm);
+            primary_audio.time_since_beat = clock.beat_phase * (60.0 / clock.bpm);
+        }
+
         if let Err(e) = self.mixer.render(&self.context, &primary_audio, &audio_values) {
             log::error!("Failed to render mixer: {}", e);
         }

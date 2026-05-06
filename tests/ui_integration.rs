@@ -292,6 +292,11 @@ fn click_new_output_creates_output_action() {
     harness.run();
     *harness.state_mut() = AccActions::default();
 
+    // Expand the "📺 Outputs" collapsing header first
+    harness.get_by_label("📺 Outputs").click();
+    harness.run();
+    *harness.state_mut() = AccActions::default();
+
     harness.get_by_label("+ New Output").click();
     harness.run();
 
@@ -304,6 +309,10 @@ fn click_new_output_creates_output_action() {
 fn click_add_lfo() {
     let mut harness = make_harness(UIData::test_fixture());
 
+    harness.get_by_label("∿ Modulation").click();
+    harness.run();
+    *harness.state_mut() = AccActions::default();
+
     harness.get_by_label("➕ LFO").click();
     harness.run();
 
@@ -313,6 +322,10 @@ fn click_add_lfo() {
 #[test]
 fn click_add_audio_mod() {
     let mut harness = make_harness(UIData::test_fixture());
+
+    harness.get_by_label("∿ Modulation").click();
+    harness.run();
+    *harness.state_mut() = AccActions::default();
 
     harness.get_by_label("➕ Audio").click();
     harness.run();
@@ -324,6 +337,10 @@ fn click_add_audio_mod() {
 fn click_add_adsr() {
     let mut harness = make_harness(UIData::test_fixture());
 
+    harness.get_by_label("∿ Modulation").click();
+    harness.run();
+    *harness.state_mut() = AccActions::default();
+
     harness.get_by_label("➕ ADSR").click();
     harness.run();
 
@@ -333,6 +350,10 @@ fn click_add_adsr() {
 #[test]
 fn click_add_step_seq() {
     let mut harness = make_harness(UIData::test_fixture());
+
+    harness.get_by_label("∿ Modulation").click();
+    harness.run();
+    *harness.state_mut() = AccActions::default();
 
     harness.get_by_label("➕ StepSeq").click();
     harness.run();
@@ -348,6 +369,11 @@ fn click_open_stage_editor() {
     data.stage_editor_open = false;
     let mut harness = make_harness(data);
 
+    // Expand "🗺 Stage Layout" collapsing header
+    harness.get_by_label("🗺 Stage Layout").click();
+    harness.run();
+    *harness.state_mut() = AccActions::default();
+
     harness.get_by_label("✏ Open Editor").click();
     harness.run();
 
@@ -360,6 +386,11 @@ fn click_add_surface() {
     data.stage_editor_open = false;
     let mut harness = make_harness(data);
 
+    // Expand "🗺 Stage Layout" collapsing header
+    harness.get_by_label("🗺 Stage Layout").click();
+    harness.run();
+    *harness.state_mut() = AccActions::default();
+
     harness.get_by_label("+ Add Surface").click();
     harness.run();
 
@@ -371,6 +402,11 @@ fn click_add_surface() {
 #[test]
 fn click_midi_rescan() {
     let mut harness = make_harness(UIData::test_fixture());
+
+    // Expand "🎹 MIDI" collapsing header
+    harness.get_by_label("🎹 MIDI").click();
+    harness.run();
+    *harness.state_mut() = AccActions::default();
 
     harness.get_by_label("🔄 Rescan").click();
     harness.run();
@@ -668,14 +704,9 @@ fn collapsing_camera_rescan() {
     harness.run();
     *harness.state_mut() = AccActions::default();
 
-    // There are now TWO "🔄 Rescan" buttons: one in MIDI section (right panel)
-    // and one in the camera section (library). Click all and verify camera_rescan fires.
-    let rescans: Vec<_> = harness.get_all_by_label("🔄 Rescan").collect();
-    assert!(rescans.len() >= 2, "Expected at least 2 rescan buttons (MIDI + Camera)");
-    // The camera rescan should be one of them
-    for r in &rescans {
-        r.click();
-    }
+    // MIDI section is now collapsed by default, so only the camera rescan is visible.
+    // Click the camera rescan button directly.
+    harness.get_by_label("🔄 Rescan").click();
     harness.run();
 
     assert!(harness.state().camera_rescan, "camera_rescan should be true");
@@ -706,6 +737,11 @@ fn collapsing_midi_clear_all_mappings() {
             },
             AccActions::default(),
         );
+    harness.run();
+    *harness.state_mut() = AccActions::default();
+
+    // Expand "🎹 MIDI" collapsing header in right panel
+    harness.get_by_label("🎹 MIDI").click();
     harness.run();
     *harness.state_mut() = AccActions::default();
 

@@ -6,8 +6,6 @@ use super::super::{UIData, UIActions, SurfaceAction};
 use super::geometry::polygon_shape;
 
 pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    ui.heading("🗺 Stage Layout");
-
     // Open Editor / Add Surface buttons
     ui.horizontal(|ui| {
         let editor_label = if data.stage_editor_open { "✏ Close Editor" } else { "✏ Open Editor" };
@@ -157,7 +155,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         (vi, (dx_px * dx_px + dy_px * dy_px).sqrt())
                     })
                     .filter(|(_, d)| *d < vertex_threshold_px)
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(vi, _)| vi)
                 {
                     found_vertex = Some((i, vert_idx));
@@ -490,7 +488,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
         // Circle-specific toolbar: when exactly one circle is selected, show radius/sides/convert
         let selected_circle = if state.selected_surfaces.len() == 1 {
-            let idx = *state.selected_surfaces.iter().next().unwrap();
+            let Some(&idx) = state.selected_surfaces.iter().next() else { unreachable!() };
             data.surfaces.get(idx).and_then(|s| s.circle_hint.map(|h| (idx, h)))
         } else {
             None
@@ -634,7 +632,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
         // For circles: render radius handle instead of vertex handles
         if is_selected && surface.circle_hint.is_some() {
-            let hint = surface.circle_hint.unwrap();
+            let Some(hint) = surface.circle_hint else { continue; };
             let cx_px = canvas_rect.left() + hint.center[0] * canvas_width;
             let cy_px = canvas_rect.top() + hint.center[1] * canvas_height;
             let center_pos = egui::pos2(cx_px, cy_px);

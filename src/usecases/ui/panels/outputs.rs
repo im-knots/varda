@@ -5,8 +5,6 @@ use crate::surface::SurfaceOutputType;
 use super::super::{UIData, UIActions, OutputAction};
 
 pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    ui.heading("📺 Outputs");
-
     // New output button
     ui.horizontal(|ui| {
         if ui.button("+ New Output").clicked() {
@@ -230,7 +228,7 @@ pub(super) fn render_warp_calibration(
                     let screen_pos = to_screen(corner[0], corner[1]);
                     let dist = pos.distance(screen_pos);
                     if dist < 20.0 {
-                        if best.is_none() || dist < best.unwrap().2 {
+                        if best.map_or(true, |(_, _, d)| dist < d) {
                             best = Some((ai, ci, dist));
                         }
                     }

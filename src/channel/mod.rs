@@ -433,7 +433,7 @@ impl Channel {
 
             // Check if this deck is transitioning with a shader
             if let Some(progress) = info.transition_progress {
-                if slot.transition_effect.is_some() && i > 0 {
+                if let Some(effect) = slot.transition_effect.as_mut().filter(|_| i > 0) {
                     // Snapshot composite-so-far into effect_ping_texture
                     let mut copy_encoder = context.device.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor { label: Some("AT Snapshot Copy") },
@@ -446,7 +446,6 @@ impl Channel {
                     context.queue.submit(std::iter::once(copy_encoder.finish()));
 
                     // Run transition shader: start=deck (outgoing), end=composite-below (incoming)
-                    let effect = slot.transition_effect.as_mut().unwrap();
                     let uniforms = ISFUniforms {
                         time,
                         time_delta: dt,
@@ -477,7 +476,8 @@ impl Channel {
                 // Opacity fade fallback (no shader or first deck)
                 let fade_opacity = info.opacity * (1.0 - progress as f32);
                 let pipeline = self.blend_blit_pipelines.get(&info.blend_mode)
-                    .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
+                    .or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal))
+                    .expect("Normal blend pipeline must exist");
                 pipeline.set_opacity(&context.queue, fade_opacity);
                 let bind_group = pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
 
@@ -508,7 +508,8 @@ impl Channel {
 
             // Normal compositing (no transition)
             let pipeline = self.blend_blit_pipelines.get(&info.blend_mode)
-                .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
+                .or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal))
+                .expect("Normal blend pipeline must exist");
             pipeline.set_opacity(&context.queue, info.opacity);
             let bind_group = pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
 
@@ -768,8 +769,9 @@ impl Channel {
                 let is_candidate = slot.auto_transition.as_ref()
                     .map_or(false, |at| at.enabled && at.phase == DeckTransitionPhase::Inactive);
                 if is_candidate && !slot.mute {
-                    self.decks[j].auto_transition.as_mut().unwrap().phase =
-                        DeckTransitionPhase::Playing { elapsed: 0.0 };
+                    if let Some(at) = self.decks[j].auto_transition.as_mut() {
+                        at.phase = DeckTransitionPhase::Playing { elapsed: 0.0 };
+                    }
                     activated = true;
                     break;
                 }
@@ -781,8 +783,9 @@ impl Channel {
                     let is_candidate = slot.auto_transition.as_ref()
                         .map_or(false, |at| at.enabled && at.phase == DeckTransitionPhase::Done);
                     if is_candidate && !slot.mute {
-                        self.decks[j].auto_transition.as_mut().unwrap().phase =
-                            DeckTransitionPhase::Playing { elapsed: 0.0 };
+                        if let Some(at) = self.decks[j].auto_transition.as_mut() {
+                            at.phase = DeckTransitionPhase::Playing { elapsed: 0.0 };
+                        }
                         break;
                     }
                 }
@@ -816,8 +819,9 @@ impl Channel {
                 let is_inactive_at = slot.auto_transition.as_ref()
                     .map_or(false, |at| at.enabled && at.phase == DeckTransitionPhase::Inactive);
                 if is_inactive_at && !dominated {
-                    slot.auto_transition.as_mut().unwrap().phase =
-                        DeckTransitionPhase::Playing { elapsed: 0.0 };
+                    if let Some(at) = slot.auto_transition.as_mut() {
+                        at.phase = DeckTransitionPhase::Playing { elapsed: 0.0 };
+                    }
                     break;
                 }
             }

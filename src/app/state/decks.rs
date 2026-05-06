@@ -57,7 +57,10 @@ impl VardaApp {
         if let Some((src_ch, src_deck, dst_ch)) = actions.deck_to_move {
             if src_ch != dst_ch && src_ch < mixer.channel_count() && dst_ch < mixer.channel_count() {
                 if src_deck < mixer.channels_mut()[src_ch].decks.len() {
-                    let slot = mixer.channels_mut()[src_ch].remove_deck_slot(src_deck).unwrap();
+                    let Some(slot) = mixer.channels_mut()[src_ch].remove_deck_slot(src_deck) else {
+                        log::warn!("deck_to_move: deck {} not found in channel {}", src_deck, src_ch);
+                        return;
+                    };
                     let new_idx = mixer.channels_mut()[dst_ch].add_deck_slot(slot);
 
                     log::info!("Moved deck {} from channel {} to channel {} (new index {})", src_deck, src_ch, dst_ch, new_idx);

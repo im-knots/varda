@@ -66,6 +66,12 @@ impl VardaApp {
                             ch.set_deck_mute(deck_idx, enabled);
                         }
                     }
+                    crate::osc::OscControl::ClockBpm(bpm) => {
+                        self.clock_manager.process_osc_bpm(bpm);
+                    }
+                    crate::osc::OscControl::ClockBeat(phase) => {
+                        self.clock_manager.process_osc_beat(phase);
+                    }
                     crate::osc::OscControl::Unknown(addr, args) => {
                         log::debug!("Unknown OSC: {} {:?}", addr, args);
                     }
@@ -74,10 +80,36 @@ impl VardaApp {
             }
         }
 
-        // Process MIDI messages → apply to mixer via mapping store
+        // Process MIDI messages → apply to mixer via mapping store, forward clock to ClockManager
         if let Some(midi) = &self.midi_devices {
             while let Some(msg) = midi.try_recv() {
-                let key = msg.mapping_key();
+                // Forward clock messages to ClockManager
+                match &msg {
+                    crate::midi::MidiMessage::ClockTick { device_id } => {
+                        let dev_name = midi.device(*device_id)
+                            .map(|d| d.name.as_str()).unwrap_or("Unknown");
+                        self.clock_manager.process_midi_tick(*device_id, dev_name);
+                        continue;
+                    }
+                    crate::midi::MidiMessage::ClockStart { .. } => {
+                        self.clock_manager.process_midi_start();
+                        continue;
+                    }
+                    crate::midi::MidiMessage::ClockContinue { .. } => {
+                        self.clock_manager.process_midi_continue();
+                        continue;
+                    }
+                    crate::midi::MidiMessage::ClockStop { .. } => {
+                        self.clock_manager.process_midi_stop();
+                        continue;
+                    }
+                    _ => {}
+                }
+
+                let key = match msg.mapping_key() {
+                    Some(k) => k,
+                    None => continue,
+                };
                 let value = msg.normalized_value();
 
                 // Learn mode: map next MIDI input to the learn target
@@ -93,5 +125,14 @@ impl VardaApp {
                 }
             }
         }
+
+        // Feed audio BPM to ClockManager
+        {
+            let primary = self.audio_manager.get_primary_data();
+            self.clock_manager.update_audio(primary.bpm, primary.beat_phase());
+        }
+
+        // Resolve clock priority
+        self.clock_manager.update();
     }
 }

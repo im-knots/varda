@@ -70,6 +70,13 @@ pub struct Mixer {
 }
 
 impl Mixer {
+    /// Get the blit pipeline for a blend mode, falling back to Normal.
+    pub(crate) fn blend_pipeline(&self, mode: &BlendMode) -> &BlitPipeline {
+        self.blend_blit_pipelines.get(mode)
+            .or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal))
+            .expect("Normal blend pipeline must always exist")
+    }
+
     /// Create a new mixer with two default channels (A and B)
     pub fn new(context: &GpuContext, width: u32, height: u32) -> Result<Self> {
         let composite_texture = context.create_render_texture(width, height);

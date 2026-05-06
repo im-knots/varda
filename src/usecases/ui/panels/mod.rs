@@ -86,17 +86,33 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let bpm_text = if let Some(bpm) = data.audio.bpm {
+                    // BPM from unified clock (MIDI > OSC > Audio > --)
+                    let bpm_text = if let Some(bpm) = data.clock_bpm {
                         format!("{:.0} BPM", bpm)
                     } else {
                         "-- BPM".to_string()
                     };
-                    let bpm_color = if data.audio.bpm.is_some() {
-                        egui::Color32::from_rgb(100, 220, 100)
-                    } else {
-                        egui::Color32::from_rgb(120, 120, 120)
+                    let bpm_color = match data.clock_source.as_str() {
+                        "MIDI" => egui::Color32::from_rgb(180, 100, 255),
+                        "OSC" => egui::Color32::from_rgb(100, 150, 255),
+                        "Audio" => egui::Color32::from_rgb(100, 220, 100),
+                        _ => egui::Color32::from_rgb(120, 120, 120),
                     };
-                    ui.label(egui::RichText::new(&bpm_text).color(bpm_color).monospace());
+                    if let Some(dev) = &data.clock_device_name {
+                        ui.label(egui::RichText::new(format!("({})", dev)).weak().small());
+                    }
+                    // Clickable BPM label → opens clock source popover
+                    let bpm_response = ui.add(
+                        egui::Label::new(egui::RichText::new(&bpm_text).color(bpm_color).monospace())
+                            .sense(egui::Sense::click()),
+                    ).on_hover_text("Click to select clock source");
+                    let popup_id = egui::Id::new("clock_source_popover");
+                    if bpm_response.clicked() {
+                        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+                    }
+                    egui::popup_below_widget(ui, popup_id, &bpm_response, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                        render_clock_popover(ui, data, &mut actions);
+                    });
 
                     ui.separator();
 
@@ -410,6 +426,64 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
             });
         }
     }
+}
+
+
+/// Render the clock source popover (shown when clicking BPM in the top bar).
+fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    ui.set_min_width(220.0);
+    ui.label(egui::RichText::new("🕐 Clock Source").strong());
+    ui.separator();
+
+    let is_auto = data.clock_preference == "Auto";
+
+    // Auto option
+    if ui.radio(is_auto, "Auto (recommended)").clicked() && !is_auto {
+        actions.clock_preference = Some(crate::clock::ClockPreference::Auto);
+    }
+
+    // Detected MIDI devices
+    for src in &data.clock_detected_midi {
+        let is_selected = data.clock_preference_force_device_id == Some(src.device_id);
+        let bpm_str = src.bpm.map_or("--".to_string(), |b| format!("{:.0}", b));
+        let label = format!("🟣 {}  {} BPM", src.device_name, bpm_str);
+        if ui.radio(is_selected, label).clicked() && !is_selected {
+            actions.clock_preference = Some(crate::clock::ClockPreference::ForceMidi {
+                device_id: src.device_id,
+            });
+        }
+    }
+
+    // OSC option (only shown if OSC is active)
+    if data.clock_osc_active {
+        let is_osc = data.clock_preference == "ForceOsc";
+        let bpm_str = data.clock_osc_bpm.map_or("--".to_string(), |b| format!("{:.0}", b));
+        let label = format!("🔵 OSC  {} BPM", bpm_str);
+        if ui.radio(is_osc, label).clicked() && !is_osc {
+            actions.clock_preference = Some(crate::clock::ClockPreference::ForceOsc);
+        }
+    }
+
+    // Audio only option
+    let is_audio = data.clock_preference == "ForceAudio";
+    let audio_bpm_str = data.clock_audio_bpm.map_or("--".to_string(), |b| format!("{:.0}", b));
+    let label = format!("🟢 Audio only  {} BPM", audio_bpm_str);
+    if ui.radio(is_audio, label).clicked() && !is_audio {
+        actions.clock_preference = Some(crate::clock::ClockPreference::ForceAudio);
+    }
+
+    // Current status line
+    ui.separator();
+    let status = match data.clock_source.as_str() {
+        "MIDI" => {
+            let dev = data.clock_device_name.as_deref().unwrap_or("Unknown");
+            format!("Currently: {} ({})", dev, if is_auto { "auto" } else { "forced" })
+        }
+        "OSC" => format!("Currently: OSC ({})", if is_auto { "auto" } else { "forced" }),
+        "Audio" => format!("Currently: Audio ({})", if is_auto { "auto" } else { "forced" }),
+        _ => "Currently: No clock".to_string(),
+    };
+    ui.label(egui::RichText::new(status).weak().small());
 }
 
 #[cfg(test)]

@@ -25,6 +25,10 @@ pub enum OscControl {
     SetMasterEffect(usize, String, f32),
     /// Trigger a one-shot action
     Trigger(String),
+    /// Clock BPM from external source: /clock/bpm <float>
+    ClockBpm(f32),
+    /// Clock beat phase from external source: /clock/beat <float> (0.0–1.0)
+    ClockBeat(f32),
     /// Unknown message
     Unknown(String, Vec<OscType>),
 }
@@ -134,6 +138,16 @@ impl OscReceiver {
             // /trigger/name
             ["trigger", name] => {
                 Some(OscControl::Trigger(name.to_string()))
+            }
+            // /clock/bpm <float>
+            ["clock", "bpm"] => {
+                let val = msg.args.first()?.clone().float()?;
+                Some(OscControl::ClockBpm(val))
+            }
+            // /clock/beat <float>
+            ["clock", "beat"] => {
+                let val = msg.args.first()?.clone().float()?;
+                Some(OscControl::ClockBeat(val))
             }
             _ => {
                 Some(OscControl::Unknown(msg.addr, msg.args))

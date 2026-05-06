@@ -39,8 +39,46 @@ pub struct EngineState {
     pub registry: RegistrySnapshot,
     pub midi: MidiSnapshot,
     pub cameras: CameraSnapshot,
+    pub clock: ClockSnapshot,
     pub fps: f32,
     pub frame_count: u64,
+}
+
+// ── Clock Snapshot ──────────────────────────────────────────────
+
+/// A detected MIDI clock source for UI display.
+#[derive(Clone, Debug)]
+pub struct DetectedClockSourceSnapshot {
+    pub device_id: crate::midi::DeviceId,
+    pub device_name: String,
+    pub bpm: Option<f32>,
+}
+
+/// Snapshot of the unified clock state for UI display.
+#[derive(Clone)]
+pub struct ClockSnapshot {
+    /// Current BPM from the resolved clock source.
+    pub bpm: Option<f32>,
+    /// Beat phase 0.0–1.0.
+    pub beat_phase: f32,
+    /// Which source is active: "Audio", "MIDI", "OSC", or "None".
+    pub source_label: String,
+    /// Device name (for MIDI clock source).
+    pub device_name: Option<String>,
+    /// Whether a valid clock source is active.
+    pub active: bool,
+    /// All MIDI devices currently detected as sending clock ticks.
+    pub detected_midi_sources: Vec<DetectedClockSourceSnapshot>,
+    /// Whether OSC clock is currently active.
+    pub osc_active: bool,
+    /// Current OSC BPM (if active).
+    pub osc_bpm: Option<f32>,
+    /// Current audio BPM (always available as fallback).
+    pub audio_bpm: Option<f32>,
+    /// Current preference label: "Auto", "ForceMidi(<name>)", "ForceOsc", "ForceAudio".
+    pub preference_label: String,
+    /// Device ID if preference is ForceMidi.
+    pub preference_force_device_id: Option<crate::midi::DeviceId>,
 }
 
 // ── Registry Snapshot ──────────────────────────────────────────────
@@ -370,6 +408,13 @@ mod tests {
                 learn_active: false, learn_target: None,
             },
             cameras: CameraSnapshot { devices: vec![] },
+            clock: ClockSnapshot {
+                bpm: None, beat_phase: 0.0, source_label: "None".into(),
+                device_name: None, active: false,
+                detected_midi_sources: vec![], osc_active: false, osc_bpm: None,
+                audio_bpm: None, preference_label: "Auto".into(),
+                preference_force_device_id: None,
+            },
             fps: 60.0,
             frame_count: 0,
         };
@@ -406,6 +451,13 @@ mod tests {
                 learn_active: false, learn_target: None,
             },
             cameras: CameraSnapshot { devices: vec![] },
+            clock: ClockSnapshot {
+                bpm: Some(120.0), beat_phase: 0.0, source_label: "Audio".into(),
+                device_name: None, active: true,
+                detected_midi_sources: vec![], osc_active: false, osc_bpm: None,
+                audio_bpm: Some(120.0), preference_label: "Auto".into(),
+                preference_force_device_id: None,
+            },
             fps: 59.9,
             frame_count: 42,
         };

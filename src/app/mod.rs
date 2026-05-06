@@ -53,6 +53,7 @@ pub struct VardaApp {
     midi_devices: Option<midi::MidiDeviceManager>,
     midi_mappings: midi::MidiMappingStore,
     controller_led_mgr: midi::ControllerLedManager,
+    clock_manager: crate::clock::ClockManager,
 
     // ── Output & surfaces ──────────────────────────────────────
     output_windows: Vec<OutputWindow>,
@@ -91,7 +92,7 @@ impl VardaApp {
     ///
     /// Requires a fully initialized `GpuContext` — the engine cannot exist
     /// without a GPU. A default two-channel mixer is always created.
-    pub fn new(gpu: GpuContext) -> Self {
+    pub fn new(gpu: GpuContext) -> anyhow::Result<Self> {
         let mut registry = ShaderRegistry::new();
         if let Err(e) = registry.add_library_path("shaders") {
             log::warn!("Failed to add shaders path: {}", e);
@@ -135,10 +136,9 @@ impl VardaApp {
         let audio_textures = crate::audio::AudioTextures::new(&gpu.device);
         let calibration_textures =
             crate::renderer::context::create_calibration_textures(&gpu.device, &gpu.queue, 8);
-        let mixer = Mixer::new(&gpu, RENDER_WIDTH, RENDER_HEIGHT)
-            .expect("Failed to create default mixer");
+        let mixer = Mixer::new(&gpu, RENDER_WIDTH, RENDER_HEIGHT)?;
 
-        Self {
+        Ok(Self {
             mixer,
             audio_manager,
             camera_manager: CameraManager::new(),
@@ -148,6 +148,7 @@ impl VardaApp {
             midi_devices,
             midi_mappings: midi::MidiMappingStore::new(),
             controller_led_mgr,
+            clock_manager: crate::clock::ClockManager::new(),
             output_windows: Vec::new(),
             surface_manager: SurfaceManager::new(),
             calibration_textures,
@@ -163,7 +164,7 @@ impl VardaApp {
             fps_history: Vec::with_capacity(60),
             fps_smoothed: 0.0,
             frame_count: 0,
-        }
+        })
     }
 
     /// Get a command sender for cross-thread consumers (HTTP API, CLI).

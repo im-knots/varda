@@ -587,7 +587,7 @@ pub fn get_current_date() -> [f32; 4] {
 
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap();
+        .unwrap_or_default();
 
     let total_seconds = now.as_secs();
     let seconds_in_day = (total_seconds % 86400) as f32;

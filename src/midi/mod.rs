@@ -35,6 +35,14 @@ pub enum MidiMessage {
     NoteOn { device_id: DeviceId, channel: u8, note: u8, velocity: u8 },
     /// Note Off: channel, note, velocity
     NoteOff { device_id: DeviceId, channel: u8, note: u8, velocity: u8 },
+    /// MIDI Clock Tick (0xF8) — 24 per quarter note
+    ClockTick { device_id: DeviceId },
+    /// MIDI Start (0xFA) — reset to beginning
+    ClockStart { device_id: DeviceId },
+    /// MIDI Continue (0xFB) — resume from current position
+    ClockContinue { device_id: DeviceId },
+    /// MIDI Stop (0xFC) — stop clock
+    ClockStop { device_id: DeviceId },
 }
 
 impl MidiMessage {
@@ -44,6 +52,16 @@ impl MidiMessage {
             return None;
         }
         let status = data[0];
+
+        // System real-time messages (single byte, no channel) — check before channel masking
+        match status {
+            0xF8 => return Some(MidiMessage::ClockTick { device_id }),
+            0xFA => return Some(MidiMessage::ClockStart { device_id }),
+            0xFB => return Some(MidiMessage::ClockContinue { device_id }),
+            0xFC => return Some(MidiMessage::ClockStop { device_id }),
+            _ => {}
+        }
+
         let msg_type = status & 0xF0;
         let channel = status & 0x0F;
         match msg_type {
@@ -66,27 +84,41 @@ impl MidiMessage {
     /// The device this message came from.
     pub fn device_id(&self) -> DeviceId {
         match self {
-            MidiMessage::ControlChange { device_id, .. } => *device_id,
-            MidiMessage::NoteOn { device_id, .. } => *device_id,
-            MidiMessage::NoteOff { device_id, .. } => *device_id,
+            MidiMessage::ControlChange { device_id, .. }
+            | MidiMessage::NoteOn { device_id, .. }
+            | MidiMessage::NoteOff { device_id, .. }
+            | MidiMessage::ClockTick { device_id }
+            | MidiMessage::ClockStart { device_id }
+            | MidiMessage::ClockContinue { device_id }
+            | MidiMessage::ClockStop { device_id } => *device_id,
         }
     }
 
-    /// Unique key for mapping: encodes device + message type + channel + cc/note
-    pub fn mapping_key(&self) -> MidiKey {
+    /// Unique key for mapping: encodes device + message type + channel + cc/note.
+    /// Clock messages are not mappable — returns None.
+    pub fn mapping_key(&self) -> Option<MidiKey> {
         match self {
-            MidiMessage::ControlChange { device_id, channel, cc, .. } => MidiKey::CC(*device_id, *channel, *cc),
-            MidiMessage::NoteOn { device_id, channel, note, .. } => MidiKey::Note(*device_id, *channel, *note),
-            MidiMessage::NoteOff { device_id, channel, note, .. } => MidiKey::Note(*device_id, *channel, *note),
+            MidiMessage::ControlChange { device_id, channel, cc, .. } => Some(MidiKey::CC(*device_id, *channel, *cc)),
+            MidiMessage::NoteOn { device_id, channel, note, .. } => Some(MidiKey::Note(*device_id, *channel, *note)),
+            MidiMessage::NoteOff { device_id, channel, note, .. } => Some(MidiKey::Note(*device_id, *channel, *note)),
+            // Clock messages are not mappable
+            MidiMessage::ClockTick { .. }
+            | MidiMessage::ClockStart { .. }
+            | MidiMessage::ClockContinue { .. }
+            | MidiMessage::ClockStop { .. } => None,
         }
     }
 
-    /// Normalized value (0.0–1.0)
+    /// Normalized value (0.0–1.0). Clock messages return 0.
     pub fn normalized_value(&self) -> f32 {
         match self {
             MidiMessage::ControlChange { value, .. } => *value as f32 / 127.0,
             MidiMessage::NoteOn { velocity, .. } => *velocity as f32 / 127.0,
             MidiMessage::NoteOff { .. } => 0.0,
+            MidiMessage::ClockTick { .. }
+            | MidiMessage::ClockStart { .. }
+            | MidiMessage::ClockContinue { .. }
+            | MidiMessage::ClockStop { .. } => 0.0,
         }
     }
 }
@@ -164,6 +196,25 @@ pub struct MidiDeviceManager {
     pub profile_registry: ProfileRegistry,
 }
 
+/// Strip common directional suffixes from a MIDI port name to get its logical stem.
+/// Used to pair input/output ports for multi-port USB MIDI devices.
+///
+/// Examples:
+/// - "Tascam Model 12 MIDI In" → "Tascam Model 12 MIDI"
+/// - "Tascam Model 12 MIDI Out" → "Tascam Model 12 MIDI"
+/// - "APC MINI" → "APC MINI" (no suffix to strip)
+fn strip_port_suffix(name: &str) -> &str {
+    let lower = name.to_lowercase();
+    // Strip directional suffixes. Order: longer first to avoid partial matches.
+    let suffixes = [" input", " output", " in", " out"];
+    for suffix in &suffixes {
+        if lower.ends_with(suffix) {
+            return &name[..name.len() - suffix.len()];
+        }
+    }
+    name
+}
+
 impl MidiDeviceManager {
     /// Create a new device manager and scan for connected devices.
     pub fn new() -> anyhow::Result<Self> {
@@ -225,10 +276,25 @@ impl MidiDeviceManager {
             let device_id = self.next_device_id;
             self.next_device_id += 1;
 
-            // Check for a matching output port by name
-            let matching_out_idx = output_port_names.iter().position(|out_name| {
-                out_name.to_lowercase() == in_name.to_lowercase()
-            });
+            // Two-pass output matching:
+            // Pass 1: exact name match (case-insensitive) — handles simple devices (APC Mini)
+            // Pass 2: stem match after stripping directional suffixes — handles multi-port
+            //         devices (Tascam Model 12 MIDI In ↔ Tascam Model 12 MIDI Out)
+            let matching_out_idx = output_port_names.iter()
+                .enumerate()
+                .position(|(j, out_name)| {
+                    !matched_outputs[j] && out_name.to_lowercase() == in_name.to_lowercase()
+                })
+                .map(|j| j)
+                .or_else(|| {
+                    let in_stem = strip_port_suffix(in_name);
+                    output_port_names.iter()
+                        .enumerate()
+                        .position(|(j, out_name)| {
+                            !matched_outputs[j]
+                                && strip_port_suffix(out_name).eq_ignore_ascii_case(in_stem)
+                        })
+                });
             let has_output = matching_out_idx.is_some();
 
             if let Some(out_idx) = matching_out_idx {
@@ -251,27 +317,40 @@ impl MidiDeviceManager {
                 profile,
             });
 
-            // Connect input (fresh MidiInput per port — midir consumes it on connect)
+            // Connect input (fresh MidiInput per port — midir consumes it on connect).
+            // Match by port name instead of index since each MidiInput::new() creates a
+            // new CoreMIDI client and port ordering may differ between instances.
             let tx = self.sender.clone();
             let dev_id = device_id;
             let port_label = format!("Varda In {}", device_id);
             match MidiInput::new(&port_label) {
                 Ok(midi_in) => {
                     let ports = midi_in.ports();
-                    if i < ports.len() {
+                    let target_port = ports.iter().find(|p| {
+                        midi_in.port_name(p).map(|n| n == *in_name).unwrap_or(false)
+                    });
+                    if let Some(port) = target_port {
                         match midi_in.connect(
-                            &ports[i],
+                            port,
                             &port_label,
                             move |_ts, data, _| {
+                                // Raw byte logging for diagnostics.
+                                // Enable with RUST_LOG=varda::midi=debug
+                                log::debug!("[MIDI-RAW] dev={} len={} bytes: {:02X?}", dev_id, data.len(), data);
                                 if let Some(msg) = MidiMessage::from_bytes(data, dev_id) {
                                     let _ = tx.send(msg);
                                 }
                             },
                             (),
                         ) {
-                            Ok(conn) => self.input_connections.push(conn),
+                            Ok(conn) => {
+                                log::debug!("[MIDI] Connected input: '{}' (dev={})", in_name, device_id);
+                                self.input_connections.push(conn);
+                            }
                             Err(e) => log::warn!("Failed to connect MIDI input {}: {}", in_name, e),
                         }
+                    } else {
+                        log::warn!("MIDI input port '{}' not found during connect (port list changed?)", in_name);
                     }
                 }
                 Err(e) => log::warn!("Failed to create MidiInput for {}: {}", in_name, e),
@@ -804,8 +883,8 @@ mod tests {
     fn test_midi_key_includes_device_id() {
         let msg1 = MidiMessage::from_bytes(&[0xB0, 48, 64], 0).unwrap();
         let msg2 = MidiMessage::from_bytes(&[0xB0, 48, 64], 1).unwrap();
-        let key1 = msg1.mapping_key();
-        let key2 = msg2.mapping_key();
+        let key1 = msg1.mapping_key().unwrap();
+        let key2 = msg2.mapping_key().unwrap();
         // Same CC on different devices should be different keys
         assert_ne!(key1, key2);
         assert_eq!(key1.device_id(), 0);
@@ -818,6 +897,25 @@ mod tests {
         let msg2 = MidiMessage::from_bytes(&[0xB0, 48, 100], 5).unwrap();
         // Same device, same CC — keys should match (different values don't matter)
         assert_eq!(msg1.mapping_key(), msg2.mapping_key());
+    }
+
+    #[test]
+    fn test_clock_tick_parsed() {
+        let msg = MidiMessage::from_bytes(&[0xF8], 7).unwrap();
+        assert!(matches!(msg, MidiMessage::ClockTick { device_id: 7 }));
+        assert!(msg.mapping_key().is_none());
+    }
+
+    #[test]
+    fn test_clock_start_stop_continue() {
+        let start = MidiMessage::from_bytes(&[0xFA], 0).unwrap();
+        assert!(matches!(start, MidiMessage::ClockStart { .. }));
+
+        let cont = MidiMessage::from_bytes(&[0xFB], 0).unwrap();
+        assert!(matches!(cont, MidiMessage::ClockContinue { .. }));
+
+        let stop = MidiMessage::from_bytes(&[0xFC], 0).unwrap();
+        assert!(matches!(stop, MidiMessage::ClockStop { .. }));
     }
 
     #[test]
@@ -862,5 +960,51 @@ mod tests {
 
         let generic = registry.detect("Novation Launchpad");
         assert!(generic.is_none());
+    }
+
+    #[test]
+    fn test_strip_port_suffix_midi_in_out() {
+        assert_eq!(strip_port_suffix("Tascam Model 12 MIDI In"), "Tascam Model 12 MIDI");
+        assert_eq!(strip_port_suffix("Tascam Model 12 MIDI Out"), "Tascam Model 12 MIDI");
+    }
+
+    #[test]
+    fn test_strip_port_suffix_daw_control() {
+        assert_eq!(strip_port_suffix("Tascam Model 12 DAW CONTROL MIDI In"), "Tascam Model 12 DAW CONTROL MIDI");
+        assert_eq!(strip_port_suffix("Tascam Model 12 DAW CONTROL MIDI Out"), "Tascam Model 12 DAW CONTROL MIDI");
+    }
+
+    #[test]
+    fn test_strip_port_suffix_simple_in_out() {
+        assert_eq!(strip_port_suffix("Digitakt In"), "Digitakt");
+        assert_eq!(strip_port_suffix("Digitakt Out"), "Digitakt");
+    }
+
+    #[test]
+    fn test_strip_port_suffix_no_suffix() {
+        assert_eq!(strip_port_suffix("APC MINI"), "APC MINI");
+        assert_eq!(strip_port_suffix("Launchpad X"), "Launchpad X");
+    }
+
+    #[test]
+    fn test_strip_port_suffix_input_output() {
+        assert_eq!(strip_port_suffix("Device MIDI Input"), "Device MIDI");
+        assert_eq!(strip_port_suffix("Device MIDI Output"), "Device MIDI");
+    }
+
+    #[test]
+    fn test_stem_pairing_matches() {
+        // Two ports that differ only by In/Out suffix should share a stem
+        let in_stem = strip_port_suffix("Tascam Model 12 MIDI In");
+        let out_stem = strip_port_suffix("Tascam Model 12 MIDI Out");
+        assert_eq!(in_stem, out_stem);
+
+        // DAW CONTROL ports should pair separately
+        let daw_in = strip_port_suffix("Tascam Model 12 DAW CONTROL MIDI In");
+        let daw_out = strip_port_suffix("Tascam Model 12 DAW CONTROL MIDI Out");
+        assert_eq!(daw_in, daw_out);
+
+        // Main and DAW should NOT match each other
+        assert_ne!(in_stem, daw_in);
     }
 }

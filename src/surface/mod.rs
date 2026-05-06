@@ -219,7 +219,7 @@ impl Surface {
                 (i, (dx * dx + dy * dy).sqrt())
             })
             .filter(|(_, d)| *d < threshold)
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, _)| i)
     }
 
@@ -361,7 +361,7 @@ impl SurfaceManager {
     pub fn combine_surfaces(&mut self, indices: &[usize]) -> Option<usize> {
         if indices.len() < 2 { return None; }
 
-        let first_idx = *indices.iter().min().unwrap();
+        let Some(&first_idx) = indices.iter().min() else { return None; };
 
         // Collect all contours as geo polygons
         let mut geo_polys: Vec<geo::Polygon<f64>> = Vec::new();

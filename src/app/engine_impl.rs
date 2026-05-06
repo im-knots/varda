@@ -104,7 +104,10 @@ impl MixerCommands for VardaApp {
         // Two mutable borrows into different vec elements require raw indexing
         // (split_at_mut or index — Rust's borrow checker doesn't allow two
         //  channel_mut() calls in the same scope)
-        let slot = channels[src_ch].remove_deck_slot(src_deck).unwrap();
+        let Some(slot) = channels[src_ch].remove_deck_slot(src_deck) else {
+            log::warn!("move_deck: deck {} not found in channel {}", src_deck, src_ch);
+            return Ok(());
+        };
         let new_idx = channels[dst_ch].add_deck_slot(slot);
         log::info!("Moved deck {} from ch{} to ch{} (new idx {})", src_deck, src_ch, dst_ch, new_idx);
         Ok(())

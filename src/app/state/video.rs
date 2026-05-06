@@ -65,7 +65,7 @@ impl VardaApp {
                     if slot.auto_transition.is_none() {
                         slot.auto_transition = Some(DeckAutoTransition::new());
                     }
-                    let at = slot.auto_transition.as_mut().unwrap();
+                    let Some(at) = slot.auto_transition.as_mut() else { continue; };
                     match action {
                         AutoTransitionAction::SetEnabled(en) => {
                             at.enabled = *en;

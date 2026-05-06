@@ -169,8 +169,7 @@ impl Mixer {
             if opacity <= 0.0 { continue; }
 
             let blend_mode = channel.blend_mode;
-            let pipeline = self.blend_blit_pipelines.get(&blend_mode)
-                .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
+            let pipeline = self.blend_pipeline(&blend_mode);
 
             pipeline.set_opacity(&context.queue, opacity);
             let bind_group = pipeline.create_bind_group(&context.device, &channel.composite_view);
@@ -253,8 +252,7 @@ impl Mixer {
             if opacity <= 0.0 { continue; }
 
             let blend_mode = channel.blend_mode;
-            let pipeline = self.blend_blit_pipelines.get(&blend_mode)
-                .unwrap_or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal).unwrap());
+            let pipeline = self.blend_pipeline(&blend_mode);
 
             pipeline.set_opacity(&context.queue, opacity);
             let bind_group = pipeline.create_bind_group(&context.device, &channel.composite_view);

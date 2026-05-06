@@ -89,7 +89,10 @@ impl UILayoutState {
             if sel_ch == removed_ch {
                 self.selected_deck = None;
             } else if sel_ch > removed_ch {
-                self.selected_deck = Some((sel_ch - 1, self.selected_deck.unwrap().1));
+                // sel_ch > removed_ch, so selected_deck must be Some (we matched it above)
+                if let Some((_, deck_idx)) = self.selected_deck {
+                    self.selected_deck = Some((sel_ch - 1, deck_idx));
+                }
             }
         }
         if let Some(sel_ch) = self.selected_channel {
@@ -373,6 +376,26 @@ pub struct UIData {
     pub channel_names: Vec<String>,
     /// Smoothed FPS (rolling average over last 60 frames)
     pub fps: f32,
+    /// Clock sync source label ("Audio", "MIDI", "OSC", "None")
+    pub clock_source: String,
+    /// Clock sync BPM (if active)
+    pub clock_bpm: Option<f32>,
+    /// Clock sync active
+    pub clock_active: bool,
+    /// Clock MIDI device name (if source is MIDI)
+    pub clock_device_name: Option<String>,
+    /// Detected MIDI clock sources for the popover
+    pub clock_detected_midi: Vec<crate::engine::types::DetectedClockSourceSnapshot>,
+    /// Whether OSC clock is currently active
+    pub clock_osc_active: bool,
+    /// OSC BPM (if active)
+    pub clock_osc_bpm: Option<f32>,
+    /// Audio BPM (fallback)
+    pub clock_audio_bpm: Option<f32>,
+    /// Current clock preference label
+    pub clock_preference: String,
+    /// Device ID if preference is ForceMidi
+    pub clock_preference_force_device_id: Option<crate::midi::DeviceId>,
 }
 
 /// Read-only snapshot of a single transition sequence
@@ -641,6 +664,8 @@ pub struct UIActions {
     pub save_requested: bool,
     /// Transition sequence actions
     pub sequence_actions: Vec<SequenceAction>,
+    /// Clock source preference change
+    pub clock_preference: Option<crate::clock::ClockPreference>,
 }
 
 /// Action for controlling video deck playback
@@ -777,6 +802,7 @@ impl UIActions {
             auto_transition_actions: Vec::new(),
             save_requested: false,
             sequence_actions: Vec::new(),
+            clock_preference: None,
         }
     }
 }
@@ -1008,6 +1034,16 @@ impl UIData {
             channel_count: 2,
             channel_names: vec!["Ch A".to_string(), "Ch B".to_string()],
             fps: 60.0,
+            clock_source: "Audio".to_string(),
+            clock_bpm: None,
+            clock_active: false,
+            clock_device_name: None,
+            clock_detected_midi: vec![],
+            clock_osc_active: false,
+            clock_osc_bpm: None,
+            clock_audio_bpm: None,
+            clock_preference: "Auto".to_string(),
+            clock_preference_force_device_id: None,
         }
     }
 }

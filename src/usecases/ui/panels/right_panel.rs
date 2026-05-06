@@ -47,41 +47,54 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
         }
 
         ui.add_space(10.0);
-        ui.heading("🔮 Master Effects");
-        ui.label("(Apply to final composite)");
 
-        ui.add_space(10.0);
-        ui.separator();
+        // === Collapsible sections (like the library panel) ===
 
-        // Modulation sources
-        render_modulation_section(ui, data, actions);
+        egui::CollapsingHeader::new(egui::RichText::new("🔮 Master Effects").strong())
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("(Apply to final composite)").small().weak());
+            });
 
-        ui.add_space(10.0);
-        ui.separator();
+        ui.add_space(4.0);
+
+        egui::CollapsingHeader::new(egui::RichText::new("∿ Modulation").strong())
+            .default_open(false)
+            .show(ui, |ui| {
+                render_modulation_section(ui, data, actions);
+            });
+
+        ui.add_space(4.0);
 
         // Library panel toggle (if closed, show a button to reopen)
         if !data.library_panel_open {
             if ui.button("📚 Open Library (L)").clicked() {
                 actions.toggle_library_panel = true;
             }
-            ui.add_space(10.0);
-            ui.separator();
+            ui.add_space(4.0);
         }
 
-        // MIDI devices & mappings
-        render_midi_section(ui, data, actions);
+        egui::CollapsingHeader::new(egui::RichText::new("🎹 MIDI").strong())
+            .default_open(false)
+            .show(ui, |ui| {
+                render_midi_section(ui, data, actions);
+            });
 
-        ui.add_space(10.0);
-        ui.separator();
+        ui.add_space(4.0);
 
-        // Surface editor (2D stage layout)
-        render_surface_editor(ui, data, actions);
+        egui::CollapsingHeader::new(egui::RichText::new("🗺 Stage Layout").strong())
+            .default_open(false)
+            .show(ui, |ui| {
+                render_surface_editor(ui, data, actions);
+            });
 
-        ui.add_space(10.0);
-        ui.separator();
+        ui.add_space(4.0);
 
-        // Output windows management
-        render_output_section(ui, data, actions);
+        egui::CollapsingHeader::new(egui::RichText::new("📺 Outputs").strong())
+            .default_open(false)
+            .show(ui, |ui| {
+                render_output_section(ui, data, actions);
+            });
     });
 }
 

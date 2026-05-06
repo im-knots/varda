@@ -64,7 +64,7 @@ pub(super) fn triangulate_polygon(verts: &[egui::Pos2]) -> Vec<u32> {
         })
         .sum::<f32>()
         + {
-            let a = verts[*idx.last().unwrap()];
+            let a = verts[*idx.last().expect("polygon must have >= 3 vertices")];
             let b = verts[idx[0]];
             (b.x - a.x) * (b.y + a.y)
         };

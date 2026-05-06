@@ -2,6 +2,7 @@ pub mod app;
 pub mod audio;
 pub mod camera;
 pub mod channel;
+pub mod clock;
 pub mod deck;
 pub mod engine;
 pub mod isf;

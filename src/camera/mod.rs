@@ -291,7 +291,10 @@ impl CameraManager {
             active.ref_count = active.ref_count.saturating_sub(1);
             if active.ref_count == 0 {
                 log::info!("Closing camera {} (no more references)", id);
-                let mut removed = self.active.remove(&id).unwrap();
+                let Some(mut removed) = self.active.remove(&id) else {
+                    log::warn!("Camera {} not found in active map during release", id);
+                    return;
+                };
                 removed.stop_flag.store(true, Ordering::Relaxed);
                 if let Some(t) = removed.thread.take() {
                     let _ = t.join();
