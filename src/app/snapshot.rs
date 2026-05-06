@@ -1,0 +1,433 @@
+//! Snapshot builder — constructs engine state snapshots from live VardaApp state.
+
+use super::VardaApp;
+use crate::engine::types::*;
+use crate::channel::{DurationSpec, TransitionTrigger, DeckTransitionPhase};
+use crate::usecases::ui::{ShaderParamsUI, ParamUIInfo, EffectInfo};
+
+/// Build a MixerSnapshot from the current VardaApp state.
+pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
+    let mixer = match &app.mixer {
+        Some(m) => m,
+        None => return MixerSnapshot {
+            channels: Vec::new(),
+            crossfader: 0.0,
+            auto_crossfade_active: false,
+            auto_crossfade_progress: 0.0,
+            master_effects: Vec::new(),
+            active_transition_name: None,
+            transition_names: Vec::new(),
+            sequences: Vec::new(),
+        },
+    };
+
+    let channels = mixer.channels.iter().enumerate().map(|(ch_idx, ch)| {
+        let decks = ch.decks.iter().enumerate().map(|(deck_idx, slot)| {
+            let gen_params = build_shader_params(&slot.deck.source_name(), &slot.deck.generator_params);
+            let effects = slot.deck.effects.iter().map(|e| {
+                EffectSnapshot {
+                    name: e.shader.name(),
+                    enabled: e.enabled,
+                    params: build_shader_params(&e.shader.name(), &e.params),
+                }
+            }).collect();
+
+            let video_playback = slot.deck.playback_state().map(|ps| {
+                VideoPlaybackSnapshot {
+                    playing: ps.playing,
+                    position: ps.position,
+                    duration: ps.duration,
+                    speed: ps.speed,
+                    loop_mode: ps.loop_mode,
+                    in_point: ps.in_point,
+                    out_point: ps.out_point,
+                    frame_rate: ps.frame_rate,
+                }
+            });
+
+            let auto_transition = slot.auto_transition.as_ref().map(|at| {
+                AutoTransitionSnapshot {
+                    enabled: at.enabled,
+                    trigger_is_clip_end: at.trigger == TransitionTrigger::ClipEnd,
+                    play_duration_value: at.play_duration.value(),
+                    play_duration_is_beats: matches!(at.play_duration, DurationSpec::Beats(_)),
+                    transition_duration_value: at.transition_duration.value(),
+                    transition_duration_is_beats: matches!(at.transition_duration, DurationSpec::Beats(_)),
+                    transition_shader_name: at.transition_shader_name.clone(),
+                    phase: at.phase,
+                }
+            });
+
+            let effective_opacity = match slot.transition_phase() {
+                DeckTransitionPhase::Transitioning { progress } => {
+                    slot.opacity * (1.0 - progress as f32)
+                }
+                _ => slot.opacity,
+            };
+
+            DeckSnapshot {
+                idx: deck_idx,
+                name: slot.deck.source_name().to_string(),
+                opacity: slot.opacity,
+                effective_opacity,
+                blend_mode: slot.blend_mode,
+                solo: slot.solo,
+                mute: slot.mute,
+                scaling_mode: slot.deck.scaling_mode(),
+                generator: gen_params,
+                effects,
+                video_playback,
+                auto_transition,
+            }
+        }).collect();
+
+        let ch_effects = ch.effects.iter().map(|e| {
+            EffectSnapshot {
+                name: e.shader.name(),
+                enabled: e.enabled,
+                params: build_shader_params(&e.shader.name(), &e.params),
+            }
+        }).collect();
+
+        ChannelSnapshot {
+            idx: ch_idx,
+            name: ch.name.clone(),
+            opacity: ch.opacity,
+            blend_mode: ch.blend_mode,
+            decks,
+            effects: ch_effects,
+        }
+    }).collect();
+
+    let master_effects = mixer.master_effects.iter().map(|e| {
+        EffectSnapshot {
+            name: e.shader.name(),
+            enabled: e.enabled,
+            params: build_shader_params(&e.shader.name(), &e.params),
+        }
+    }).collect();
+
+    let auto_crossfade_active = mixer.is_crossfading();
+    let auto_crossfade_progress = mixer.auto_crossfade.as_ref().map_or(0.0, |a| a.progress());
+
+    let transition_names = app.registry.transitions().iter().map(|s| s.name()).collect();
+    let active_transition_name = mixer.active_transition.as_ref().map(|t| t.name.clone());
+
+    let sequences = build_sequence_snapshots(mixer);
+
+    MixerSnapshot {
+        channels,
+        crossfader: mixer.crossfader,
+        auto_crossfade_active,
+        auto_crossfade_progress,
+        master_effects,
+        active_transition_name,
+        transition_names,
+        sequences,
+    }
+}
+
+fn build_shader_params(shader_name: &str, params: &crate::params::ShaderParams) -> ShaderParamsSnapshot {
+    let params_vec = params.param_order.iter().filter_map(|name| {
+        let value = params.values.get(name)?;
+        let def = params.definitions.get(name);
+        Some(ParamSnapshot {
+            name: name.clone(),
+            label: def.and_then(|d| d.label.clone()),
+            value: *value,
+            min: def.and_then(|d| d.min),
+            max: def.and_then(|d| d.max),
+        })
+    }).collect();
+
+    ShaderParamsSnapshot {
+        shader_name: shader_name.to_string(),
+        params: params_vec,
+    }
+}
+
+fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot> {
+    let channel_names: Vec<String> = mixer.channels.iter().map(|c| c.name.clone()).collect();
+    mixer.transition_sequences.iter().map(|seq| {
+        let steps = seq.steps.iter().map(|step| {
+            let (label, kind) = match &step.kind {
+                crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                    let unit = if duration.is_beats() { "beats" } else { "s" };
+                    let easing_name = format!("{:?}", easing);
+                    let label = format!("Fade {} -> {} ({:.1}{})",
+                        channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?"),
+                        channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?"),
+                        duration.value(), unit);
+                    (label, SequenceStepKindSnapshot::Fade {
+                        from_ch: *from_ch, to_ch: *to_ch,
+                        duration_val: duration.value(), is_beats: duration.is_beats(),
+                        easing: easing_name, transition_shader: transition_shader.clone(),
+                    })
+                }
+                crate::mixer::StepKind::Wait { duration } => {
+                    let unit = if duration.is_beats() { "beats" } else { "s" };
+                    let label = format!("Wait {:.1}{}", duration.value(), unit);
+                    (label, SequenceStepKindSnapshot::Wait {
+                        duration_val: duration.value(), is_beats: duration.is_beats(),
+                    })
+                }
+                crate::mixer::StepKind::GoTo { step_index } => {
+                    let label = format!("GoTo step {}", step_index);
+                    (label, SequenceStepKindSnapshot::GoTo { step_index: *step_index })
+                }
+            };
+            SequenceStepSnapshot { label, kind }
+        }).collect();
+        SequenceSnapshot {
+            name: seq.name.clone(),
+            enabled: seq.enabled,
+            playing: seq.state.playing,
+            current_step: seq.state.current_step,
+            steps,
+        }
+    }).collect()
+}
+
+
+/// Build a RegistrySnapshot from the current VardaApp state.
+pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
+    let mut generators: Vec<(String, usize)> = app.registry.generators().iter()
+        .enumerate().map(|(i, s)| (s.name(), i)).collect();
+    generators.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    let mut filters: Vec<(String, usize)> = app.registry.filters().iter()
+        .enumerate().map(|(i, s)| (s.name(), i)).collect();
+    filters.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    RegistrySnapshot {
+        generators,
+        filters,
+        shader_count: app.registry.count(),
+    }
+}
+
+/// Build a MidiSnapshot from the current VardaApp state.
+pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
+    let devices = app.midi_devices.as_ref().map(|mgr| {
+        mgr.device_list().iter().map(|d| MidiDeviceSnapshot {
+            id: d.id, name: d.name.clone(), enabled: d.enabled,
+            has_output: d.has_output, profile: d.profile_name().to_string(),
+        }).collect()
+    }).unwrap_or_default();
+
+    let mappings = {
+        let sorted = app.midi_mappings.sorted_mappings();
+        sorted.iter().map(|(key, path)| {
+            let dev_name = app.midi_devices.as_ref()
+                .and_then(|mgr| mgr.device(key.device_id()))
+                .map(|d| d.name.clone())
+                .unwrap_or_else(|| format!("Device {}", key.device_id()));
+            MidiMappingSnapshot { key: *key, key_display: format!("{}", key), device_name: dev_name, param_path: path.clone() }
+        }).collect()
+    };
+
+    MidiSnapshot {
+        devices,
+        mappings,
+        learn_active: app.midi_mappings.learn_mode,
+        learn_target: app.midi_mappings.learn_target.clone(),
+    }
+}
+
+/// Build a CameraSnapshot from the current VardaApp state.
+pub(crate) fn build_camera_snapshot(app: &VardaApp) -> CameraSnapshot {
+    CameraSnapshot {
+        devices: app.camera_manager.devices().iter()
+            .map(|d| (d.name.clone(), d.id)).collect(),
+    }
+}
+
+/// Build a full EngineState from all subsystem snapshots.
+pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
+    use crate::engine::traits::*;
+    EngineState {
+        mixer: app.mixer_snapshot(),
+        audio: app.audio_snapshot(),
+        modulation: app.modulation_snapshot(),
+        outputs: app.output_snapshot(),
+        registry: build_registry_snapshot(app),
+        midi: build_midi_snapshot(app),
+        cameras: build_camera_snapshot(app),
+        fps: app.fps_smoothed,
+        frame_count: app.frame_count,
+    }
+}
+
+/// Build a UIData snapshot from VardaApp state + egui texture IDs.
+/// Constructs EngineState first, then derives UIData from it.
+pub(crate) fn build_ui_data(
+    app: &VardaApp,
+    deck_preview_textures: &std::collections::HashMap<(usize, usize), egui::TextureId>,
+    main_output_texture: Option<egui::TextureId>,
+) -> crate::usecases::ui::UIData {
+    use crate::usecases::ui::*;
+
+    // Build the domain-neutral engine state first
+    let engine = build_engine_state(app);
+
+    // ── Map EngineState → UIData ──────────────────────────────────────
+
+    // Channels: map ChannelSnapshot → ChannelUIInfo
+    let channels = engine.mixer.channels.iter().map(|ch| {
+        let decks = ch.decks.iter().map(|d| {
+            let generator = params_snapshot_to_ui(&d.generator);
+            let effects = d.effects.iter().map(effect_snapshot_to_ui).collect();
+            let video_playback = d.video_playback.as_ref().map(|vp| VideoPlaybackUI {
+                playing: vp.playing, position: vp.position, duration: vp.duration,
+                speed: vp.speed, loop_mode: vp.loop_mode, in_point: vp.in_point,
+                out_point: vp.out_point, frame_rate: vp.frame_rate,
+            });
+            let auto_transition = d.auto_transition.as_ref().map(|at| AutoTransitionUI {
+                enabled: at.enabled, trigger_is_clip_end: at.trigger_is_clip_end,
+                play_duration_value: at.play_duration_value,
+                play_duration_is_beats: at.play_duration_is_beats,
+                transition_duration_value: at.transition_duration_value,
+                transition_duration_is_beats: at.transition_duration_is_beats,
+                transition_shader_name: at.transition_shader_name.clone(),
+                phase: at.phase,
+            });
+            DeckUIInfo {
+                deck_idx: d.idx, name: d.name.clone(),
+                opacity: d.opacity, effective_opacity: d.effective_opacity,
+                blend_mode: d.blend_mode, solo: d.solo, mute: d.mute,
+                scaling_mode: d.scaling_mode,
+                generator, effects, video_playback, auto_transition,
+            }
+        }).collect();
+        let effects = ch.effects.iter().map(effect_snapshot_to_ui).collect();
+        ChannelUIInfo {
+            ch_idx: ch.idx, name: ch.name.clone(),
+            opacity: ch.opacity, blend_mode: ch.blend_mode,
+            decks, effects,
+        }
+    }).collect();
+
+    let master_effect_info = engine.mixer.master_effects.iter()
+        .map(effect_snapshot_to_ui).collect();
+
+    // Modulation: map snapshots → UI types
+    let modulation_sources = engine.modulation.sources.iter().map(|src| match src {
+        ModulationSourceSnapshot::LFO { waveform, frequency, phase, amplitude, bipolar } =>
+            ModSourceUI::LFO { waveform: *waveform, frequency: *frequency, phase: *phase, amplitude: *amplitude, bipolar: *bipolar },
+        ModulationSourceSnapshot::Audio { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } =>
+            ModSourceUI::Audio { source_id: *source_id, freq_low: *freq_low, freq_high: *freq_high, gain: *gain, smoothing: *smoothing, mode: *mode, noise_gate: *noise_gate },
+        ModulationSourceSnapshot::ADSR { attack, decay, sustain, release, stage } =>
+            ModSourceUI::ADSR { attack: *attack, decay: *decay, sustain: *sustain, release: *release, stage: *stage },
+        ModulationSourceSnapshot::StepSequencer { steps, rate, interpolation, bipolar } =>
+            ModSourceUI::StepSequencer { steps: steps.clone(), rate: *rate, interpolation: *interpolation, bipolar: *bipolar },
+    }).collect();
+    let modulation_current_values = engine.modulation.current_values.clone();
+    let modulation_assignments = engine.modulation.assignments.iter().map(|(k, v)| {
+        (k.clone(), v.iter().map(|a| ModAssignmentUI { source_idx: a.source_idx, amount: a.amount }).collect())
+    }).collect();
+
+    // Audio: map AudioSnapshot → AudioUIData
+    let audio = AudioUIData {
+        level: engine.audio.level, bass: engine.audio.bass, mid: engine.audio.mid,
+        treble: engine.audio.treble, bpm: engine.audio.bpm, beat_phase: engine.audio.beat_phase,
+        enabled: engine.audio.enabled,
+        devices: engine.audio.devices.iter().map(|d| AudioDeviceUI {
+            id: d.id, name: d.name.clone(), active: d.active,
+        }).collect(),
+        fft: engine.audio.fft.clone(), sample_rate: engine.audio.sample_rate,
+    };
+
+    // Outputs: map snapshots → UI types
+    let output_windows = engine.outputs.windows.iter().map(|o| OutputWindowUI {
+        name: o.name.clone(), target_label: o.target_label.clone(),
+        is_on_display: o.is_on_display,
+        surface_assignments: o.surface_assignments.iter().map(|a| SurfaceAssignmentUI {
+            surface_idx: a.surface_idx, surface_name: a.surface_name.clone(),
+            warp_corners: a.warp_corners, enabled: a.enabled,
+        }).collect(),
+        calibration_mode: o.calibration_mode,
+    }).collect();
+
+    let surfaces = engine.outputs.surfaces.iter().map(|s| SurfaceUI {
+        name: s.name.clone(), vertices: s.vertices.clone(),
+        extra_contours: s.extra_contours.clone(),
+        source: s.source.clone(), content_mapping: s.content_mapping,
+        output_type: s.output_type, circle_hint: s.circle_hint,
+    }).collect();
+
+    let available_monitors = engine.outputs.monitors.iter().map(|m| MonitorInfo {
+        name: m.name.clone(), index: m.index, width: m.width, height: m.height,
+    }).collect();
+
+    // MIDI: map snapshots → UI types
+    let midi_devices = engine.midi.devices.iter().map(|d| MidiDeviceUI {
+        id: d.id, name: d.name.clone(), enabled: d.enabled,
+        has_output: d.has_output, profile: d.profile.clone(),
+    }).collect();
+    let midi_mappings = engine.midi.mappings.iter().map(|m| MidiMappingUI {
+        key: m.key, key_display: m.key_display.clone(),
+        device_name: m.device_name.clone(), param_path: m.param_path.clone(),
+    }).collect();
+
+    // Sequences: map snapshots → UI types
+    let sequences = engine.mixer.sequences.iter().map(|seq| {
+        let steps = seq.steps.iter().map(|s| {
+            let kind = match &s.kind {
+                SequenceStepKindSnapshot::Fade { from_ch, to_ch, duration_val, is_beats, easing, transition_shader } =>
+                    SequenceStepKindUI::Fade { from_ch: *from_ch, to_ch: *to_ch, duration_val: *duration_val, is_beats: *is_beats, easing: easing.clone(), transition_shader: transition_shader.clone() },
+                SequenceStepKindSnapshot::Wait { duration_val, is_beats } =>
+                    SequenceStepKindUI::Wait { duration_val: *duration_val, is_beats: *is_beats },
+                SequenceStepKindSnapshot::GoTo { step_index } =>
+                    SequenceStepKindUI::GoTo { step_index: *step_index },
+            };
+            SequenceStepUI { label: s.label.clone(), kind }
+        }).collect();
+        SequenceUIData { name: seq.name.clone(), enabled: seq.enabled, playing: seq.playing, current_step: seq.current_step, steps }
+    }).collect();
+
+    // Notifications — UI-only, not in EngineState
+    let notifications = app.notifications.visible().iter().map(|n| NotificationUI {
+        level: n.level, message: n.message.clone(), progress: n.progress(),
+    }).collect();
+
+    UIData {
+        generators: engine.registry.generators, filters: engine.registry.filters,
+        shader_count: engine.registry.shader_count,
+        channels, master_effect_info,
+        modulation_sources, modulation_current_values, modulation_assignments,
+        audio, deck_preview_textures: deck_preview_textures.clone(),
+        main_output_texture, notifications,
+        crossfader: engine.mixer.crossfader,
+        auto_crossfade_active: engine.mixer.auto_crossfade_active,
+        auto_crossfade_progress: engine.mixer.auto_crossfade_progress,
+        midi_learn_active: engine.midi.learn_active,
+        midi_learn_target: engine.midi.learn_target,
+        transition_names: engine.mixer.transition_names,
+        active_transition_name: engine.mixer.active_transition_name,
+        // UI-only selection/layout state — not in EngineState
+        selected_deck: app.selected_deck, selected_channel: app.selected_channel,
+        selected_master: app.selected_master,
+        output_windows, surfaces,
+        stage_editor_open: app.stage_editor_open, library_panel_open: app.library_panel_open,
+        stage_editor_grid_size: app.stage_editor_grid_size, stage_editor_snap: app.stage_editor_snap,
+        available_monitors, midi_devices, midi_mappings,
+        cameras: engine.cameras.devices, sequences,
+        channel_count: engine.mixer.channels.len(),
+        channel_names: engine.mixer.channels.iter().map(|c| c.name.clone()).collect(),
+        fps: engine.fps,
+    }
+}
+
+// ── Snapshot → UI type helpers ──────────────────────────────────────
+
+fn params_snapshot_to_ui(snap: &ShaderParamsSnapshot) -> ShaderParamsUI {
+    ShaderParamsUI {
+        shader_name: snap.shader_name.clone(),
+        params: snap.params.iter().map(|p| ParamUIInfo {
+            name: p.name.clone(), label: p.label.clone(),
+            value: p.value, min: p.min, max: p.max,
+        }).collect(),
+    }
+}
+
+fn effect_snapshot_to_ui(snap: &EffectSnapshot) -> EffectInfo {
+    (snap.name.clone(), snap.enabled, params_snapshot_to_ui(&snap.params))
+}

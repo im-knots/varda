@@ -4,7 +4,7 @@ use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
-use crate::renderer::{RenderContext, BlitPipeline, ISFUniforms, TransitionPipeline};
+use crate::renderer::{GpuContext, BlitPipeline, ISFUniforms, TransitionPipeline};
 use anyhow::{Context as _, Result};
 
 /// Blend modes for compositing decks and channels
@@ -178,7 +178,7 @@ impl DeckSlot {
     /// Compiles the shader and stores the pipeline.
     pub fn set_transition_shader(
         &mut self,
-        context: &RenderContext,
+        context: &GpuContext,
         shader: ISFShader,
     ) -> Result<()> {
         let spirv = crate::isf::compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
@@ -186,7 +186,7 @@ impl DeckSlot {
         let pipeline = TransitionPipeline::new(
             &context.device,
             &spirv,
-            context.surface_config.format,
+            context.texture_format,
         )?;
         let name = shader.name();
         let inputs = shader.metadata.inputs.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
@@ -256,7 +256,7 @@ pub struct Channel {
 
 impl Channel {
     /// Create a new channel
-    pub fn new(name: String, context: &RenderContext, width: u32, height: u32) -> Result<Self> {
+    pub fn new(name: String, context: &GpuContext, width: u32, height: u32) -> Result<Self> {
         let composite_texture = context.create_render_texture(width, height);
         let composite_view = composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -269,7 +269,7 @@ impl Channel {
                      BlendMode::Screen, BlendMode::Overlay, BlendMode::Difference] {
             let pipeline = BlitPipeline::with_blend(
                 &context.device,
-                context.surface_config.format,
+                context.texture_format,
                 mode.to_blend_state()
             )?;
             blend_blit_pipelines.insert(mode, pipeline);
@@ -332,7 +332,7 @@ impl Channel {
     /// `dt` is the frame delta in seconds (for auto-transition tick).
     pub fn render(
         &mut self,
-        context: &RenderContext,
+        context: &GpuContext,
         audio_data: &crate::AudioData,
         modulation: &ModulationEngine,
         channel_idx: usize,
@@ -631,7 +631,7 @@ impl Channel {
     }
 
     /// Resize the channel's textures
-    pub fn resize(&mut self, context: &RenderContext, width: u32, height: u32) {
+    pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
         self.composite_texture = context.create_render_texture(width, height);
         self.composite_view = self.composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.effect_ping_texture = context.create_render_texture(width, height);

@@ -344,8 +344,8 @@ pub fn snapshot_stage(
 
 use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
-use crate::renderer::RenderContext;
-use crate::ui::{RENDER_WIDTH, RENDER_HEIGHT};
+use crate::renderer::GpuContext;
+use crate::app::{RENDER_WIDTH, RENDER_HEIGHT};
 
 /// Restore result — contains reconstructed mixer.
 /// Surfaces and outputs are loaded separately from stage.json.
@@ -357,7 +357,7 @@ pub struct RestoreResult {
 /// Reconstruct live state from a SceneConfig.
 pub fn restore_scene(
     config: &SceneConfig,
-    context: &RenderContext,
+    context: &GpuContext,
     registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
 ) -> Result<RestoreResult> {
@@ -433,7 +433,7 @@ pub fn restore_scene(
 
         // Restore channel effects
         for eff_config in &ch_config.effects {
-            match restore_effect(eff_config, context, context.surface_config.format) {
+            match restore_effect(eff_config, context, context.texture_format) {
                 Ok(eff) => channel.add_effect(eff),
                 Err(e) => {
                     let msg = format!("Failed to restore channel effect '{}': {}", eff_config.path, e);
@@ -457,7 +457,7 @@ pub fn restore_scene(
 
     // Restore master effects
     for eff_config in &config.master_effects {
-        match restore_effect(eff_config, context, context.surface_config.format) {
+        match restore_effect(eff_config, context, context.texture_format) {
             Ok(eff) => mixer.master_effects.push(eff),
             Err(e) => {
                 let msg = format!("Failed to restore master effect '{}': {}", eff_config.path, e);
@@ -539,7 +539,7 @@ pub fn restore_scene(
 /// Restore a single deck from config.
 fn restore_deck(
     config: &DeckConfig,
-    context: &RenderContext,
+    context: &GpuContext,
     _registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
 ) -> Result<Deck> {
@@ -591,8 +591,8 @@ fn restore_deck(
 
 /// Restore a single effect from config.
 /// `target_format` should be `Rgba8Unorm` for deck effects,
-/// or `context.surface_config.format` for channel/master effects.
-fn restore_effect(config: &EffectConfig, context: &RenderContext, target_format: wgpu::TextureFormat) -> Result<Effect> {
+/// or `context.texture_format` for channel/master effects.
+fn restore_effect(config: &EffectConfig, context: &GpuContext, target_format: wgpu::TextureFormat) -> Result<Effect> {
     let shader = ISFShader::from_file(&config.path)
         .with_context(|| format!("Failed to load effect shader: {}", config.path))?;
     let mut effect = Effect::new_with_format(context, shader, target_format)?;

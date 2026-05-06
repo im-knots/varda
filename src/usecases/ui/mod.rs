@@ -1,6 +1,6 @@
 pub mod notifications;
 pub mod panels;
-pub mod state;
+pub mod runner;
 pub mod widgets;
 
 use crate::mixer::CrossfadeEasing;
@@ -11,9 +11,8 @@ use crate::renderer::context::OutputSource;
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
-/// Fixed render resolution for all decks and stage output (Full HD 1080p)
-pub const RENDER_WIDTH: u32 = 1920;
-pub const RENDER_HEIGHT: u32 = 1080;
+// Re-export render resolution constants from the engine layer for backwards compatibility
+pub use crate::app::{RENDER_WIDTH, RENDER_HEIGHT};
 
 /// Parameter info for UI rendering (collected before egui to avoid borrow conflicts)
 #[derive(Clone)]

@@ -195,7 +195,7 @@ impl TransitionPipeline {
     /// Render the transition to a target view.
     pub fn render_to(
         &self,
-        context: &super::RenderContext,
+        context: &super::GpuContext,
         start_view: &wgpu::TextureView,
         end_view: &wgpu::TextureView,
         output_view: &wgpu::TextureView,

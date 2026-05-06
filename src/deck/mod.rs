@@ -1,7 +1,7 @@
 use crate::isf::{ISFShader, ISFPass, compile_glsl_to_spirv};
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
-use crate::renderer::{RenderContext, UnifiedPipeline, ISFUniforms, BlitPipeline, HapConvertPipeline};
+use crate::renderer::{GpuContext, UnifiedPipeline, ISFUniforms, BlitPipeline, HapConvertPipeline};
 use crate::video::{VideoPlayer, HapTextureFormat, hap::HapPlayer};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -157,12 +157,12 @@ pub struct Effect {
 
 impl Effect {
     /// Create a new effect from an ISF filter shader
-    pub fn new(context: &RenderContext, shader: ISFShader) -> Result<Self> {
+    pub fn new(context: &GpuContext, shader: ISFShader) -> Result<Self> {
         Self::new_with_format(context, shader, wgpu::TextureFormat::Rgba8Unorm)
     }
 
     /// Create a new effect with a specific target format
-    pub fn new_with_format(context: &RenderContext, shader: ISFShader, target_format: wgpu::TextureFormat) -> Result<Self> {
+    pub fn new_with_format(context: &GpuContext, shader: ISFShader, target_format: wgpu::TextureFormat) -> Result<Self> {
         let spirv = compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
             .context("Failed to compile filter shader to SPIR-V")?;
 
@@ -263,7 +263,7 @@ impl Effect {
     /// Optionally applies modulation to effect parameters using the given prefix
     pub fn apply(
         &mut self,
-        context: &RenderContext,
+        context: &GpuContext,
         input_view: &wgpu::TextureView,
         output_view: &wgpu::TextureView,
         uniforms: &ISFUniforms,
@@ -275,7 +275,7 @@ impl Effect {
     /// Apply this effect with modulation support
     pub fn apply_with_modulation(
         &mut self,
-        context: &RenderContext,
+        context: &GpuContext,
         input_view: &wgpu::TextureView,
         output_view: &wgpu::TextureView,
         uniforms: &ISFUniforms,
@@ -561,7 +561,7 @@ pub struct Deck {
 impl Deck {
     /// Create a new deck from an ISF shader
     pub fn new(
-        context: &RenderContext,
+        context: &GpuContext,
         shader: ISFShader,
         width: u32,
         height: u32,
@@ -798,7 +798,7 @@ impl Deck {
     /// Create a new deck from a video file.
     /// Auto-detects HAP codec and uses GPU-native BCn path when available.
     pub fn new_from_video<P: AsRef<Path>>(
-        context: &RenderContext,
+        context: &GpuContext,
         path: P,
         width: u32,
         height: u32,
@@ -969,7 +969,7 @@ impl Deck {
 
     /// Create a new deck from an image file (PNG, JPG, BMP, etc.)
     pub fn new_from_image<P: AsRef<Path>>(
-        context: &RenderContext,
+        context: &GpuContext,
         path: P,
         width: u32,
         height: u32,
@@ -1085,7 +1085,7 @@ impl Deck {
 
     /// Create a new deck with a solid color fill
     pub fn new_solid_color(
-        context: &RenderContext,
+        context: &GpuContext,
         color: [f32; 4],
         width: u32,
         height: u32,
@@ -1150,7 +1150,7 @@ impl Deck {
     /// Create a new deck from a camera source.
     /// The camera is managed by CameraManager — this deck reads from the shared texture.
     pub fn new_from_camera(
-        context: &RenderContext,
+        context: &GpuContext,
         camera_id: crate::camera::CameraId,
         camera_name: &str,
         source_width: u32,
@@ -1306,7 +1306,7 @@ impl Deck {
 
     /// Update video frame (call before render if using video source).
     /// Handles both ffmpeg RGBA uploads and HAP BCn compressed uploads.
-    pub fn update_video_frame(&mut self, context: &RenderContext) -> Result<()> {
+    pub fn update_video_frame(&mut self, context: &GpuContext) -> Result<()> {
         match &mut self.source {
             DeckSource::Video { ref mut player, ref texture, .. } => {
                 if player.is_playing() {
@@ -1385,14 +1385,14 @@ impl Deck {
     /// Render the deck to its texture (source + effect chain)
     /// The modulation engine is owned by Stage and passed in for parameter automation
     /// `deck_idx` is the deck index used for modulation key lookup (e.g., "deck0:paramname")
-    pub fn render(&mut self, context: &RenderContext, audio_data: &crate::AudioData, modulation: &ModulationEngine, deck_idx: usize, cmd_buffers: &mut Vec<wgpu::CommandBuffer>) -> Result<()> {
+    pub fn render(&mut self, context: &GpuContext, audio_data: &crate::AudioData, modulation: &ModulationEngine, deck_idx: usize, cmd_buffers: &mut Vec<wgpu::CommandBuffer>) -> Result<()> {
         let prefix = format!("deck{}", deck_idx);
         self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers)
     }
 
     /// Render the deck with a custom param prefix for modulation key lookup
     /// Used by Channel to provide channel-scoped addressing (e.g., "ch0_deck0")
-    pub fn render_with_prefix(&mut self, context: &RenderContext, audio_data: &crate::AudioData, modulation: &ModulationEngine, param_prefix: &str, cmd_buffers: &mut Vec<wgpu::CommandBuffer>) -> Result<()> {
+    pub fn render_with_prefix(&mut self, context: &GpuContext, audio_data: &crate::AudioData, modulation: &ModulationEngine, param_prefix: &str, cmd_buffers: &mut Vec<wgpu::CommandBuffer>) -> Result<()> {
         let now = Instant::now();
         let time = (now - self.start_time).as_secs_f32();
         let time_delta = (now - self.last_frame_time).as_secs_f32();
@@ -1631,7 +1631,7 @@ impl Deck {
 
     /// Render simple (non-multi-pass) shader (static version)
     fn render_simple_static(
-        context: &RenderContext,
+        context: &GpuContext,
         pipeline: &UnifiedPipeline,
         texture: &wgpu::Texture,
         time: f32,
@@ -1701,7 +1701,7 @@ impl Deck {
 
     /// Render multi-pass shader with proper ping-pong buffers
     fn render_multi_pass_static(
-        context: &RenderContext,
+        context: &GpuContext,
         multi_pass: &UnifiedPipeline,
         passes: &[ISFPass],
         pass_buffers: &mut HashMap<String, PassBuffer>,
@@ -1884,7 +1884,7 @@ impl Deck {
     }
 
     /// Resize the deck's render targets
-    pub fn resize(&mut self, context: &RenderContext, width: u32, height: u32) {
+    pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
         // All deck textures use Rgba8Unorm for effect chain compatibility
         self.texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Deck Texture (Linear)"),

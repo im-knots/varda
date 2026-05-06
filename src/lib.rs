@@ -1,7 +1,9 @@
+pub mod app;
 pub mod audio;
 pub mod camera;
 pub mod channel;
 pub mod deck;
+pub mod engine;
 pub mod isf;
 pub mod midi;
 pub mod mixer;
@@ -13,7 +15,7 @@ pub mod registry;
 pub mod renderer;
 pub mod scene;
 pub mod surface;
-pub mod ui;
+pub mod usecases;
 pub mod video;
 
 // Re-export commonly used types

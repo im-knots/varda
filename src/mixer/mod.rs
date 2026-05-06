@@ -5,7 +5,7 @@ use crate::deck::Effect;
 use crate::isf::{ISFShader, compile_glsl_to_spirv};
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
-use crate::renderer::{RenderContext, BlitPipeline, ISFUniforms, TransitionPipeline};
+use crate::renderer::{GpuContext, BlitPipeline, ISFUniforms, TransitionPipeline};
 use anyhow::{Context as _, Result};
 
 /// Easing curve for crossfade transitions
@@ -217,7 +217,7 @@ pub struct Mixer {
 
 impl Mixer {
     /// Create a new mixer with two default channels (A and B)
-    pub fn new(context: &RenderContext, width: u32, height: u32) -> Result<Self> {
+    pub fn new(context: &GpuContext, width: u32, height: u32) -> Result<Self> {
         let composite_texture = context.create_render_texture(width, height);
         let composite_view = composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -230,7 +230,7 @@ impl Mixer {
                      BlendMode::Screen, BlendMode::Overlay, BlendMode::Difference] {
             let pipeline = BlitPipeline::with_blend(
                 &context.device,
-                context.surface_config.format,
+                context.texture_format,
                 mode.to_blend_state(),
             )?;
             blend_blit_pipelines.insert(mode, pipeline);
@@ -272,7 +272,7 @@ impl Mixer {
 
     /// Render all channels and composite them via crossfader, then apply master effects.
     /// `audio_values` carries per-source FFT data for the modulation engine.
-    pub fn render(&mut self, context: &RenderContext, audio_data: &crate::AudioData, audio_values: &crate::modulation::AudioValues) -> Result<()> {
+    pub fn render(&mut self, context: &GpuContext, audio_data: &crate::AudioData, audio_values: &crate::modulation::AudioValues) -> Result<()> {
         // Calculate dt
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
@@ -364,7 +364,7 @@ impl Mixer {
         Ok(())
     }
 
-    fn composite_channels(&mut self, context: &RenderContext) -> Result<()> {
+    fn composite_channels(&mut self, context: &GpuContext) -> Result<()> {
         let channel_count = self.channels.len();
         if channel_count == 0 {
             // Clear composite
@@ -489,7 +489,7 @@ impl Mixer {
 
     /// Prepare sub-mix textures for all unique multi-channel surface sources.
     /// Call this after `composite_channels` and before output rendering.
-    pub fn prepare_sub_mixes(&mut self, sources: &[Vec<usize>], context: &RenderContext) {
+    pub fn prepare_sub_mixes(&mut self, sources: &[Vec<usize>], context: &GpuContext) {
         // Remove cache entries no longer needed
         let needed: std::collections::HashSet<Vec<usize>> = sources.iter().cloned().collect();
         self.sub_mix_cache.retain(|k, _| needed.contains(k));
@@ -514,7 +514,7 @@ impl Mixer {
     }
 
     /// Composite a specific subset of channels into the cached sub-mix texture.
-    fn composite_sub_mix(&self, indices: &[usize], context: &RenderContext) {
+    fn composite_sub_mix(&self, indices: &[usize], context: &GpuContext) {
         let (_, view) = match self.sub_mix_cache.get(indices) {
             Some(entry) => entry,
             None => return,
@@ -612,7 +612,7 @@ impl Mixer {
     }
 
 
-    fn apply_master_effects(&mut self, context: &RenderContext, audio_data: &crate::AudioData, time: f32) -> Result<()> {
+    fn apply_master_effects(&mut self, context: &GpuContext, audio_data: &crate::AudioData, time: f32) -> Result<()> {
         if self.master_effects.is_empty() {
             return Ok(());
         }
@@ -675,7 +675,7 @@ impl Mixer {
     }
 
     /// Resize mixer and all channel textures
-    pub fn resize(&mut self, context: &RenderContext, width: u32, height: u32) {
+    pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
         self.composite_texture = context.create_render_texture(width, height);
         self.composite_view = self.composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.effect_ping_texture = context.create_render_texture(width, height);
@@ -702,7 +702,7 @@ impl Mixer {
     }
 
     /// Add a new channel with an auto-generated name (C, D, E, ...)
-    pub fn add_channel(&mut self, context: &RenderContext, width: u32, height: u32) -> Result<usize> {
+    pub fn add_channel(&mut self, context: &GpuContext, width: u32, height: u32) -> Result<usize> {
         let name = channel_name(self.next_channel_index);
         self.next_channel_index += 1;
         let channel = Channel::new(name, context, width, height)?;
@@ -775,7 +775,7 @@ impl Mixer {
     /// The `progress` parameter is automatically synced from the crossfader position.
     pub fn set_transition(
         &mut self,
-        context: &RenderContext,
+        context: &GpuContext,
         shader: ISFShader,
     ) -> Result<()> {
         let name = shader.name();
