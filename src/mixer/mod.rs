@@ -272,7 +272,7 @@ impl Mixer {
 
     /// Render all channels and composite them via crossfader, then apply master effects.
     /// `audio_values` carries per-source FFT data for the modulation engine.
-    pub fn render(&mut self, context: &GpuContext, audio_data: &crate::AudioData, audio_values: &crate::modulation::AudioValues) -> Result<()> {
+    pub fn render(&mut self, context: &GpuContext, audio_data: &crate::audio::AudioData, audio_values: &crate::modulation::AudioValues) -> Result<()> {
         // Calculate dt
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
@@ -612,7 +612,7 @@ impl Mixer {
     }
 
 
-    fn apply_master_effects(&mut self, context: &GpuContext, audio_data: &crate::AudioData, time: f32) -> Result<()> {
+    fn apply_master_effects(&mut self, context: &GpuContext, audio_data: &crate::audio::AudioData, time: f32) -> Result<()> {
         if self.master_effects.is_empty() {
             return Ok(());
         }

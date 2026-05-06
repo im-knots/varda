@@ -4,6 +4,7 @@
 //! since they mutate engine-owned state (mixer, surfaces, outputs, etc.).
 
 use super::VardaApp;
+use crate::deck::Deck;
 use crate::usecases::ui;
 
 
@@ -154,7 +155,7 @@ impl VardaApp {
 
         match self.camera_manager.open_camera(camera_id, &self.context.device) {
             Ok((src_w, src_h)) => {
-                match crate::Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h,
+                match Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h,
                     crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT)
                 {
                     Ok(deck) => {

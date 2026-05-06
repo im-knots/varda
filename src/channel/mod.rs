@@ -333,7 +333,7 @@ impl Channel {
     pub fn render(
         &mut self,
         context: &GpuContext,
-        audio_data: &crate::AudioData,
+        audio_data: &crate::audio::AudioData,
         modulation: &ModulationEngine,
         channel_idx: usize,
         time: f32,

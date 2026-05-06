@@ -19,17 +19,7 @@ pub mod surface;
 pub mod usecases;
 pub mod video;
 
-// Re-export commonly used types
-pub use audio::*;
-pub use channel::*;
-pub use deck::*;
-pub use isf::{ISFMetadata, ISFShader};
-pub use midi::*;
-pub use mixer::*;
-pub use modulation::*;
-pub use osc::*;
-pub use params::*;
-pub use registry::*;
-pub use renderer::*;
-pub use scene::*;
-pub use video::*;
+// Re-export commonly used types at crate root for convenience
+pub use channel::BlendMode;
+pub use deck::ScalingMode;
+pub use params::ShaderParams;

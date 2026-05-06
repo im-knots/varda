@@ -5,9 +5,9 @@
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
 use crate::app::VardaApp;
+use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::{GpuContext, WindowSurface};
 use crate::usecases::ui;
-use crate::*;
 
 use winit::{
     application::ApplicationHandler,
