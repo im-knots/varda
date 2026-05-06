@@ -1,0 +1,344 @@
+//! Crossfade, transition, and sequence types + Mixer transition control methods.
+
+use crate::isf::{ISFShader, compile_glsl_to_spirv};
+use crate::params::ShaderParams;
+use crate::renderer::{GpuContext, TransitionPipeline};
+use anyhow::{Context as _, Result};
+use super::Mixer;
+
+/// Easing curve for crossfade transitions
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CrossfadeEasing {
+    Linear,
+    EaseInOut,
+    EaseIn,
+    EaseOut,
+}
+
+impl CrossfadeEasing {
+    /// Apply easing to normalized time t (0.0 to 1.0)
+    pub fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            CrossfadeEasing::Linear => t,
+            CrossfadeEasing::EaseInOut => t * t * (3.0 - 2.0 * t),
+            CrossfadeEasing::EaseIn => t * t,
+            CrossfadeEasing::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
+        }
+    }
+}
+
+/// Describes an in-progress auto-crossfade
+#[derive(Debug, Clone)]
+pub struct AutoCrossfade {
+    /// Where the crossfader started
+    pub from: f32,
+    /// Where the crossfader is heading
+    pub to: f32,
+    /// Total duration in seconds
+    pub duration: f32,
+    /// Elapsed time in seconds
+    pub elapsed: f32,
+    /// Easing curve
+    pub easing: CrossfadeEasing,
+}
+
+impl AutoCrossfade {
+    /// Create a new auto-crossfade
+    pub fn new(from: f32, to: f32, duration: f32, easing: CrossfadeEasing) -> Self {
+        Self { from, to, duration, elapsed: 0.0, easing }
+    }
+
+    /// Tick the crossfade by dt seconds, return the new crossfader value.
+    /// Returns None if the crossfade is complete.
+    pub fn tick(&mut self, dt: f32) -> Option<f32> {
+        self.elapsed += dt;
+        if self.elapsed >= self.duration {
+            return None;
+        }
+        let t = self.easing.apply(self.elapsed / self.duration);
+        Some(self.from + (self.to - self.from) * t)
+    }
+
+    /// Progress as 0.0 to 1.0
+    pub fn progress(&self) -> f32 {
+        (self.elapsed / self.duration).clamp(0.0, 1.0)
+    }
+}
+
+/// Beat-synced crossfade configuration
+#[derive(Debug, Clone)]
+pub struct BeatSyncCrossfade {
+    /// Target crossfader value
+    pub to: f32,
+    /// Duration in beats
+    pub beats: f32,
+    /// Whether we've started (waiting for next beat boundary)
+    pub started: bool,
+    /// The auto-crossfade that runs once triggered
+    pub auto: Option<AutoCrossfade>,
+}
+
+// ── Transition Sequence (channel-to-channel automation) ──────────────
+
+/// A named sequence of channel transition steps for automated shows/installations.
+#[derive(Debug, Clone)]
+pub struct TransitionSequence {
+    pub name: String,
+    pub steps: Vec<TransitionStep>,
+    pub enabled: bool,
+    /// Runtime sequencer state — NOT persisted.
+    pub state: SequencerState,
+}
+
+impl TransitionSequence {
+    pub fn new(name: String) -> Self {
+        Self { name, steps: Vec::new(), enabled: true, state: SequencerState::new() }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransitionStep {
+    pub kind: StepKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum StepKind {
+    /// Fade from one channel to another over a duration.
+    Fade {
+        from_ch: usize,
+        to_ch: usize,
+        duration: crate::channel::DurationSpec,
+        easing: CrossfadeEasing,
+        /// Transition shader name (None = opacity fade). Only used in 2-channel mode.
+        transition_shader: Option<String>,
+    },
+    /// Wait/hold for a duration.
+    Wait {
+        duration: crate::channel::DurationSpec,
+    },
+    /// Jump to a step index (0-based). Enables looping.
+    GoTo {
+        step_index: usize,
+    },
+}
+
+/// Runtime sequencer state — NOT persisted, computed each frame.
+#[derive(Debug, Clone)]
+pub struct SequencerState {
+    pub playing: bool,
+    pub current_step: usize,
+    pub step_elapsed: f64,
+}
+
+impl SequencerState {
+    pub fn new() -> Self {
+        Self { playing: false, current_step: 0, step_elapsed: 0.0 }
+    }
+
+    pub fn reset(&mut self) {
+        self.playing = false;
+        self.current_step = 0;
+        self.step_elapsed = 0.0;
+    }
+}
+
+/// Active transition effect between channels A and B
+pub struct TransitionEffect {
+    /// The ISF transition shader source
+    pub shader: ISFShader,
+    /// The compiled transition pipeline (two input textures + progress)
+    pub pipeline: TransitionPipeline,
+    /// User-controllable parameters (progress is always index 0)
+    pub params: ShaderParams,
+    /// Shader name for display
+    pub name: String,
+}
+
+
+// ── Mixer transition/crossfade/sequence control methods ──────────────
+
+impl Mixer {
+    /// Start a timed auto-crossfade to the target value
+    pub fn start_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing) {
+        let target = target.clamp(0.0, 1.0);
+        if (self.crossfader - target).abs() < 0.001 {
+            return;
+        }
+        self.beat_sync_crossfade = None;
+        self.auto_crossfade = Some(AutoCrossfade::new(self.crossfader, target, duration_secs, easing));
+        log::info!("Starting auto-crossfade: {:.2} → {:.2} over {:.1}s ({:?})",
+            self.crossfader, target, duration_secs, easing);
+    }
+
+    /// Start a beat-synced crossfade (waits for next beat boundary, then transitions over N beats)
+    pub fn start_beat_crossfade(&mut self, target: f32, beats: f32) {
+        let target = target.clamp(0.0, 1.0);
+        self.auto_crossfade = None;
+        self.beat_sync_crossfade = Some(BeatSyncCrossfade {
+            to: target,
+            beats,
+            started: false,
+            auto: None,
+        });
+        log::info!("Queued beat-synced crossfade: → {:.2} over {:.1} beats", target, beats);
+    }
+
+    /// Snap crossfader to a value immediately (cancels any in-progress transitions)
+    pub fn snap_crossfader(&mut self, value: f32) {
+        self.crossfader = value.clamp(0.0, 1.0);
+        self.auto_crossfade = None;
+        self.beat_sync_crossfade = None;
+    }
+
+    /// Whether a crossfade transition is currently in progress
+    pub fn is_crossfading(&self) -> bool {
+        self.auto_crossfade.is_some() || self.beat_sync_crossfade.as_ref().map_or(false, |b| b.started)
+    }
+
+    /// Set the active transition shader. Compiles the shader and creates the pipeline.
+    pub fn set_transition(
+        &mut self,
+        context: &GpuContext,
+        shader: ISFShader,
+    ) -> Result<()> {
+        let name = shader.name();
+        let spirv = compile_glsl_to_spirv(&shader.fragment_source, &name)
+            .context("Failed to compile transition shader")?;
+
+        let target_format = wgpu::TextureFormat::Rgba8Unorm;
+        let pipeline = TransitionPipeline::new(&context.device, &spirv, target_format)
+            .context("Failed to create transition pipeline")?;
+
+        let inputs = shader.metadata.inputs.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let mut params = ShaderParams::from_inputs(inputs);
+        params.ensure_buffer(&context.device);
+
+        log::info!("Active transition set: {}", name);
+        self.active_transition = Some(TransitionEffect {
+            shader,
+            pipeline,
+            params,
+            name,
+        });
+        Ok(())
+    }
+
+    /// Clear the active transition (revert to opacity-based crossfade)
+    pub fn clear_transition(&mut self) {
+        if self.active_transition.is_some() {
+            log::info!("Transition cleared, reverting to opacity crossfade");
+        }
+        self.active_transition = None;
+    }
+
+    /// Sync the transition's `progress` parameter with the crossfader value.
+    pub(super) fn sync_transition_progress(&mut self) {
+        if let Some(transition) = &mut self.active_transition {
+            transition.params.set("progress", crate::params::ParamValue::Float(self.crossfader));
+        }
+    }
+
+    // ── Transition Sequence Control ──────────────────────────────────
+
+    /// Start playing a transition sequence by index from the beginning.
+    pub fn start_sequence(&mut self, seq_idx: usize) {
+        if let Some(seq) = self.transition_sequences.get_mut(seq_idx) {
+            if seq.steps.is_empty() { return; }
+            self.auto_crossfade = None;
+            self.beat_sync_crossfade = None;
+            seq.state = SequencerState { playing: true, current_step: 0, step_elapsed: 0.0 };
+            log::info!("Transition sequence '{}' started", seq.name);
+        }
+    }
+
+    /// Stop a transition sequence by index (leaves channels at current state).
+    pub fn stop_sequence(&mut self, seq_idx: usize) {
+        if let Some(seq) = self.transition_sequences.get_mut(seq_idx) {
+            seq.state.playing = false;
+            log::info!("Transition sequence '{}' stopped at step {}", seq.name, seq.state.current_step);
+        }
+    }
+
+    /// Tick all transition sequences forward by dt seconds.
+    pub(super) fn tick_sequence(&mut self, dt: f32, bpm: Option<f64>) {
+        let channel_count = self.channels.len();
+
+        for seq_idx in 0..self.transition_sequences.len() {
+            let seq = &mut self.transition_sequences[seq_idx];
+            if !seq.state.playing || !seq.enabled || seq.steps.is_empty() {
+                continue;
+            }
+            let num_steps = seq.steps.len();
+            if seq.state.current_step >= num_steps {
+                seq.state.playing = false;
+                continue;
+            }
+
+            let step = &seq.steps[seq.state.current_step];
+            let mutation = match &step.kind {
+                StepKind::Fade { from_ch, to_ch, duration, easing, .. } => {
+                    let duration_secs = duration.to_seconds(bpm);
+                    if duration_secs <= 0.0 {
+                        seq.state.current_step += 1;
+                        seq.state.step_elapsed = 0.0;
+                        if seq.state.current_step >= num_steps {
+                            seq.state.playing = false;
+                        }
+                        continue;
+                    }
+                    let progress = (seq.state.step_elapsed / duration_secs).clamp(0.0, 1.0) as f32;
+                    let eased = easing.apply(progress);
+                    let completed = seq.state.step_elapsed + dt as f64 >= duration_secs;
+                    seq.state.step_elapsed += dt as f64;
+                    if completed {
+                        seq.state.current_step += 1;
+                        seq.state.step_elapsed = 0.0;
+                        if seq.state.current_step >= num_steps {
+                            seq.state.playing = false;
+                        }
+                    }
+                    Some((*from_ch, *to_ch, eased, completed))
+                }
+                StepKind::Wait { duration } => {
+                    let duration_secs = duration.to_seconds(bpm);
+                    seq.state.step_elapsed += dt as f64;
+                    if seq.state.step_elapsed >= duration_secs {
+                        seq.state.current_step += 1;
+                        seq.state.step_elapsed = 0.0;
+                        if seq.state.current_step >= num_steps {
+                            seq.state.playing = false;
+                        }
+                    }
+                    None
+                }
+                StepKind::GoTo { step_index } => {
+                    let target = *step_index;
+                    if target < num_steps {
+                        seq.state.current_step = target;
+                        seq.state.step_elapsed = 0.0;
+                    } else {
+                        seq.state.playing = false;
+                    }
+                    None
+                }
+            };
+
+            if let Some((from, to, eased, completed)) = mutation {
+                if channel_count == 2 {
+                    let from_val = if from == 0 { 0.0f32 } else { 1.0f32 };
+                    let to_val = if to == 0 { 0.0f32 } else { 1.0f32 };
+                    self.crossfader = if completed { to_val } else { from_val + (to_val - from_val) * eased };
+                } else {
+                    if completed {
+                        if from < channel_count { self.channels[from].opacity = 0.0; }
+                        if to < channel_count { self.channels[to].opacity = 1.0; }
+                    } else {
+                        if from < channel_count { self.channels[from].opacity = 1.0 - eased; }
+                        if to < channel_count { self.channels[to].opacity = eased; }
+                    }
+                }
+            }
+        }
+    }
+}
