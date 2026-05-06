@@ -102,6 +102,11 @@ impl Workspace {
         self.varda_dir().join("stage.json")
     }
 
+    /// Path to `controllers/` directory for MIDI controller profiles.
+    pub fn controllers_dir(&self) -> PathBuf {
+        self.varda_dir().join("controllers")
+    }
+
     /// Whether `.varda/` exists in this workspace.
     pub fn exists(&self) -> bool {
         self.varda_dir().is_dir()

@@ -107,7 +107,7 @@ pub fn render_params(
                                         let color = modulator_color(src_idx);
                                         let src_name = match src {
                                             ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                                            ModSourceUI::Audio { band, .. } => format!("Audio {:?}", band),
+                                            ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
                                             ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                                             ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
                                         };
@@ -244,7 +244,7 @@ pub fn render_effect_params(
                                         let color = modulator_color(src_idx);
                                         let src_name = match src {
                                             ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                                            ModSourceUI::Audio { band, .. } => format!("Audio {:?}", band),
+                                            ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
                                             ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                                             ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
                                         };

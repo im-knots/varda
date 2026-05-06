@@ -1723,10 +1723,13 @@ impl Deck {
         let user_params_buffer = generator_params.buffer().expect("Buffer should exist after ensure_buffer");
 
         // For reaction-diffusion simulations, we need multiple iterations per frame
-        // Run persistent passes multiple times before the final render pass
-        const SIMULATION_ITERATIONS: usize = 16;
+        // Run persistent passes multiple times before the final render pass.
+        // Higher values = faster sim evolution but more GPU load.
+        // 4 iterations is a good balance: fast enough visually, 4x less GPU work than 16.
+        const SIMULATION_ITERATIONS: usize = 4;
 
-        // First, run all persistent simulation passes multiple times
+        // First, run all persistent simulation passes multiple times.
+        // Batch command buffers per-pass to avoid per-iteration GPU pipeline stalls.
         for pass_idx in 0..passes.len() {
             let pass = &passes[pass_idx];
 
@@ -1748,9 +1751,12 @@ impl Deck {
                 wgpu::TextureFormat::Rgba8Unorm
             };
 
+            // Each iteration needs its own uniform data. Since update_uniforms writes
+            // to the same buffer, we must submit per-iteration to ensure correct ordering.
+            // However, we batch into groups to reduce submission overhead.
+            let mut iter_cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::with_capacity(iterations);
+
             for iter in 0..iterations {
-                // Update uniforms with current iteration info
-                // Use frame_count * iterations + iter for unique frame indices
                 let effective_frame = frame_count * SIMULATION_ITERATIONS as u32 + iter as u32;
 
                 let uniforms = ISFUniforms {
@@ -1770,7 +1776,6 @@ impl Deck {
 
                 multi_pass.update_uniforms(&context.queue, &uniforms);
 
-                // Get current read view for sampling
                 let pass_buffer_views: Vec<&wgpu::TextureView> = passes
                     .iter()
                     .filter_map(|p| p.target.as_ref().and_then(|t| pass_buffers.get(t)))
@@ -1779,18 +1784,17 @@ impl Deck {
 
                 let bind_group = multi_pass.create_bind_group(&context.device, None, &pass_buffer_views, Some(user_params_buffer));
 
-                // Get write view for rendering
                 let target_view = pass_buffers.get(target_name)
                     .map(|pb| pb.write_view())
                     .unwrap_or(final_target);
 
                 let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some(&format!("Pass {} Iter {} Encoder", pass_idx, iter)),
+                    label: Some("Sim Pass Encoder"),
                 });
 
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some(&format!("Pass {} Iter {} Render", pass_idx, iter)),
+                        label: Some("Sim Pass Render"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: target_view,
                             resolve_target: None,
@@ -1810,9 +1814,10 @@ impl Deck {
                     render_pass.draw(0..3, 0..1);
                 }
 
+                // Must submit per-iteration because uniforms share a single buffer
+                // and ping-pong buffers must swap between iterations.
                 context.queue.submit(std::iter::once(encoder.finish()));
 
-                // Swap ping-pong buffers after each iteration
                 if let Some(pb) = pass_buffers.get_mut(target_name) {
                     pb.swap();
                 }

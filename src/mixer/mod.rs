@@ -3,7 +3,7 @@
 use crate::channel::{Channel, BlendMode};
 use crate::deck::Effect;
 use crate::isf::{ISFShader, compile_glsl_to_spirv};
-use crate::modulation::{ModulationEngine, AudioValues};
+use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
 use crate::renderer::{RenderContext, BlitPipeline, ISFUniforms, TransitionPipeline};
 use anyhow::{Context as _, Result};
@@ -263,8 +263,16 @@ impl Mixer {
         })
     }
 
-    /// Render all channels and composite them via crossfader, then apply master effects
-    pub fn render(&mut self, context: &RenderContext, audio_data: &crate::AudioData) -> Result<()> {
+    /// Pre-update modulation engine with latest audio data.
+    /// Call this before collect_ui_data() so the UI reads fresh modulation values.
+    pub fn update_modulation(&mut self, audio_values: &crate::modulation::AudioValues) {
+        let time = self.start_time.elapsed().as_secs_f32();
+        self.modulation.update(time, audio_values);
+    }
+
+    /// Render all channels and composite them via crossfader, then apply master effects.
+    /// `audio_values` carries per-source FFT data for the modulation engine.
+    pub fn render(&mut self, context: &RenderContext, audio_data: &crate::AudioData, audio_values: &crate::modulation::AudioValues) -> Result<()> {
         // Calculate dt
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
@@ -321,16 +329,25 @@ impl Mixer {
 
         // Update global modulation engine
         let time = self.start_time.elapsed().as_secs_f32();
-        let audio_values = AudioValues {
-            level: audio_data.level,
-            bass: audio_data.bass(),
-            mid: audio_data.mid(),
-            treble: audio_data.treble(),
-        };
-        self.modulation.update(time, &audio_values);
+        self.modulation.update(time, audio_values);
 
-        // Render each channel
+        // Compute effective opacity per channel (crossfader × channel opacity).
+        // Skip rendering channels that won't be visible in the composite.
+        let channel_count = self.channels.len();
+        let effective_opacities: Vec<f32> = if channel_count == 2 {
+            vec![
+                (1.0 - self.crossfader) * self.channels[0].opacity,
+                self.crossfader * self.channels[1].opacity,
+            ]
+        } else {
+            self.channels.iter().map(|ch| ch.opacity).collect()
+        };
+
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
+            // Skip channels with zero effective opacity — no point rendering them
+            if effective_opacities[ch_idx] < 0.001 {
+                continue;
+            }
             channel.render(context, audio_data, &self.modulation, ch_idx, time, dt)?;
         }
 

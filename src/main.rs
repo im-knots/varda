@@ -3,7 +3,7 @@ use varda::modulation::ModulationSource;
 use varda::renderer::context::{OutputWindow, OutputSource, OutputTarget, SurfaceRenderInfo};
 use varda::surface::ContentMapping;
 use varda::surface::SurfaceManager;
-use varda::ui::{self, UIData, AudioUIData, ModSourceUI, ModAssignmentUI, NotificationUI, OutputWindowUI, SurfaceUI, ShaderParamsUI, ChannelUIInfo, DeckUIInfo, collect_params, RENDER_WIDTH, RENDER_HEIGHT};
+use varda::ui::{self, UIData, AudioUIData, AudioDeviceUI, ModSourceUI, ModAssignmentUI, NotificationUI, OutputWindowUI, SurfaceUI, ShaderParamsUI, ChannelUIInfo, DeckUIInfo, collect_params, RENDER_WIDTH, RENDER_HEIGHT};
 use varda::renderer::context::SurfaceAssignment;
 use varda::ui::notifications::NotificationSystem;
 use winit::{
@@ -28,15 +28,14 @@ struct App {
     // Main output preview texture ID
     main_output_texture: Option<egui::TextureId>,
     // Audio state
-    audio_input: Option<AudioInput>,
+    audio_manager: AudioManager,
     audio_textures: Option<AudioTextures>,
-    audio_data: AudioData,
     // OSC state
     osc_receiver: Option<OscReceiver>,
     // MIDI state
     midi_devices: Option<midi::MidiDeviceManager>,
     midi_mappings: midi::MidiMappingStore,
-    apc_mini_mgr: midi::apc_mini::ApcMiniManager,
+    controller_led_mgr: midi::ControllerLedManager,
     // Notification system
     notifications: NotificationSystem,
     // Currently selected deck for bottom bar detail view
@@ -66,6 +65,10 @@ struct App {
     camera_manager: varda::camera::CameraManager,
     // Workspace persistence
     workspace: varda::persistence::Workspace,
+    // Frame timing for FPS display
+    last_frame_instant: std::time::Instant,
+    fps_history: Vec<f32>,
+    fps_smoothed: f32,
 }
 
 impl App {
@@ -88,17 +91,8 @@ impl App {
             log::warn!("Failed to start shader hot-reload: {}", e);
         }
 
-        // Initialize audio input
-        let audio_input = match AudioInput::new() {
-            Ok(input) => {
-                log::info!("Audio input initialized");
-                Some(input)
-            }
-            Err(e) => {
-                log::warn!("Failed to initialize audio input: {}", e);
-                None
-            }
-        };
+        // Initialize audio manager (scans devices and auto-opens default)
+        let audio_manager = AudioManager::new();
 
         // Try to start OSC receiver on port 9000
         let osc_receiver = match OscReceiver::new(9000) {
@@ -112,13 +106,24 @@ impl App {
             }
         };
 
+        // Initialize workspace first so we can use its paths
+        let workspace = varda::persistence::Workspace::from_cwd()
+            .unwrap_or_else(|_| varda::persistence::Workspace::new(std::path::PathBuf::from(".")));
+
         // Initialize MIDI device manager (handles N devices, input + output)
-        let mut apc_mini_mgr = midi::apc_mini::ApcMiniManager::new();
+        let mut controller_led_mgr = midi::ControllerLedManager::new();
         let midi_devices = match midi::MidiDeviceManager::new() {
-            Ok(mgr) => {
+            Ok(mut mgr) => {
+                // Load user controller profiles from .varda/controllers/
+                let controllers_dir = workspace.controllers_dir();
+                mgr.load_user_profiles(&controllers_dir);
+                // Rescan to re-match profiles after loading user profiles
+                if controllers_dir.is_dir() {
+                    let _ = mgr.scan_devices();
+                }
                 let count = mgr.devices.len();
                 log::info!("MIDI initialized: {} device(s)", count);
-                apc_mini_mgr.sync_devices(&mgr);
+                controller_led_mgr.sync_devices(&mgr);
                 Some(mgr)
             }
             Err(e) => {
@@ -138,13 +143,12 @@ impl App {
             egui_renderer: None,
             deck_preview_textures: std::collections::HashMap::new(),
             main_output_texture: None,
-            audio_input,
+            audio_manager,
             audio_textures: None,
-            audio_data: AudioData::default(),
             osc_receiver,
             midi_devices,
             midi_mappings: midi::MidiMappingStore::new(),
-            apc_mini_mgr,
+            controller_led_mgr,
             notifications: NotificationSystem::new(),
             selected_deck: None,
             selected_channel: None,
@@ -160,8 +164,10 @@ impl App {
             library_panel_open: true,
             calibration_textures: Vec::new(),
             camera_manager: varda::camera::CameraManager::new(),
-            workspace: varda::persistence::Workspace::from_cwd()
-                .unwrap_or_else(|_| varda::persistence::Workspace::new(std::path::PathBuf::from("."))),
+            workspace,
+            last_frame_instant: std::time::Instant::now(),
+            fps_history: Vec::with_capacity(60),
+            fps_smoothed: 0.0,
         };
 
         app
@@ -597,8 +603,8 @@ impl App {
                     ModulationSource::LFO { waveform, frequency, phase, amplitude, bipolar } => {
                         ModSourceUI::LFO { waveform: *waveform, frequency: *frequency, phase: *phase, amplitude: *amplitude, bipolar: *bipolar }
                     }
-                    ModulationSource::AudioBand { band, smoothing } => {
-                        ModSourceUI::Audio { band: *band, smoothing: *smoothing }
+                    ModulationSource::AudioBand { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } => {
+                        ModSourceUI::Audio { source_id: *source_id, freq_low: *freq_low, freq_high: *freq_high, gain: *gain, smoothing: *smoothing, mode: *mode, noise_gate: *noise_gate }
                     }
                     ModulationSource::ADSR { attack, decay, sustain, release, stage, .. } => {
                         ModSourceUI::ADSR { attack: *attack, decay: *decay, sustain: *sustain, release: *release, stage: *stage }
@@ -623,14 +629,23 @@ impl App {
             }).collect())
             .unwrap_or_default();
 
+        let primary_audio = self.audio_manager.get_primary_data();
+        let active_ids = self.audio_manager.active_source_ids();
         let audio = AudioUIData {
-            level: self.audio_data.level,
-            bass: self.audio_data.bass(),
-            mid: self.audio_data.mid(),
-            treble: self.audio_data.treble(),
-            bpm: self.audio_data.bpm,
-            beat_phase: self.audio_data.beat_phase(),
-            enabled: self.audio_input.is_some(),
+            level: primary_audio.level,
+            bass: primary_audio.bass(),
+            mid: primary_audio.mid(),
+            treble: primary_audio.treble(),
+            bpm: primary_audio.bpm,
+            beat_phase: primary_audio.beat_phase(),
+            enabled: self.audio_manager.has_active_source(),
+            devices: self.audio_manager.devices().iter().map(|d| AudioDeviceUI {
+                id: d.id,
+                name: d.name.clone(),
+                active: active_ids.contains(&d.id),
+            }).collect(),
+            fft: primary_audio.fft.clone(),
+            sample_rate: primary_audio.sample_rate,
         };
 
         let notifications = self.notifications.visible().iter().map(|n| NotificationUI {
@@ -718,7 +733,7 @@ impl App {
                     name: d.name.clone(),
                     enabled: d.enabled,
                     has_output: d.has_output,
-                    profile: format!("{:?}", d.profile),
+                    profile: d.profile_name().to_string(),
                 }).collect()
             }).unwrap_or_default(),
             midi_mappings: {
@@ -784,6 +799,7 @@ impl App {
             channel_names: self.mixer.as_ref()
                 .map(|m| m.channels.iter().map(|c| c.name.clone()).collect())
                 .unwrap_or_default(),
+            fps: self.fps_smoothed,
         }
     }
 
@@ -808,18 +824,29 @@ impl App {
             }
         }
 
-        // Poll for audio data
-        if let Some(audio_input) = &self.audio_input {
-            if let Some(data) = audio_input.get_latest() {
-                self.audio_data = data;
+        // Poll all audio sources
+        self.audio_manager.poll();
+
+        // Update audio textures (using primary source)
+        if let Some(context) = &self.context {
+            if let Some(audio_textures) = &self.audio_textures {
+                audio_textures.update(&context.queue, self.audio_manager.get_primary_data());
             }
         }
 
-        // Update audio textures
-        if let Some(context) = &self.context {
-            if let Some(audio_textures) = &self.audio_textures {
-                audio_textures.update(&context.queue, &self.audio_data);
+        // Pre-update modulation with fresh audio so collect_ui_data() reads current values
+        if let Some(mixer) = &mut self.mixer {
+            let mut av = varda::modulation::AudioValues::default();
+            for id in self.audio_manager.active_source_ids() {
+                if let Some(data) = self.audio_manager.get_data(id) {
+                    av.sources.insert(id, varda::modulation::AudioSourceValues {
+                        fft: data.fft.clone(),
+                        level: data.level,
+                        sample_rate: data.sample_rate,
+                    });
+                }
             }
+            mixer.update_modulation(&av);
         }
 
         // Process OSC messages (mapped to channel A for now)
@@ -880,33 +907,37 @@ impl App {
     }
 
     /// Re-register GPU textures with egui so preview IDs stay valid.
+    /// Re-register GPU textures with egui so preview IDs stay valid.
+    /// Only needed when deck layout changes (add/remove/reorder), not every frame.
+    /// The GPU textures are updated in-place by the mixer render, so egui reads
+    /// the latest content automatically through the existing TextureView references.
     fn refresh_textures(&mut self) {
         let Some(context) = &self.context else { return };
         if let (Some(mixer), Some(egui_renderer)) = (&self.mixer, &mut self.egui_renderer) {
-            // Main output texture
-            if let Some(old_id) = self.main_output_texture.take() {
-                egui_renderer.free_texture(&old_id);
+            // Only re-register if main output texture isn't registered yet
+            if self.main_output_texture.is_none() {
+                let main_texture_id = egui_renderer.register_native_texture(
+                    &context.device,
+                    &mixer.composite_view,
+                    wgpu::FilterMode::Linear,
+                );
+                self.main_output_texture = Some(main_texture_id);
+                log::info!("Registered main output texture for preview");
             }
-            let main_texture_id = egui_renderer.register_native_texture(
-                &context.device,
-                &mixer.composite_view,
-                wgpu::FilterMode::Linear,
-            );
-            self.main_output_texture = Some(main_texture_id);
 
-            // Deck preview textures from all channels
+            // Only register deck textures that aren't registered yet
             for (ch_idx, ch) in mixer.channels.iter().enumerate() {
                 for (deck_idx, deck_slot) in ch.decks.iter().enumerate() {
                     let key = (ch_idx, deck_idx);
-                    if let Some(old_id) = self.deck_preview_textures.get(&key) {
-                        egui_renderer.free_texture(old_id);
+                    if !self.deck_preview_textures.contains_key(&key) {
+                        let new_id = egui_renderer.register_native_texture(
+                            &context.device,
+                            &deck_slot.deck.texture_view,
+                            wgpu::FilterMode::Linear,
+                        );
+                        self.deck_preview_textures.insert(key, new_id);
+                        log::info!("Registered ch{} deck {} texture for preview", ch_idx, deck_idx);
                     }
-                    let new_id = egui_renderer.register_native_texture(
-                        &context.device,
-                        &deck_slot.deck.texture_view,
-                        wgpu::FilterMode::Linear,
-                    );
-                    self.deck_preview_textures.insert(key, new_id);
                 }
             }
         }
@@ -972,9 +1003,30 @@ impl App {
     }
 
     fn render(&mut self, event_loop: &ActiveEventLoop) {
+        // Frame timing for FPS measurement
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(self.last_frame_instant).as_secs_f32();
+        self.last_frame_instant = now;
+        if dt > 0.0 {
+            let instant_fps = 1.0 / dt;
+            self.fps_history.push(instant_fps);
+            if self.fps_history.len() > 60 {
+                self.fps_history.remove(0);
+            }
+            self.fps_smoothed = self.fps_history.iter().sum::<f32>() / self.fps_history.len() as f32;
+        }
+
+        // --- Frame profiling ---
+        static PROF_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let prof_frame = PROF_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let prof_start = std::time::Instant::now();
+
         self.notifications.update();
+        let t0 = std::time::Instant::now();
         self.process_inputs();
+        let t1 = std::time::Instant::now();
         self.refresh_textures();
+        let t2 = std::time::Instant::now();
 
         let Some(window) = self.window else { return };
         if self.context.is_none() { return; }
@@ -990,8 +1042,10 @@ impl App {
             })
             .collect();
 
+        let t3 = std::time::Instant::now();
         // Collect UI data and run egui frame
         let ui_data = self.collect_ui_data();
+        let t4 = std::time::Instant::now();
         let raw_input = {
             let Some(egui_state) = &mut self.egui_state else { return };
             egui_state.take_egui_input(window)
@@ -1000,6 +1054,7 @@ impl App {
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
             ui_actions = ui::panels::render_ui(ctx, &ui_data);
         });
+        let t5 = std::time::Instant::now();
         {
             let Some(egui_state) = &mut self.egui_state else { return };
             egui_state.handle_platform_output(window, full_output.platform_output);
@@ -1011,9 +1066,9 @@ impl App {
         self.apply_output_actions(&ui_actions);
         self.apply_surface_actions(&ui_actions);
 
-        // Update APC Mini LEDs based on current state
+        // Update controller LEDs based on current state
         if let (Some(mgr), Some(mixer)) = (&self.midi_devices, &self.mixer) {
-            self.apc_mini_mgr.update_leds(
+            self.controller_led_mgr.update_leds(
                 mgr,
                 &self.midi_mappings,
                 mixer,
@@ -1027,13 +1082,30 @@ impl App {
             self.camera_manager.scan_devices();
         }
 
+        // Handle audio rescan and source toggles
+        if ui_actions.audio_rescan {
+            self.audio_manager.scan_devices();
+        }
+        for (source_id, enabled) in &ui_actions.audio_source_toggles {
+            if *enabled {
+                if let Err(e) = self.audio_manager.open_source(*source_id) {
+                    log::warn!("Failed to open audio source {}: {}", source_id, e);
+                    self.notifications.warn(format!("Failed to open audio source: {}", e));
+                }
+            } else {
+                self.audio_manager.close_source(*source_id);
+            }
+        }
+
         // Handle MIDI device actions from UI
         if ui_actions.midi_rescan {
             if let Some(mgr) = &mut self.midi_devices {
+                // Reload user controller profiles on rescan
+                mgr.load_user_profiles(&self.workspace.controllers_dir());
                 if let Err(e) = mgr.scan_devices() {
                     log::warn!("MIDI rescan failed: {}", e);
                 }
-                self.apc_mini_mgr.sync_devices(mgr);
+                self.controller_led_mgr.sync_devices(mgr);
             }
         }
         for (dev_id, enabled) in &ui_actions.midi_device_toggles {
@@ -1093,11 +1165,27 @@ impl App {
             }
         }
 
-        // Render output windows
-        self.render_output_windows();
-
-        // Submit GPU frame
+        let t6 = std::time::Instant::now();
+        // Submit GPU frame (main window — includes mixer render)
         self.submit_frame(window, full_output.shapes, full_output.pixels_per_point, full_output.textures_delta);
+        let t7 = std::time::Instant::now();
+
+        // Render output windows AFTER main window present to avoid GPU queue contention
+        self.render_output_windows();
+        let t8 = std::time::Instant::now();
+
+        // Log frame profile every ~120 frames
+        if prof_frame % 120 == 0 {
+            log::debug!("FRAME PROFILE: total={:.1}ms | inputs={:.1}ms textures={:.1}ms collect_ui={:.1}ms egui={:.1}ms submit={:.1}ms outputs={:.1}ms",
+                t8.duration_since(prof_start).as_secs_f64() * 1000.0,
+                t1.duration_since(t0).as_secs_f64() * 1000.0,
+                t2.duration_since(t1).as_secs_f64() * 1000.0,
+                t4.duration_since(t3).as_secs_f64() * 1000.0,
+                t5.duration_since(t4).as_secs_f64() * 1000.0,
+                t7.duration_since(t6).as_secs_f64() * 1000.0,
+                t8.duration_since(t7).as_secs_f64() * 1000.0,
+            );
+        }
     }
 
     /// Create pending output windows (deferred from UI actions to here where we have ActiveEventLoop)
@@ -1690,30 +1778,15 @@ impl App {
     ) {
         let Some(context) = &self.context else { return };
 
-        // Acquire surface texture
-        let output = match context.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(e) => {
-                log::error!("Failed to get surface texture: {}", e);
-                return;
-            }
-        };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // --- Submit sub-profiling ---
+        static SUBMIT_PROF_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let submit_frame_idx = SUBMIT_PROF_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let s0 = std::time::Instant::now();
 
-        // Tessellate egui shapes
-        let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
-
-        let Some(egui_renderer) = &mut self.egui_renderer else { return };
-
-        // Update egui textures
-        for (id, image_delta) in &textures_delta.set {
-            egui_renderer.update_texture(&context.device, &context.queue, *id, image_delta);
-        }
-
-        // Create encoder
-        let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        // ── Phase 1: GPU work (no surface needed) ──────────────────────
+        // Do all GPU rendering BEFORE acquiring the surface texture.
+        // This lets the GPU drain previous-frame work while we submit new work,
+        // so get_current_texture() finds a free buffer instead of blocking.
 
         // Update camera frames and distribute shared texture views to camera decks
         self.camera_manager.update(&context.queue);
@@ -1729,12 +1802,58 @@ impl App {
             }
         }
 
-        // Render the mixer (all channels composited)
+        // Build AudioValues from all active audio sources for the modulation engine
+        let audio_values = {
+            let mut av = varda::modulation::AudioValues::default();
+            for id in self.audio_manager.active_source_ids() {
+                if let Some(data) = self.audio_manager.get_data(id) {
+                    av.sources.insert(id, varda::modulation::AudioSourceValues {
+                        fft: data.fft.clone(),
+                        level: data.level,
+                        sample_rate: data.sample_rate,
+                    });
+                }
+            }
+            av
+        };
+
+        // Render the mixer (all channels composited) — GPU work submitted here
+        let primary_audio = self.audio_manager.get_primary_data().clone();
         if let Some(mixer) = &mut self.mixer {
-            if let Err(e) = mixer.render(context, &self.audio_data) {
+            if let Err(e) = mixer.render(context, &primary_audio, &audio_values) {
                 log::error!("Failed to render mixer: {}", e);
             }
         }
+        let s1 = std::time::Instant::now();
+
+        // Tessellate egui shapes (CPU work while GPU processes mixer)
+        let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
+        let s2 = std::time::Instant::now();
+
+        // ── Phase 2: Acquire surface (GPU should be done by now) ───────
+        // Poll the device to process completed command buffers and free drawables
+        let _ = context.device.poll(wgpu::PollType::Poll);
+        let output = match context.surface.get_current_texture() {
+            Ok(output) => output,
+            Err(e) => {
+                log::error!("Failed to get surface texture: {}", e);
+                return;
+            }
+        };
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let s3 = std::time::Instant::now();
+
+        let Some(egui_renderer) = &mut self.egui_renderer else { return };
+
+        // Update egui textures
+        for (id, image_delta) in &textures_delta.set {
+            egui_renderer.update_texture(&context.device, &context.queue, *id, image_delta);
+        }
+
+        // Create encoder for screen blit + egui overlay
+        let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Screen Encoder"),
+        });
 
         // Create bind group to blit mixer composite to screen
         let bind_group = if let (Some(mixer), Some(blit_pipeline)) = (&self.mixer, &self.blit_pipeline) {
@@ -1796,7 +1915,20 @@ impl App {
 
         // Submit and present
         context.queue.submit(std::iter::once(encoder.finish()));
+        let s4 = std::time::Instant::now();
         output.present();
+        let s5 = std::time::Instant::now();
+
+        // Log submit sub-profile every ~120 frames
+        if submit_frame_idx % 120 == 0 {
+            log::debug!("SUBMIT PROFILE: mixer_render={:.1}ms tessellate={:.1}ms surface_acquire={:.1}ms blit+submit={:.1}ms present={:.1}ms",
+                s1.duration_since(s0).as_secs_f64() * 1000.0,
+                s2.duration_since(s1).as_secs_f64() * 1000.0,
+                s3.duration_since(s2).as_secs_f64() * 1000.0,
+                s4.duration_since(s3).as_secs_f64() * 1000.0,
+                s5.duration_since(s4).as_secs_f64() * 1000.0,
+            );
+        }
     }
 }
 

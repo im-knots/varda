@@ -55,3 +55,4 @@ nokhwa = { version = "0.10.10", features = ["input-native", "output-threaded"] }
 midir = "0.11"
 yuvutils-rs = "0.8.3"
 geo = "0.33.1"
+toml = "1.1.2"

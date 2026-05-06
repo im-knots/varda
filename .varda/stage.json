@@ -1,0 +1,87 @@
+{
+  "grid_size": 0.05,
+  "snap": true,
+  "library_panel_open": true,
+  "stage_editor_open": false,
+  "surfaces": {
+    "surfaces": [
+      {
+        "name": "Surface 1",
+        "vertices": [
+          [
+            0.35,
+            0.5
+          ],
+          [
+            0.4,
+            0.0
+          ],
+          [
+            0.45000002,
+            0.35
+          ],
+          [
+            0.5,
+            0.4
+          ],
+          [
+            0.55,
+            0.4
+          ],
+          [
+            0.6,
+            0.35
+          ],
+          [
+            0.65000004,
+            0.0
+          ],
+          [
+            0.7,
+            0.5
+          ],
+          [
+            0.69999987,
+            0.9
+          ],
+          [
+            0.15,
+            0.90000004
+          ],
+          [
+            0.15,
+            0.55
+          ],
+          [
+            0.2,
+            0.55
+          ],
+          [
+            0.25,
+            0.6
+          ],
+          [
+            0.3,
+            0.55
+          ],
+          [
+            0.35,
+            0.55
+          ]
+        ],
+        "extra_contours": [],
+        "source": "Master",
+        "content_mapping": "Mapped",
+        "output_type": "Projection",
+        "circle_hint": null
+      }
+    ]
+  },
+  "outputs": [
+    {
+      "name": "Output 1",
+      "target_display": null,
+      "surface_assignments": []
+    }
+  ]
+}

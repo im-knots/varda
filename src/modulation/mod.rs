@@ -21,18 +21,47 @@ impl Default for LFOWaveform {
     }
 }
 
-/// Audio frequency band for audio-reactive modulation
+/// How audio energy drives the modulation value.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum AudioBand {
-    Level,  // Overall volume
-    Bass,   // Low frequencies
-    Mid,    // Mid frequencies
-    Treble, // High frequencies
+pub enum AudioReactMode {
+    /// Direct: output = audio energy (standard envelope follower)
+    Direct,
+    /// Increase: audio energy sweeps the value upward (accumulates)
+    Increase,
+    /// Decrease: audio energy sweeps the value downward (accumulates)
+    Decrease,
 }
 
-impl Default for AudioBand {
+impl Default for AudioReactMode {
+    fn default() -> Self { AudioReactMode::Direct }
+}
+
+fn default_noise_gate() -> f32 { 0.1 }
+
+/// Audio frequency band presets (convenience for UI quick-select).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum AudioBandPreset {
+    Low,    // 20–250 Hz
+    Mid,    // 250–2000 Hz
+    High,   // 2000–20000 Hz
+    Full,   // 20–20000 Hz (overall level)
+}
+
+impl AudioBandPreset {
+    /// Get the frequency range for this preset.
+    pub fn freq_range(self) -> (f32, f32) {
+        match self {
+            AudioBandPreset::Low => (20.0, 250.0),
+            AudioBandPreset::Mid => (250.0, 2000.0),
+            AudioBandPreset::High => (2000.0, 20000.0),
+            AudioBandPreset::Full => (20.0, 20000.0),
+        }
+    }
+}
+
+impl Default for AudioBandPreset {
     fn default() -> Self {
-        AudioBand::Bass
+        AudioBandPreset::Low
     }
 }
 
@@ -80,10 +109,24 @@ pub enum ModulationSource {
         amplitude: f32, // 0.0 - 1.0, scales the output range
         bipolar: bool,  // true: -1 to 1, false: 0 to 1
     },
-    /// Audio band reactivity
+    /// Audio FFT reactivity with custom frequency range
     AudioBand {
-        band: AudioBand,
-        smoothing: f32, // 0.0 - 1.0 (low-pass filter strength)
+        /// Which audio source device to read from (None = first/default)
+        source_id: Option<crate::audio::AudioSourceId>,
+        /// Low frequency bound in Hz (default 20.0)
+        freq_low: f32,
+        /// High frequency bound in Hz (default 250.0)
+        freq_high: f32,
+        /// Gain multiplier (1.0 = unity, 0.0-10.0)
+        gain: f32,
+        /// Smoothing / fall-off (0.0 = instant, 0.99 = very slow)
+        smoothing: f32,
+        /// How audio energy drives the output value
+        #[serde(default)]
+        mode: AudioReactMode,
+        /// Noise gate threshold (0.0–1.0). Signal below this reads as zero.
+        #[serde(default = "default_noise_gate")]
+        noise_gate: f32,
     },
     /// ADSR envelope generator
     ADSR {
@@ -121,11 +164,17 @@ impl ModulationSource {
         }
     }
 
-    /// Create a new audio band source
-    pub fn audio(band: AudioBand) -> Self {
+    /// Create a new audio FFT source from a preset band
+    pub fn audio_from_preset(preset: AudioBandPreset) -> Self {
+        let (freq_low, freq_high) = preset.freq_range();
         ModulationSource::AudioBand {
-            band,
-            smoothing: 0.3,
+            source_id: None,
+            freq_low,
+            freq_high,
+            gain: 1.0,
+            smoothing: 0.6,
+            mode: AudioReactMode::Direct,
+            noise_gate: 0.1,
         }
     }
 
@@ -195,15 +244,53 @@ impl ModulationSource {
                 let scaled = raw * *amplitude;
                 if *bipolar { scaled } else { scaled * 0.5 + 0.5 }
             }
-            ModulationSource::AudioBand { band, smoothing } => {
-                let raw = match band {
-                    AudioBand::Level => audio.level,
-                    AudioBand::Bass => audio.bass,
-                    AudioBand::Mid => audio.mid,
-                    AudioBand::Treble => audio.treble,
+            ModulationSource::AudioBand { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } => {
+                // Look up the audio source: specific ID, or fall back to primary
+                let source_vals = if let Some(id) = source_id {
+                    audio.sources.get(id)
+                } else {
+                    audio.primary()
                 };
-                let alpha = 1.0 - *smoothing;
-                prev_value + alpha * (raw - prev_value)
+                let raw_signal = if let Some(vals) = source_vals {
+                    vals.energy_in_range(*freq_low, *freq_high) * *gain
+                } else {
+                    0.0
+                };
+                // Apply noise gate: signal below threshold reads as zero
+                let raw = if raw_signal < *noise_gate { 0.0 } else { raw_signal };
+                match mode {
+                    AudioReactMode::Direct => {
+                        // Asymmetric envelope: instant attack, smooth release
+                        if raw >= prev_value {
+                            raw.clamp(0.0, 1.0)
+                        } else {
+                            let release_alpha = 1.0 - *smoothing;
+                            (prev_value + release_alpha * (raw - prev_value)).clamp(0.0, 1.0)
+                        }
+                    }
+                    AudioReactMode::Increase => {
+                        if raw <= 0.0 {
+                            prev_value // hold when gated/quiet
+                        } else {
+                            // Speed: smoothing 0.0 = very fast, 0.99 = slow
+                            // At smoothing=0.5 with raw=0.5, sweep 0→1 in ~0.5s
+                            let speed = (1.0 - *smoothing * 0.9) * 4.0;
+                            let step = raw * dt * speed;
+                            let next = prev_value + step;
+                            if next >= 1.0 { next - 1.0 } else { next }
+                        }
+                    }
+                    AudioReactMode::Decrease => {
+                        if raw <= 0.0 {
+                            prev_value // hold when gated/quiet
+                        } else {
+                            let speed = (1.0 - *smoothing * 0.9) * 4.0;
+                            let step = raw * dt * speed;
+                            let next = prev_value - step;
+                            if next <= 0.0 { next + 1.0 } else { next }
+                        }
+                    }
+                }
             }
             ModulationSource::ADSR { attack, decay, sustain, release, stage, stage_time, current_level, .. } => {
                 *stage_time += dt;
@@ -277,13 +364,50 @@ impl ModulationSource {
     }
 }
 
-/// Audio analysis values passed to modulation engine
-#[derive(Debug, Clone, Copy, Default)]
-pub struct AudioValues {
+/// Audio analysis values for a single source, passed to modulation engine.
+#[derive(Debug, Clone)]
+pub struct AudioSourceValues {
+    pub fft: Vec<f32>,
     pub level: f32,
-    pub bass: f32,
-    pub mid: f32,
-    pub treble: f32,
+    pub sample_rate: f32,
+}
+
+impl AudioSourceValues {
+    /// Compute energy in a frequency range from the FFT data.
+    /// Returns a perceptually-scaled value in roughly 0.0–1.0 range
+    /// suitable for driving modulation (dB-based mapping).
+    pub fn energy_in_range(&self, freq_low: f32, freq_high: f32) -> f32 {
+        if self.fft.is_empty() || self.sample_rate <= 0.0 { return 0.0; }
+        let fft_size = self.fft.len() * 2; // fft stores half (positive frequencies)
+        let bin_width = self.sample_rate / fft_size as f32;
+        let bin_low = ((freq_low / bin_width).floor() as usize).min(self.fft.len() - 1);
+        let bin_high = ((freq_high / bin_width).ceil() as usize).min(self.fft.len());
+        if bin_high <= bin_low { return 0.0; }
+        let slice = &self.fft[bin_low..bin_high];
+        // RMS energy
+        let rms = (slice.iter().map(|v| v * v).sum::<f32>() / slice.len() as f32).sqrt();
+        // Convert to dB-based perceptual scale:
+        // -60dB (0.001) → 0.0, 0dB (1.0) → 1.0
+        // This maps typical mic signals into a usable range
+        if rms < 1e-6 { return 0.0; }
+        let db = 20.0 * rms.log10(); // negative dB value
+        ((db + 60.0) / 60.0).clamp(0.0, 1.0)
+    }
+}
+
+/// All audio source data for the current frame.
+#[derive(Debug, Clone, Default)]
+pub struct AudioValues {
+    /// Per-source audio data, keyed by AudioSourceId.
+    pub sources: std::collections::HashMap<crate::audio::AudioSourceId, AudioSourceValues>,
+}
+
+impl AudioValues {
+    /// Get the first/primary source's data (convenience).
+    pub fn primary(&self) -> Option<&AudioSourceValues> {
+        // Return the source with the lowest ID
+        self.sources.iter().min_by_key(|(id, _)| **id).map(|(_, v)| v)
+    }
 }
 
 /// Modulation assignment linking a source to a parameter
@@ -412,7 +536,8 @@ impl ModulationEngine {
                 *phase = (*phase + self.get_mod_source_offset(idx, "phase")).clamp(0.0, 1.0);
                 *amplitude = (*amplitude + self.get_mod_source_offset(idx, "amplitude")).clamp(0.0, 1.0);
             }
-            ModulationSource::AudioBand { smoothing, .. } => {
+            ModulationSource::AudioBand { gain, smoothing, .. } => {
+                *gain = (*gain + self.get_mod_source_offset(idx, "gain")).max(0.0);
                 *smoothing = (*smoothing + self.get_mod_source_offset(idx, "smoothing")).clamp(0.0, 0.99);
             }
             ModulationSource::ADSR { attack, decay, sustain, release, .. } => {

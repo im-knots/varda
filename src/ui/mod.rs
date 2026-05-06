@@ -4,7 +4,8 @@ pub mod state;
 pub mod widgets;
 
 use crate::mixer::CrossfadeEasing;
-use crate::modulation::{LFOWaveform, AudioBand, ADSRStage, StepInterpolation};
+use crate::modulation::{LFOWaveform, AudioBandPreset, AudioReactMode, ADSRStage, StepInterpolation};
+use crate::audio::AudioSourceId;
 use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
@@ -51,7 +52,7 @@ pub enum ParamUpdate {
 /// Modulation action from UI
 pub enum ModulationAction {
     AddLFO { waveform: LFOWaveform, frequency: f32 },
-    AddAudioBand { band: AudioBand },
+    AddAudioFFT { preset: AudioBandPreset, source_id: Option<AudioSourceId> },
     AddADSR { attack: f32, decay: f32, sustain: f32, release: f32 },
     AddStepSequencer { num_steps: usize, rate: f32 },
     RemoveSource { idx: usize },
@@ -61,6 +62,13 @@ pub enum ModulationAction {
     UpdateLFOAmplitude { idx: usize, amplitude: f32 },
     UpdateLFOBipolar { idx: usize, bipolar: bool },
     UpdateAudioSmoothing { idx: usize, smoothing: f32 },
+    UpdateAudioFreqLow { idx: usize, freq_low: f32 },
+    UpdateAudioFreqHigh { idx: usize, freq_high: f32 },
+    UpdateAudioGain { idx: usize, gain: f32 },
+    UpdateAudioPreset { idx: usize, preset: AudioBandPreset },
+    UpdateAudioSource { idx: usize, source_id: Option<AudioSourceId> },
+    UpdateAudioMode { idx: usize, mode: AudioReactMode },
+    UpdateAudioNoiseGate { idx: usize, noise_gate: f32 },
     // ADSR updates
     UpdateADSRAttack { idx: usize, attack: f32 },
     UpdateADSRDecay { idx: usize, decay: f32 },
@@ -90,7 +98,7 @@ pub enum ModulationAction {
 #[derive(Clone)]
 pub enum ModSourceUI {
     LFO { waveform: LFOWaveform, frequency: f32, phase: f32, amplitude: f32, bipolar: bool },
-    Audio { band: AudioBand, smoothing: f32 },
+    Audio { source_id: Option<AudioSourceId>, freq_low: f32, freq_high: f32, gain: f32, smoothing: f32, mode: AudioReactMode, noise_gate: f32 },
     ADSR { attack: f32, decay: f32, sustain: f32, release: f32, stage: ADSRStage },
     StepSequencer { steps: Vec<f32>, rate: f32, interpolation: StepInterpolation, bipolar: bool },
 }
@@ -179,6 +187,14 @@ pub struct ChannelUIInfo {
     pub effects: Vec<EffectInfo>,
 }
 
+/// Audio input device info for UI display.
+#[derive(Clone)]
+pub struct AudioDeviceUI {
+    pub id: AudioSourceId,
+    pub name: String,
+    pub active: bool,
+}
+
 /// Audio data snapshot for UI display
 #[derive(Clone)]
 pub struct AudioUIData {
@@ -189,6 +205,12 @@ pub struct AudioUIData {
     pub bpm: Option<f32>,
     pub beat_phase: f32,
     pub enabled: bool,
+    /// Available audio input devices
+    pub devices: Vec<AudioDeviceUI>,
+    /// FFT spectrum of primary source (for spectrum visualization, 256 bins)
+    pub fft: Vec<f32>,
+    /// Sample rate of primary source
+    pub sample_rate: f32,
 }
 
 /// Notification snapshot for UI rendering (avoids borrowing NotificationSystem during egui)
@@ -262,6 +284,8 @@ pub struct UIData {
     pub channel_count: usize,
     /// Channel names (for labels in sequence builder)
     pub channel_names: Vec<String>,
+    /// Smoothed FPS (rolling average over last 60 frames)
+    pub fps: f32,
 }
 
 /// Read-only snapshot of a single transition sequence
@@ -518,6 +542,10 @@ pub struct UIActions {
     pub camera_to_add: Option<(usize, crate::camera::CameraId)>,
     /// Rescan for camera devices
     pub camera_rescan: bool,
+    /// Rescan for audio input devices
+    pub audio_rescan: bool,
+    /// Toggle an audio source on/off (source_id, enabled)
+    pub audio_source_toggles: Vec<(AudioSourceId, bool)>,
     /// Video playback actions: (ch_idx, deck_idx, action)
     pub video_actions: Vec<(usize, usize, VideoAction)>,
     /// Auto-transition actions: (ch_idx, deck_idx, action)
@@ -656,6 +684,8 @@ impl UIActions {
             master_effect_to_move: None,
             camera_to_add: None,
             camera_rescan: false,
+            audio_rescan: false,
+            audio_source_toggles: Vec::new(),
             video_actions: Vec::new(),
             auto_transition_actions: Vec::new(),
             save_requested: false,

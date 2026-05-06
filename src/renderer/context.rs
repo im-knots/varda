@@ -81,15 +81,26 @@ impl RenderContext {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
+        // Use Fifo (vsync) for stable frame pacing.
+        // Our render work is well under one vsync interval, so Fifo gives clean
+        // 60fps/120fps without tearing or wasted GPU cycles on never-displayed frames.
+        // Mailbox would be ideal (lowest latency, no tearing) but Metal doesn't support it.
+        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+        log::info!("Present mode: {:?} (available: {:?})", present_mode, surface_caps.present_modes);
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 3,
         };
 
         surface.configure(&device, &surface_config);
@@ -285,15 +296,23 @@ impl OutputWindow {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
+        // Output windows use Immediate mode for lowest latency to projectors/displays.
+        // This avoids output windows throttling the main render loop via vsync contention.
+        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+            wgpu::PresentMode::Immediate
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 3,
         };
 
         surface.configure(&context.device, &surface_config);

@@ -195,7 +195,7 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
             render_bottom_panel(ui, data, &mut actions);
         });
 
-    // === TOP BAR: Save button + status ===
+    // === TOP BAR: Save button + FPS/BPM status ===
     egui::TopBottomPanel::top("top_bar")
         .exact_height(28.0)
         .show(ctx, |ui| {
@@ -203,6 +203,35 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                 if ui.button("💾 Save").on_hover_text("Save workspace (⌘S)").clicked() {
                     actions.save_requested = true;
                 }
+
+                // Right-align FPS + BPM
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // BPM display
+                    let bpm_text = if let Some(bpm) = data.audio.bpm {
+                        format!("{:.0} BPM", bpm)
+                    } else {
+                        "-- BPM".to_string()
+                    };
+                    let bpm_color = if data.audio.bpm.is_some() {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else {
+                        egui::Color32::from_rgb(120, 120, 120)
+                    };
+                    ui.label(egui::RichText::new(&bpm_text).color(bpm_color).monospace());
+
+                    ui.separator();
+
+                    // FPS display (color-coded per spec: green >55, yellow 30-55, red <30)
+                    let fps = data.fps;
+                    let fps_color = if fps > 55.0 {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else if fps > 30.0 {
+                        egui::Color32::from_rgb(220, 200, 60)
+                    } else {
+                        egui::Color32::from_rgb(220, 60, 60)
+                    };
+                    ui.label(egui::RichText::new(format!("{:.0} FPS", fps)).color(fps_color).monospace());
+                });
             });
         });
 
@@ -3160,8 +3189,9 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
             });
         }
         if ui.button("➕ Audio").clicked() {
-            actions.modulation_actions.push(ModulationAction::AddAudioBand {
-                band: crate::modulation::AudioBand::Bass,
+            actions.modulation_actions.push(ModulationAction::AddAudioFFT {
+                preset: crate::modulation::AudioBandPreset::Low,
+                source_id: None,
             });
         }
         if ui.button("➕ ADSR").clicked() {
@@ -3295,20 +3325,87 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                     painter.circle_filled(egui::pos2(rect.center().x, y), 3.0, mod_color);
                                 }
                             }
-                            ModSourceUI::Audio { band, smoothing } => {
+                            ModSourceUI::Audio { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } => {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(format!("Audio {}", idx + 1)).strong().color(mod_color));
                                     if ui.small_button("x").clicked() {
                                         actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
                                     }
                                 });
-                                let band_name = match band {
-                                    crate::modulation::AudioBand::Level => "Level",
-                                    crate::modulation::AudioBand::Bass => "Bass",
-                                    crate::modulation::AudioBand::Mid => "Mid",
-                                    crate::modulation::AudioBand::Treble => "Treble",
+                                // Mode selector (Direct/Increase/Decrease)
+                                use crate::modulation::AudioReactMode;
+                                let mode_label = match mode {
+                                    AudioReactMode::Direct => "Direct",
+                                    AudioReactMode::Increase => "Increase",
+                                    AudioReactMode::Decrease => "Decrease",
                                 };
-                                ui.label(egui::RichText::new(format!("Band: {}", band_name)).small());
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Mode:").small());
+                                    egui::ComboBox::from_id_salt(format!("audio_mode_{}", idx))
+                                        .selected_text(mode_label)
+                                        .width(70.0)
+                                        .show_ui(ui, |ui| {
+                                            for (name, m) in [("Direct", AudioReactMode::Direct), ("Increase", AudioReactMode::Increase), ("Decrease", AudioReactMode::Decrease)] {
+                                                if ui.selectable_label(*mode == m, name).clicked() {
+                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioMode { idx, mode: m });
+                                                }
+                                            }
+                                        });
+                                });
+                                // Preset selector (Low/Mid/High/Full/Custom)
+                                let preset_label = if (*freq_low - 20.0).abs() < 1.0 && (*freq_high - 250.0).abs() < 1.0 {
+                                    "Low"
+                                } else if (*freq_low - 250.0).abs() < 1.0 && (*freq_high - 2000.0).abs() < 1.0 {
+                                    "Mid"
+                                } else if (*freq_low - 2000.0).abs() < 1.0 && (*freq_high - 20000.0).abs() < 1.0 {
+                                    "High"
+                                } else if (*freq_low - 20.0).abs() < 1.0 && (*freq_high - 20000.0).abs() < 1.0 {
+                                    "Full"
+                                } else {
+                                    "Custom"
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Range:").small());
+                                    egui::ComboBox::from_id_salt(format!("audio_preset_{}", idx))
+                                        .selected_text(preset_label)
+                                        .width(60.0)
+                                        .show_ui(ui, |ui| {
+                                            use crate::modulation::AudioBandPreset;
+                                            for (name, preset) in [("Low", AudioBandPreset::Low), ("Mid", AudioBandPreset::Mid), ("High", AudioBandPreset::High), ("Full", AudioBandPreset::Full)] {
+                                                if ui.selectable_label(preset_label == name, name).clicked() {
+                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioPreset { idx, preset });
+                                                }
+                                            }
+                                        });
+                                });
+                                // Frequency range sliders (bookshelf)
+                                let mut fl = *freq_low;
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Lo:").small());
+                                    let path = format!("mod/{}/freq_low", idx);
+                                    if render_mod_learn_slider(ui, &mut fl, 20.0..=20000.0, |s| s.logarithmic(true).suffix("Hz"), &path, data, actions) {
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioFreqLow { idx, freq_low: fl });
+                                    }
+                                });
+                                let mut fh = *freq_high;
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Hi:").small());
+                                    let path = format!("mod/{}/freq_high", idx);
+                                    if render_mod_learn_slider(ui, &mut fh, 20.0..=20000.0, |s| s.logarithmic(true).suffix("Hz"), &path, data, actions) {
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioFreqHigh { idx, freq_high: fh });
+                                    }
+                                });
+                                // Gain slider
+                                let mut g = *gain;
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Gain:").small());
+                                    let path = format!("mod/{}/gain", idx);
+                                    if render_mod_learn_slider(ui, &mut g, 0.0..=4.0, |s| s.show_value(true), &path, data, actions) {
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioGain { idx, gain: g });
+                                    }
+                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "gain");
+                                });
+                                // Smoothing slider
                                 let mut sm = *smoothing;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Smooth:").small());
@@ -3318,6 +3415,37 @@ fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                                     }
                                     render_mod_on_mod_dropdown(ui, data, actions, idx, "smoothing");
                                 });
+                                // Noise gate slider
+                                let mut ng = *noise_gate;
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Gate:").small());
+                                    if ui.add(egui::Slider::new(&mut ng, 0.0..=0.5).show_value(true)).changed() {
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioNoiseGate { idx, noise_gate: ng });
+                                    }
+                                });
+                                // Source selector (if multiple audio devices)
+                                if data.audio.devices.len() > 1 {
+                                    let src_label = source_id
+                                        .and_then(|sid| data.audio.devices.iter().find(|d| d.id == sid))
+                                        .map(|d| d.name.as_str())
+                                        .unwrap_or("Default");
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("Src:").small());
+                                        egui::ComboBox::from_id_salt(format!("audio_src_{}", idx))
+                                            .selected_text(src_label)
+                                            .width(80.0)
+                                            .show_ui(ui, |ui| {
+                                                if ui.selectable_label(source_id.is_none(), "Default").clicked() {
+                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioSource { idx, source_id: None });
+                                                }
+                                                for dev in &data.audio.devices {
+                                                    if ui.selectable_label(*source_id == Some(dev.id), &dev.name).clicked() {
+                                                        actions.modulation_actions.push(ModulationAction::UpdateAudioSource { idx, source_id: Some(dev.id) });
+                                                    }
+                                                }
+                                            });
+                                    });
+                                }
                                 // Audio level bar
                                 if let Some(&cur_val) = data.modulation_current_values.get(idx) {
                                     ui.add(egui::ProgressBar::new(cur_val).desired_width(140.0).fill(mod_color));
@@ -3565,7 +3693,7 @@ fn render_mod_on_mod_dropdown(
                 let color = modulator_color(src_idx);
                 let src_name = match src {
                     ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                    ModSourceUI::Audio { band, .. } => format!("Audio {:?}", band),
+                    ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
                     ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                     ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
                 };

@@ -298,10 +298,11 @@ pub fn apply_modulation_actions(mixer: &mut Mixer, actions: &UIActions) {
                 let idx = mixer.modulation.add_source(source);
                 log::info!("Added LFO modulation source {}", idx);
             }
-            ModulationAction::AddAudioBand { band } => {
-                let source = ModulationSource::AudioBand { band: *band, smoothing: 0.3 };
+            ModulationAction::AddAudioFFT { preset, source_id } => {
+                let (freq_low, freq_high) = preset.freq_range();
+                let source = ModulationSource::AudioBand { source_id: *source_id, freq_low, freq_high, gain: 1.0, smoothing: 0.6, mode: crate::modulation::AudioReactMode::Direct, noise_gate: 0.1 };
                 let idx = mixer.modulation.add_source(source);
-                log::info!("Added Audio modulation source {} ({:?})", idx, band);
+                log::info!("Added Audio FFT modulation source {} ({:?}, {}-{}Hz)", idx, preset, freq_low, freq_high);
             }
             ModulationAction::RemoveSource { idx } => {
                 mixer.modulation.remove_source(*idx);
@@ -346,6 +347,57 @@ pub fn apply_modulation_actions(mixer: &mut Mixer, actions: &UIActions) {
                 if *idx < mixer.modulation.sources.len() {
                     if let ModulationSource::AudioBand { smoothing: ref mut s, .. } = mixer.modulation.sources[*idx] {
                         *s = *smoothing;
+                    }
+                }
+            }
+            ModulationAction::UpdateAudioFreqLow { idx, freq_low } => {
+                if *idx < mixer.modulation.sources.len() {
+                    if let ModulationSource::AudioBand { freq_low: ref mut fl, .. } = mixer.modulation.sources[*idx] {
+                        *fl = *freq_low;
+                    }
+                }
+            }
+            ModulationAction::UpdateAudioFreqHigh { idx, freq_high } => {
+                if *idx < mixer.modulation.sources.len() {
+                    if let ModulationSource::AudioBand { freq_high: ref mut fh, .. } = mixer.modulation.sources[*idx] {
+                        *fh = *freq_high;
+                    }
+                }
+            }
+            ModulationAction::UpdateAudioGain { idx, gain } => {
+                if *idx < mixer.modulation.sources.len() {
+                    if let ModulationSource::AudioBand { gain: ref mut g, .. } = mixer.modulation.sources[*idx] {
+                        *g = *gain;
+                    }
+                }
+            }
+            ModulationAction::UpdateAudioPreset { idx, preset } => {
+                if *idx < mixer.modulation.sources.len() {
+                    if let ModulationSource::AudioBand { freq_low: ref mut fl, freq_high: ref mut fh, .. } = mixer.modulation.sources[*idx] {
+                        let (lo, hi) = preset.freq_range();
+                        *fl = lo;
+                        *fh = hi;
+                    }
+                }
+            }
+            ModulationAction::UpdateAudioSource { idx, source_id } => {
+                if *idx < mixer.modulation.sources.len() {
+                    if let ModulationSource::AudioBand { source_id: ref mut sid, .. } = mixer.modulation.sources[*idx] {
+                        *sid = *source_id;
+                    }
+                }
+            }
+            ModulationAction::UpdateAudioMode { idx, mode } => {
+                if *idx < mixer.modulation.sources.len() {
+                    if let ModulationSource::AudioBand { mode: ref mut m, .. } = mixer.modulation.sources[*idx] {
+                        *m = *mode;
+                    }
+                }
+            }
+            ModulationAction::UpdateAudioNoiseGate { idx, noise_gate } => {
+                if *idx < mixer.modulation.sources.len() {
+                    if let ModulationSource::AudioBand { noise_gate: ref mut ng, .. } = mixer.modulation.sources[*idx] {
+                        *ng = *noise_gate;
                     }
                 }
             }

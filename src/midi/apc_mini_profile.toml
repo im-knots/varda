@@ -1,0 +1,56 @@
+[profile]
+name = "Akai APC Mini mk1"
+name_match = "apc mini"
+
+[leds]
+method = "note_velocity"
+channel = 0
+
+[leds.colors]
+off = 0
+green = 1
+green_blink = 2
+red = 3
+red_blink = 4
+yellow = 5
+yellow_blink = 6
+
+[[controls]]
+name = "grid"
+type = "button"
+midi_type = "note"
+channel = 0
+range = [0, 63]
+has_led = true
+
+[[controls]]
+name = "bottom_buttons"
+type = "button"
+midi_type = "note"
+channel = 0
+range = [64, 71]
+has_led = true
+
+[[controls]]
+name = "side_buttons"
+type = "button"
+midi_type = "note"
+channel = 0
+range = [82, 89]
+has_led = true
+
+[[controls]]
+name = "shift"
+type = "button"
+midi_type = "note"
+channel = 0
+range = [98, 98]
+has_led = true
+
+[[controls]]
+name = "faders"
+type = "fader"
+midi_type = "cc"
+channel = 0
+range = [48, 56]
+has_led = false

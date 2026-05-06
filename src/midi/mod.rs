@@ -5,10 +5,11 @@
 //! MIDI mappings are device-specific so two controllers can have the same CC#
 //! mapped to different parameters.
 
-pub mod apc_mini;
+pub mod controller_profile;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::Context as _;
@@ -17,6 +18,10 @@ use midir::{MidiInput, MidiOutput};
 use crate::mixer::Mixer;
 use crate::modulation::ModulationSource;
 use crate::params::ParamValue;
+
+pub use controller_profile::{
+    ControllerProfileData, ProfileRegistry, ControllerLedManager,
+};
 
 /// Stable identifier for a MIDI device within a session.
 pub type DeviceId = u32;
@@ -127,25 +132,16 @@ pub struct MidiDeviceInfo {
     pub enabled: bool,
     /// Whether this device supports output (has a matching destination).
     pub has_output: bool,
-    /// Controller profile type detected from name.
-    pub profile: ControllerProfile,
+    /// Controller profile (if one matched this device's name).
+    pub profile: Option<Arc<ControllerProfileData>>,
 }
 
-/// Known controller profiles (detected by name).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ControllerProfile {
-    ApcMini,
-    Generic,
-}
-
-impl ControllerProfile {
-    fn detect(name: &str) -> Self {
-        let lower = name.to_lowercase();
-        if lower.contains("apc mini") {
-            ControllerProfile::ApcMini
-        } else {
-            ControllerProfile::Generic
-        }
+impl MidiDeviceInfo {
+    /// Profile display name for UI.
+    pub fn profile_name(&self) -> &str {
+        self.profile.as_ref()
+            .map(|p| p.profile.name.as_str())
+            .unwrap_or("Generic")
     }
 }
 
@@ -164,6 +160,8 @@ pub struct MidiDeviceManager {
     /// Output connections keyed by DeviceId. Mutex for interior mutability
     /// (MidiOutputConnection::send requires &mut self, but send_raw takes &self).
     output_connections: HashMap<DeviceId, Mutex<midir::MidiOutputConnection>>,
+    /// Controller profile registry for device detection.
+    pub profile_registry: ProfileRegistry,
 }
 
 impl MidiDeviceManager {
@@ -178,9 +176,15 @@ impl MidiDeviceManager {
             next_device_id: 0,
             input_connections: Vec::new(),
             output_connections: HashMap::new(),
+            profile_registry: ProfileRegistry::new(),
         };
         mgr.scan_devices()?;
         Ok(mgr)
+    }
+
+    /// Load user controller profiles from a directory (e.g. `.varda/controllers/`).
+    pub fn load_user_profiles(&mut self, dir: &std::path::Path) {
+        self.profile_registry.load_user_profiles(dir);
     }
 
     /// Scan for MIDI devices. Can be called again to rescan (hot-plug).
@@ -232,9 +236,12 @@ impl MidiDeviceManager {
                 self.connect_output(device_id, &output_port_names[out_idx]);
             }
 
-            let profile = ControllerProfile::detect(in_name);
-            log::info!("MIDI device [{}]: {} (profile={:?}, output={})",
-                device_id, in_name, profile, has_output);
+            let profile = self.profile_registry.detect(in_name);
+            let profile_name = profile.as_ref()
+                .map(|p| p.profile.name.as_str())
+                .unwrap_or("Generic");
+            log::info!("MIDI device [{}]: {} (profile={}, output={})",
+                device_id, in_name, profile_name, has_output);
 
             self.devices.insert(device_id, MidiDeviceInfo {
                 id: device_id,
@@ -278,8 +285,11 @@ impl MidiDeviceManager {
             }
             let device_id = self.next_device_id;
             self.next_device_id += 1;
-            let profile = ControllerProfile::detect(out_name);
-            log::info!("MIDI output-only device [{}]: {} (profile={:?})", device_id, out_name, profile);
+            let profile = self.profile_registry.detect(out_name);
+            let profile_name = profile.as_ref()
+                .map(|p| p.profile.name.as_str())
+                .unwrap_or("Generic");
+            log::info!("MIDI output-only device [{}]: {} (profile={})", device_id, out_name, profile_name);
             self.connect_output(device_id, out_name);
             self.devices.insert(device_id, MidiDeviceInfo {
                 id: device_id,
@@ -363,14 +373,6 @@ impl MidiDeviceManager {
             log::info!("MIDI device [{}] {} → {}", id, info.name,
                 if enabled { "enabled" } else { "disabled" });
         }
-    }
-
-    /// Get all device IDs matching a controller profile.
-    pub fn devices_with_profile(&self, profile: ControllerProfile) -> Vec<DeviceId> {
-        self.devices.iter()
-            .filter(|(_, info)| info.profile == profile && info.enabled)
-            .map(|(id, _)| *id)
-            .collect()
     }
 
     /// Get a sorted list of all device infos (for UI display).
@@ -849,9 +851,16 @@ mod tests {
     }
 
     #[test]
-    fn test_controller_profile_detect() {
-        assert_eq!(ControllerProfile::detect("APC MINI"), ControllerProfile::ApcMini);
-        assert_eq!(ControllerProfile::detect("Apc Mini mk2"), ControllerProfile::ApcMini);
-        assert_eq!(ControllerProfile::detect("Novation Launchpad"), ControllerProfile::Generic);
+    fn test_profile_registry_detect() {
+        let registry = ProfileRegistry::new();
+        let apc = registry.detect("APC MINI");
+        assert!(apc.is_some());
+        assert_eq!(apc.unwrap().profile.name, "Akai APC Mini mk1");
+
+        let apc2 = registry.detect("Apc Mini mk2");
+        assert!(apc2.is_some());
+
+        let generic = registry.detect("Novation Launchpad");
+        assert!(generic.is_none());
     }
 }

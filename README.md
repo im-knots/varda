@@ -10,7 +10,7 @@ Live visual mixing with generative shaders, video, and images. Drag sources onto
 - **Multi-channel mixer** — crossfader, per-channel blend modes, N-channel compositing
 - **Effect chains** — deck → channel → master, drag-and-drop from library
 - **Modulation** — LFO, audio-reactive, ADSR, step sequencer, mod-on-mod
-- **MIDI control** — multi-device, learn mode, APC Mini LED feedback
+- **MIDI control** — multi-device, learn mode, controller profiles with LED feedback
 - **Projection mapping** — 2D stage editor, polygon/circle surfaces, per-surface warp
 - **Video** — HAP (GPU-native) + ffmpeg fallback
 - **Multi-output** — multiple windows, fullscreen on any display
@@ -24,15 +24,5 @@ cargo run
 ```
 
 ISF shaders go in `shaders/generators/` and `shaders/filters/`. The app scans these on startup.
-
-## Project structure
-
-```
-src/          — Rust source
-spec/         — living design specs (how things work and why)
-vision/       — north star, parity analysis
-intent/       — motivations and beliefs
-shaders/      — ISF shader library (generators, filters, transitions)
-```
 
 
