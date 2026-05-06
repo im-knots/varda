@@ -29,7 +29,7 @@ use crate::persistence::Workspace;
 use crate::registry::ShaderRegistry;
 use crate::renderer::context::{OutputWindow, GpuContext};
 use crate::surface::SurfaceManager;
-use crate::usecases::ui::notifications::NotificationSystem;
+use crate::notifications::NotificationSystem;
 
 use std::sync::mpsc;
 
@@ -41,45 +41,45 @@ use crate::engine::{EngineCommand, EngineState};
 /// for direct same-thread access. Also processes EngineCommands from
 /// cross-thread consumers via mpsc channel.
 pub struct VardaApp {
-    // ── Engine subsystems ──────────────────────────────────────
-    pub mixer: Option<Mixer>,
-    pub audio_manager: AudioManager,
-    pub camera_manager: CameraManager,
-    pub registry: ShaderRegistry,
-    pub context: Option<GpuContext>,
+    // ── Engine subsystems (always present after construction) ──
+    mixer: Mixer,
+    audio_manager: AudioManager,
+    camera_manager: CameraManager,
+    registry: ShaderRegistry,
+    context: GpuContext,
 
     // ── Control subsystems ─────────────────────────────────────
-    pub osc_receiver: Option<OscReceiver>,
-    pub midi_devices: Option<midi::MidiDeviceManager>,
-    pub midi_mappings: midi::MidiMappingStore,
-    pub controller_led_mgr: midi::ControllerLedManager,
+    osc_receiver: Option<OscReceiver>,
+    midi_devices: Option<midi::MidiDeviceManager>,
+    midi_mappings: midi::MidiMappingStore,
+    controller_led_mgr: midi::ControllerLedManager,
 
     // ── Output & surfaces ──────────────────────────────────────
-    pub output_windows: Vec<OutputWindow>,
-    pub surface_manager: SurfaceManager,
-    pub calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
+    output_windows: Vec<OutputWindow>,
+    surface_manager: SurfaceManager,
+    calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
 
     // ── Notifications ──────────────────────────────────────────
-    pub notifications: NotificationSystem,
+    notifications: NotificationSystem,
 
     // ── Persistence ────────────────────────────────────────────
-    pub workspace: Workspace,
+    workspace: Workspace,
 
     // ── UI state (owned here for trait access, not egui-specific) ──
-    pub selected_deck: Option<(usize, usize)>,
-    pub selected_channel: Option<usize>,
-    pub selected_master: bool,
-    pub stage_editor_open: bool,
-    pub stage_editor_grid_size: f32,
-    pub stage_editor_snap: bool,
-    pub library_panel_open: bool,
+    selected_deck: Option<(usize, usize)>,
+    selected_channel: Option<usize>,
+    selected_master: bool,
+    stage_editor_open: bool,
+    stage_editor_grid_size: f32,
+    stage_editor_snap: bool,
+    library_panel_open: bool,
 
     // ── Pending actions (deferred to event loop) ───────────────
-    pub pending_output_creates: Vec<()>,
-    pub cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
+    pending_output_creates: Vec<()>,
+    cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
 
     // ── Audio textures (GPU resource, owned here) ──────────────
-    pub audio_textures: Option<crate::audio::AudioTextures>,
+    audio_textures: crate::audio::AudioTextures,
 
     // ── Message passing (cross-thread consumers) ───────────────
     command_rx: mpsc::Receiver<EngineCommand>,
@@ -89,15 +89,18 @@ pub struct VardaApp {
     state_tx: std::sync::Arc<std::sync::RwLock<Option<EngineState>>>,
 
     // ── Frame timing ───────────────────────────────────────────
-    pub last_frame_instant: std::time::Instant,
-    pub fps_history: Vec<f32>,
-    pub fps_smoothed: f32,
-    pub frame_count: u64,
+    last_frame_instant: std::time::Instant,
+    fps_history: Vec<f32>,
+    fps_smoothed: f32,
+    frame_count: u64,
 }
 
 impl VardaApp {
     /// Create a new VardaApp with all subsystems initialized.
-    pub fn new() -> Self {
+    ///
+    /// Requires a fully initialized `GpuContext` — the engine cannot exist
+    /// without a GPU. A default two-channel mixer is always created.
+    pub fn new(gpu: GpuContext) -> Self {
         let mut registry = ShaderRegistry::new();
         if let Err(e) = registry.add_library_path("shaders") {
             log::warn!("Failed to add shaders path: {}", e);
@@ -137,19 +140,26 @@ impl VardaApp {
         let (command_tx, command_rx) = mpsc::channel();
         let state_tx = std::sync::Arc::new(std::sync::RwLock::new(None));
 
+        // Always create GPU-dependent resources up front
+        let audio_textures = crate::audio::AudioTextures::new(&gpu.device);
+        let calibration_textures =
+            crate::renderer::context::create_calibration_textures(&gpu.device, &gpu.queue, 8);
+        let mixer = Mixer::new(&gpu, RENDER_WIDTH, RENDER_HEIGHT)
+            .expect("Failed to create default mixer");
+
         Self {
-            mixer: None,
+            mixer,
             audio_manager,
             camera_manager: CameraManager::new(),
             registry,
-            context: None,
+            context: gpu,
             osc_receiver,
             midi_devices,
             midi_mappings: midi::MidiMappingStore::new(),
             controller_led_mgr,
             output_windows: Vec::new(),
             surface_manager: SurfaceManager::new(),
-            calibration_textures: Vec::new(),
+            calibration_textures,
             notifications: NotificationSystem::new(),
             workspace,
             selected_deck: None,
@@ -161,7 +171,7 @@ impl VardaApp {
             library_panel_open: true,
             pending_output_creates: Vec::new(),
             cached_monitors: Vec::new(),
-            audio_textures: None,
+            audio_textures,
             command_rx,
             command_tx,
             state_tx,
@@ -258,5 +268,54 @@ impl VardaApp {
         main_output_texture: Option<egui::TextureId>,
     ) -> crate::usecases::ui::UIData {
         snapshot::build_ui_data(self, deck_preview_textures, main_output_texture)
+    }
+
+    // ── Public accessors (controlled access for delivery layers) ─────
+
+    /// Read-only access to the GPU context.
+    pub fn gpu_context(&self) -> &GpuContext {
+        &self.context
+    }
+
+    /// Read-only access to the mixer.
+    pub fn mixer_ref(&self) -> &crate::mixer::Mixer {
+        &self.mixer
+    }
+
+    /// Number of loaded shaders.
+    pub fn shader_count(&self) -> usize {
+        self.registry.count()
+    }
+
+    /// Tick notification expiry timers.
+    pub fn update_notifications(&mut self) {
+        self.notifications.update();
+    }
+
+    /// Push an info-level notification.
+    pub fn notify_info(&mut self, message: impl Into<String>) {
+        self.notifications.info(message);
+    }
+
+    /// Close an output window by its winit WindowId. Returns the name if found.
+    pub fn close_output_window_by_id(&mut self, window_id: winit::window::WindowId) -> Option<String> {
+        if let Some(idx) = self.output_windows.iter().position(|o| o.window.id() == window_id) {
+            let name = self.output_windows[idx].name.clone();
+            self.output_windows.remove(idx).destroy();
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+    /// Resize an output window by its winit WindowId.
+    pub fn resize_output_window_by_id(
+        &mut self,
+        window_id: winit::window::WindowId,
+        new_size: winit::dpi::PhysicalSize<u32>,
+    ) {
+        if let Some(o) = self.output_windows.iter_mut().find(|o| o.window.id() == window_id) {
+            o.resize(&self.context.device, new_size);
+        }
     }
 }

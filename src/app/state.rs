@@ -12,9 +12,8 @@ impl VardaApp {
     /// Apply video playback actions (play/pause, seek, speed, loop mode)
     pub(crate) fn apply_video_actions(&mut self, actions: &UIActions) {
         use crate::usecases::ui::VideoAction;
-        let Some(mixer) = &mut self.mixer else { return };
         for (ch_idx, deck_idx, action) in &actions.video_actions {
-            if let Some(ch) = mixer.channel_mut(*ch_idx) {
+            if let Some(ch) = self.mixer.channel_mut(*ch_idx) {
                 if *deck_idx < ch.decks.len() {
                     let deck = &mut ch.decks[*deck_idx].deck;
                     match action {
@@ -64,9 +63,8 @@ impl VardaApp {
     pub(crate) fn apply_auto_transition_actions(&mut self, actions: &UIActions) {
         use crate::usecases::ui::AutoTransitionAction;
         use crate::channel::{DeckAutoTransition, DurationSpec, TransitionTrigger};
-        let (Some(context), Some(mixer)) = (&self.context, &mut self.mixer) else { return };
         for (ch_idx, deck_idx, action) in &actions.auto_transition_actions {
-            if let Some(ch) = mixer.channel_mut(*ch_idx) {
+            if let Some(ch) = self.mixer.channel_mut(*ch_idx) {
                 if *deck_idx < ch.decks.len() {
                     let slot = &mut ch.decks[*deck_idx];
                     if slot.auto_transition.is_none() {
@@ -113,7 +111,7 @@ impl VardaApp {
                                 if let Some(shader) = self.registry.transitions().iter()
                                     .find(|s| s.name() == *shader_name)
                                 {
-                                    if let Err(e) = slot.set_transition_shader(context, (*shader).clone()) {
+                                    if let Err(e) = slot.set_transition_shader(&self.context, (*shader).clone()) {
                                         log::warn!("Failed to set deck transition shader: {}", e);
                                     }
                                 }
@@ -129,7 +127,7 @@ impl VardaApp {
 
     /// Apply parameter value updates (generator, effect, master effect params)
     pub(crate) fn apply_param_updates(&mut self, actions: &UIActions) {
-        let Some(mixer) = &mut self.mixer else { return };
+        let mixer = &mut self.mixer;
         for update in &actions.param_updates {
             match update {
                 ParamUpdate::GeneratorFloat { ch_idx, deck_idx, name, value } => {
@@ -232,7 +230,7 @@ impl VardaApp {
 
     /// Apply modulation actions
     pub(crate) fn apply_modulation_actions(&mut self, actions: &UIActions) {
-        let Some(mixer) = &mut self.mixer else { return };
+        let mixer = &mut self.mixer;
         for action in &actions.modulation_actions {
             match action {
                 ModulationAction::AddLFO { waveform, frequency } => {
@@ -478,7 +476,8 @@ impl VardaApp {
         egui_renderer: &mut egui_wgpu::Renderer,
         deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
     ) {
-        let (Some(context), Some(mixer)) = (&self.context, &mut self.mixer) else { return };
+        let context = &self.context;
+        let mixer = &mut self.mixer;
 
         // Remove deck if requested
         if let Some((ch_idx, deck_idx)) = actions.deck_to_remove {
@@ -796,7 +795,7 @@ impl VardaApp {
         use crate::usecases::ui::SequenceAction;
         use crate::channel::DurationSpec;
         use crate::mixer::{TransitionSequence, TransitionStep, StepKind, CrossfadeEasing};
-        let Some(mixer) = &mut self.mixer else { return };
+        let mixer = &mut self.mixer;
         for action in &actions.sequence_actions {
             match action {
                 SequenceAction::Create => {

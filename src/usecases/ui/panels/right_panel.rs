@@ -1,0 +1,86 @@
+//! Right side panel.
+
+use super::super::{UIData, UIActions};
+use super::modulation::render_modulation_section;
+use super::midi::render_midi_section;
+use super::stage::render_surface_editor;
+use super::outputs::render_output_section;
+
+pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        // Clickable heading — selects master for bottom bar
+        let heading_response = ui.add(
+            egui::Label::new(egui::RichText::new("🎬 Main Output").heading())
+                .sense(egui::Sense::click()),
+        );
+        if heading_response.clicked() {
+            actions.select_master = true;
+        }
+
+        // Main output preview (clickable to select master)
+        let preview_width = ui.available_width() - 10.0;
+        let preview_height = preview_width * 0.5625;
+        let preview_size = egui::vec2(preview_width, preview_height);
+
+        if let Some(texture_id) = data.main_output_texture {
+            let img_response = ui.add(egui::Image::new(egui::load::SizedTexture::new(texture_id, preview_size))
+                .corner_radius(4.0)
+                .sense(egui::Sense::click()));
+            if img_response.clicked() {
+                actions.select_master = true;
+            }
+        } else {
+            ui.allocate_ui(preview_size, |ui| {
+                let (rect, response) = ui.allocate_exact_size(preview_size, egui::Sense::click());
+                ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 30));
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "No Output",
+                    egui::FontId::proportional(14.0),
+                    egui::Color32::GRAY,
+                );
+                if response.clicked() {
+                    actions.select_master = true;
+                }
+            });
+        }
+
+        ui.add_space(10.0);
+        ui.heading("🔮 Master Effects");
+        ui.label("(Apply to final composite)");
+
+        ui.add_space(10.0);
+        ui.separator();
+
+        // Modulation sources
+        render_modulation_section(ui, data, actions);
+
+        ui.add_space(10.0);
+        ui.separator();
+
+        // Library panel toggle (if closed, show a button to reopen)
+        if !data.library_panel_open {
+            if ui.button("📚 Open Library (L)").clicked() {
+                actions.toggle_library_panel = true;
+            }
+            ui.add_space(10.0);
+            ui.separator();
+        }
+
+        // MIDI devices & mappings
+        render_midi_section(ui, data, actions);
+
+        ui.add_space(10.0);
+        ui.separator();
+
+        // Surface editor (2D stage layout)
+        render_surface_editor(ui, data, actions);
+
+        ui.add_space(10.0);
+        ui.separator();
+
+        // Output windows management
+        render_output_section(ui, data, actions);
+    });
+}

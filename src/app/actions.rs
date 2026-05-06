@@ -127,17 +127,14 @@ impl VardaApp {
 
     fn apply_add_channel(&mut self, ui_actions: &ui::UIActions) {
         if !ui_actions.add_channel { return; }
-        let Some(context) = &self.context else { return };
-        if let Some(mixer) = &mut self.mixer {
-            match mixer.add_channel(context, crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT) {
-                Ok(idx) => {
-                    self.notifications.info(format!("Added channel {} (index {})",
-                        mixer.channels[idx].name, idx));
-                }
-                Err(e) => {
-                    log::error!("Failed to add channel: {}", e);
-                    self.notifications.error(format!("Error adding channel: {}", e));
-                }
+        match self.mixer.add_channel(&self.context, crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT) {
+            Ok(idx) => {
+                self.notifications.info(format!("Added channel {} (index {})",
+                    self.mixer.channels[idx].name, idx));
+            }
+            Err(e) => {
+                log::error!("Failed to add channel: {}", e);
+                self.notifications.error(format!("Error adding channel: {}", e));
             }
         }
     }
@@ -149,24 +146,23 @@ impl VardaApp {
         deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
     ) {
         let Some((ch_idx, camera_id)) = ui_actions.camera_to_add.take() else { return };
-        let (Some(context), Some(mixer)) = (&self.context, &mut self.mixer) else { return };
 
         let cam_name = self.camera_manager.devices().iter()
             .find(|d| d.id == camera_id)
             .map(|d| d.name.clone())
             .unwrap_or_else(|| format!("Camera {}", camera_id));
 
-        match self.camera_manager.open_camera(camera_id, &context.device) {
+        match self.camera_manager.open_camera(camera_id, &self.context.device) {
             Ok((src_w, src_h)) => {
-                match crate::Deck::new_from_camera(context, camera_id, &cam_name, src_w, src_h,
+                match crate::Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h,
                     crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT)
                 {
                     Ok(deck) => {
-                        if let Some(ch) = mixer.channel_mut(ch_idx) {
+                        if let Some(ch) = self.mixer.channel_mut(ch_idx) {
                             let idx = ch.add_deck(deck);
                             log::info!("Added camera deck {} to channel {}: {}", idx, ch_idx, cam_name);
                             let texture_id = egui_renderer.register_native_texture(
-                                &context.device,
+                                &self.context.device,
                                 &ch.decks[idx].deck.texture_view,
                                 wgpu::FilterMode::Linear,
                             );
@@ -189,27 +185,25 @@ impl VardaApp {
 
     fn apply_remove_channel(&mut self, ui_actions: &ui::UIActions) {
         let Some(ch_idx) = ui_actions.remove_channel else { return };
-        if let Some(mixer) = &mut self.mixer {
-            let name = mixer.channels.get(ch_idx).map(|c| c.name.clone()).unwrap_or_default();
-            if mixer.remove_channel(ch_idx) {
-                self.notifications.info(format!("Removed channel {}", name));
-                if let Some((sel_ch, _)) = self.selected_deck {
-                    if sel_ch == ch_idx {
-                        self.selected_deck = None;
-                    } else if sel_ch > ch_idx {
-                        self.selected_deck = Some((sel_ch - 1, self.selected_deck.unwrap().1));
-                    }
+        let name = self.mixer.channels.get(ch_idx).map(|c| c.name.clone()).unwrap_or_default();
+        if self.mixer.remove_channel(ch_idx) {
+            self.notifications.info(format!("Removed channel {}", name));
+            if let Some((sel_ch, _)) = self.selected_deck {
+                if sel_ch == ch_idx {
+                    self.selected_deck = None;
+                } else if sel_ch > ch_idx {
+                    self.selected_deck = Some((sel_ch - 1, self.selected_deck.unwrap().1));
                 }
-                if let Some(sel_ch) = self.selected_channel {
-                    if sel_ch == ch_idx {
-                        self.selected_channel = None;
-                    } else if sel_ch > ch_idx {
-                        self.selected_channel = Some(sel_ch - 1);
-                    }
-                }
-            } else {
-                self.notifications.error("Cannot remove channel (minimum 2 required)".to_string());
             }
+            if let Some(sel_ch) = self.selected_channel {
+                if sel_ch == ch_idx {
+                    self.selected_channel = None;
+                } else if sel_ch > ch_idx {
+                    self.selected_channel = Some(sel_ch - 1);
+                }
+            }
+        } else {
+            self.notifications.error("Cannot remove channel (minimum 2 required)".to_string());
         }
     }
 
@@ -255,11 +249,11 @@ impl VardaApp {
 
     /// Update controller LEDs based on current state.
     pub fn update_controller_leds(&mut self) {
-        if let (Some(mgr), Some(mixer)) = (&self.midi_devices, &self.mixer) {
+        if let Some(mgr) = &self.midi_devices {
             self.controller_led_mgr.update_leds(
                 mgr,
                 &self.midi_mappings,
-                mixer,
+                &self.mixer,
                 self.midi_mappings.learn_mode,
                 self.midi_mappings.learn_target.as_deref(),
             );

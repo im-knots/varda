@@ -350,3 +350,282 @@ impl SceneConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Round-trip serialization ─────────────────────────────────────
+
+    #[test]
+    fn scene_config_roundtrip_empty() {
+        let scene = SceneConfig {
+            version: 2,
+            channels: vec![],
+            crossfader: 0.5,
+            active_transition: None,
+            master_effects: vec![],
+            modulation: Default::default(),
+            transition_sequences: vec![],
+        };
+        let json = serde_json::to_string_pretty(&scene).unwrap();
+        let restored: SceneConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.version, 2);
+        assert!((restored.crossfader - 0.5).abs() < 1e-5);
+        assert!(restored.channels.is_empty());
+    }
+
+    #[test]
+    fn scene_config_roundtrip_with_channels() {
+        let scene = SceneConfig {
+            version: 2,
+            channels: vec![
+                ChannelConfig {
+                    name: "Ch 0".into(),
+                    opacity: 1.0,
+                    blend_mode: BlendModeConfig::Normal,
+                    decks: vec![
+                        DeckConfig {
+                            name: "Color Burn".into(),
+                            source: SourceConfig::Shader {
+                                path: "shaders/color_burn.fs".into(),
+                                params: HashMap::new(),
+                            },
+                            effects: vec![],
+                            opacity: 0.8,
+                            blend_mode: BlendModeConfig::Add,
+                            mute: false,
+                            solo: false,
+                            z_index: 0,
+                            auto_transition: None,
+                        },
+                    ],
+                    effects: vec![],
+                },
+            ],
+            crossfader: 0.0,
+            active_transition: Some("dissolve".into()),
+            master_effects: vec![],
+            modulation: Default::default(),
+            transition_sequences: vec![],
+        };
+        let json = serde_json::to_string_pretty(&scene).unwrap();
+        let restored: SceneConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.channels.len(), 1);
+        assert_eq!(restored.channels[0].name, "Ch 0");
+        assert_eq!(restored.channels[0].decks.len(), 1);
+        assert_eq!(restored.channels[0].decks[0].name, "Color Burn");
+        assert!((restored.channels[0].decks[0].opacity - 0.8).abs() < 1e-5);
+        assert_eq!(restored.active_transition, Some("dissolve".into()));
+    }
+
+    #[test]
+    fn scene_config_roundtrip_with_effects() {
+        let scene = SceneConfig {
+            version: 2,
+            channels: vec![],
+            crossfader: 0.0,
+            active_transition: None,
+            master_effects: vec![EffectConfig {
+                path: "shaders/blur.fs".into(),
+                enabled: true,
+                params: {
+                    let mut p = HashMap::new();
+                    p.insert("amount".into(), ParamValue::Float(0.5));
+                    p
+                },
+            }],
+            modulation: Default::default(),
+            transition_sequences: vec![],
+        };
+        let json = serde_json::to_string_pretty(&scene).unwrap();
+        let restored: SceneConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.master_effects.len(), 1);
+        assert!(restored.master_effects[0].enabled);
+    }
+
+    #[test]
+    fn scene_config_roundtrip_solid_color_source() {
+        let source = SourceConfig::SolidColor { color: [1.0, 0.0, 0.0, 1.0] };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::SolidColor { color } => {
+                assert!((color[0] - 1.0).abs() < 1e-5);
+            }
+            _ => panic!("Expected SolidColor"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_video_source() {
+        let source = SourceConfig::Video { path: "clips/intro.mov".into() };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Video { path } => assert_eq!(path, "clips/intro.mov"),
+            _ => panic!("Expected Video"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_image_source() {
+        let source = SourceConfig::Image { path: "images/logo.png".into() };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Image { path } => assert_eq!(path, "images/logo.png"),
+            _ => panic!("Expected Image"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_camera_source() {
+        let source = SourceConfig::Camera { name: "FaceTime HD".into() };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Camera { name } => assert_eq!(name, "FaceTime HD"),
+            _ => panic!("Expected Camera"),
+        }
+    }
+
+    // ── Defaults ─────────────────────────────────────────────────────
+
+    #[test]
+    fn scene_config_defaults_on_missing_fields() {
+        let json = r#"{"version": 2}"#;
+        let scene: SceneConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(scene.crossfader, 0.0);
+        assert!(scene.channels.is_empty());
+        assert!(scene.master_effects.is_empty());
+        assert!(scene.active_transition.is_none());
+    }
+
+    #[test]
+    fn deck_config_defaults() {
+        let json = r#"{"source": {"type": "SolidColor", "color": [1,0,0,1]}}"#;
+        let deck: DeckConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(deck.opacity, 1.0); // default
+        assert!(!deck.mute);
+        assert!(!deck.solo);
+        assert_eq!(deck.z_index, 0);
+    }
+
+    // ── BlendModeConfig conversion ───────────────────────────────────
+
+    #[test]
+    fn blend_mode_config_roundtrip() {
+        let modes = [
+            (BlendMode::Normal, BlendModeConfig::Normal),
+            (BlendMode::Add, BlendModeConfig::Add),
+            (BlendMode::Multiply, BlendModeConfig::Multiply),
+            (BlendMode::Screen, BlendModeConfig::Screen),
+            (BlendMode::Overlay, BlendModeConfig::Overlay),
+            (BlendMode::Difference, BlendModeConfig::Difference),
+        ];
+        for (mode, config) in &modes {
+            let converted: BlendModeConfig = (*mode).into();
+            assert_eq!(std::mem::discriminant(&converted), std::mem::discriminant(config));
+            let back: BlendMode = converted.into();
+            assert_eq!(back, *mode);
+        }
+    }
+
+    // ── EasingConfig conversion ──────────────────────────────────────
+
+    #[test]
+    fn easing_config_roundtrip() {
+        use crate::mixer::CrossfadeEasing;
+        let easings = [
+            (CrossfadeEasing::Linear, EasingConfig::Linear),
+            (CrossfadeEasing::EaseInOut, EasingConfig::EaseInOut),
+            (CrossfadeEasing::EaseIn, EasingConfig::EaseIn),
+            (CrossfadeEasing::EaseOut, EasingConfig::EaseOut),
+        ];
+        for (easing, config) in &easings {
+            let converted: EasingConfig = (*easing).into();
+            assert_eq!(converted, *config);
+            let back: CrossfadeEasing = converted.into();
+            assert_eq!(back, *easing);
+        }
+    }
+
+    // ── Transition sequence config ───────────────────────────────────
+
+    #[test]
+    fn transition_sequence_config_roundtrip() {
+        let seq = TransitionSequenceConfig {
+            name: "Show Loop".into(),
+            enabled: true,
+            steps: vec![
+                TransitionStepConfig::Fade {
+                    from_ch: 0,
+                    to_ch: 1,
+                    duration: DurationSpecConfig::Beats(4.0),
+                    easing: EasingConfig::EaseInOut,
+                    transition_shader: Some("dissolve".into()),
+                },
+                TransitionStepConfig::Wait {
+                    duration: DurationSpecConfig::Seconds(10.0),
+                },
+                TransitionStepConfig::GoTo { step_index: 0 },
+            ],
+        };
+        let json = serde_json::to_string_pretty(&seq).unwrap();
+        let restored: TransitionSequenceConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.name, "Show Loop");
+        assert_eq!(restored.steps.len(), 3);
+    }
+
+    // ── Auto-transition config ───────────────────────────────────────
+
+    #[test]
+    fn auto_transition_config_roundtrip() {
+        let at = AutoTransitionConfig {
+            enabled: true,
+            trigger: TriggerConfig::ClipEnd,
+            play_duration: DurationSpecConfig::Beats(16.0),
+            transition_duration: DurationSpecConfig::Seconds(2.0),
+            transition_shader: Some("wipe".into()),
+        };
+        let json = serde_json::to_string(&at).unwrap();
+        let restored: AutoTransitionConfig = serde_json::from_str(&json).unwrap();
+        assert!(restored.enabled);
+        assert_eq!(restored.trigger, TriggerConfig::ClipEnd);
+    }
+
+    // ── File I/O ─────────────────────────────────────────────────────
+
+    #[test]
+    fn scene_config_save_and_load() {
+        let dir = std::env::temp_dir().join("varda_test_scene");
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join("test_scene.json");
+
+        let scene = SceneConfig {
+            version: 2,
+            channels: vec![ChannelConfig {
+                name: "Test Ch".into(),
+                opacity: 0.9,
+                blend_mode: BlendModeConfig::Add,
+                decks: vec![],
+                effects: vec![],
+            }],
+            crossfader: 0.42,
+            active_transition: None,
+            master_effects: vec![],
+            modulation: Default::default(),
+            transition_sequences: vec![],
+        };
+        scene.save(&path).unwrap();
+        let loaded = SceneConfig::load(&path).unwrap();
+        assert_eq!(loaded.channels.len(), 1);
+        assert_eq!(loaded.channels[0].name, "Test Ch");
+        assert!((loaded.crossfader - 0.42).abs() < 1e-5);
+
+        // Cleanup
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+}

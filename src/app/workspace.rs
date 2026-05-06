@@ -9,8 +9,8 @@ impl VardaApp {
             log::error!("Failed to create .varda directory: {}", e);
             return;
         }
-        if let Some(mixer) = &self.mixer {
-            let scene = crate::persistence::snapshot_scene(mixer);
+        {
+            let scene = crate::persistence::snapshot_scene(&self.mixer);
             match scene.save(self.workspace.scene_path()) {
                 Ok(()) => log::info!("Saved scene to {}", self.workspace.scene_path().display()),
                 Err(e) => log::error!("Failed to save scene: {}", e),
@@ -35,8 +35,8 @@ impl VardaApp {
     }
 
     /// Load workspace from `.varda/` if it exists.
+    /// If a scene is found, replaces the default mixer with the restored one.
     pub fn load_workspace(&mut self) {
-        let Some(context) = &self.context else { return };
         if !self.workspace.exists() {
             log::info!("No .varda/ directory found, starting fresh");
             return;
@@ -61,9 +61,9 @@ impl VardaApp {
         if self.workspace.has_scene() {
             match crate::scene::SceneConfig::load(self.workspace.scene_path()) {
                 Ok(scene_config) => {
-                    match crate::persistence::restore_scene(&scene_config, context, &self.registry, &mut self.camera_manager) {
+                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager) {
                         Ok(result) => {
-                            self.mixer = Some(result.mixer);
+                            self.mixer = result.mixer;
                             for warn in &result.warnings {
                                 self.notifications.warn(warn.clone());
                             }
@@ -93,34 +93,6 @@ impl VardaApp {
                 }
                 Err(e) => log::warn!("Failed to load MIDI config: {}", e),
             }
-        }
-    }
-
-    /// Initialize the mixer with a default shader if none loaded from workspace.
-    pub fn init_default_mixer(&mut self) {
-        let Some(context) = &self.context else { return };
-        if self.mixer.is_some() { return; }
-        match crate::mixer::Mixer::new(context, crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT) {
-            Ok(mut mixer) => {
-                let generators = self.registry.generators();
-                let shader_to_load = generators.iter()
-                    .find(|s| s.metadata.passes.as_ref().map(|p| !p.is_empty()).unwrap_or(false))
-                    .or_else(|| generators.first());
-                if let Some(shader) = shader_to_load {
-                    log::info!("Loading shader: {}", shader.name());
-                    match crate::Deck::new(context, (*shader).clone(), crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT) {
-                        Ok(deck) => {
-                            if let Some(ch) = mixer.channel_mut(0) {
-                                ch.add_deck(deck);
-                                log::info!("Created deck in channel A with shader: {}", shader.name());
-                            }
-                        }
-                        Err(e) => log::error!("Failed to create deck: {}", e),
-                    }
-                }
-                self.mixer = Some(mixer);
-            }
-            Err(e) => log::error!("Failed to create mixer: {}", e),
         }
     }
 }

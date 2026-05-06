@@ -30,14 +30,10 @@ impl VardaApp {
         self.audio_manager.poll();
 
         // Update audio textures (using primary source)
-        if let Some(context) = &self.context {
-            if let Some(audio_textures) = &self.audio_textures {
-                audio_textures.update(&context.queue, self.audio_manager.get_primary_data());
-            }
-        }
+        self.audio_textures.update(&self.context.queue, self.audio_manager.get_primary_data());
 
         // Pre-update modulation with fresh audio so snapshots read current values
-        if let Some(mixer) = &mut self.mixer {
+        {
             let mut av = crate::modulation::AudioValues::default();
             for id in self.audio_manager.active_source_ids() {
                 if let Some(data) = self.audio_manager.get_data(id) {
@@ -48,7 +44,7 @@ impl VardaApp {
                     });
                 }
             }
-            mixer.update_modulation(&av);
+            self.mixer.update_modulation(&av);
         }
 
         // Process OSC messages (mapped to channel A for now)
@@ -56,24 +52,18 @@ impl VardaApp {
             while let Some(ctrl) = osc.try_recv() {
                 match ctrl {
                     crate::osc::OscControl::SetOpacity(deck_idx, val) => {
-                        if let Some(mixer) = &mut self.mixer {
-                            if let Some(ch) = mixer.channel_mut(0) {
-                                ch.set_deck_opacity(deck_idx, val);
-                            }
+                        if let Some(ch) = self.mixer.channel_mut(0) {
+                            ch.set_deck_opacity(deck_idx, val);
                         }
                     }
                     crate::osc::OscControl::SetSolo(deck_idx, enabled) => {
-                        if let Some(mixer) = &mut self.mixer {
-                            if let Some(ch) = mixer.channel_mut(0) {
-                                ch.set_deck_solo(deck_idx, enabled);
-                            }
+                        if let Some(ch) = self.mixer.channel_mut(0) {
+                            ch.set_deck_solo(deck_idx, enabled);
                         }
                     }
                     crate::osc::OscControl::SetMute(deck_idx, enabled) => {
-                        if let Some(mixer) = &mut self.mixer {
-                            if let Some(ch) = mixer.channel_mut(0) {
-                                ch.set_deck_mute(deck_idx, enabled);
-                            }
+                        if let Some(ch) = self.mixer.channel_mut(0) {
+                            ch.set_deck_mute(deck_idx, enabled);
                         }
                     }
                     crate::osc::OscControl::Unknown(addr, args) => {
@@ -97,9 +87,7 @@ impl VardaApp {
 
                 // Apply mapped value to mixer (both normal and learn mode)
                 if let Some(path) = self.midi_mappings.get(&key).cloned() {
-                    if let Some(mixer) = &mut self.mixer {
-                        crate::midi::apply_midi_to_param(mixer, &path, value);
-                    }
+                    crate::midi::apply_midi_to_param(&mut self.mixer, &path, value);
                 } else if !self.midi_mappings.learn_mode {
                     log::debug!("Unmapped MIDI: {} value={:.2}", key, value);
                 }

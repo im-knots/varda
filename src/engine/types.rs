@@ -289,3 +289,212 @@ pub struct MidiMappingSnapshot {
 pub struct CameraSnapshot {
     pub devices: Vec<(String, CameraId)>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── EffectTarget tests ───────────────────────────────────────────
+
+    #[test]
+    fn effect_target_deck_equality() {
+        let a = EffectTarget::Deck(0, 1);
+        let b = EffectTarget::Deck(0, 1);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn effect_target_deck_inequality() {
+        assert_ne!(EffectTarget::Deck(0, 0), EffectTarget::Deck(0, 1));
+        assert_ne!(EffectTarget::Deck(0, 0), EffectTarget::Channel(0));
+        assert_ne!(EffectTarget::Channel(0), EffectTarget::Master);
+    }
+
+    #[test]
+    fn effect_target_debug() {
+        assert!(format!("{:?}", EffectTarget::Master).contains("Master"));
+        assert!(format!("{:?}", EffectTarget::Channel(2)).contains("2"));
+        assert!(format!("{:?}", EffectTarget::Deck(1, 3)).contains("1"));
+    }
+
+    #[test]
+    fn effect_target_clone() {
+        let original = EffectTarget::Deck(5, 10);
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn effect_target_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(EffectTarget::Master);
+        set.insert(EffectTarget::Channel(0));
+        set.insert(EffectTarget::Channel(0)); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    // ── Snapshot struct construction ─────────────────────────────────
+
+    #[test]
+    fn engine_state_can_be_constructed() {
+        let state = EngineState {
+            mixer: MixerSnapshot {
+                channels: vec![],
+                crossfader: 0.0,
+                auto_crossfade_active: false,
+                auto_crossfade_progress: 0.0,
+                master_effects: vec![],
+                active_transition_name: None,
+                transition_names: vec![],
+                sequences: vec![],
+            },
+            audio: AudioSnapshot {
+                level: 0.0, bass: 0.0, mid: 0.0, treble: 0.0,
+                bpm: None, beat_phase: 0.0, enabled: false,
+                devices: vec![], fft: vec![], sample_rate: 48000.0,
+            },
+            modulation: ModulationSnapshot {
+                sources: vec![],
+                current_values: vec![],
+                assignments: Default::default(),
+            },
+            outputs: OutputSnapshot {
+                windows: vec![], surfaces: vec![], monitors: vec![],
+            },
+            registry: RegistrySnapshot {
+                generators: vec![], filters: vec![], shader_count: 0,
+            },
+            midi: MidiSnapshot {
+                devices: vec![], mappings: vec![],
+                learn_active: false, learn_target: None,
+            },
+            cameras: CameraSnapshot { devices: vec![] },
+            fps: 60.0,
+            frame_count: 0,
+        };
+        assert!((state.fps - 60.0).abs() < 1e-5);
+        assert_eq!(state.frame_count, 0);
+    }
+
+    #[test]
+    fn engine_state_clone() {
+        let state = EngineState {
+            mixer: MixerSnapshot {
+                channels: vec![], crossfader: 0.5,
+                auto_crossfade_active: false, auto_crossfade_progress: 0.0,
+                master_effects: vec![], active_transition_name: None,
+                transition_names: vec![], sequences: vec![],
+            },
+            audio: AudioSnapshot {
+                level: 0.0, bass: 0.0, mid: 0.0, treble: 0.0,
+                bpm: Some(120.0), beat_phase: 0.0, enabled: true,
+                devices: vec![], fft: vec![], sample_rate: 48000.0,
+            },
+            modulation: ModulationSnapshot {
+                sources: vec![], current_values: vec![],
+                assignments: Default::default(),
+            },
+            outputs: OutputSnapshot {
+                windows: vec![], surfaces: vec![], monitors: vec![],
+            },
+            registry: RegistrySnapshot {
+                generators: vec![("Sine".into(), 0)], filters: vec![], shader_count: 1,
+            },
+            midi: MidiSnapshot {
+                devices: vec![], mappings: vec![],
+                learn_active: false, learn_target: None,
+            },
+            cameras: CameraSnapshot { devices: vec![] },
+            fps: 59.9,
+            frame_count: 42,
+        };
+        let cloned = state.clone();
+        assert!((cloned.mixer.crossfader - 0.5).abs() < 1e-5);
+        assert_eq!(cloned.audio.bpm, Some(120.0));
+        assert_eq!(cloned.registry.shader_count, 1);
+        assert_eq!(cloned.frame_count, 42);
+    }
+
+    // ── EngineCommand construction ───────────────────────────────────
+
+    #[test]
+    fn engine_command_debug() {
+        let cmd = crate::engine::EngineCommand::SetCrossfader(0.5);
+        assert!(format!("{:?}", cmd).contains("SetCrossfader"));
+    }
+
+    #[test]
+    fn engine_command_add_deck() {
+        let cmd = crate::engine::EngineCommand::AddDeck {
+            channel_idx: 0,
+            shader_name: "Color Bars".into(),
+        };
+        match cmd {
+            crate::engine::EngineCommand::AddDeck { channel_idx, shader_name } => {
+                assert_eq!(channel_idx, 0);
+                assert_eq!(shader_name, "Color Bars");
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn engine_command_set_param() {
+        let cmd = crate::engine::EngineCommand::SetParam {
+            path: "ch0:deck0:brightness".into(),
+            value: ParamValue::Float(0.8),
+        };
+        match cmd {
+            crate::engine::EngineCommand::SetParam { path, value } => {
+                assert_eq!(path, "ch0:deck0:brightness");
+                match value {
+                    ParamValue::Float(v) => assert!((v - 0.8).abs() < 1e-5),
+                    _ => panic!("Expected Float"),
+                }
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    // ── Snapshot field access ────────────────────────────────────────
+
+    #[test]
+    fn channel_snapshot_fields() {
+        let ch = ChannelSnapshot {
+            idx: 0,
+            name: "Ch 0".into(),
+            opacity: 0.75,
+            blend_mode: BlendMode::Add,
+            decks: vec![],
+            effects: vec![],
+        };
+        assert_eq!(ch.idx, 0);
+        assert!((ch.opacity - 0.75).abs() < 1e-5);
+        assert_eq!(ch.blend_mode, BlendMode::Add);
+    }
+
+    #[test]
+    fn deck_snapshot_fields() {
+        let d = DeckSnapshot {
+            idx: 0,
+            name: "Sine Wave".into(),
+            opacity: 1.0,
+            effective_opacity: 0.5,
+            blend_mode: BlendMode::Normal,
+            solo: false,
+            mute: true,
+            scaling_mode: Some(ScalingMode::default()),
+            generator: ShaderParamsSnapshot {
+                shader_name: "Sine".into(),
+                params: vec![],
+            },
+            effects: vec![],
+            video_playback: None,
+            auto_transition: None,
+        };
+        assert!(d.mute);
+        assert!(!d.solo);
+        assert!((d.effective_opacity - 0.5).abs() < 1e-5);
+    }
+}

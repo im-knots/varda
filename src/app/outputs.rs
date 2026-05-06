@@ -111,16 +111,14 @@ impl VardaApp {
             match event_loop.create_window(window_attrs) {
                 Ok(window) => {
                     let window_static: &'static Window = Box::leak(Box::new(window));
-                    if let Some(context) = &self.context {
-                        match OutputWindow::new(context, window_static, name.clone()) {
-                            Ok(output) => {
-                                log::info!("Created output window '{}'", name);
-                                self.output_windows.push(output);
-                            }
-                            Err(e) => {
-                                log::error!("Failed to create output window: {}", e);
-                                self.notifications.error(format!("Failed to create output: {}", e));
-                            }
+                    match OutputWindow::new(&self.context, window_static, name.clone()) {
+                        Ok(output) => {
+                            log::info!("Created output window '{}'", name);
+                            self.output_windows.push(output);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create output window: {}", e);
+                            self.notifications.error(format!("Failed to create output: {}", e));
                         }
                     }
                 }

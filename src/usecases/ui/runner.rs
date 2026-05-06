@@ -28,8 +28,8 @@ pub struct UIRunner {
     main_output_texture: Option<egui::TextureId>,
     main_window_id: Option<WindowId>,
 
-    // ── Engine (owns all subsystems) ────────────────────────────────
-    varda: VardaApp,
+    // ── Engine (created after GPU init in resumed()) ─────────────────
+    varda: Option<VardaApp>,
 }
 
 impl UIRunner {
@@ -44,7 +44,7 @@ impl UIRunner {
             deck_preview_textures: std::collections::HashMap::new(),
             main_output_texture: None,
             main_window_id: None,
-            varda: VardaApp::new(),
+            varda: None,
         }
     }
 
@@ -75,7 +75,6 @@ impl ApplicationHandler for UIRunner {
             Ok(pair) => pair,
             Err(e) => { log::error!("Failed to create render context: {}", e); event_loop.exit(); return; }
         };
-        log::info!("Varda initialized: {}x{}, {} shaders", win_surface.size.width, win_surface.size.height, self.varda.registry.count());
 
         self.blit_pipeline = BlitPipeline::new(&gpu.device, win_surface.surface_config.format).ok();
         self.egui_state = Some(egui_winit::State::new(
@@ -85,20 +84,24 @@ impl ApplicationHandler for UIRunner {
         self.egui_renderer = Some(egui_wgpu::Renderer::new(
             &gpu.device, win_surface.surface_config.format, egui_wgpu::RendererOptions::default(),
         ));
-        self.varda.audio_textures = Some(AudioTextures::new(&gpu.device));
-        self.varda.calibration_textures = crate::renderer::context::create_calibration_textures(&gpu.device, &gpu.queue, 8);
         self.window_surface = Some(win_surface);
-        self.varda.context = Some(gpu);
 
-        // Load workspace + init default mixer (engine concerns)
-        self.varda.load_workspace();
-        self.varda.init_default_mixer();
+        // Create engine now that GPU is ready — mixer, audio textures,
+        // calibration textures all initialized immediately.
+        let mut varda = VardaApp::new(gpu);
+        log::info!("Varda initialized: {} shaders", varda.shader_count());
+
+        // Load workspace (may replace default mixer with saved scene)
+        varda.load_workspace();
+
+        self.varda = Some(varda);
 
         // Register GPU textures with egui for previews
         self.register_preview_textures();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+        if self.varda.is_none() { return; }
         if self.main_window_id == Some(window_id) {
             if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state) {
                 if egui_state.on_window_event(window, &event).consumed { return; }
@@ -106,12 +109,13 @@ impl ApplicationHandler for UIRunner {
             match event {
                 WindowEvent::CloseRequested => {
                     log::info!("Close requested, saving workspace and exiting...");
-                    self.varda.save_workspace();
+                    self.varda.as_mut().unwrap().save_workspace();
                     event_loop.exit();
                 }
                 WindowEvent::Resized(new_size) => {
-                    if let (Some(ctx), Some(ws)) = (&self.varda.context, &mut self.window_surface) {
-                        ws.resize(&ctx.device, new_size);
+                    let device = &self.varda.as_ref().unwrap().gpu_context().device;
+                    if let Some(ws) = &mut self.window_surface {
+                        ws.resize(device, new_size);
                     }
                 }
                 WindowEvent::RedrawRequested => {
@@ -121,20 +125,15 @@ impl ApplicationHandler for UIRunner {
                 _ => {}
             }
         } else {
+            let varda = self.varda.as_mut().unwrap();
             match event {
                 WindowEvent::CloseRequested => {
-                    if let Some(idx) = self.varda.output_windows.iter().position(|o| o.window.id() == window_id) {
-                        let name = self.varda.output_windows[idx].name.clone();
-                        self.varda.output_windows.remove(idx).destroy();
+                    if let Some(name) = varda.close_output_window_by_id(window_id) {
                         log::info!("Output window '{}' closed", name);
                     }
                 }
                 WindowEvent::Resized(new_size) => {
-                    if let Some(ctx) = &self.varda.context {
-                        if let Some(o) = self.varda.output_windows.iter_mut().find(|o| o.window.id() == window_id) {
-                            o.resize(&ctx.device, new_size);
-                        }
-                    }
+                    varda.resize_output_window_by_id(window_id, new_size);
                 }
                 _ => {}
             }
@@ -146,9 +145,10 @@ impl ApplicationHandler for UIRunner {
 impl UIRunner {
     /// Register GPU textures with egui for deck previews and main output.
     fn register_preview_textures(&mut self) {
-        let Some(context) = &self.varda.context else { return };
+        let Some(varda) = &self.varda else { return };
         let Some(egui_renderer) = &mut self.egui_renderer else { return };
-        let Some(mixer) = &self.varda.mixer else { return };
+        let context = varda.gpu_context();
+        let mixer = varda.mixer_ref();
 
         for (ch_idx, ch) in mixer.channels.iter().enumerate() {
             for (deck_idx, slot) in ch.decks.iter().enumerate() {
@@ -165,9 +165,10 @@ impl UIRunner {
 
     /// Re-register GPU textures when deck layout changes.
     fn refresh_textures(&mut self) {
-        let Some(context) = &self.varda.context else { return };
+        let Some(varda) = &self.varda else { return };
         let Some(egui_renderer) = &mut self.egui_renderer else { return };
-        let Some(mixer) = &self.varda.mixer else { return };
+        let context = varda.gpu_context();
+        let mixer = varda.mixer_ref();
 
         if self.main_output_texture.is_none() {
             self.main_output_texture = Some(egui_renderer.register_native_texture(
@@ -189,28 +190,34 @@ impl UIRunner {
 
     /// Main render loop — delegates all logic to VardaApp.
     fn render(&mut self, event_loop: &ActiveEventLoop) {
-        // 1. Frame timing + notifications
-        self.varda.update_frame_timing();
-        self.varda.notifications.update();
+        if self.varda.is_none() { return; }
 
-        // 2. Process cross-thread commands + external inputs
-        self.varda.process_commands();
-        self.varda.process_inputs();
+        // 1. Frame timing + notifications + inputs
+        {
+            let varda = self.varda.as_mut().unwrap();
+            varda.update_frame_timing();
+            varda.update_notifications();
+            varda.process_commands();
+            varda.process_inputs();
+        }
 
-        // 3. Sync egui texture registrations
+        // 2. Sync egui texture registrations
         self.refresh_textures();
 
         let Some(window) = self.window else { return };
-        if self.varda.context.is_none() { return; }
 
-        // 4. Create pending output windows + refresh monitors
-        self.varda.create_pending_outputs(event_loop);
-        self.varda.refresh_monitors(event_loop);
+        // 3. Create pending output windows + refresh monitors
+        {
+            let varda = self.varda.as_mut().unwrap();
+            varda.create_pending_outputs(event_loop);
+            varda.refresh_monitors(event_loop);
+        }
 
-        // 5. Collect UI data snapshot (engine → UI)
-        let ui_data = self.varda.collect_ui_data(&self.deck_preview_textures, self.main_output_texture);
+        // 4. Collect UI data snapshot (engine → UI)
+        let ui_data = self.varda.as_ref().unwrap()
+            .collect_ui_data(&self.deck_preview_textures, self.main_output_texture);
 
-        // 6. Run egui frame
+        // 5. Run egui frame
         let raw_input = {
             let Some(egui_state) = &mut self.egui_state else { return };
             egui_state.take_egui_input(window)
@@ -224,33 +231,33 @@ impl UIRunner {
             egui_state.handle_platform_output(window, full_output.platform_output);
         }
 
-        // 7. Apply all UI actions (delegated to VardaApp)
-        let egui_renderer = self.egui_renderer.as_mut().unwrap();
-        self.varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
-        self.varda.apply_ui_actions(&ui_actions);
-        self.varda.apply_output_actions(&ui_actions);
-        self.varda.apply_surface_actions(&ui_actions);
-        self.varda.apply_device_actions(&ui_actions);
-        self.varda.update_controller_leds();
+        // 6. Apply all UI actions (delegated to VardaApp)
+        {
+            let varda = self.varda.as_mut().unwrap();
+            let egui_renderer = self.egui_renderer.as_mut().unwrap();
+            varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
+            varda.apply_ui_actions(&ui_actions);
+            varda.apply_output_actions(&ui_actions);
+            varda.apply_surface_actions(&ui_actions);
+            varda.apply_device_actions(&ui_actions);
+            varda.update_controller_leds();
 
-        // 8. Handle save requests
-        if ui_actions.save_requested {
-            self.varda.save_workspace();
-            self.varda.notifications.info("💾 Workspace saved".to_string());
+            if ui_actions.save_requested {
+                varda.save_workspace();
+                varda.notify_info("💾 Workspace saved");
+            }
+
+            varda.handle_file_dialogs(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
         }
 
-        // 9. Handle deferred file dialogs (macOS Finder focus)
-        self.varda.handle_file_dialogs(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
-
-        // 10. GPU: render mixer + blit + egui overlay + present
-        self.varda.render_mixer_frame();
+        // 7. GPU: render mixer + blit + egui overlay + present
+        self.varda.as_mut().unwrap().render_mixer_frame();
         self.submit_frame(window, full_output.shapes, full_output.pixels_per_point, full_output.textures_delta);
 
-        // 11. Render output windows (after main present)
-        self.varda.render_output_windows();
-
-        // 12. Publish engine state for cross-thread consumers
-        self.varda.publish_state();
+        // 8. Render output windows + publish state
+        let varda = self.varda.as_mut().unwrap();
+        varda.render_output_windows();
+        varda.publish_state();
     }
 
     /// Blit mixer output to screen, overlay egui, and present.
@@ -261,7 +268,8 @@ impl UIRunner {
         pixels_per_point: f32,
         textures_delta: egui::TexturesDelta,
     ) {
-        let Some(context) = &self.varda.context else { return };
+        let Some(varda) = &self.varda else { return };
+        let context = varda.gpu_context();
         let Some(win_surface) = &self.window_surface else { return };
 
         let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
@@ -283,7 +291,8 @@ impl UIRunner {
             label: Some("Screen Encoder"),
         });
 
-        let bind_group = if let (Some(mixer), Some(blit)) = (&self.varda.mixer, &self.blit_pipeline) {
+        let bind_group = if let Some(blit) = &self.blit_pipeline {
+            let mixer = varda.mixer_ref();
             Some(blit.create_bind_group(&context.device, &mixer.composite_view))
         } else { None };
 

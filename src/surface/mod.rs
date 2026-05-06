@@ -457,3 +457,336 @@ fn geo_to_verts(ring: &geo::LineString<f64>) -> Vec<[f32; 2]> {
         pts
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::context::OutputSource;
+
+    fn master_source() -> OutputSource {
+        OutputSource::Master
+    }
+
+    // ── Surface creation tests ───────────────────────────────────────
+
+    #[test]
+    fn new_rect_creates_4_vertices() {
+        let s = Surface::new_rect("Test".into(), 0.1, 0.2, 0.3, 0.4, master_source());
+        assert_eq!(s.vertices.len(), 4);
+        assert_eq!(s.name, "Test");
+        assert!(!s.is_circle());
+    }
+
+    #[test]
+    fn new_rect_vertices_correct() {
+        let s = Surface::new_rect("R".into(), 0.1, 0.2, 0.3, 0.4, master_source());
+        // TL, TR, BR, BL
+        assert!((s.vertices[0][0] - 0.1).abs() < 1e-5);
+        assert!((s.vertices[0][1] - 0.2).abs() < 1e-5);
+        assert!((s.vertices[1][0] - 0.4).abs() < 1e-5); // x + w
+        assert!((s.vertices[2][1] - 0.6).abs() < 1e-5); // y + h
+    }
+
+    // ── Center tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn center_of_rect() {
+        let s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        let c = s.center();
+        assert!((c[0] - 0.5).abs() < 1e-5);
+        assert!((c[1] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn center_empty_vertices() {
+        let s = Surface {
+            name: "E".into(), vertices: vec![], extra_contours: vec![],
+            source: master_source(), content_mapping: ContentMapping::default(),
+            output_type: SurfaceOutputType::Projection, circle_hint: None,
+        };
+        assert_eq!(s.center(), [0.0, 0.0]);
+    }
+
+    // ── Contains (point-in-polygon) tests ────────────────────────────
+
+    #[test]
+    fn contains_point_inside_rect() {
+        let s = Surface::new_rect("R".into(), 0.1, 0.1, 0.5, 0.5, master_source());
+        assert!(s.contains(0.3, 0.3));
+    }
+
+    #[test]
+    fn contains_point_outside_rect() {
+        let s = Surface::new_rect("R".into(), 0.1, 0.1, 0.5, 0.5, master_source());
+        assert!(!s.contains(0.0, 0.0));
+        assert!(!s.contains(0.9, 0.9));
+    }
+
+    #[test]
+    fn contains_fewer_than_3_vertices() {
+        let s = Surface {
+            name: "Line".into(), vertices: vec![[0.0, 0.0], [1.0, 1.0]],
+            extra_contours: vec![], source: master_source(),
+            content_mapping: ContentMapping::default(),
+            output_type: SurfaceOutputType::Projection, circle_hint: None,
+        };
+        assert!(!s.contains(0.5, 0.5));
+    }
+
+    // ── Bounding box tests ───────────────────────────────────────────
+
+    #[test]
+    fn bounding_box_rect() {
+        let s = Surface::new_rect("R".into(), 0.1, 0.2, 0.3, 0.4, master_source());
+        let bb = s.bounding_box();
+        assert!((bb.x - 0.1).abs() < 1e-5);
+        assert!((bb.y - 0.2).abs() < 1e-5);
+        assert!((bb.width - 0.3).abs() < 1e-5);
+        assert!((bb.height - 0.4).abs() < 1e-5);
+    }
+
+    // ── Translate tests ──────────────────────────────────────────────
+
+    #[test]
+    fn translate_basic() {
+        let mut s = Surface::new_rect("R".into(), 0.1, 0.1, 0.2, 0.2, master_source());
+        s.translate(0.1, 0.1);
+        let c = s.center();
+        assert!((c[0] - 0.3).abs() < 1e-4);
+        assert!((c[1] - 0.3).abs() < 1e-4);
+    }
+
+    #[test]
+    fn translate_clamps_to_canvas() {
+        let mut s = Surface::new_rect("R".into(), 0.8, 0.8, 0.2, 0.2, master_source());
+        s.translate(0.5, 0.5); // Would go past 1.0
+        let bb = s.bounding_box();
+        assert!(bb.x + bb.width <= 1.0 + 1e-5);
+        assert!(bb.y + bb.height <= 1.0 + 1e-5);
+    }
+
+    #[test]
+    fn translate_clamps_negative() {
+        let mut s = Surface::new_rect("R".into(), 0.1, 0.1, 0.2, 0.2, master_source());
+        s.translate(-0.5, -0.5); // Would go below 0
+        let bb = s.bounding_box();
+        assert!(bb.x >= -1e-5);
+        assert!(bb.y >= -1e-5);
+    }
+
+    // ── Nearest vertex tests ─────────────────────────────────────────
+
+    #[test]
+    fn nearest_vertex_finds_closest() {
+        let s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        // Point near top-left vertex (0,0)
+        let idx = s.nearest_vertex(0.01, 0.01, 0.1);
+        assert_eq!(idx, Some(0));
+    }
+
+    #[test]
+    fn nearest_vertex_none_when_far() {
+        let s = Surface::new_rect("R".into(), 0.0, 0.0, 0.1, 0.1, master_source());
+        let idx = s.nearest_vertex(0.9, 0.9, 0.01);
+        assert_eq!(idx, None);
+    }
+
+    // ── CircleHint tests ─────────────────────────────────────────────
+
+    #[test]
+    fn circle_hint_generates_vertices() {
+        let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 8, aspect_ratio: 1.0 };
+        let verts = hint.generate_vertices();
+        assert_eq!(verts.len(), 8);
+        // All vertices should be within canvas bounds
+        for v in &verts {
+            assert!(v[0] >= 0.0 && v[0] <= 1.0);
+            assert!(v[1] >= 0.0 && v[1] <= 1.0);
+        }
+    }
+
+    #[test]
+    fn circle_hint_min_3_sides() {
+        let hint = CircleHint { center: [0.5, 0.5], radius: 0.1, sides: 1, aspect_ratio: 1.0 };
+        let verts = hint.generate_vertices();
+        assert_eq!(verts.len(), 3); // Clamped to min 3
+    }
+
+    #[test]
+    fn circle_hint_aspect_ratio() {
+        let hint_square = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 4, aspect_ratio: 1.0 };
+        let hint_wide = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 4, aspect_ratio: 2.0 };
+        let verts_sq = hint_square.generate_vertices();
+        let verts_wide = hint_wide.generate_vertices();
+        // With wider aspect ratio, y spread should be larger
+        let y_range_sq = verts_sq.iter().map(|v| v[1]).fold(f32::MIN, f32::max)
+            - verts_sq.iter().map(|v| v[1]).fold(f32::MAX, f32::min);
+        let y_range_wide = verts_wide.iter().map(|v| v[1]).fold(f32::MIN, f32::max)
+            - verts_wide.iter().map(|v| v[1]).fold(f32::MAX, f32::min);
+        assert!(y_range_wide > y_range_sq);
+    }
+
+    #[test]
+    fn surface_regenerate_circle_vertices() {
+        let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 6, aspect_ratio: 1.0 };
+        let mut s = Surface {
+            name: "C".into(), vertices: vec![[0.0, 0.0]], // dummy
+            extra_contours: vec![], source: master_source(),
+            content_mapping: ContentMapping::default(),
+            output_type: SurfaceOutputType::Projection,
+            circle_hint: Some(hint),
+        };
+        s.regenerate_circle_vertices();
+        assert_eq!(s.vertices.len(), 6);
+    }
+
+    #[test]
+    fn surface_convert_to_polygon() {
+        let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 6, aspect_ratio: 1.0 };
+        let mut s = Surface {
+            name: "C".into(), vertices: hint.generate_vertices(),
+            extra_contours: vec![], source: master_source(),
+            content_mapping: ContentMapping::default(),
+            output_type: SurfaceOutputType::Projection,
+            circle_hint: Some(hint),
+        };
+        assert!(s.is_circle());
+        s.convert_to_polygon();
+        assert!(!s.is_circle());
+        assert_eq!(s.vertices.len(), 6); // Vertices preserved
+    }
+
+    // ── Contour tests ────────────────────────────────────────────────
+
+    #[test]
+    fn contour_count() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 0.5, 0.5, master_source());
+        assert_eq!(s.contour_count(), 1);
+        s.extra_contours.push(vec![[0.6, 0.6], [0.8, 0.6], [0.7, 0.8]]);
+        assert_eq!(s.contour_count(), 2);
+    }
+
+    #[test]
+    fn contour_access() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 0.5, 0.5, master_source());
+        s.extra_contours.push(vec![[0.6, 0.6], [0.8, 0.6], [0.7, 0.8]]);
+        assert!(s.contour(0).is_some());
+        assert!(s.contour(1).is_some());
+        assert!(s.contour(2).is_none());
+        assert!(s.contour_mut(0).is_some());
+        assert!(s.contour_mut(1).is_some());
+    }
+
+    #[test]
+    fn contains_in_extra_contour() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 0.1, 0.1, master_source());
+        s.extra_contours.push(vec![[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]]);
+        assert!(s.contains(0.7, 0.7)); // Inside extra contour
+        assert!(!s.contains(0.3, 0.3)); // Between contours
+    }
+
+    // ── SurfaceManager tests ─────────────────────────────────────────
+
+    #[test]
+    fn manager_add_surface() {
+        let mut mgr = SurfaceManager::new();
+        let idx = mgr.add_surface("Main".into(), master_source());
+        assert_eq!(idx, 0);
+        assert_eq!(mgr.surfaces.len(), 1);
+    }
+
+    #[test]
+    fn manager_remove_surface() {
+        let mut mgr = SurfaceManager::new();
+        mgr.add_surface("A".into(), master_source());
+        mgr.add_surface("B".into(), master_source());
+        assert!(mgr.remove_surface(0));
+        assert_eq!(mgr.surfaces.len(), 1);
+        assert_eq!(mgr.surfaces[0].name, "B");
+    }
+
+    #[test]
+    fn manager_remove_out_of_bounds() {
+        let mut mgr = SurfaceManager::new();
+        assert!(!mgr.remove_surface(0));
+    }
+
+    #[test]
+    fn manager_surface_at() {
+        let mut mgr = SurfaceManager::new();
+        mgr.add_surface("A".into(), master_source());
+        // The first surface is placed at (0.05, 0.05) with size 0.28x0.28
+        let found = mgr.surface_at(0.15, 0.15);
+        assert_eq!(found, Some(0));
+        let not_found = mgr.surface_at(0.99, 0.99);
+        assert_eq!(not_found, None);
+    }
+
+    #[test]
+    fn manager_surface_at_returns_topmost() {
+        let mut mgr = SurfaceManager::new();
+        // Two overlapping surfaces
+        mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.5, 0.5, master_source()));
+        mgr.surfaces.push(Surface::new_rect("B".into(), 0.1, 0.1, 0.5, 0.5, master_source()));
+        // At (0.2, 0.2) both contain, but B (index 1) is topmost (last added)
+        assert_eq!(mgr.surface_at(0.2, 0.2), Some(1));
+    }
+
+    #[test]
+    fn manager_add_polygon_surface() {
+        let mut mgr = SurfaceManager::new();
+        let verts = vec![[0.0, 0.0], [0.5, 0.0], [0.25, 0.5]];
+        let idx = mgr.add_polygon_surface("Triangle".into(), verts, master_source());
+        assert_eq!(idx, 0);
+        assert_eq!(mgr.surfaces[0].vertices.len(), 3);
+    }
+
+    #[test]
+    fn manager_add_circle_surface() {
+        let mut mgr = SurfaceManager::new();
+        let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 16, aspect_ratio: 1.0 };
+        let idx = mgr.add_circle_surface("Circle".into(), hint, master_source());
+        assert_eq!(idx, 0);
+        assert!(mgr.surfaces[0].is_circle());
+        assert_eq!(mgr.surfaces[0].vertices.len(), 16);
+    }
+
+    #[test]
+    fn manager_combine_surfaces() {
+        let mut mgr = SurfaceManager::new();
+        mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.3, 0.3, master_source()));
+        mgr.surfaces.push(Surface::new_rect("B".into(), 0.2, 0.2, 0.3, 0.3, master_source()));
+        let result = mgr.combine_surfaces(&[0, 1]);
+        assert!(result.is_some());
+        assert_eq!(mgr.surfaces.len(), 1); // Two removed, one combined added
+        assert!(mgr.surfaces[0].name.contains("A"));
+        assert!(mgr.surfaces[0].name.contains("B"));
+    }
+
+    #[test]
+    fn manager_combine_fewer_than_2() {
+        let mut mgr = SurfaceManager::new();
+        mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.3, 0.3, master_source()));
+        assert_eq!(mgr.combine_surfaces(&[0]), None);
+        assert_eq!(mgr.combine_surfaces(&[]), None);
+    }
+
+    // ── ContentMapping & SurfaceOutputType Display ────────────────────
+
+    #[test]
+    fn content_mapping_display() {
+        assert_eq!(format!("{}", ContentMapping::Fill), "Fill");
+        assert_eq!(format!("{}", ContentMapping::Mapped), "Mapped");
+    }
+
+    #[test]
+    fn surface_output_type_display() {
+        assert_eq!(format!("{}", SurfaceOutputType::Projection), "Projection");
+        assert_eq!(format!("{}", SurfaceOutputType::LEDDirect), "LED Direct");
+    }
+
+    #[test]
+    fn content_mapping_default() {
+        assert_eq!(ContentMapping::default(), ContentMapping::Fill);
+    }
+}

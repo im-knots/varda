@@ -215,7 +215,7 @@ pub struct AudioUIData {
 /// Notification snapshot for UI rendering (avoids borrowing NotificationSystem during egui)
 #[derive(Clone)]
 pub struct NotificationUI {
-    pub level: notifications::NotificationLevel,
+    pub level: crate::notifications::NotificationLevel,
     pub message: String,
     pub progress: f32,
 }

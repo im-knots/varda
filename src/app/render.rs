@@ -24,18 +24,14 @@ impl VardaApp {
     /// Render the mixer frame: update cameras, collect audio, render mixer.
     /// This performs all GPU work that doesn't need the surface texture.
     pub fn render_mixer_frame(&mut self) {
-        let Some(context) = &self.context else { return };
-
         // Update camera frames
-        self.camera_manager.update(&context.queue);
-        if let Some(mixer) = &mut self.mixer {
-            for channel in &mut mixer.channels {
-                for slot in &mut channel.decks {
-                    if let Some(cam_id) = slot.deck.camera_id() {
-                        slot.deck.camera_source_view = self.camera_manager
-                            .texture_view(cam_id)
-                            .cloned();
-                    }
+        self.camera_manager.update(&self.context.queue);
+        for channel in &mut self.mixer.channels {
+            for slot in &mut channel.decks {
+                if let Some(cam_id) = slot.deck.camera_id() {
+                    slot.deck.camera_source_view = self.camera_manager
+                        .texture_view(cam_id)
+                        .cloned();
                 }
             }
         }
@@ -56,17 +52,14 @@ impl VardaApp {
         };
 
         let primary_audio = self.audio_manager.get_primary_data().clone();
-        if let Some(mixer) = &mut self.mixer {
-            if let Err(e) = mixer.render(context, &primary_audio, &audio_values) {
-                log::error!("Failed to render mixer: {}", e);
-            }
+        if let Err(e) = self.mixer.render(&self.context, &primary_audio, &audio_values) {
+            log::error!("Failed to render mixer: {}", e);
         }
     }
 
     /// Render content to all output windows using the surface layout.
     pub fn render_output_windows(&mut self) {
-        let Some(context) = &self.context else { return };
-        let Some(mixer) = &mut self.mixer else { return };
+        let context = &self.context;
 
         // Prepare sub-mixes for any Channels(...) sources
         {
@@ -81,10 +74,10 @@ impl VardaApp {
                     }
                 }
             }
-            mixer.prepare_sub_mixes(&sub_mix_sources, context);
+            self.mixer.prepare_sub_mixes(&sub_mix_sources, context);
         }
 
-        let mixer = self.mixer.as_ref().unwrap();
+        let mixer = &self.mixer;
 
         for output in &self.output_windows {
             if output.calibration_mode && !self.calibration_textures.is_empty() && self.surface_manager.surfaces.is_empty() {

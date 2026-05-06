@@ -7,19 +7,7 @@ use crate::usecases::ui::{ShaderParamsUI, ParamUIInfo, EffectInfo};
 
 /// Build a MixerSnapshot from the current VardaApp state.
 pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
-    let mixer = match &app.mixer {
-        Some(m) => m,
-        None => return MixerSnapshot {
-            channels: Vec::new(),
-            crossfader: 0.0,
-            auto_crossfade_active: false,
-            auto_crossfade_progress: 0.0,
-            master_effects: Vec::new(),
-            active_transition_name: None,
-            transition_names: Vec::new(),
-            sequences: Vec::new(),
-        },
-    };
+    let mixer = &app.mixer;
 
     let channels = mixer.channels.iter().enumerate().map(|(ch_idx, ch)| {
         let decks = ch.decks.iter().enumerate().map(|(deck_idx, slot)| {

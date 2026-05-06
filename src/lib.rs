@@ -8,6 +8,7 @@ pub mod isf;
 pub mod midi;
 pub mod mixer;
 pub mod modulation;
+pub mod notifications;
 pub mod osc;
 pub mod params;
 pub mod persistence;

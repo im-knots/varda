@@ -418,3 +418,367 @@ impl ShaderParams {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isf::ISFInput;
+
+    fn make_float_input(name: &str, default: f64, min: f32, max: f32) -> ISFInput {
+        ISFInput {
+            name: name.to_string(),
+            input_type: "float".to_string(),
+            default: Some(serde_json::json!(default)),
+            min: Some(min),
+            max: Some(max),
+            label: Some(name.to_string()),
+            values: None,
+            labels: None,
+            identity: None,
+        }
+    }
+
+    fn make_bool_input(name: &str, default: bool) -> ISFInput {
+        ISFInput {
+            name: name.to_string(),
+            input_type: "bool".to_string(),
+            default: Some(serde_json::json!(default)),
+            min: None, max: None, label: None, values: None, labels: None, identity: None,
+        }
+    }
+
+    fn make_color_input(name: &str) -> ISFInput {
+        ISFInput {
+            name: name.to_string(),
+            input_type: "color".to_string(),
+            default: Some(serde_json::json!([1.0, 0.0, 0.0, 1.0])),
+            min: None, max: None, label: None, values: None, labels: None, identity: None,
+        }
+    }
+
+    fn make_long_input(name: &str, default: i64) -> ISFInput {
+        ISFInput {
+            name: name.to_string(),
+            input_type: "long".to_string(),
+            default: Some(serde_json::json!(default)),
+            min: None, max: None, label: None,
+            values: Some(vec![serde_json::json!(0), serde_json::json!(1), serde_json::json!(2)]),
+            labels: Some(vec!["A".into(), "B".into(), "C".into()]),
+            identity: None,
+        }
+    }
+
+    fn make_point2d_input(name: &str) -> ISFInput {
+        ISFInput {
+            name: name.to_string(),
+            input_type: "point2D".to_string(),
+            default: Some(serde_json::json!([0.5, 0.5])),
+            min: None, max: None, label: None, values: None, labels: None, identity: None,
+        }
+    }
+
+    // ── ParamValue tests ─────────────────────────────────────────────
+
+    #[test]
+    fn param_value_from_float_input() {
+        let input = make_float_input("brightness", 0.75, 0.0, 1.0);
+        match ParamValue::from_isf_input(&input) {
+            ParamValue::Float(v) => assert!((v - 0.75).abs() < 1e-5),
+            other => panic!("Expected Float, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn param_value_from_bool_input() {
+        let input = make_bool_input("enabled", true);
+        match ParamValue::from_isf_input(&input) {
+            ParamValue::Bool(v) => assert!(v),
+            other => panic!("Expected Bool, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn param_value_from_color_input() {
+        let input = make_color_input("tint");
+        match ParamValue::from_isf_input(&input) {
+            ParamValue::Color(c) => {
+                assert!((c[0] - 1.0).abs() < 1e-5);
+                assert!((c[1] - 0.0).abs() < 1e-5);
+                assert!((c[2] - 0.0).abs() < 1e-5);
+                assert!((c[3] - 1.0).abs() < 1e-5);
+            }
+            other => panic!("Expected Color, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn param_value_from_long_input() {
+        let input = make_long_input("mode", 2);
+        match ParamValue::from_isf_input(&input) {
+            ParamValue::Long(v) => assert_eq!(v, 2),
+            other => panic!("Expected Long, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn param_value_from_point2d_input() {
+        let input = make_point2d_input("center");
+        match ParamValue::from_isf_input(&input) {
+            ParamValue::Point2D(p) => {
+                assert!((p[0] - 0.5).abs() < 1e-5);
+                assert!((p[1] - 0.5).abs() < 1e-5);
+            }
+            other => panic!("Expected Point2D, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn param_value_byte_sizes() {
+        assert_eq!(ParamValue::Float(0.0).byte_size(), 4);
+        assert_eq!(ParamValue::Bool(true).byte_size(), 4);
+        assert_eq!(ParamValue::Long(0).byte_size(), 4);
+        assert_eq!(ParamValue::Color([0.0; 4]).byte_size(), 16);
+        assert_eq!(ParamValue::Point2D([0.0; 2]).byte_size(), 8);
+    }
+
+    #[test]
+    fn param_value_write_bytes_float() {
+        let mut buf = Vec::new();
+        ParamValue::Float(1.0).write_bytes(&mut buf);
+        assert_eq!(buf.len(), 4);
+        assert_eq!(f32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]), 1.0);
+    }
+
+    #[test]
+    fn param_value_write_bytes_bool() {
+        let mut buf = Vec::new();
+        ParamValue::Bool(true).write_bytes(&mut buf);
+        let val = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        assert_eq!(val, 1);
+
+        let mut buf2 = Vec::new();
+        ParamValue::Bool(false).write_bytes(&mut buf2);
+        let val2 = u32::from_le_bytes([buf2[0], buf2[1], buf2[2], buf2[3]]);
+        assert_eq!(val2, 0);
+    }
+
+    #[test]
+    fn param_value_write_bytes_color() {
+        let mut buf = Vec::new();
+        ParamValue::Color([1.0, 0.5, 0.25, 0.0]).write_bytes(&mut buf);
+        assert_eq!(buf.len(), 16);
+    }
+
+    // ── ShaderParams tests ───────────────────────────────────────────
+
+    #[test]
+    fn shader_params_from_inputs() {
+        let inputs = vec![
+            make_float_input("brightness", 0.5, 0.0, 1.0),
+            make_bool_input("invert", false),
+        ];
+        let params = ShaderParams::from_inputs(&inputs);
+        assert_eq!(params.param_order.len(), 2);
+        assert!(!params.is_empty());
+    }
+
+    #[test]
+    fn shader_params_skips_image_inputs() {
+        let inputs = vec![
+            make_float_input("brightness", 0.5, 0.0, 1.0),
+            ISFInput {
+                name: "inputImage".to_string(),
+                input_type: "image".to_string(),
+                default: None, min: None, max: None, label: None,
+                values: None, labels: None, identity: None,
+            },
+        ];
+        let params = ShaderParams::from_inputs(&inputs);
+        assert_eq!(params.param_order.len(), 1); // image skipped
+    }
+
+    #[test]
+    fn shader_params_get_set_float() {
+        let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        assert!((params.get_float("brightness").unwrap() - 0.5).abs() < 1e-5);
+        params.set_float("brightness", 0.8);
+        assert!((params.get_float("brightness").unwrap() - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shader_params_get_set_bool() {
+        let inputs = vec![make_bool_input("invert", false)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        assert_eq!(params.get_bool("invert"), Some(false));
+        params.set_bool("invert", true);
+        assert_eq!(params.get_bool("invert"), Some(true));
+    }
+
+    #[test]
+    fn shader_params_get_set_color() {
+        let inputs = vec![make_color_input("tint")];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        let c = params.get_color("tint").unwrap();
+        assert!((c[0] - 1.0).abs() < 1e-5);
+        params.set_color("tint", [0.0, 1.0, 0.0, 1.0]);
+        let c2 = params.get_color("tint").unwrap();
+        assert!((c2[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shader_params_get_set_long() {
+        let inputs = vec![make_long_input("mode", 0)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        assert_eq!(params.get_long("mode"), Some(0));
+        params.set_long("mode", 2);
+        assert_eq!(params.get_long("mode"), Some(2));
+    }
+
+    #[test]
+    fn shader_params_get_set_point2d() {
+        let inputs = vec![make_point2d_input("center")];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        let p = params.get_point2d("center").unwrap();
+        assert!((p[0] - 0.5).abs() < 1e-5);
+        params.set_point2d("center", [0.1, 0.9]);
+        let p2 = params.get_point2d("center").unwrap();
+        assert!((p2[0] - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shader_params_generic_set() {
+        let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        params.set("brightness", ParamValue::Float(0.9));
+        assert!((params.get_float("brightness").unwrap() - 0.9).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shader_params_set_nonexistent_noop() {
+        let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        params.set("nonexistent", ParamValue::Float(1.0)); // should not crash
+        assert!(params.get_float("nonexistent").is_none());
+    }
+
+    #[test]
+    fn shader_params_buffer_size_min_16() {
+        let params = ShaderParams::from_inputs(&[]);
+        assert!(params.buffer_size() >= 16);
+    }
+
+    #[test]
+    fn shader_params_buffer_size_aligned_to_16() {
+        let inputs = vec![make_float_input("a", 0.0, 0.0, 1.0)];
+        let params = ShaderParams::from_inputs(&inputs);
+        assert_eq!(params.buffer_size() % 16, 0);
+    }
+
+    #[test]
+    fn shader_params_build_buffer_data() {
+        let inputs = vec![
+            make_float_input("brightness", 0.5, 0.0, 1.0),
+            make_bool_input("invert", true),
+        ];
+        let params = ShaderParams::from_inputs(&inputs);
+        let data = params.build_buffer_data();
+        assert!(data.len() >= 16);
+        assert_eq!(data.len() % 16, 0);
+        // First 4 bytes should be 0.5f32
+        let val = f32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        assert!((val - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shader_params_reset_to_defaults() {
+        let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        params.set_float("brightness", 0.9);
+        params.reset_to_defaults();
+        assert!((params.get_float("brightness").unwrap() - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shader_params_empty() {
+        let params = ShaderParams::from_inputs(&[]);
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn shader_params_modulated_buffer_no_modulation() {
+        let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
+        let params = ShaderParams::from_inputs(&inputs);
+        let engine = ModulationEngine::new();
+        let data = params.build_modulated_buffer_data(&engine, None);
+        let base = params.build_buffer_data();
+        assert_eq!(data, base, "No modulation should produce identical buffer");
+    }
+
+    #[test]
+    fn shader_params_modulated_buffer_with_modulation() {
+        let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
+        let params = ShaderParams::from_inputs(&inputs);
+        let mut engine = ModulationEngine::new();
+        let idx = engine.add_source(crate::modulation::ModulationSource::LFO {
+            waveform: crate::modulation::LFOWaveform::Sine,
+            frequency: 1.0, phase: 0.0, amplitude: 1.0, bipolar: true,
+        });
+        engine.update(0.25, &crate::modulation::AudioValues::default());
+        engine.assign("brightness", idx, 0.5, None);
+
+        let modulated = params.build_modulated_buffer_data(&engine, None);
+        let base = params.build_buffer_data();
+        // Modulated should differ from base (LFO at t=0.25 is non-zero)
+        assert_ne!(modulated, base, "Modulated buffer should differ from base");
+    }
+
+    #[test]
+    fn shader_params_modulated_with_prefix() {
+        let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
+        let params = ShaderParams::from_inputs(&inputs);
+        let mut engine = ModulationEngine::new();
+        let idx = engine.add_source(crate::modulation::ModulationSource::sine_lfo(1.0));
+        engine.update(0.25, &crate::modulation::AudioValues::default());
+        // Assign with prefix "deck0:brightness"
+        engine.assign("deck0:brightness", idx, 0.5, None);
+
+        let modulated = params.build_modulated_buffer_data(&engine, Some("deck0"));
+        let base = params.build_buffer_data();
+        assert_ne!(modulated, base, "Prefixed modulation should apply");
+    }
+
+    #[test]
+    fn shader_params_std140_alignment_point2d() {
+        // Point2D requires 8-byte alignment
+        let inputs = vec![
+            make_float_input("a", 1.0, 0.0, 1.0), // 4 bytes at offset 0
+            make_point2d_input("center"),           // should align to offset 8
+        ];
+        let params = ShaderParams::from_inputs(&inputs);
+        let data = params.build_buffer_data();
+        // offset 0..4: float a
+        // offset 4..8: padding (align to 8 for vec2)
+        // offset 8..16: point2D center
+        assert!(data.len() >= 16);
+        let p0 = f32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        let p1 = f32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+        assert!((p0 - 0.5).abs() < 1e-5);
+        assert!((p1 - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shader_params_std140_alignment_color() {
+        // Color requires 16-byte alignment
+        let inputs = vec![
+            make_float_input("a", 1.0, 0.0, 1.0), // 4 bytes at offset 0
+            make_color_input("tint"),               // should align to offset 16
+        ];
+        let params = ShaderParams::from_inputs(&inputs);
+        let data = params.build_buffer_data();
+        assert!(data.len() >= 32);
+        // tint starts at offset 16
+        let r = f32::from_le_bytes([data[16], data[17], data[18], data[19]]);
+        assert!((r - 1.0).abs() < 1e-5); // red = 1.0
+    }
+}
+

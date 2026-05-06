@@ -150,5 +150,189 @@ void main() {}
         let shader = ISFShader::from_string(filter_isf).unwrap();
         assert!(shader.metadata.is_filter());
     }
-}
 
+    #[test]
+    fn test_is_transition() {
+        let isf = r#"/*{
+    "CATEGORIES": ["Transition"],
+    "INPUTS": [{"NAME": "inputImage", "TYPE": "image"}, {"NAME": "startImage", "TYPE": "image"}]
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert!(shader.metadata.is_transition());
+        assert!(shader.metadata.is_filter()); // Transitions are also filters
+    }
+
+    #[test]
+    fn test_is_not_transition() {
+        let isf = r#"/*{
+    "CATEGORIES": ["Generator"]
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert!(!shader.metadata.is_transition());
+    }
+
+    #[test]
+    fn test_is_audio_reactive() {
+        let isf = r#"/*{
+    "INPUTS": [{"NAME": "audio", "TYPE": "audio"}, {"NAME": "fft", "TYPE": "audioFFT"}]
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert!(shader.metadata.is_audio_reactive());
+    }
+
+    #[test]
+    fn test_is_not_audio_reactive() {
+        let isf = r#"/*{
+    "INPUTS": [{"NAME": "brightness", "TYPE": "float"}]
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert!(!shader.metadata.is_audio_reactive());
+    }
+
+    #[test]
+    fn test_multiple_inputs() {
+        let isf = r#"/*{
+    "INPUTS": [
+        {"NAME": "brightness", "TYPE": "float", "MIN": 0.0, "MAX": 1.0, "DEFAULT": 0.5},
+        {"NAME": "invert", "TYPE": "bool", "DEFAULT": false},
+        {"NAME": "mode", "TYPE": "long", "VALUES": [0, 1, 2], "LABELS": ["A", "B", "C"]},
+        {"NAME": "tint", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0]},
+        {"NAME": "center", "TYPE": "point2D", "DEFAULT": [0.5, 0.5]}
+    ]
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        let inputs = shader.metadata.inputs.unwrap();
+        assert_eq!(inputs.len(), 5);
+        assert_eq!(inputs[0].name, "brightness");
+        assert_eq!(inputs[0].min, Some(0.0));
+        assert_eq!(inputs[0].max, Some(1.0));
+        assert_eq!(inputs[2].values.as_ref().unwrap().len(), 3);
+        assert_eq!(inputs[2].labels.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_no_inputs() {
+        let isf = r#"/*{
+    "DESCRIPTION": "Minimal"
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert!(shader.metadata.inputs.is_none());
+        assert!(shader.metadata.is_generator()); // No image inputs = generator
+        assert!(!shader.metadata.is_audio_reactive());
+    }
+
+    #[test]
+    fn test_categories_string() {
+        let isf = r#"/*{
+    "CATEGORIES": ["Generator", "Color"]
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert_eq!(shader.metadata.categories_string(), "Generator, Color");
+    }
+
+    #[test]
+    fn test_categories_string_empty() {
+        let isf = r#"/*{
+    "DESCRIPTION": "No categories"
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert_eq!(shader.metadata.categories_string(), "Uncategorized");
+    }
+
+    #[test]
+    fn test_shader_name_from_path() {
+        let mut shader = ISFShader::from_string("/*{}*/\nvoid main() {}").unwrap();
+        shader.file_path = Some("/path/to/Color Bars.fs".into());
+        assert_eq!(shader.name(), "Color Bars");
+    }
+
+    #[test]
+    fn test_shader_name_no_path() {
+        let shader = ISFShader::from_string("/*{}*/\nvoid main() {}").unwrap();
+        assert_eq!(shader.name(), "Unnamed");
+    }
+
+    #[test]
+    fn test_description_and_credit() {
+        let isf = r#"/*{
+    "DESCRIPTION": "A cool effect",
+    "CREDIT": "Test Author"
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert_eq!(shader.description(), "A cool effect");
+        assert_eq!(shader.credit(), "Test Author");
+    }
+
+    #[test]
+    fn test_description_and_credit_defaults() {
+        let shader = ISFShader::from_string("/*{}*/\nvoid main() {}").unwrap();
+        assert_eq!(shader.description(), "No description");
+        assert_eq!(shader.credit(), "Unknown");
+    }
+
+    #[test]
+    fn test_missing_json_block() {
+        let result = ISFShader::from_string("void main() {}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unclosed_json_block() {
+        let result = ISFShader::from_string("/*{\nvoid main() {}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fragment_source_trimmed() {
+        let isf = "/*{}*/\n\n  void main() { }\n\n";
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert_eq!(shader.fragment_source, "void main() { }");
+    }
+
+    #[test]
+    fn test_passes_metadata() {
+        let isf = r#"/*{
+    "PASSES": [
+        {"TARGET": "buffer1", "PERSISTENT": true},
+        {}
+    ]
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        let passes = shader.metadata.passes.unwrap();
+        assert_eq!(passes.len(), 2);
+        assert_eq!(passes[0].target, Some("buffer1".into()));
+        assert_eq!(passes[0].persistent, Some(true));
+        assert!(passes[1].target.is_none());
+    }
+
+    #[test]
+    fn test_transition_case_insensitive() {
+        let isf = r#"/*{
+    "CATEGORIES": ["transition"]
+}*/
+void main() {}
+"#;
+        let shader = ISFShader::from_string(isf).unwrap();
+        assert!(shader.metadata.is_transition());
+    }
+}

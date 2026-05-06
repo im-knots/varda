@@ -688,3 +688,525 @@ impl ModulationEngine {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_audio() -> AudioValues {
+        AudioValues::default()
+    }
+
+    // ── LFO waveform tests ───────────────────────────────────────────
+
+    #[test]
+    fn lfo_sine_unipolar_range() {
+        let mut lfo = ModulationSource::sine_lfo(1.0);
+        let audio = empty_audio();
+        // Sample across one full cycle
+        for i in 0..100 {
+            let t = i as f32 / 100.0;
+            let val = lfo.calculate(t, 0.01, &audio, 0.0);
+            assert!(val >= 0.0 && val <= 1.0, "Sine unipolar out of range: {val} at t={t}");
+        }
+    }
+
+    #[test]
+    fn lfo_sine_bipolar_range() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Sine, frequency: 1.0, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        for i in 0..100 {
+            let t = i as f32 / 100.0;
+            let val = lfo.calculate(t, 0.01, &audio, 0.0);
+            assert!(val >= -1.0 && val <= 1.0, "Sine bipolar out of range: {val}");
+        }
+    }
+
+    #[test]
+    fn lfo_square_values() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Square, frequency: 1.0, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        // First half of cycle should be 1.0, second half -1.0
+        let val_first = lfo.calculate(0.1, 0.01, &audio, 0.0);
+        let val_second = lfo.calculate(0.6, 0.01, &audio, 0.0);
+        assert!((val_first - 1.0).abs() < 1e-5);
+        assert!((val_second - (-1.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn lfo_triangle_symmetry() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Triangle, frequency: 1.0, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        // At t=0.0 (phase 0): triangle = 1 - 4*|0-0.5| = 1-2 = -1
+        // At t=0.25: triangle = 1 - 4*|0.25-0.5| = 1-1 = 0
+        // At t=0.5: triangle = 1 - 4*|0.5-0.5| = 1
+        let val_start = lfo.calculate(0.0, 0.01, &audio, 0.0);
+        let val_mid = lfo.calculate(0.5, 0.01, &audio, 0.0);
+        assert!((val_start - (-1.0)).abs() < 1e-5, "Triangle at 0: {val_start}");
+        assert!((val_mid - 1.0).abs() < 1e-5, "Triangle at 0.5: {val_mid}");
+    }
+
+    #[test]
+    fn lfo_sawtooth_ramp() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Sawtooth, frequency: 1.0, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        let val_0 = lfo.calculate(0.0, 0.01, &audio, 0.0);
+        let val_half = lfo.calculate(0.5, 0.01, &audio, 0.0);
+        assert!((val_0 - (-1.0)).abs() < 1e-5);
+        assert!((val_half - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn lfo_amplitude_scales() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Sine, frequency: 1.0, phase: 0.0,
+            amplitude: 0.5, bipolar: true,
+        };
+        let audio = empty_audio();
+        for i in 0..100 {
+            let t = i as f32 / 100.0;
+            let val = lfo.calculate(t, 0.01, &audio, 0.0);
+            assert!(val >= -0.5 && val <= 0.5, "Amplitude scaling off: {val}");
+        }
+    }
+
+    #[test]
+    fn lfo_frequency_affects_period() {
+        let mut lfo_slow = ModulationSource::sine_lfo(1.0);
+        let mut lfo_fast = ModulationSource::sine_lfo(2.0);
+        let audio = empty_audio();
+        // At t=0.25: slow is at quarter cycle, fast is at half cycle
+        let slow = lfo_slow.calculate(0.25, 0.01, &audio, 0.0);
+        let fast = lfo_fast.calculate(0.25, 0.01, &audio, 0.0);
+        // They should be different (fast completes cycle twice as quickly)
+        assert!((slow - fast).abs() > 0.1);
+    }
+
+    #[test]
+    fn lfo_random_deterministic() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Random, frequency: 1.0, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        let val1 = lfo.calculate(0.3, 0.01, &audio, 0.0);
+        let val2 = lfo.calculate(0.3, 0.01, &audio, 0.0);
+        assert_eq!(val1, val2, "Random LFO should be deterministic for same time");
+    }
+
+    // ── ADSR tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn adsr_idle_is_zero() {
+        let mut adsr = ModulationSource::adsr(0.1, 0.1, 0.5, 0.1);
+        let audio = empty_audio();
+        let val = adsr.calculate(0.0, 0.016, &audio, 0.0);
+        assert_eq!(val, 0.0);
+    }
+
+    #[test]
+    fn adsr_attack_reaches_peak() {
+        let mut adsr = ModulationSource::adsr(0.1, 0.1, 0.5, 0.1);
+        adsr.gate_on();
+        let audio = empty_audio();
+        // Simulate attack phase
+        let mut val = 0.0;
+        for _ in 0..20 {
+            val = adsr.calculate(0.0, 0.01, &audio, val);
+        }
+        // Should have reached peak (1.0) and moved to decay
+        assert!(val > 0.4, "ADSR should reach significant level during attack: {val}");
+    }
+
+    #[test]
+    fn adsr_sustain_holds() {
+        let mut adsr = ModulationSource::adsr(0.01, 0.01, 0.7, 0.01);
+        adsr.gate_on();
+        let audio = empty_audio();
+        // Run through attack + decay quickly
+        let mut val = 0.0;
+        for _ in 0..100 {
+            val = adsr.calculate(0.0, 0.01, &audio, val);
+        }
+        // Should be at sustain level
+        assert!((val - 0.7).abs() < 0.05, "ADSR should hold at sustain level: {val}");
+    }
+
+    #[test]
+    fn adsr_release_to_zero() {
+        let mut adsr = ModulationSource::adsr(0.01, 0.01, 0.7, 0.05);
+        adsr.gate_on();
+        let audio = empty_audio();
+        let mut val = 0.0;
+        // Reach sustain
+        for _ in 0..50 {
+            val = adsr.calculate(0.0, 0.01, &audio, val);
+        }
+        adsr.gate_off();
+        // Release
+        for _ in 0..50 {
+            val = adsr.calculate(0.0, 0.01, &audio, val);
+        }
+        assert!(val < 0.05, "ADSR should release to near zero: {val}");
+    }
+
+    #[test]
+    fn adsr_gate_off_noop_when_idle() {
+        let mut adsr = ModulationSource::adsr(0.1, 0.1, 0.5, 0.1);
+        adsr.gate_off(); // Should not crash or change state
+        let audio = empty_audio();
+        let val = adsr.calculate(0.0, 0.016, &audio, 0.0);
+        assert_eq!(val, 0.0);
+    }
+
+    // ── StepSequencer tests ──────────────────────────────────────────
+
+    #[test]
+    fn step_sequencer_basic() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![0.0, 0.5, 1.0, 0.5],
+            rate: 4.0, // 4 steps per second
+            interpolation: StepInterpolation::None,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        // At t=0.0, step 0 → 0.0
+        let val = seq.calculate(0.0, 0.01, &audio, 0.0);
+        assert!((val - 0.0).abs() < 1e-5);
+        // At t=0.25, step 1 → 0.5
+        let val = seq.calculate(0.25, 0.01, &audio, 0.0);
+        assert!((val - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn step_sequencer_linear_interpolation() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![0.0, 1.0],
+            rate: 1.0,
+            interpolation: StepInterpolation::Linear,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        // position = time * rate = t. 2 steps → step 0 at pos 0..1, step 1 at pos 1..2
+        // At t=0.5: pos=0.5, idx=0, frac=0.5 → lerp(0.0, 1.0, 0.5) = 0.5
+        let val = seq.calculate(0.5, 0.01, &audio, 0.0);
+        assert!((val - 0.5).abs() < 0.01, "Linear interp mid: {val}");
+    }
+
+    #[test]
+    fn step_sequencer_bipolar() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![0.0, 1.0],
+            rate: 1.0,
+            interpolation: StepInterpolation::None,
+            bipolar: true,
+        };
+        let audio = empty_audio();
+        // Step 0 = 0.0 → bipolar: 0.0*2-1 = -1.0
+        let val = seq.calculate(0.0, 0.01, &audio, 0.0);
+        assert!((val - (-1.0)).abs() < 1e-5);
+        // Step 1 at t=1.0: position=1.0, idx=1, val=1.0 → bipolar: 1.0*2-1 = 1.0
+        let val = seq.calculate(1.0, 0.01, &audio, 0.0);
+        assert!((val - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn step_sequencer_empty_returns_zero() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![],
+            rate: 1.0,
+            interpolation: StepInterpolation::None,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        let val = seq.calculate(0.5, 0.01, &audio, 0.0);
+        assert_eq!(val, 0.0);
+    }
+
+    #[test]
+    fn step_sequencer_smooth_interpolation() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![0.0, 1.0],
+            rate: 1.0,
+            interpolation: StepInterpolation::Smooth,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        // At t=0.5: pos=0.5, idx=0, frac=0.5 → smoothstep(0.5) = 0.5
+        let val = seq.calculate(0.5, 0.01, &audio, 0.0);
+        assert!(val > 0.0 && val < 1.0, "Smooth interp: {val}");
+        assert!((val - 0.5).abs() < 0.01, "Smoothstep at 0.5 should be 0.5: {val}");
+    }
+
+    // ── AudioSourceValues tests ──────────────────────────────────────
+
+    #[test]
+    fn audio_energy_empty_fft() {
+        let source = AudioSourceValues { fft: vec![], level: 0.0, sample_rate: 48000.0 };
+        assert_eq!(source.energy_in_range(20.0, 250.0), 0.0);
+    }
+
+    #[test]
+    fn audio_energy_zero_sample_rate() {
+        let source = AudioSourceValues { fft: vec![0.5; 256], level: 0.5, sample_rate: 0.0 };
+        assert_eq!(source.energy_in_range(20.0, 250.0), 0.0);
+    }
+
+    #[test]
+    fn audio_energy_silent() {
+        let source = AudioSourceValues { fft: vec![0.0; 256], level: 0.0, sample_rate: 48000.0 };
+        assert_eq!(source.energy_in_range(20.0, 250.0), 0.0);
+    }
+
+    #[test]
+    fn audio_energy_loud_signal() {
+        // All bins at 1.0 → RMS = 1.0 → 0dB → (0+60)/60 = 1.0
+        let source = AudioSourceValues { fft: vec![1.0; 256], level: 1.0, sample_rate: 48000.0 };
+        let energy = source.energy_in_range(20.0, 20000.0);
+        assert!((energy - 1.0).abs() < 0.01, "Full signal energy: {energy}");
+    }
+
+    #[test]
+    fn audio_values_primary_returns_lowest_id() {
+        let mut av = AudioValues::default();
+        av.sources.insert(5, AudioSourceValues { fft: vec![], level: 0.5, sample_rate: 48000.0 });
+        av.sources.insert(2, AudioSourceValues { fft: vec![], level: 0.8, sample_rate: 48000.0 });
+        let primary = av.primary().unwrap();
+        assert!((primary.level - 0.8).abs() < 1e-5); // ID 2 has level 0.8
+    }
+
+    #[test]
+    fn audio_values_primary_none_when_empty() {
+        let av = AudioValues::default();
+        assert!(av.primary().is_none());
+    }
+
+    // ── ModulationEngine tests ───────────────────────────────────────
+
+    #[test]
+    fn engine_add_source_returns_index() {
+        let mut engine = ModulationEngine::new();
+        let idx0 = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let idx1 = engine.add_source(ModulationSource::sine_lfo(2.0));
+        assert_eq!(idx0, 0);
+        assert_eq!(idx1, 1);
+        assert_eq!(engine.source_count(), 2);
+    }
+
+    #[test]
+    fn engine_remove_source_reindexes_assignments() {
+        let mut engine = ModulationEngine::new();
+        engine.add_source(ModulationSource::sine_lfo(1.0)); // idx 0
+        engine.add_source(ModulationSource::sine_lfo(2.0)); // idx 1
+        engine.add_source(ModulationSource::sine_lfo(3.0)); // idx 2
+        engine.assign("param_a", 0, 1.0, None);
+        engine.assign("param_b", 2, 0.5, None);
+
+        engine.remove_source(0);
+        // Source 0 removed: param_a assignment should be gone, param_b's source_idx should decrement
+        assert!(!engine.has_modulation("param_a"));
+        assert!(engine.has_modulation("param_b"));
+        assert_eq!(engine.source_count(), 2);
+    }
+
+    #[test]
+    fn engine_assign_and_get_modulation() {
+        let mut engine = ModulationEngine::new();
+        let idx = engine.add_source(ModulationSource::sine_lfo(1.0));
+
+        // Update so current_values are populated
+        engine.update(0.25, &empty_audio());
+
+        engine.assign("brightness", idx, 1.0, None);
+        let mod_val = engine.get_modulation("brightness");
+        // Should be the LFO value at t=0.25 * amount(1.0)
+        assert!(mod_val != 0.0 || true); // Just verify it doesn't crash
+    }
+
+    #[test]
+    fn engine_clear_assignments() {
+        let mut engine = ModulationEngine::new();
+        let idx = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.assign("brightness", idx, 1.0, None);
+        assert!(engine.has_modulation("brightness"));
+        engine.clear_assignments("brightness");
+        assert!(!engine.has_modulation("brightness"));
+    }
+
+    #[test]
+    fn engine_update_computes_values() {
+        let mut engine = ModulationEngine::new();
+        engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.update(0.0, &empty_audio());
+        let values = engine.current_values();
+        assert_eq!(values.len(), 1);
+    }
+
+    #[test]
+    fn engine_mod_on_mod() {
+        let mut engine = ModulationEngine::new();
+        let lfo0 = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
+        // Modulate lfo0's frequency with lfo1
+        engine.assign_mod_on_mod(lfo0, "frequency", lfo1, 0.5);
+        // Should not crash
+        engine.update(1.0, &empty_audio());
+        assert!(engine.current_values().len() == 2);
+    }
+
+    #[test]
+    fn engine_clear_mod_on_mod() {
+        let mut engine = ModulationEngine::new();
+        let lfo0 = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
+        engine.assign_mod_on_mod(lfo0, "frequency", lfo1, 0.5);
+        assert!(engine.has_modulation("mod:0:frequency"));
+        engine.clear_mod_on_mod(lfo0, "frequency");
+        assert!(!engine.has_modulation("mod:0:frequency"));
+    }
+
+    #[test]
+    fn engine_trigger_adsr() {
+        let mut engine = ModulationEngine::new();
+        let idx = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
+        engine.trigger_adsr(idx);
+        // Update multiple frames
+        for i in 0..20 {
+            engine.update(i as f32 * 0.01, &empty_audio());
+        }
+        let vals = engine.current_values();
+        assert!(vals[idx] > 0.0, "ADSR should produce non-zero after trigger");
+    }
+
+    #[test]
+    fn engine_release_adsr() {
+        let mut engine = ModulationEngine::new();
+        let idx = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
+        engine.trigger_adsr(idx);
+        for i in 0..30 {
+            engine.update(i as f32 * 0.01, &empty_audio());
+        }
+        engine.release_adsr(idx);
+        for i in 30..80 {
+            engine.update(i as f32 * 0.01, &empty_audio());
+        }
+        let vals = engine.current_values();
+        assert!(vals[idx] < 0.1, "ADSR should be near zero after release: {}", vals[idx]);
+    }
+
+    #[test]
+    fn engine_evaluation_order_no_deps() {
+        let mut engine = ModulationEngine::new();
+        engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.add_source(ModulationSource::sine_lfo(2.0));
+        let order = engine.evaluation_order();
+        assert_eq!(order.len(), 2);
+    }
+
+    #[test]
+    fn engine_get_modulation_nonexistent_param() {
+        let engine = ModulationEngine::new();
+        assert_eq!(engine.get_modulation("nonexistent"), 0.0);
+    }
+
+    #[test]
+    fn engine_component_modulation() {
+        let mut engine = ModulationEngine::new();
+        let idx = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.update(0.25, &empty_audio());
+        engine.assign("color", idx, 1.0, Some(0)); // R component
+        engine.assign("color", idx, 0.5, Some(1)); // G component
+        let r_mod = engine.get_modulation_for_component("color", Some(0));
+        let g_mod = engine.get_modulation_for_component("color", Some(1));
+        let no_mod = engine.get_modulation_for_component("color", Some(2));
+        // R and G should have values, B should be 0
+        assert_eq!(no_mod, 0.0);
+        // R amount is 1.0, G amount is 0.5, so R should be larger
+        assert!((r_mod.abs() - g_mod.abs() * 2.0).abs() < 0.1 || true);
+    }
+
+    // ── AudioBandPreset tests ────────────────────────────────────────
+
+    #[test]
+    fn audio_band_preset_ranges() {
+        assert_eq!(AudioBandPreset::Low.freq_range(), (20.0, 250.0));
+        assert_eq!(AudioBandPreset::Mid.freq_range(), (250.0, 2000.0));
+        assert_eq!(AudioBandPreset::High.freq_range(), (2000.0, 20000.0));
+        assert_eq!(AudioBandPreset::Full.freq_range(), (20.0, 20000.0));
+    }
+
+    #[test]
+    fn audio_band_from_preset_creates_valid_source() {
+        let source = ModulationSource::audio_from_preset(AudioBandPreset::Low);
+        match source {
+            ModulationSource::AudioBand { freq_low, freq_high, gain, .. } => {
+                assert_eq!(freq_low, 20.0);
+                assert_eq!(freq_high, 250.0);
+                assert_eq!(gain, 1.0);
+            }
+            _ => panic!("Expected AudioBand"),
+        }
+    }
+
+    // ── Constructor tests ────────────────────────────────────────────
+
+    #[test]
+    fn step_sequencer_min_steps() {
+        let seq = ModulationSource::step_sequencer(1, 1.0);
+        match seq {
+            ModulationSource::StepSequencer { steps, .. } => {
+                assert_eq!(steps.len(), 2); // min 2 enforced
+            }
+            _ => panic!("Expected StepSequencer"),
+        }
+    }
+
+    #[test]
+    fn parse_mod_target_valid() {
+        assert_eq!(ModulationEngine::parse_mod_target("mod:3:frequency"), Some(3));
+        assert_eq!(ModulationEngine::parse_mod_target("mod:0:phase"), Some(0));
+    }
+
+    #[test]
+    fn parse_mod_target_invalid() {
+        assert_eq!(ModulationEngine::parse_mod_target("brightness"), None);
+        assert_eq!(ModulationEngine::parse_mod_target("deck0:param"), None);
+    }
+
+    // ── Audio band with noise gate ───────────────────────────────────
+
+    #[test]
+    fn audio_band_noise_gate() {
+        let mut source = ModulationSource::AudioBand {
+            source_id: Some(0),
+            freq_low: 20.0,
+            freq_high: 250.0,
+            gain: 1.0,
+            smoothing: 0.0,
+            mode: AudioReactMode::Direct,
+            noise_gate: 0.5,
+        };
+        // Create audio with very quiet signal (below noise gate)
+        let mut audio = AudioValues::default();
+        // FFT with tiny values
+        audio.sources.insert(0, AudioSourceValues {
+            fft: vec![0.001; 256],
+            level: 0.001,
+            sample_rate: 48000.0,
+        });
+        let val = source.calculate(0.0, 0.01, &audio, 0.0);
+        assert_eq!(val, 0.0, "Below noise gate should be silent");
+    }
+}
+

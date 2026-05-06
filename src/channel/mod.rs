@@ -824,3 +824,131 @@ impl Channel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── BlendMode tests ──────────────────────────────────────────────
+
+    #[test]
+    fn blend_mode_default_is_normal() {
+        assert_eq!(BlendMode::default(), BlendMode::Normal);
+    }
+
+    #[test]
+    fn blend_mode_all_variants_have_blend_state() {
+        // Verify to_blend_state doesn't panic for any variant
+        let modes = [
+            BlendMode::Normal, BlendMode::Add, BlendMode::Multiply,
+            BlendMode::Screen, BlendMode::Overlay, BlendMode::Difference,
+        ];
+        for mode in &modes {
+            let _ = mode.to_blend_state();
+        }
+    }
+
+    #[test]
+    fn blend_mode_debug() {
+        assert!(format!("{:?}", BlendMode::Add).contains("Add"));
+    }
+
+    // ── DurationSpec tests ───────────────────────────────────────────
+
+    #[test]
+    fn duration_spec_seconds() {
+        let d = DurationSpec::Seconds(5.0);
+        assert!((d.to_seconds(None) - 5.0).abs() < 1e-5);
+        assert!((d.to_seconds(Some(120.0)) - 5.0).abs() < 1e-5);
+        assert!((d.value() - 5.0).abs() < 1e-5);
+        assert!(!d.is_beats());
+    }
+
+    #[test]
+    fn duration_spec_beats_with_bpm() {
+        let d = DurationSpec::Beats(4.0);
+        // 4 beats at 120 BPM = 4 * 60/120 = 2 seconds
+        assert!((d.to_seconds(Some(120.0)) - 2.0).abs() < 1e-5);
+        assert!(d.is_beats());
+        assert!((d.value() - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn duration_spec_beats_no_bpm_defaults_120() {
+        let d = DurationSpec::Beats(4.0);
+        // Falls back to 120 BPM → 4 * 60/120 = 2.0
+        assert!((d.to_seconds(None) - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn duration_spec_beats_different_bpm() {
+        let d = DurationSpec::Beats(1.0);
+        // 1 beat at 60 BPM = 1 second
+        assert!((d.to_seconds(Some(60.0)) - 1.0).abs() < 1e-5);
+        // 1 beat at 180 BPM = 60/180 = 0.333s
+        assert!((d.to_seconds(Some(180.0)) - 0.333).abs() < 0.01);
+    }
+
+    // ── DeckAutoTransition tests ─────────────────────────────────────
+
+    #[test]
+    fn deck_auto_transition_defaults() {
+        let at = DeckAutoTransition::new();
+        assert!(!at.enabled);
+        assert_eq!(at.trigger, TransitionTrigger::Timer);
+        assert_eq!(at.phase, DeckTransitionPhase::Inactive);
+        assert!(at.transition_shader_name.is_none());
+    }
+
+    #[test]
+    fn deck_auto_transition_play_duration_is_beats() {
+        let at = DeckAutoTransition::new();
+        assert!(at.play_duration.is_beats());
+    }
+
+    #[test]
+    fn deck_auto_transition_transition_duration_is_seconds() {
+        let at = DeckAutoTransition::new();
+        assert!(!at.transition_duration.is_beats());
+    }
+
+    // ── DeckTransitionPhase tests ────────────────────────────────────
+
+    #[test]
+    fn deck_transition_phase_equality() {
+        assert_eq!(DeckTransitionPhase::Inactive, DeckTransitionPhase::Inactive);
+        assert_eq!(DeckTransitionPhase::Done, DeckTransitionPhase::Done);
+        assert_ne!(DeckTransitionPhase::Inactive, DeckTransitionPhase::Done);
+    }
+
+    #[test]
+    fn deck_transition_phase_playing() {
+        let phase = DeckTransitionPhase::Playing { elapsed: 1.5 };
+        match phase {
+            DeckTransitionPhase::Playing { elapsed } => {
+                assert!((elapsed - 1.5).abs() < 1e-5);
+            }
+            _ => panic!("Wrong phase"),
+        }
+    }
+
+    #[test]
+    fn deck_transition_phase_transitioning() {
+        let phase = DeckTransitionPhase::Transitioning { progress: 0.75 };
+        match phase {
+            DeckTransitionPhase::Transitioning { progress } => {
+                assert!((progress - 0.75).abs() < 1e-5);
+            }
+            _ => panic!("Wrong phase"),
+        }
+    }
+
+    // ── TransitionTrigger tests ──────────────────────────────────────
+
+    #[test]
+    fn transition_trigger_equality() {
+        assert_eq!(TransitionTrigger::Timer, TransitionTrigger::Timer);
+        assert_eq!(TransitionTrigger::ClipEnd, TransitionTrigger::ClipEnd);
+        assert_ne!(TransitionTrigger::Timer, TransitionTrigger::ClipEnd);
+    }
+}
