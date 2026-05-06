@@ -411,3 +411,92 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Smoke test: render_ui doesn't panic with the test fixture.
+    #[test]
+    fn render_ui_smoke_default_fixture() {
+        let data = UIData::test_fixture();
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            let _ = render_ui(ui.ctx(), &data);
+        });
+        // Running the harness processes a frame — if render_ui panics, this test fails.
+        let _ = harness;
+    }
+
+    /// Smoke test: render_ui with empty channels doesn't panic.
+    #[test]
+    fn render_ui_smoke_empty_channels() {
+        let mut data = UIData::test_fixture();
+        data.channels.clear();
+        data.channel_count = 0;
+        data.channel_names.clear();
+        data.selected_deck = None;
+        data.selected_channel = None;
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            let _ = render_ui(ui.ctx(), &data);
+        });
+        let _ = harness;
+    }
+
+    /// Smoke test: render_ui with library panel closed doesn't panic.
+    #[test]
+    fn render_ui_smoke_library_closed() {
+        let mut data = UIData::test_fixture();
+        data.library_panel_open = false;
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            let _ = render_ui(ui.ctx(), &data);
+        });
+        let _ = harness;
+    }
+
+    /// Smoke test: render_ui with stage editor open doesn't panic.
+    #[test]
+    fn render_ui_smoke_stage_editor_open() {
+        let mut data = UIData::test_fixture();
+        data.stage_editor_open = true;
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            let _ = render_ui(ui.ctx(), &data);
+        });
+        let _ = harness;
+    }
+
+    /// Smoke test: render_ui with master selected doesn't panic.
+    #[test]
+    fn render_ui_smoke_master_selected() {
+        let mut data = UIData::test_fixture();
+        data.selected_deck = None;
+        data.selected_master = true;
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            let _ = render_ui(ui.ctx(), &data);
+        });
+        let _ = harness;
+    }
+
+    /// Smoke test: render_ui with channel selected doesn't panic.
+    #[test]
+    fn render_ui_smoke_channel_selected() {
+        let mut data = UIData::test_fixture();
+        data.selected_deck = None;
+        data.selected_channel = Some(0);
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            let _ = render_ui(ui.ctx(), &data);
+        });
+        let _ = harness;
+    }
+
+    /// Smoke test: render_ui with MIDI learn active doesn't panic.
+    #[test]
+    fn render_ui_smoke_midi_learn() {
+        let mut data = UIData::test_fixture();
+        data.midi_learn_active = true;
+        data.midi_learn_target = Some("crossfader".to_string());
+        let harness = egui_kittest::Harness::new_ui(|ui| {
+            let _ = render_ui(ui.ctx(), &data);
+        });
+        let _ = harness;
+    }
+}

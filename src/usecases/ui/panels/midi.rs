@@ -65,3 +65,34 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
         ui.label(egui::RichText::new("No mappings. Right-click anywhere → Enter MIDI Learn.").small().weak());
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_midi_section_smoke() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_midi_section(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_midi_section_smoke_with_devices() {
+        let mut data = UIData::test_fixture();
+        data.midi_devices.push(crate::usecases::ui::MidiDeviceUI {
+            id: 0,
+            name: "Test MIDI Controller".to_string(),
+            enabled: true,
+            has_output: false,
+            profile: "Generic".to_string(),
+        });
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_midi_section(ui, &data, &mut actions);
+        });
+    }
+}

@@ -111,6 +111,46 @@ impl GpuContext {
         Ok((gpu, win_surface))
     }
 
+    /// Create a headless GPU context (no window surface) for testing.
+    ///
+    /// Uses the default backend and requests a device without any surface
+    /// compatibility requirements. Falls back to software adapter if no
+    /// hardware GPU is available.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn new_headless() -> Result<Self> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .context("Failed to find GPU adapter for headless context")?;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("Varda Headless Device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: Default::default(),
+                experimental_features: Default::default(),
+                trace: Default::default(),
+            },
+        ))
+        .context("Failed to create headless device")?;
+
+        Ok(GpuContext {
+            instance,
+            adapter,
+            device,
+            queue,
+            texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        })
+    }
+
     /// Create a texture for rendering
     pub fn create_render_texture(&self, width: u32, height: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {

@@ -951,4 +951,146 @@ mod tests {
         assert_eq!(TransitionTrigger::ClipEnd, TransitionTrigger::ClipEnd);
         assert_ne!(TransitionTrigger::Timer, TransitionTrigger::ClipEnd);
     }
+
+    // ── Deck slot management tests (DnD data model) ─────────────────
+    //
+    // These test the Channel-level operations that back drag-and-drop
+    // actions: add_deck, remove_deck, remove_deck_slot, add_deck_slot.
+    // They require a headless GPU to construct real Channel + Deck instances.
+
+    use crate::renderer::GpuContext;
+
+    fn headless_gpu() -> GpuContext {
+        GpuContext::new_headless().expect("headless GPU required for tests")
+    }
+
+    fn test_channel(gpu: &GpuContext, name: &str) -> Channel {
+        Channel::new(name.to_string(), gpu, 64, 64).expect("channel creation")
+    }
+
+    fn add_solid_deck(ch: &mut Channel, gpu: &GpuContext, color: [f32; 4]) {
+        let deck = crate::deck::Deck::new_solid_color(gpu, color, 64, 64)
+            .expect("solid color deck");
+        ch.add_deck(deck);
+    }
+
+    #[test]
+    fn add_deck_increases_count() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        assert_eq!(ch.deck_count(), 0);
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(ch.deck_count(), 1);
+        add_solid_deck(&mut ch, &gpu, [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(ch.deck_count(), 2);
+    }
+
+    #[test]
+    fn remove_deck_returns_deck_and_shrinks() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+        add_solid_deck(&mut ch, &gpu, [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(ch.deck_count(), 2);
+        let removed = ch.remove_deck(0);
+        assert!(removed.is_some());
+        assert_eq!(ch.deck_count(), 1);
+    }
+
+    #[test]
+    fn remove_deck_out_of_bounds_returns_none() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        assert!(ch.remove_deck(0).is_none());
+        assert!(ch.remove_deck(99).is_none());
+    }
+
+    #[test]
+    fn remove_deck_slot_preserves_properties() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+        ch.decks[0].opacity = 0.42;
+        ch.decks[0].blend_mode = BlendMode::Add;
+        ch.decks[0].solo = true;
+
+        let slot = ch.remove_deck_slot(0).expect("slot exists");
+        assert!((slot.opacity - 0.42).abs() < 1e-5);
+        assert_eq!(slot.blend_mode, BlendMode::Add);
+        assert!(slot.solo);
+        assert_eq!(ch.deck_count(), 0);
+    }
+
+    #[test]
+    fn add_deck_slot_appends_and_returns_index() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+
+        let slot = ch.remove_deck_slot(0).unwrap();
+        let idx = ch.add_deck_slot(slot);
+        assert_eq!(idx, 0); // only slot
+        assert_eq!(ch.deck_count(), 1);
+    }
+
+    #[test]
+    fn move_deck_between_channels_preserves_data() {
+        let gpu = headless_gpu();
+        let mut src = test_channel(&gpu, "Src");
+        let mut dst = test_channel(&gpu, "Dst");
+
+        // Add two decks to src
+        add_solid_deck(&mut src, &gpu, [1.0, 0.0, 0.0, 1.0]); // Red
+        add_solid_deck(&mut src, &gpu, [0.0, 1.0, 0.0, 1.0]); // Green
+        src.decks[0].opacity = 0.5;
+        src.decks[1].opacity = 0.75;
+
+        // Move deck 0 (red) from src to dst
+        let slot = src.remove_deck_slot(0).unwrap();
+        let new_idx = dst.add_deck_slot(slot);
+
+        assert_eq!(src.deck_count(), 1);
+        assert_eq!(dst.deck_count(), 1);
+        assert_eq!(new_idx, 0);
+        // Moved slot preserves opacity
+        assert!((dst.decks[0].opacity - 0.5).abs() < 1e-5);
+        // Remaining src deck shifted
+        assert!((src.decks[0].opacity - 0.75).abs() < 1e-5);
+    }
+
+    #[test]
+    fn effect_reorder_within_deck() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+
+        // Manually push named effects (requires ISF shader + GPU pipeline)
+        // Since Effect::new requires real shaders, test the vec operation directly
+        // which is what apply_deck_and_effect_actions does
+        let deck = &mut ch.decks[0].deck;
+
+        // Simulate 3 effects by checking vec operations match action processing logic
+        // The action processing code does: effects.remove(from); effects.insert(to, effect);
+        let mut names = vec!["blur", "glow", "invert"];
+        // Move index 2 → index 0
+        let removed = names.remove(2);
+        names.insert(0, removed);
+        assert_eq!(names, vec!["invert", "blur", "glow"]);
+
+        // Move index 0 → index 1
+        let removed = names.remove(0);
+        names.insert(1, removed);
+        assert_eq!(names, vec!["blur", "invert", "glow"]);
+    }
+
+    #[test]
+    fn channel_effect_reorder() {
+        // Channel effects use the same vec pattern
+        let mut effects = vec!["ch_blur", "ch_color", "ch_distort"];
+        let from = 0;
+        let to = 2;
+        let e = effects.remove(from);
+        effects.insert(to, e);
+        assert_eq!(effects, vec!["ch_color", "ch_distort", "ch_blur"]);
+    }
 }

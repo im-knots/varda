@@ -690,3 +690,45 @@ pub(super) fn render_deck_thumbnail(
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_central_panel_smoke() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_central_panel(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_central_panel_smoke_stage_editor() {
+        let mut data = UIData::test_fixture();
+        data.stage_editor_open = true;
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_central_panel(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_mixer_box_smoke() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_mixer_box(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_channel_column_smoke() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_channel_column(ui, &data.channels[0], &data, &mut actions);
+        });
+    }
+}

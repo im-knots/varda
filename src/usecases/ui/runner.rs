@@ -107,7 +107,7 @@ impl ApplicationHandler for UIRunner {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
-        if self.varda.is_none() { return; }
+        let Some(varda) = self.varda.as_mut() else { return; };
         if self.main_window_id == Some(window_id) {
             if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state) {
                 if egui_state.on_window_event(window, &event).consumed { return; }
@@ -115,23 +115,24 @@ impl ApplicationHandler for UIRunner {
             match event {
                 WindowEvent::CloseRequested => {
                     log::info!("Close requested, saving workspace and exiting...");
-                    self.varda.as_mut().unwrap().save_workspace(&self.layout);
+                    varda.save_workspace(&self.layout);
                     event_loop.exit();
                 }
                 WindowEvent::Resized(new_size) => {
-                    let device = &self.varda.as_ref().unwrap().gpu_context().device;
+                    let device = &varda.gpu_context().device;
                     if let Some(ws) = &mut self.window_surface {
                         ws.resize(device, new_size);
                     }
                 }
                 WindowEvent::RedrawRequested => {
+                    // Need to drop varda borrow before calling self.render()
+                    drop(varda);
                     self.render(event_loop);
                     if let Some(w) = self.window { w.request_redraw(); }
                 }
                 _ => {}
             }
         } else {
-            let varda = self.varda.as_mut().unwrap();
             match event {
                 WindowEvent::CloseRequested => {
                     if let Some(name) = varda.close_output_window_by_id(window_id) {
@@ -196,11 +197,9 @@ impl UIRunner {
 
     /// Main render loop — delegates all logic to VardaApp.
     fn render(&mut self, event_loop: &ActiveEventLoop) {
-        if self.varda.is_none() { return; }
-
         // 1. Frame timing + notifications + inputs
         {
-            let varda = self.varda.as_mut().unwrap();
+            let Some(varda) = self.varda.as_mut() else { return; };
             varda.update_frame_timing();
             varda.update_notifications();
             varda.process_commands();
@@ -214,14 +213,16 @@ impl UIRunner {
 
         // 3. Create pending output windows + refresh monitors
         {
-            let varda = self.varda.as_mut().unwrap();
+            let Some(varda) = self.varda.as_mut() else { return; };
             varda.create_pending_outputs(event_loop);
             varda.refresh_monitors(event_loop);
         }
 
         // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
-        let ui_data = self.varda.as_ref().unwrap()
+        let Some(varda_ref) = self.varda.as_ref() else { return; };
+        let ui_data = varda_ref
             .collect_ui_data(&self.layout, &self.deck_preview_textures, self.main_output_texture);
+        drop(varda_ref);
 
         // 5. Run egui frame
         let raw_input = {
@@ -243,8 +244,8 @@ impl UIRunner {
 
         // 6b. Engine actions (delegated to VardaApp)
         {
-            let varda = self.varda.as_mut().unwrap();
-            let egui_renderer = self.egui_renderer.as_mut().unwrap();
+            let Some(varda) = self.varda.as_mut() else { return; };
+            let Some(egui_renderer) = self.egui_renderer.as_mut() else { return; };
             let removed_ch = varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
             varda.apply_ui_actions(&ui_actions);
             varda.apply_output_actions(&ui_actions);
@@ -266,13 +267,18 @@ impl UIRunner {
         }
 
         // 7. GPU: render mixer + blit + egui overlay + present
-        self.varda.as_mut().unwrap().render_mixer_frame();
+        {
+            let Some(varda) = self.varda.as_mut() else { return; };
+            varda.render_mixer_frame();
+        }
         self.submit_frame(window, full_output.shapes, full_output.pixels_per_point, full_output.textures_delta);
 
         // 8. Render output windows + publish state
-        let varda = self.varda.as_mut().unwrap();
-        varda.render_output_windows();
-        varda.publish_state();
+        {
+            let Some(varda) = self.varda.as_mut() else { return; };
+            varda.render_output_windows();
+            varda.publish_state();
+        }
     }
 
     /// Blit mixer output to screen, overlay egui, and present.

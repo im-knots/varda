@@ -247,3 +247,27 @@ pub(super) fn render_sequence_step_editor(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_sequence_builder_smoke() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_sequence_builder(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_sequence_builder_smoke_empty() {
+        let mut data = UIData::test_fixture();
+        data.sequences.clear();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_sequence_builder(ui, &data, &mut actions);
+        });
+    }
+}

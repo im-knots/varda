@@ -585,3 +585,52 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
         });
     });
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_bottom_panel_smoke_deck_selected() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_bottom_panel(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_bottom_panel_smoke_channel_selected() {
+        let mut data = UIData::test_fixture();
+        data.selected_deck = None;
+        data.selected_channel = Some(0);
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_bottom_panel(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_bottom_panel_smoke_master_selected() {
+        let mut data = UIData::test_fixture();
+        data.selected_deck = None;
+        data.selected_master = true;
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_bottom_panel(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_bottom_panel_smoke_nothing_selected() {
+        let mut data = UIData::test_fixture();
+        data.selected_deck = None;
+        data.selected_channel = None;
+        data.selected_master = false;
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_bottom_panel(ui, &data, &mut actions);
+        });
+    }
+}

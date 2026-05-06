@@ -548,3 +548,30 @@ pub(super) fn render_mod_on_mod_dropdown(
             }
         });
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_modulation_section_smoke() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_modulation_section(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_modulation_section_smoke_empty() {
+        let mut data = UIData::test_fixture();
+        data.modulation_sources.clear();
+        data.modulation_current_values.clear();
+        data.modulation_assignments.clear();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_modulation_section(ui, &data, &mut actions);
+        });
+    }
+}

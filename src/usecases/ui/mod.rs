@@ -818,3 +818,196 @@ pub fn collect_params(params: &ShaderParams) -> Vec<ParamUIInfo> {
     }).collect()
 }
 
+
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl UIData {
+    /// Representative test fixture for UI testing.
+    ///
+    /// Contains 2 channels with 2 decks each, effects, modulation, crossfader
+    /// at 0.5, library panel open, deck (0,0) selected, and empty but present
+    /// collections for MIDI, audio, surfaces, and sequences.
+    pub fn test_fixture() -> Self {
+        use crate::modulation::LFOWaveform;
+
+        let deck_a0 = DeckUIInfo {
+            deck_idx: 0,
+            name: "test_generator_a".to_string(),
+            opacity: 1.0,
+            effective_opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            solo: false,
+            mute: false,
+            scaling_mode: Some(ScalingMode::Fit),
+            generator: ShaderParamsUI {
+                shader_name: "test_generator_a".to_string(),
+                params: vec![
+                    ParamUIInfo { name: "speed".to_string(), label: Some("Speed".to_string()), value: crate::params::ParamValue::Float(1.0), min: Some(0.0), max: Some(5.0) },
+                ],
+            },
+            effects: vec![
+                ("test_effect".to_string(), true, ShaderParamsUI {
+                    shader_name: "test_effect".to_string(),
+                    params: vec![
+                        ParamUIInfo { name: "amount".to_string(), label: Some("Amount".to_string()), value: crate::params::ParamValue::Float(0.5), min: Some(0.0), max: Some(1.0) },
+                    ],
+                }),
+            ],
+            video_playback: None,
+            auto_transition: None,
+        };
+
+        let deck_a1 = DeckUIInfo {
+            deck_idx: 1,
+            name: "test_generator_b".to_string(),
+            opacity: 0.8,
+            effective_opacity: 0.8,
+            blend_mode: BlendMode::Normal,
+            solo: false,
+            mute: false,
+            scaling_mode: Some(ScalingMode::Fit),
+            generator: ShaderParamsUI {
+                shader_name: "test_generator_b".to_string(),
+                params: vec![],
+            },
+            effects: vec![],
+            video_playback: None,
+            auto_transition: None,
+        };
+
+        let channel_a = ChannelUIInfo {
+            ch_idx: 0,
+            name: "Ch A".to_string(),
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            decks: vec![deck_a0, deck_a1],
+            effects: vec![
+                ("ch_effect".to_string(), true, ShaderParamsUI {
+                    shader_name: "ch_effect".to_string(),
+                    params: vec![],
+                }),
+            ],
+        };
+
+        let deck_b0 = DeckUIInfo {
+            deck_idx: 0,
+            name: "test_generator_c".to_string(),
+            opacity: 1.0,
+            effective_opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            solo: false,
+            mute: false,
+            scaling_mode: Some(ScalingMode::Fit),
+            generator: ShaderParamsUI {
+                shader_name: "test_generator_c".to_string(),
+                params: vec![],
+            },
+            effects: vec![],
+            video_playback: None,
+            auto_transition: None,
+        };
+
+        let deck_b1 = DeckUIInfo {
+            deck_idx: 1,
+            name: "test_generator_d".to_string(),
+            opacity: 1.0,
+            effective_opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            solo: false,
+            mute: false,
+            scaling_mode: Some(ScalingMode::Fit),
+            generator: ShaderParamsUI {
+                shader_name: "test_generator_d".to_string(),
+                params: vec![],
+            },
+            effects: vec![],
+            video_playback: None,
+            auto_transition: None,
+        };
+
+        let channel_b = ChannelUIInfo {
+            ch_idx: 1,
+            name: "Ch B".to_string(),
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            decks: vec![deck_b0, deck_b1],
+            effects: vec![],
+        };
+
+        UIData {
+            generators: vec![
+                ("test_generator_a".to_string(), 0),
+                ("test_generator_b".to_string(), 1),
+                ("test_generator_c".to_string(), 2),
+                ("test_generator_d".to_string(), 3),
+            ],
+            filters: vec![
+                ("test_effect".to_string(), 0),
+                ("ch_effect".to_string(), 1),
+                ("master_effect".to_string(), 2),
+            ],
+            shader_count: 7,
+            channels: vec![channel_a, channel_b],
+            master_effect_info: vec![
+                ("master_effect".to_string(), true, ShaderParamsUI {
+                    shader_name: "master_effect".to_string(),
+                    params: vec![],
+                }),
+            ],
+            modulation_sources: vec![
+                ModSourceUI::LFO {
+                    waveform: LFOWaveform::Sine,
+                    frequency: 1.0,
+                    phase: 0.0,
+                    amplitude: 1.0,
+                    bipolar: false,
+                },
+            ],
+            modulation_current_values: vec![0.5],
+            modulation_assignments: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("ch0_deck0:speed".to_string(), vec![ModAssignmentUI { source_idx: 0, amount: 0.5 }]);
+                m
+            },
+            audio: AudioUIData {
+                level: 0.0,
+                bass: 0.0,
+                mid: 0.0,
+                treble: 0.0,
+                bpm: None,
+                beat_phase: 0.0,
+                enabled: false,
+                devices: vec![],
+                fft: vec![0.0; 256],
+                sample_rate: 44100.0,
+            },
+            deck_preview_textures: std::collections::HashMap::new(),
+            main_output_texture: None,
+            notifications: vec![],
+            crossfader: 0.5,
+            auto_crossfade_active: false,
+            auto_crossfade_progress: 0.0,
+            midi_learn_active: false,
+            midi_learn_target: None,
+            transition_names: vec!["fade".to_string()],
+            active_transition_name: None,
+            selected_deck: Some((0, 0)),
+            selected_channel: None,
+            selected_master: false,
+            output_windows: vec![],
+            surfaces: vec![],
+            stage_editor_open: false,
+            library_panel_open: true,
+            stage_editor_grid_size: 0.05,
+            stage_editor_snap: true,
+            available_monitors: vec![],
+            midi_devices: vec![],
+            midi_mappings: vec![],
+            cameras: vec![],
+            sequences: vec![],
+            channel_count: 2,
+            channel_names: vec!["Ch A".to_string(), "Ch B".to_string()],
+            fps: 60.0,
+        }
+    }
+}

@@ -263,3 +263,34 @@ pub(super) fn render_warp_calibration(
     ui.memory_mut(|mem| mem.data.insert_temp(state_id, dragging));
 }
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_output_section_smoke() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_output_section(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_output_section_smoke_with_windows() {
+        let mut data = UIData::test_fixture();
+        data.output_windows.push(crate::usecases::ui::OutputWindowUI {
+            name: "Main".to_string(),
+            target_label: "Windowed".to_string(),
+            is_on_display: false,
+            surface_assignments: vec![],
+            calibration_mode: false,
+        });
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_output_section(ui, &data, &mut actions);
+        });
+    }
+}

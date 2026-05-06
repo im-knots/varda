@@ -123,3 +123,30 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 
     });
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_library_panel_smoke() {
+        let data = UIData::test_fixture();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_library_panel(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_library_panel_smoke_empty() {
+        let mut data = UIData::test_fixture();
+        data.generators.clear();
+        data.filters.clear();
+        data.cameras.clear();
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_library_panel(ui, &data, &mut actions);
+        });
+    }
+}

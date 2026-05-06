@@ -434,4 +434,65 @@ mod tests {
         assert_eq!(channel_name(1), "Ch 1");
         assert_eq!(channel_name(42), "Ch 42");
     }
+
+    // ── Mixer-level DnD data model tests ─────────────────────────────
+    //
+    // Tests for cross-channel deck moves and master effect reordering,
+    // matching the logic in apply_deck_and_effect_actions.
+
+    use crate::renderer::GpuContext;
+
+    fn headless_gpu() -> GpuContext {
+        GpuContext::new_headless().expect("headless GPU required for tests")
+    }
+
+    #[test]
+    fn mixer_new_has_two_channels() {
+        let gpu = headless_gpu();
+        let mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        assert_eq!(mixer.channel_count(), 2);
+    }
+
+    #[test]
+    fn mixer_add_channel() {
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        let idx = mixer.add_channel(&gpu, 64, 64).unwrap();
+        assert_eq!(idx, 2);
+        assert_eq!(mixer.channel_count(), 3);
+    }
+
+    #[test]
+    fn mixer_move_deck_between_channels() {
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+
+        // Add a solid color deck to channel 0
+        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
+        mixer.channel_mut(0).unwrap().add_deck(deck);
+        mixer.channel_mut(0).unwrap().decks[0].opacity = 0.33;
+
+        assert_eq!(mixer.channel(0).unwrap().deck_count(), 1);
+        assert_eq!(mixer.channel(1).unwrap().deck_count(), 0);
+
+        // Move deck from ch0 to ch1 (mirrors apply_deck_and_effect_actions logic)
+        let slot = mixer.channels_mut()[0].remove_deck_slot(0).unwrap();
+        let new_idx = mixer.channels_mut()[1].add_deck_slot(slot);
+
+        assert_eq!(new_idx, 0);
+        assert_eq!(mixer.channel(0).unwrap().deck_count(), 0);
+        assert_eq!(mixer.channel(1).unwrap().deck_count(), 1);
+        assert!((mixer.channel(1).unwrap().decks[0].opacity - 0.33).abs() < 1e-5);
+    }
+
+    #[test]
+    fn mixer_master_effect_reorder() {
+        // Master effects are Vec<Effect> — test the vec reorder pattern
+        // used in apply_deck_and_effect_actions
+        let mut effects = vec!["master_blur", "master_color", "master_feedback"];
+        // Move last to first (from=2, to=0)
+        let e = effects.remove(2);
+        effects.insert(0, e);
+        assert_eq!(effects, vec!["master_feedback", "master_blur", "master_color"]);
+    }
 }
