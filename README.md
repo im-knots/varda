@@ -47,7 +47,18 @@ brew install --cask libndi
 cargo run
 ```
 
-ISF shaders go in `shaders/`. The app scans these on startup.
+Varda treats the current working directory as a workspace. All state lives in a `.varda/` directory created automatically:
+
+```
+your-show/
+  .varda/
+    scene.json       # channels, decks, effects, modulation, crossfader, transition sequences
+    stage.json       # surface layout, outputs, warp calibration
+    midi.json        # MIDI controller mappings
+  shaders/           # ISF shaders (scanned on startup)
+```
+
+Run `cargo run` from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
 
 
 ## Abstractions you should know about
