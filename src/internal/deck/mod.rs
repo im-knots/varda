@@ -306,6 +306,13 @@ impl Deck {
         }
     }
 
+    /// Set the solid color value (only applies to SolidColor sources)
+    pub fn set_solid_color(&mut self, new_color: [f32; 4]) {
+        if let DeckSource::SolidColor { color } = &mut self.source {
+            *color = [new_color[0] as f64, new_color[1] as f64, new_color[2] as f64, new_color[3] as f64];
+        }
+    }
+
     /// Get the scaling mode (if applicable for this source type)
     pub fn scaling_mode(&self) -> Option<ScalingMode> {
         match &self.source {

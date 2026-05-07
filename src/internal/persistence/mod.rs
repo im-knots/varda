@@ -625,7 +625,7 @@ pub fn restore_scene(
 }
 
 /// Restore a single deck from config.
-fn restore_deck(
+pub(crate) fn restore_deck(
     config: &DeckConfig,
     context: &GpuContext,
     _registry: &crate::registry::ShaderRegistry,
@@ -715,7 +715,7 @@ fn restore_deck(
 /// Restore a single effect from config.
 /// `target_format` should be `Rgba8Unorm` for deck effects,
 /// or `context.texture_format` for channel/master effects.
-fn restore_effect(config: &EffectConfig, context: &GpuContext, target_format: wgpu::TextureFormat) -> Result<Effect> {
+pub(crate) fn restore_effect(config: &EffectConfig, context: &GpuContext, target_format: wgpu::TextureFormat) -> Result<Effect> {
     let shader = ISFShader::from_file(&config.path)
         .with_context(|| format!("Failed to load effect shader: {}", config.path))?;
     let mut effect = Effect::new_with_format(context, shader, target_format)?;
@@ -725,4 +725,90 @@ fn restore_effect(config: &EffectConfig, context: &GpuContext, target_format: wg
         effect.params.set(name, *value);
     }
     Ok(effect)
+}
+
+
+/// Check if a live deck's source matches a target SourceConfig (same type + same path/name).
+/// Used by diff-apply to decide whether a deck can be patched in place or must be rebuilt.
+pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
+    match (deck.source_type(), config) {
+        ("shader", SourceConfig::Shader { path, .. }) => deck.source_path() == Some(path.as_str()),
+        ("video", SourceConfig::Video { path }) => deck.source_path() == Some(path.as_str()),
+        ("image", SourceConfig::Image { path }) => deck.source_path() == Some(path.as_str()),
+        ("solid_color", SourceConfig::SolidColor { .. }) => true,
+        ("camera", SourceConfig::Camera { name }) => {
+            deck.source_name().trim_start_matches("📹 ") == name
+        }
+        ("ndi", SourceConfig::Ndi { name }) => {
+            deck.source_name().trim_start_matches("📡 ") == name
+        }
+        ("syphon", SourceConfig::Syphon { name }) => {
+            deck.source_name().trim_start_matches("🔗 ") == name
+        }
+        ("srt", SourceConfig::Srt { url, .. }) => {
+            deck.source_name().trim_start_matches("📺 ") == url
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::GpuContext;
+    use std::collections::HashMap;
+
+    fn headless_gpu() -> GpuContext {
+        GpuContext::new_headless().expect("headless GPU required for tests")
+    }
+
+    #[test]
+    fn source_configs_match_solid_color() {
+        let gpu = headless_gpu();
+        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
+        // Any solid color config matches a solid color deck
+        assert!(source_configs_match(&deck, &SourceConfig::SolidColor { color: [0.0, 1.0, 0.0, 1.0] }));
+        // But not other types
+        assert!(!source_configs_match(&deck, &SourceConfig::Video { path: "test.mp4".into() }));
+        assert!(!source_configs_match(&deck, &SourceConfig::Shader { path: "test.fs".into(), params: HashMap::new() }));
+    }
+
+    #[test]
+    fn source_configs_match_type_mismatch() {
+        let gpu = headless_gpu();
+        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
+        assert!(!source_configs_match(&deck, &SourceConfig::Image { path: "test.png".into() }));
+        assert!(!source_configs_match(&deck, &SourceConfig::Camera { name: "cam".into() }));
+        assert!(!source_configs_match(&deck, &SourceConfig::Ndi { name: "src".into() }));
+    }
+
+    #[test]
+    fn snapshot_and_match_solid_color_roundtrip() {
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        // Clear default channels and add one with a solid color deck
+        mixer.channels_mut().clear();
+        let mut ch = crate::channel::Channel::new("Ch 0".into(), &gpu, 64, 64).unwrap();
+        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.5, 0.0, 1.0], 64, 64).unwrap();
+        ch.add_deck(deck);
+        mixer.channels_mut().push(ch);
+
+        // Snapshot and verify source match
+        let config = snapshot_scene(&mixer, 64, 64);
+        let deck_ref = &mixer.channels()[0].decks[0].deck;
+        assert!(source_configs_match(deck_ref, &config.channels[0].decks[0].source));
+    }
+
+    #[test]
+    fn restore_effect_pub_crate_accessible() {
+        // Just verify the function signature is accessible at pub(crate) level
+        let gpu = headless_gpu();
+        let cfg = EffectConfig {
+            path: "nonexistent.fs".into(),
+            enabled: true,
+            params: HashMap::new(),
+        };
+        // Should fail (file doesn't exist) but shouldn't be a compile error
+        assert!(restore_effect(&cfg, &gpu, wgpu::TextureFormat::Rgba8Unorm).is_err());
+    }
 }

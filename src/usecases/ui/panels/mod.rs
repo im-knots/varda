@@ -81,6 +81,16 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
         .exact_height(28.0)
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
+                ui.add_enabled_ui(data.can_undo, |ui| {
+                    if ui.button("↩ Undo").on_hover_text("Undo (⌘Z)").clicked() {
+                        actions.undo_requested = true;
+                    }
+                });
+                ui.add_enabled_ui(data.can_redo, |ui| {
+                    if ui.button("↪ Redo").on_hover_text("Redo (⌘⇧Z)").clicked() {
+                        actions.redo_requested = true;
+                    }
+                });
                 if ui.button("💾 Save").on_hover_text("Save workspace (⌘S)").clicked() {
                     actions.save_requested = true;
                 }
@@ -210,6 +220,12 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
     handle_midi_learn_popup(ctx, data, &mut actions);
 
     // === KEYBOARD SHORTCUTS (global) ===
+    if ctx.input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z)) {
+        actions.undo_requested = true;
+    }
+    if ctx.input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Z)) {
+        actions.redo_requested = true;
+    }
     if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
         actions.save_requested = true;
     }

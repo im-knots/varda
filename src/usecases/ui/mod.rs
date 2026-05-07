@@ -451,6 +451,10 @@ pub struct UIData {
     pub render_width: u32,
     /// Current master render height
     pub render_height: u32,
+    /// Whether undo is available
+    pub can_undo: bool,
+    /// Whether redo is available
+    pub can_redo: bool,
 }
 
 /// Read-only snapshot of a single transition sequence
@@ -752,6 +756,10 @@ pub struct UIActions {
     pub manual_bpm: Option<f32>,
     /// Resolution change request: (width, height)
     pub resolution_change: Option<(u32, u32)>,
+    /// Undo last undoable action
+    pub undo_requested: bool,
+    /// Redo last undone action
+    pub redo_requested: bool,
 }
 
 /// Action for controlling video deck playback
@@ -899,7 +907,45 @@ impl UIActions {
             clock_preference: None,
             manual_bpm: None,
             resolution_change: None,
+            undo_requested: false,
+            redo_requested: false,
         }
+    }
+
+    /// Whether this frame's actions include any undoable mutation.
+    pub fn has_undoable_action(&self) -> bool {
+        self.shader_to_add.is_some()
+            || self.image_to_add.is_some()
+            || self.video_to_add.is_some()
+            || self.solid_color_to_add.is_some()
+            || self.deck_to_remove.is_some()
+            || !self.deck_updates.is_empty()
+            || !self.scaling_mode_updates.is_empty()
+            || !self.param_updates.is_empty()
+            || !self.modulation_actions.is_empty()
+            || self.effect_to_add.is_some()
+            || self.effect_to_remove.is_some()
+            || self.effect_to_toggle.is_some()
+            || self.ch_effect_to_add.is_some()
+            || self.ch_effect_to_remove.is_some()
+            || self.ch_effect_to_toggle.is_some()
+            || self.master_effect_to_add.is_some()
+            || self.master_effect_to_remove.is_some()
+            || self.master_effect_to_toggle.is_some()
+            || self.add_channel
+            || self.remove_channel.is_some()
+            || self.deck_to_move.is_some()
+            || self.effect_to_move.is_some()
+            || self.ch_effect_to_move.is_some()
+            || self.master_effect_to_move.is_some()
+            || self.set_transition.is_some()
+            || !self.channel_updates.is_empty()
+            || self.camera_to_add.is_some()
+            || self.ndi_to_add.is_some()
+            || self.syphon_to_add.is_some()
+            || self.srt_to_add.is_some()
+            || !self.auto_transition_actions.is_empty()
+            || !self.sequence_actions.is_empty()
     }
 }
 
@@ -1167,6 +1213,8 @@ impl UIData {
             clock_manual_bpm: None,
             render_width: 1920,
             render_height: 1080,
+            can_undo: false,
+            can_redo: false,
         }
     }
 }

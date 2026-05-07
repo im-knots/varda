@@ -5,6 +5,7 @@
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
 use crate::app::VardaApp;
+use crate::app::history::HistoryManager;
 use crate::app::render::{FileDialogKind, FileDialogResult};
 use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::{GpuContext, WindowSurface};
@@ -38,6 +39,9 @@ pub struct UIRunner {
 
     // ── Engine (created after GPU init in resumed()) ─────────────────
     varda: Option<VardaApp>,
+
+    // ── Undo/redo history ─────────────────────────────────────────────
+    history: HistoryManager,
 }
 
 impl UIRunner {
@@ -57,6 +61,7 @@ impl UIRunner {
             file_dialog_tx,
             file_dialog_rx,
             varda: None,
+            history: HistoryManager::new(),
         }
     }
 
@@ -114,6 +119,7 @@ impl ApplicationHandler for UIRunner {
         if let Some(loaded_layout) = varda.load_workspace() {
             self.layout = loaded_layout;
         }
+        self.history.clear();
 
         self.varda = Some(varda);
 
@@ -233,8 +239,10 @@ impl UIRunner {
 
         // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
         let Some(varda_ref) = self.varda.as_ref() else { return; };
-        let ui_data = varda_ref
+        let mut ui_data = varda_ref
             .collect_ui_data(&self.layout, &self.deck_preview_textures, self.main_output_texture);
+        ui_data.can_undo = self.history.can_undo();
+        ui_data.can_redo = self.history.can_redo();
 
         // 5. Run egui frame
         let raw_input = {
@@ -258,7 +266,61 @@ impl UIRunner {
         {
             let Some(varda) = self.varda.as_mut() else { return; };
             let Some(egui_renderer) = self.egui_renderer.as_mut() else { return; };
+
+            // ── Undo/redo: snapshot before undoable mutations ──
+            if ui_actions.has_undoable_action() {
+                let snapshot = crate::persistence::snapshot_scene(
+                    varda.mixer_ref(), varda.render_width(), varda.render_height(),
+                );
+                self.history.push(snapshot);
+            }
+
             let removed_ch = varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
+
+            // ── Undo/redo: diff-apply from history ──
+            if ui_actions.undo_requested || ui_actions.redo_requested {
+                let current = crate::persistence::snapshot_scene(
+                    varda.mixer_ref(), varda.render_width(), varda.render_height(),
+                );
+                let target = if ui_actions.undo_requested {
+                    self.history.undo(current)
+                } else {
+                    self.history.redo(current)
+                };
+                if let Some(config) = target {
+                    let rw = varda.render_width();
+                    let rh = varda.render_height();
+                    let (warnings, structural_changed) = varda.apply_scene_diff(&config, rw, rh);
+                    for w in &warnings {
+                        log::warn!("Undo/redo restore warning: {}", w);
+                    }
+                    let label = if ui_actions.undo_requested { "↩ Undo" } else { "↪ Redo" };
+                    varda.notify_info(label);
+
+                    if structural_changed {
+                        // Structural change: re-register all deck preview textures
+                        self.deck_preview_textures.clear();
+                        let context = varda.gpu_context();
+                        let mixer = varda.mixer_ref();
+                        for (ch_idx, ch) in mixer.channels().iter().enumerate() {
+                            for (deck_idx, slot) in ch.decks.iter().enumerate() {
+                                let tex_id = egui_renderer.register_native_texture(
+                                    &context.device, &slot.deck.texture_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                self.deck_preview_textures.insert((ch_idx, deck_idx), tex_id);
+                            }
+                        }
+                        if let Some(main_id) = self.main_output_texture {
+                            egui_renderer.update_egui_texture_from_wgpu_texture(
+                                &context.device, &varda.mixer_ref().composite_view(),
+                                wgpu::FilterMode::Linear, main_id,
+                            );
+                        }
+                    }
+                }
+            }
+
             varda.apply_ui_actions(&ui_actions);
             varda.apply_output_actions(&ui_actions);
             varda.apply_surface_actions(&ui_actions, self.layout.stage_editor_grid_size);

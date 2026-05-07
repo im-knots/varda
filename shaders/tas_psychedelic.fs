@@ -549,8 +549,48 @@ vec4 bodyPatterns(vec2 uv, float body, float time, float seed) {
 }
 
 // ============================================================
+// Parametric snake path — bounded Lissajous-like curves
+// Returns position at time t for a given snake seed
+// ============================================================
+vec2 snakePath(float t, float seed) {
+    // 3 layers of sine/cosine at incommensurate frequencies
+    // Amplitudes keep the snake within ~(-0.65, 0.65) on each axis
+    float ax1 = 0.25 + hash(seed + 10.0) * 0.15;
+    float ax2 = 0.12 + hash(seed + 20.0) * 0.10;
+    float ax3 = 0.06 + hash(seed + 30.0) * 0.06;
+    float ay1 = 0.20 + hash(seed + 40.0) * 0.15;
+    float ay2 = 0.10 + hash(seed + 55.0) * 0.10;
+    float ay3 = 0.05 + hash(seed + 65.0) * 0.06;
+
+    // Frequencies — use irrational-ish ratios so paths don't repeat quickly
+    float wx1 = 0.7  + hash(seed + 70.0) * 0.5;
+    float wx2 = 1.3  + hash(seed + 80.0) * 0.6;
+    float wx3 = 2.1  + hash(seed + 90.0) * 0.8;
+    float wy1 = 0.5  + hash(seed + 110.0) * 0.5;
+    float wy2 = 1.1  + hash(seed + 120.0) * 0.6;
+    float wy3 = 1.9  + hash(seed + 130.0) * 0.8;
+
+    // Phase offsets
+    float px1 = hash(seed + 200.0) * TAU;
+    float px2 = hash(seed + 210.0) * TAU;
+    float px3 = hash(seed + 220.0) * TAU;
+    float py1 = hash(seed + 230.0) * TAU;
+    float py2 = hash(seed + 240.0) * TAU;
+    float py3 = hash(seed + 250.0) * TAU;
+
+    float x = ax1 * sin(wx1 * t + px1)
+            + ax2 * sin(wx2 * t + px2)
+            + ax3 * sin(wx3 * t + px3);
+    float y = ay1 * cos(wy1 * t + py1)
+            + ay2 * cos(wy2 * t + py2)
+            + ay3 * cos(wy3 * t + py3);
+
+    return vec2(x, y);
+}
+
+// ============================================================
 // Single snake — returns premultiplied RGBA
-// Uses noise-steered curving spine for organic movement
+// Uses parametric path for smooth on-screen movement
 // ============================================================
 vec4 drawSnake(vec2 p, float time, int i) {
     float fi   = float(i);
@@ -559,68 +599,46 @@ vec4 drawSnake(vec2 p, float time, int i) {
     // Snake parameters — randomized per snake
     float snakeLen = snake_length * (0.7 + hash(seed + 150.0) * 0.6);
     float freq1    = 4.0 + hash(seed + 100.0) * 3.0;
-    float amp1     = 0.05 + hash(seed + 300.0) * 0.07;
+    float amp1     = 0.03 + hash(seed + 300.0) * 0.04;
     float phase    = hash(seed + 400.0) * TAU;
-    float speed    = 0.3 + hash(seed + 500.0) * 0.4;
+    float speed    = 0.8 + hash(seed + 500.0) * 0.8;
 
-    // === RANDOMIZED STARTING POSITION & DIRECTION ===
-    float baseAngle = hash(seed + 800.0) * TAU;
-    float startX = (hash(seed + 50.0) - 0.5) * 2.4;
-    float startY = (hash(seed + 60.0) - 0.5) * 2.4;
+    // Time step between spine samples — controls how much path history the body covers
+    float bodyTimeSpan = snakeLen / (speed * 0.6 + 0.3);
 
-    // Crawl speed along spine
-    float crawl = time * speed * 0.3;
-
-    // === BUILD CURVED SPINE via noise-steered integration ===
-    // We sample N points along the spine; at each step, noise steers the heading.
+    // === BUILD SPINE by sampling parametric path at past times ===
     const int SPINE_N = 25;
-    float stepLen = snakeLen / float(SPINE_N);
-
-    // Tail position drifts with time (wraps in a large region)
-    float wrapSize = 3.0 + snakeLen;
-    vec2 tailPos = vec2(
-        mod(startX + cos(baseAngle) * crawl + wrapSize, wrapSize * 2.0) - wrapSize,
-        mod(startY + sin(baseAngle) * crawl + wrapSize, wrapSize * 2.0) - wrapSize
-    );
-
-    // March along spine, steering with noise
-    float heading = baseAngle + noise(vec2(seed, time * 0.15)) * TAU * 0.3;
+    float dt = bodyTimeSpan / float(SPINE_N);
 
     // Find closest spine point to pixel
     float minDist = 1e6;
     float bestT = 0.0;        // normalized 0..1 along body
     float bestSigned = 0.0;   // signed perpendicular distance
     vec2 bestTangent = vec2(1.0, 0.0);
-    vec2 prevPt = tailPos;
-    vec2 headPos = tailPos;
-    float headAngle = heading;
+
+    // Head is at current time, tail is in the past
+    float headTime = time * speed;
+
+    vec2 prevPt = snakePath(headTime - float(SPINE_N) * dt, seed);
+    vec2 headPos = prevPt;
+    float headAngle = 0.0;
 
     for (int s = 0; s <= SPINE_N; s++) {
-        float t = float(s) / float(SPINE_N);
+        float t = float(s) / float(SPINE_N); // 0=tail, 1=head
 
-        // Current spine point
-        vec2 curPt;
-        if (s == 0) {
-            curPt = tailPos;
-        } else {
-            // Steer heading with layered noise for organic curves
-            float nSample = noise(vec2(seed * 0.37 + t * 3.0, time * 0.2 + seed * 0.1));
-            float steer = (nSample - 0.5) * 2.5; // steering intensity
-            heading += steer * stepLen * 3.0;
+        // Sample path at this time (tail=oldest, head=newest)
+        float sampleTime = headTime - float(SPINE_N - s) * dt;
+        vec2 curPt = snakePath(sampleTime, seed);
 
-            // Sine undulation on top of noise steering
+        // Add sine undulation perpendicular to path for slithering feel
+        if (s > 0 && s < SPINE_N) {
+            vec2 tangent = normalize(curPt - prevPt);
+            vec2 perp = vec2(-tangent.y, tangent.x);
             float wave = sin(t * snakeLen * freq1 + time * speed + phase) * amp1;
-            float perpAngle = heading + PI * 0.5;
-
-            curPt = prevPt + vec2(cos(heading), sin(heading)) * stepLen
-                           + vec2(cos(perpAngle), sin(perpAngle)) * wave * stepLen;
+            curPt += perp * wave;
         }
 
-        // Tangent direction (from previous to current)
-        vec2 tangent = (s == 0) ? vec2(cos(heading), sin(heading)) : normalize(curPt - prevPt);
-
-        // Distance from pixel to this spine point
-        // For segments between points, project onto the segment
+        // Distance from pixel to this spine segment
         if (s > 0) {
             vec2 seg = curPt - prevPt;
             float segLen = length(seg);
@@ -634,7 +652,6 @@ vec4 drawSnake(vec2 p, float time, int i) {
                 minDist = d;
                 bestT = (float(s - 1) + proj / max(segLen, 0.0001)) / float(SPINE_N);
                 bestTangent = segDir;
-                // Signed distance (positive = left of travel direction)
                 vec2 norm = vec2(-segDir.y, segDir.x);
                 bestSigned = dot(p - closest, norm);
             }
@@ -642,6 +659,7 @@ vec4 drawSnake(vec2 p, float time, int i) {
 
         if (s == SPINE_N) {
             headPos = curPt;
+            vec2 tangent = normalize(curPt - prevPt);
             headAngle = atan(tangent.y, tangent.x);
         }
 

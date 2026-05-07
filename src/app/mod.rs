@@ -7,6 +7,7 @@
 
 mod actions;
 mod engine_impl;
+pub(crate) mod history;
 mod inputs;
 mod outputs;
 pub(crate) mod render;

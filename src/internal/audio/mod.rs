@@ -14,14 +14,24 @@ pub type AudioSourceId = u32;
 
 /// Audio buffer size (samples per channel) — 256 @ 48kHz ≈ 5.3ms latency
 pub const AUDIO_BUFFER_SIZE: usize = 256;
-/// FFT size — must be >= AUDIO_BUFFER_SIZE, zero-padded if larger for resolution
-pub const FFT_SIZE: usize = 512;
-/// Number of beat intervals to average for BPM calculation
-const BPM_HISTORY_SIZE: usize = 8;
+/// FFT size — 2048 @ 48kHz = 23Hz/bin resolution for clean bass separation
+pub const FFT_SIZE: usize = 2048;
+/// Hop size for overlapping analysis frames
+const FFT_HOP: usize = AUDIO_BUFFER_SIZE;
+/// Number of beat intervals to keep for BPM calculation
+const BPM_HISTORY_SIZE: usize = 16;
 /// Minimum time between beats (in seconds) to avoid double-triggering
-const MIN_BEAT_INTERVAL: f32 = 0.2;  // Max ~300 BPM
+const MIN_BEAT_INTERVAL: f32 = 0.2; // Max ~300 BPM
 /// Maximum time between beats before we reset BPM tracking
-const MAX_BEAT_INTERVAL: f32 = 2.0;  // Min ~30 BPM
+const MAX_BEAT_INTERVAL: f32 = 2.0; // Min ~30 BPM
+/// Window size for adaptive onset threshold (median of recent spectral flux)
+const ONSET_MEDIAN_WINDOW: usize = 8;
+/// Spectral flux must exceed median * this multiplier + offset to trigger onset
+const ONSET_THRESHOLD_MULTIPLIER: f32 = 1.5;
+/// Minimum spectral flux to trigger onset (prevents triggers in silence)
+const ONSET_THRESHOLD_OFFSET: f32 = 0.01;
+/// Reject beat intervals that deviate >15% from median
+const TEMPO_TOLERANCE: f32 = 0.15;
 
 /// Information about a detected audio input device.
 #[derive(Debug, Clone)]
@@ -61,9 +71,10 @@ impl Default for AudioData {
 }
 
 impl AudioData {
-    /// Hz width of each FFT bin
+    /// Hz width of each FFT bin (derived from actual FFT data length)
     fn bin_width(&self) -> f32 {
-        self.sample_rate / FFT_SIZE as f32
+        let fft_size = self.fft.len() * 2;
+        self.sample_rate / fft_size as f32
     }
 
     /// Get energy in an arbitrary frequency range (Hz).
@@ -259,13 +270,27 @@ impl AudioManager {
         f32: cpal::FromSample<T>,
     {
         let channels = config.channels as usize;
-        let mut buffer: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
+        let mut sample_buffer: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
         let mut fft_planner = FftPlanner::new();
         let fft = Arc::new(fft_planner.plan_fft_forward(FFT_SIZE));
-        let buf_size = AUDIO_BUFFER_SIZE;
+
+        // Pre-compute Hann window to reduce spectral leakage
+        let hann_window: Vec<f32> = (0..FFT_SIZE)
+            .map(|i| {
+                0.5 * (1.0
+                    - (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
+            })
+            .collect();
+
+        // Ring buffer for overlapping FFT frames
+        let mut ring_buffer: Vec<f32> = vec![0.0; FFT_SIZE];
+        let mut ring_write_pos: usize = 0;
+
+        // Spectral flux onset detection state
+        let mut prev_fft_magnitudes: Vec<f32> = vec![0.0; FFT_SIZE / 2];
+        let mut flux_history: Vec<f32> = Vec::with_capacity(ONSET_MEDIAN_WINDOW + 1);
 
         // BPM detection state
-        let mut bass_history: Vec<f32> = vec![0.0; 8];
         let mut last_beat_time = Instant::now();
         let mut beat_intervals: Vec<f32> = Vec::with_capacity(BPM_HISTORY_SIZE);
         let mut current_bpm: Option<f32> = None;
@@ -277,54 +302,96 @@ impl AudioManager {
                     let sample: f32 = chunk.iter()
                         .map(|s| <f32 as Sample>::from_sample(*s))
                         .sum::<f32>() / channels as f32;
-                    buffer.push(sample);
+                    sample_buffer.push(sample);
                 }
 
-                if buffer.len() >= buf_size {
-                    let waveform: Vec<f32> = buffer.drain(..AUDIO_BUFFER_SIZE).collect();
-                    let level = (waveform.iter().map(|s| s * s).sum::<f32>() / AUDIO_BUFFER_SIZE as f32).sqrt();
+                while sample_buffer.len() >= FFT_HOP {
+                    // Extract waveform chunk for GPU (256 samples)
+                    let waveform: Vec<f32> =
+                        sample_buffer.drain(..FFT_HOP).collect();
+                    let level = (waveform.iter().map(|s| s * s).sum::<f32>()
+                        / FFT_HOP as f32)
+                        .sqrt();
 
-                    let mut fft_buffer: Vec<Complex<f32>> = waveform.iter()
-                        .map(|&s| Complex::new(s, 0.0))
-                        .collect();
-                    fft_buffer.resize(FFT_SIZE, Complex::new(0.0, 0.0));
-                    fft.process(&mut fft_buffer);
+                    // Write hop into ring buffer (wrapping)
+                    for (i, &s) in waveform.iter().enumerate() {
+                        ring_buffer[(ring_write_pos + i) % FFT_SIZE] = s;
+                    }
+                    ring_write_pos = (ring_write_pos + FFT_HOP) % FFT_SIZE;
 
-                    // Absolute magnitude scaling: divide by FFT_SIZE for correct amplitude,
-                    // then apply a noise floor so silence reads as zero.
+                    // Extract linearized 2048-sample frame, apply Hann window
+                    let mut fft_input: Vec<Complex<f32>> = Vec::with_capacity(FFT_SIZE);
+                    for i in 0..FFT_SIZE {
+                        let idx = (ring_write_pos + i) % FFT_SIZE;
+                        fft_input.push(Complex::new(
+                            ring_buffer[idx] * hann_window[i],
+                            0.0,
+                        ));
+                    }
+                    fft.process(&mut fft_input);
+
+                    // Magnitude scaling with noise floor
                     const NOISE_FLOOR: f32 = 1e-4;
-                    let scale = 2.0 / FFT_SIZE as f32; // 2x because we only keep positive half
-                    let fft_magnitudes: Vec<f32> = fft_buffer[..FFT_SIZE/2].iter()
+                    let scale = 2.0 / FFT_SIZE as f32;
+                    let fft_magnitudes: Vec<f32> = fft_input[..FFT_SIZE / 2]
+                        .iter()
                         .map(|c: &Complex<f32>| {
                             let mag = c.norm() * scale;
                             if mag < NOISE_FLOOR { 0.0 } else { mag }
                         })
                         .collect();
 
-                    // BPM detection
-                    let bass_energy = if fft_magnitudes.len() >= 3 {
-                        (fft_magnitudes[0] + fft_magnitudes[1] + fft_magnitudes[2]) / 3.0
-                    } else { 0.0 };
+                    // Spectral flux onset detection
+                    let spectral_flux: f32 = fft_magnitudes
+                        .iter()
+                        .zip(prev_fft_magnitudes.iter())
+                        .map(|(curr, prev)| (curr - prev).max(0.0))
+                        .sum();
 
-                    bass_history.remove(0);
-                    bass_history.push(bass_energy);
-                    let avg_bass: f32 = bass_history.iter().sum::<f32>() / bass_history.len() as f32;
-                    let beat_threshold = avg_bass * 1.4 + 0.05;
+                    flux_history.push(spectral_flux);
+                    if flux_history.len() > ONSET_MEDIAN_WINDOW {
+                        flux_history.remove(0);
+                    }
+                    let onset_threshold = {
+                        let mut sorted = flux_history.clone();
+                        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                        sorted[sorted.len() / 2] * ONSET_THRESHOLD_MULTIPLIER
+                            + ONSET_THRESHOLD_OFFSET
+                    };
+
                     let now = Instant::now();
                     let elapsed = now.duration_since(last_beat_time).as_secs_f32();
+                    let is_onset =
+                        spectral_flux > onset_threshold && elapsed > MIN_BEAT_INTERVAL;
+                    prev_fft_magnitudes.clone_from(&fft_magnitudes);
 
-                    if bass_energy > beat_threshold && elapsed > MIN_BEAT_INTERVAL {
+                    // BPM estimation with outlier rejection
+                    if is_onset {
                         if elapsed < MAX_BEAT_INTERVAL {
                             beat_intervals.push(elapsed);
                             if beat_intervals.len() > BPM_HISTORY_SIZE {
                                 beat_intervals.remove(0);
                             }
-                            if beat_intervals.len() >= 2 {
-                                let avg_interval: f32 = beat_intervals.iter().sum::<f32>()
-                                    / beat_intervals.len() as f32;
-                                let bpm = 60.0 / avg_interval;
-                                if (30.0..=300.0).contains(&bpm) {
-                                    current_bpm = Some(bpm);
+                            if beat_intervals.len() >= 4 {
+                                let mut sorted = beat_intervals.clone();
+                                sorted
+                                    .sort_by(|a, b| a.partial_cmp(b).unwrap());
+                                let median = sorted[sorted.len() / 2];
+                                let stable: Vec<f32> = beat_intervals
+                                    .iter()
+                                    .filter(|&&iv| {
+                                        (iv - median).abs() / median
+                                            < TEMPO_TOLERANCE
+                                    })
+                                    .copied()
+                                    .collect();
+                                if stable.len() >= 2 {
+                                    let avg = stable.iter().sum::<f32>()
+                                        / stable.len() as f32;
+                                    let bpm = 60.0 / avg;
+                                    if (30.0..=300.0).contains(&bpm) {
+                                        current_bpm = Some(bpm);
+                                    }
                                 }
                             }
                         } else {
@@ -334,7 +401,8 @@ impl AudioManager {
                         last_beat_time = now;
                     }
 
-                    let time_since_beat = now.duration_since(last_beat_time).as_secs_f32();
+                    let time_since_beat =
+                        now.duration_since(last_beat_time).as_secs_f32();
 
                     let data = AudioData {
                         waveform,
@@ -458,3 +526,191 @@ impl AudioTextures {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hann_window_shape() {
+        let window: Vec<f32> = (0..FFT_SIZE)
+            .map(|i| {
+                0.5 * (1.0
+                    - (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
+            })
+            .collect();
+        // Endpoints should be ~0
+        assert!(window[0].abs() < 1e-6, "Hann window start should be ~0");
+        assert!(
+            window[FFT_SIZE - 1].abs() < 1e-6,
+            "Hann window end should be ~0"
+        );
+        // Middle should be ~1
+        let mid = window[FFT_SIZE / 2];
+        assert!(
+            (mid - 1.0).abs() < 0.01,
+            "Hann window midpoint should be ~1.0, got {}",
+            mid
+        );
+        // Should be symmetric
+        for i in 0..FFT_SIZE / 2 {
+            assert!(
+                (window[i] - window[FFT_SIZE - 1 - i]).abs() < 1e-6,
+                "Hann window should be symmetric at index {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn bin_resolution_at_48khz() {
+        let data = AudioData {
+            fft: vec![0.0; FFT_SIZE / 2],
+            sample_rate: 48000.0,
+            ..AudioData::default()
+        };
+        let bw = data.bin_width();
+        // 48000 / 2048 = 23.4375 Hz/bin
+        assert!(
+            (bw - 23.4375).abs() < 0.01,
+            "Bin width should be ~23.4Hz, got {}",
+            bw
+        );
+        // Bass range (20-250Hz) should span ~10 bins
+        let bass_bins = (250.0 / bw).ceil() as usize - (20.0 / bw).floor() as usize;
+        assert!(
+            bass_bins >= 9,
+            "Bass range should span >=9 bins, got {}",
+            bass_bins
+        );
+    }
+
+    #[test]
+    fn spectral_flux_detects_onset_not_steady_state() {
+        // Steady-state: identical frames produce zero flux
+        let frame_a = vec![0.1_f32; FFT_SIZE / 2];
+        let flux_steady: f32 = frame_a
+            .iter()
+            .zip(frame_a.iter())
+            .map(|(c, p)| (c - p).max(0.0))
+            .sum();
+        assert!(
+            flux_steady.abs() < 1e-6,
+            "Steady-state spectral flux should be ~0"
+        );
+
+        // Onset: sharp increase produces positive flux
+        let frame_b: Vec<f32> = vec![0.5; FFT_SIZE / 2];
+        let flux_onset: f32 = frame_b
+            .iter()
+            .zip(frame_a.iter())
+            .map(|(c, p)| (c - p).max(0.0))
+            .sum();
+        assert!(
+            flux_onset > 0.0,
+            "Onset spectral flux should be positive"
+        );
+
+        // Decrease: energy drop produces zero flux (half-wave rectified)
+        let flux_decrease: f32 = frame_a
+            .iter()
+            .zip(frame_b.iter())
+            .map(|(c, p)| (c - p).max(0.0))
+            .sum();
+        assert!(
+            flux_decrease.abs() < 1e-6,
+            "Energy decrease should produce zero flux"
+        );
+    }
+
+    #[test]
+    fn bpm_outlier_rejection() {
+        // Simulate beat intervals: mostly ~0.5s (120 BPM) with one outlier
+        let intervals: Vec<f32> = vec![0.50, 0.51, 0.49, 0.50, 0.52, 0.48, 1.2, 0.50];
+        let mut sorted = intervals.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = sorted[sorted.len() / 2];
+
+        let stable: Vec<f32> = intervals
+            .iter()
+            .filter(|&&iv| (iv - median).abs() / median < TEMPO_TOLERANCE)
+            .copied()
+            .collect();
+
+        // Outlier (1.2s) should be rejected
+        assert!(
+            !stable.contains(&1.2),
+            "Outlier interval should be rejected"
+        );
+        assert!(
+            stable.len() >= 6,
+            "Most intervals should survive filtering"
+        );
+
+        let avg = stable.iter().sum::<f32>() / stable.len() as f32;
+        let bpm = 60.0 / avg;
+        assert!(
+            (bpm - 120.0).abs() < 5.0,
+            "BPM should be ~120, got {}",
+            bpm
+        );
+    }
+
+    #[test]
+    fn bpm_stability_consistent_beats() {
+        // All consistent intervals at 128 BPM (0.46875s)
+        let interval = 60.0 / 128.0;
+        let intervals: Vec<f32> = vec![interval; BPM_HISTORY_SIZE];
+        let mut sorted = intervals.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = sorted[sorted.len() / 2];
+
+        let stable: Vec<f32> = intervals
+            .iter()
+            .filter(|&&iv| (iv - median).abs() / median < TEMPO_TOLERANCE)
+            .copied()
+            .collect();
+
+        assert_eq!(
+            stable.len(),
+            BPM_HISTORY_SIZE,
+            "All consistent intervals should pass"
+        );
+        let avg = stable.iter().sum::<f32>() / stable.len() as f32;
+        let bpm = 60.0 / avg;
+        assert!(
+            (bpm - 128.0).abs() < 0.1,
+            "BPM should be exactly ~128, got {}",
+            bpm
+        );
+    }
+
+    #[test]
+    fn energy_in_range_with_new_fft_size() {
+        // With 2048-point FFT at 48kHz, bin width is ~23.4Hz
+        // Create synthetic FFT with energy only in bins 2-4 (~47-94Hz)
+        let mut fft = vec![0.0_f32; FFT_SIZE / 2];
+        fft[2] = 0.5;
+        fft[3] = 0.5;
+        fft[4] = 0.5;
+
+        let data = AudioData {
+            fft,
+            sample_rate: 48000.0,
+            waveform: vec![0.0; AUDIO_BUFFER_SIZE],
+            level: 0.0,
+            bpm: None,
+            time_since_beat: 0.0,
+        };
+
+        // Energy in the active range should be non-zero
+        let energy = data.energy_in_range(40.0, 100.0);
+        assert!(energy > 0.0, "Should detect energy in 40-100Hz range");
+
+        // Energy outside the active range should be zero
+        let energy_high = data.energy_in_range(5000.0, 10000.0);
+        assert!(
+            energy_high < 1e-6,
+            "Should detect no energy in 5k-10kHz range"
+        );
+    }
+}
