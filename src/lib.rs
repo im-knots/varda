@@ -1,30 +1,11 @@
 pub mod app;
-pub mod audio;
-pub mod camera;
-pub mod channel;
-pub mod clock;
-pub mod deck;
 pub mod engine;
-pub mod isf;
-pub mod midi;
-pub mod mixer;
-pub mod modulation;
-pub mod ndi;
-pub mod notifications;
-pub mod osc;
-pub mod params;
-pub mod persistence;
-pub mod recording;
-pub mod registry;
-pub mod srt;
-pub mod renderer;
-pub mod scene;
-pub mod surface;
-#[cfg(target_os = "macos")]
-pub mod syphon;
-pub mod sysmon;
+mod internal;
 pub mod usecases;
-pub mod video;
+
+// Re-export all internal domain modules at crate root so existing
+// crate::audio, crate::deck, etc. paths continue to work unchanged.
+pub use internal::*;
 
 // Re-export commonly used types at crate root for convenience
 pub use channel::BlendMode;
