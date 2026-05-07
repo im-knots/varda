@@ -1,6 +1,6 @@
 # Varda
 
-Open-source live visual mixer and router for VJ performance and installation art. Linux and macOS.
+Open-source visual performance instrument with broadcast-style routing for VJ performance and installation art. Linux and macOS.
 
 ![Varda](img/screenshot.png)
 
