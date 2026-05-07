@@ -6,7 +6,7 @@ Open-source visual performance instrument with broadcast-style routing for VJs a
 
 ## What it does
 
-Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, NDI streams, SRT feeds, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). There is no clip grid or trigger button. Sources are always available in the routing graph; you mix between them with opacity, blend modes, crossfaders, and effect chains. Zero-opacity decks and channels are automatically culled from the render pass, the same way a broadcast switcher only processes sources that are live on a bus.
+Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, NDI streams, SRT feeds, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). Instead of a clip-launch grid, you control what's live by adjusting opacity, blend modes, crossfaders, mute/solo, and effect chains. Zero-opacity decks and channels are automatically culled from the render pass, the same way a broadcast switcher only processes sources that are live on a bus.
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
 - **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, images, solid color
@@ -63,16 +63,18 @@ Run `cargo run` from different directories to maintain separate workspaces per s
 
 ## Abstractions you should know about
 
-Varda uses a routing graph model, similar to broadcast video routers, rather than a clip-trigger workflow. Sources are always present in the graph and available for mixing. There is no "launch" or "trigger" action. You mix by adjusting opacity, blend modes, and crossfader position. Decks and channels at zero opacity are automatically culled from the GPU render pass, so only sources that contribute to a live output cost render time.
+The simplest setup is two channels with a crossfader between them, output going fullscreen to a projector. Load sources into decks, crossfade between channels. You only add complexity when you need it.
 
-A **Deck** is an independent render unit. It wraps a source (a shader, video, image, solid color, camera feed, NDI stream, or SRT stream) and has its own effect chain and parameters. Decks at zero opacity are culled from the render pass entirely.
+The full routing graph is: **Sources → Decks → Channels → Mixer → Surfaces → Outputs**.
 
-Decks live inside **Channels**. A channel composites its decks together using per-deck opacity, blend modes, and optional auto-transitions. Channels also have their own effect chain applied after deck compositing.
+A **Deck** wraps a source (shader, video, image, solid color, camera, NDI stream, or SRT stream) with its own effect chain, deck specific transition settings, and parameters. Decks at zero opacity are culled from the render pass.
 
-Channels are composited into the **Main Channel** by the mixer. With two channels the mixer uses a crossfader; with three or more it uses per-channel opacity and blend modes. The main channel has its own effect chain, applied to the final composite after all channels are mixed.
+**Channels** composite their decks together using per-deck opacity, blend modes, and optional auto-transitions. Channels have their own effect chain applied after compositing.
 
-**Surfaces** are optional. They define polygonal regions on a 2D stage canvas. Each surface has a content source (main, a channel, or a sub-mix of channels) and a content mapping (fill or UV-mapped). Surfaces are how you map content onto physical screens, LED panels, or projection areas. When no surfaces are defined, the full output receives the main channel directly.
+The **Mixer** composites channels together. With two channels you get an A/B crossfader. With three or more, per-channel opacity and blend modes. The mixer has its own master effect chain applied to the final composite. The mixer also has a state machine like multi channel transistion sequence builder. 
 
-**Outputs** define where rendered frames are sent: a window, a fullscreen display, an NDI stream, an SRT stream, or a recording. Surfaces are assigned to outputs to complete the routing chain.
+**Surfaces** are optional. They define polygonal regions on a 2D stage canvas, each with its own content source (main, a channel, or a sub-mix of channels). Surfaces are how you map content onto physical screens, LED panels, or projection areas. When no surfaces are defined, outputs receive the full main mix directly.
 
-The default/simple full signal path is: **Sources → Decks → Channels → (Main Channel) → Surfaces → Outputs**. At every junction you can branch, split, or re-route. Two channels feeding different surfaces on the same output. The main channel on one output, a single channel isolated on another. A sub-mix of specific channels to an NDI stream while the master goes to projection. This is a broadcast style routing matrix/graph model. 
+**Outputs** are where rendered frames go: a window, a fullscreen display, an NDI stream, an SRT stream, or a recording. Surfaces are assigned to outputs to complete the routing chain.
+
+At every junction you can branch, split, or re-route. Two channels feeding different surfaces on the same output. The main mix on one output, a single channel isolated on another. A sub-mix of specific channels to an NDI stream while the master goes to projection. You only use the complexity you need for your use case. Be it simple A/B crossfading between two decks, or a multi-channel mixing console with dedicated FX and transitions, or a complex multi-screen setup with individual content routing. 
