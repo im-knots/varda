@@ -63,7 +63,7 @@ Run `cargo run` from different directories to maintain separate workspaces per s
 
 ## Abstractions you should know about
 
-The simplest setup is two channels with a crossfader between them, output going fullscreen to a projector. Load sources into decks, crossfade between channels. You only add complexity when you need it.
+The simplest setup is two channels with a crossfader between them, output going fullscreen to a projector. Load sources into decks, crossfade between channels. From there you can add complexity as needed for your use case.
 
 The full routing graph is: **Sources → Decks → Channels → Mixer → Surfaces → Outputs**.
 
