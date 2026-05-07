@@ -6,7 +6,7 @@ Open-source visual performance instrument with broadcast-style routing for VJs a
 
 ## What it does
 
-Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, NDI streams, SRT feeds, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). There is no clip grid or trigger button. Every source runs continuously; you mix between them with opacity, blend modes, crossfaders, and effect chains, the same way a broadcast switcher operator works.
+Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, NDI streams, SRT feeds, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). There is no clip grid or trigger button. Sources are always available in the routing graph; you mix between them with opacity, blend modes, crossfaders, and effect chains. Zero-opacity decks and channels are automatically culled from the render pass, the same way a broadcast switcher only processes sources that are live on a bus.
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
 - **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, images, solid color
@@ -63,9 +63,9 @@ Run `cargo run` from different directories to maintain separate workspaces per s
 
 ## Abstractions you should know about
 
-Varda uses a routing graph model, similar to broadcast video routers, rather than a clip-trigger workflow. Every deck renders every frame according to its opacity. There is no "launch" or "trigger" action. You mix between always-running sources by adjusting opacity, blend modes, and crossfader position.
+Varda uses a routing graph model, similar to broadcast video routers, rather than a clip-trigger workflow. Sources are always present in the graph and available for mixing. There is no "launch" or "trigger" action. You mix by adjusting opacity, blend modes, and crossfader position. Decks and channels at zero opacity are automatically culled from the GPU render pass, so only sources that contribute to a live output cost render time.
 
-A **Deck** is an independent render unit. It wraps a source (a shader, video, image, solid color, camera feed, NDI stream, or SRT stream) and renders it to a texture every frame. Decks have their own effect chains and parameters. A deck at zero opacity still renders but does not contribute to the channel composite.
+A **Deck** is an independent render unit. It wraps a source (a shader, video, image, solid color, camera feed, NDI stream, or SRT stream) and has its own effect chain and parameters. Decks at zero opacity are culled from the render pass entirely.
 
 Decks live inside **Channels**. A channel composites its decks together using per-deck opacity, blend modes, and optional auto-transitions. Channels also have their own effect chain applied after deck compositing.
 
