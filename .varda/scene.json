@@ -12,12 +12,12 @@
             "type": "Shader",
             "path": "shaders/turing_patterns.fs",
             "params": {
-              "seed": 0.0,
-              "feed_rate": 0.038,
-              "perturbation": 0.0,
-              "seed_size": 0.05,
               "kill_rate": 0.062,
+              "seed": 0.78,
+              "feed_rate": 0.038,
+              "seed_size": 0.05,
               "sim_speed": 1.1,
+              "perturbation": 0.0,
               "bg_color": [
                 1.0,
                 1.0,
@@ -38,26 +38,26 @@
               "enabled": true,
               "params": {
                 "ripple_amount": 0.02,
-                "frequency": 7.0,
-                "anim_speed": 0.4,
-                "center_y": 0.5,
                 "center_x": 0.5,
-                "decay": 0.0
+                "anim_speed": 0.4,
+                "frequency": 7.0,
+                "decay": 0.0,
+                "center_y": 0.5
               }
             },
             {
               "path": "shaders/edge_glow.fs",
               "enabled": true,
               "params": {
-                "show_original": true,
-                "glow_amount": 1.0,
-                "edge_strength": 3.0,
                 "glow_color": [
                   1.0,
                   1.0,
                   1.0,
                   1.0
-                ]
+                ],
+                "show_original": true,
+                "edge_strength": 3.0,
+                "glow_amount": 1.0
               }
             }
           ],
@@ -73,22 +73,22 @@
             "type": "Shader",
             "path": "shaders/voronoi.fs",
             "params": {
-              "style": 0.0,
               "edge_color": [
                 1.0,
                 1.0,
                 1.0,
                 1.0
               ],
-              "anim_speed": 1.0,
+              "edge_width": 0.0,
+              "cell_count": 9.5,
               "color2": [
                 0.9,
                 0.2,
                 0.3,
                 1.0
               ],
-              "cell_count": 9.5,
-              "edge_width": 0.0,
+              "style": 0.0,
+              "anim_speed": 1.0,
               "color1": [
                 0.1,
                 0.4,
@@ -103,10 +103,10 @@
               "enabled": true,
               "params": {
                 "rotation": 0.0,
-                "center_x": 0.5,
                 "segments": 4.0,
-                "zoom": 1.0,
-                "center_y": 0.5
+                "center_x": 0.5,
+                "center_y": 0.5,
+                "zoom": 1.0
               }
             }
           ],
@@ -127,15 +127,15 @@
               "path": "shaders/edge_detect.fs",
               "enabled": true,
               "params": {
+                "use_source_color": 0.0,
+                "bg_opacity": 0.0,
                 "edge_color": [
                   1.0,
                   1.0,
                   1.0,
                   1.0
                 ],
-                "bg_opacity": 0.0,
-                "sensitivity": 5.0,
-                "use_source_color": 0.0
+                "sensitivity": 5.0
               }
             }
           ],
@@ -151,21 +151,21 @@
           "path": "shaders/kaleidoscope.fs",
           "enabled": true,
           "params": {
-            "rotation": 0.0,
-            "center_x": 0.5,
             "zoom": 1.0,
-            "segments": 2.0,
-            "center_y": 0.5
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "rotation": 0.0,
+            "segments": 2.0
           }
         },
         {
           "path": "shaders/hue_shift.fs",
           "enabled": true,
           "params": {
-            "cycle_speed": 0.5,
-            "hue_shift": 0.55,
+            "saturation": 1.0,
             "auto_cycle": false,
-            "saturation": 1.0
+            "hue_shift": 0.55,
+            "cycle_speed": 0.5
           }
         }
       ]
@@ -174,11 +174,69 @@
       "name": "Ch 1",
       "opacity": 1.0,
       "blend_mode": "add",
-      "decks": [],
-      "effects": []
+      "decks": [
+        {
+          "name": "tas_psychedelic",
+          "source": {
+            "type": "Shader",
+            "path": "shaders/tas_psychedelic.fs",
+            "params": {
+              "slither_amp": 0.0,
+              "snake_density": 6.0,
+              "snake_thickness": 0.02,
+              "anim_speed": 0.5,
+              "snake_length": 0.6,
+              "bg_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "move_range": 1.6,
+              "slither_freq": 0.0,
+              "snake_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "move_speed": 1.4
+            }
+          },
+          "effects": [],
+          "opacity": 1.0,
+          "blend_mode": "normal",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
+        },
+        {
+          "name": "1000_hands.avi",
+          "source": {
+            "type": "Video",
+            "path": "/Volumes/DATA/vj-art/1000_hands.avi"
+          },
+          "effects": [],
+          "opacity": 0.0,
+          "blend_mode": "normal",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
+        }
+      ],
+      "effects": [
+        {
+          "path": "shaders/mirror.fs",
+          "enabled": true,
+          "params": {
+            "mode": 0.0,
+            "flip_side": false
+          }
+        }
+      ]
     }
   ],
-  "crossfader": 0.0,
+  "crossfader": 0.36,
   "active_transition": null,
   "master_effects": [],
   "modulation": {
@@ -217,7 +275,7 @@
           "source_id": 0,
           "freq_low": 20.0,
           "freq_high": 500.0,
-          "gain": 2.2,
+          "gain": 1.5,
           "smoothing": 0.9,
           "mode": "Direct",
           "noise_gate": 0.24
@@ -225,27 +283,6 @@
       }
     ],
     "assignments": {
-      "ch0_deck1:edge_width": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_fx1:hue_shift": [
-        {
-          "source_idx": 1,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0:perturbation": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
       "ch0_deck0_fx0:decay": [
         {
           "source_idx": 2,
@@ -258,7 +295,40 @@
           "component": null
         }
       ],
+      "ch0_fx1:hue_shift": [
+        {
+          "source_idx": 1,
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_idx": 3,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
       "ch0_deck0:feed_rate": [
+        {
+          "source_idx": 3,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch0_deck1:edge_width": [
+        {
+          "source_idx": 3,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch1_deck0:slither_freq": [
+        {
+          "source_idx": 3,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch0_deck0:perturbation": [
         {
           "source_idx": 3,
           "amount": 0.5,

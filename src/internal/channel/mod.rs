@@ -334,6 +334,17 @@ impl Channel {
         self.decks.len()
     }
 
+    /// Tick video frames for all decks without doing a full render.
+    /// Call this every frame even for off-screen channels so video players
+    /// stay in sync and don't show stale/black frames when faded back in.
+    pub fn tick_video_frames(&mut self, context: &GpuContext) {
+        for slot in self.decks.iter_mut() {
+            if let Err(e) = slot.deck.update_video_frame(context) {
+                log::warn!("Video frame update failed: {}", e);
+            }
+        }
+    }
+
     /// Render all decks in this channel and composite them, then apply channel effects
     /// `channel_idx` is used for modulation key addressing (e.g., "ch0_deck0:paramname")
     /// `dt` is the frame delta in seconds (for auto-transition tick).
@@ -359,12 +370,9 @@ impl Channel {
         // Check if any deck is solo'd
         let any_solo = self.decks.iter().any(|slot| slot.solo);
 
-        // Update video frames for all video decks before rendering
-        for slot in self.decks.iter_mut() {
-            if let Err(e) = slot.deck.update_video_frame(context) {
-                log::warn!("Video frame update failed: {}", e);
-            }
-        }
+        // Note: video frame updates are handled by tick_video_frames() called
+        // from the mixer before render, so all channels stay in sync even when
+        // faded out by the crossfader.
 
         // Render each deck to its texture (skip muted, non-solo'd, zero-opacity)
         // Done decks still render — they serve as visible background for transitioning decks above.

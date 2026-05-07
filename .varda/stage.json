@@ -8,46 +8,7 @@
   },
   "outputs": [
     {
-      "name": "Output 2",
-      "target": {
-        "type": "ndi_send",
-        "sender_name": "Varda NDI"
-      },
-      "surface_assignments": []
-    },
-    {
-      "name": "Output 3",
-      "target": {
-        "type": "srt_stream",
-        "url": "srt://127.0.0.1:9001"
-      },
-      "surface_assignments": [
-        {
-          "surface_idx": 0,
-          "warp_corners": [
-            [
-              0.15,
-              0.0
-            ],
-            [
-              0.6999999,
-              0.0
-            ],
-            [
-              0.6999999,
-              0.90000004
-            ],
-            [
-              0.15,
-              0.90000004
-            ]
-          ],
-          "enabled": true
-        }
-      ]
-    },
-    {
-      "name": "Output 3",
+      "name": "Output 1",
       "target": {
         "type": "display",
         "name": "Monitor #41041"

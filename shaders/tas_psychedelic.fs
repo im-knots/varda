@@ -9,6 +9,10 @@
         {"NAME": "snake_thickness", "TYPE": "float",  "DEFAULT": 0.02, "MIN": 0.005, "MAX": 0.1},
         {"NAME": "snake_length",    "TYPE": "float",  "DEFAULT": 0.6, "MIN": 0.2, "MAX": 1.5},
         {"NAME": "snake_color",     "TYPE": "color",  "DEFAULT": [1.0, 1.0, 1.0, 1.0]},
+        {"NAME": "move_speed",      "TYPE": "float",  "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0},
+        {"NAME": "move_range",      "TYPE": "float",  "DEFAULT": 1.0, "MIN": 0.1, "MAX": 3.0},
+        {"NAME": "slither_freq",    "TYPE": "float",  "DEFAULT": 1.0, "MIN": 0.0, "MAX": 4.0},
+        {"NAME": "slither_amp",     "TYPE": "float",  "DEFAULT": 1.0, "MIN": 0.0, "MAX": 4.0},
         {"NAME": "anim_speed",      "TYPE": "float",  "DEFAULT": 0.5, "MIN": 0.0, "MAX": 2.0}
     ]
 }*/
@@ -39,6 +43,10 @@ layout(set = 0, binding = 1) uniform UserParams {
     float snake_thickness;
     float snake_length;
     vec4 snake_color;
+    float move_speed;
+    float move_range;
+    float slither_freq;
+    float slither_amp;
     float anim_speed;
 };
 
@@ -549,120 +557,127 @@ vec4 bodyPatterns(vec2 uv, float body, float time, float seed) {
 }
 
 // ============================================================
-// Parametric snake path — bounded Lissajous-like curves
-// Returns position at time t for a given snake seed
+// Analytical snake path — deterministic position for any time t
+// Pure Lissajous with phase offset for smooth speed control
 // ============================================================
-vec2 snakePath(float t, float seed) {
-    // 3 layers of sine/cosine at incommensurate frequencies
-    // Amplitudes keep the snake within ~(-0.65, 0.65) on each axis
-    float ax1 = 0.25 + hash(seed + 10.0) * 0.15;
-    float ax2 = 0.12 + hash(seed + 20.0) * 0.10;
-    float ax3 = 0.06 + hash(seed + 30.0) * 0.06;
-    float ay1 = 0.20 + hash(seed + 40.0) * 0.15;
-    float ay2 = 0.10 + hash(seed + 55.0) * 0.10;
-    float ay3 = 0.05 + hash(seed + 65.0) * 0.06;
+vec2 snakePath(float t, float seed, float rangeScale, float phaseOff) {
+    float ax1 = (0.28 + hash(seed + 10.0) * 0.12) * rangeScale;
+    float ax2 = (0.10 + hash(seed + 20.0) * 0.08) * rangeScale;
+    float ay1 = (0.22 + hash(seed + 40.0) * 0.12) * rangeScale;
+    float ay2 = (0.08 + hash(seed + 55.0) * 0.08) * rangeScale;
 
-    // Frequencies — use irrational-ish ratios so paths don't repeat quickly
-    float wx1 = 0.7  + hash(seed + 70.0) * 0.5;
-    float wx2 = 1.3  + hash(seed + 80.0) * 0.6;
-    float wx3 = 2.1  + hash(seed + 90.0) * 0.8;
-    float wy1 = 0.5  + hash(seed + 110.0) * 0.5;
-    float wy2 = 1.1  + hash(seed + 120.0) * 0.6;
-    float wy3 = 1.9  + hash(seed + 130.0) * 0.8;
+    float wx1 = 0.30 + hash(seed + 70.0) * 0.20;
+    float wx2 = 0.55 + hash(seed + 80.0) * 0.30;
+    float wy1 = 0.25 + hash(seed + 110.0) * 0.20;
+    float wy2 = 0.50 + hash(seed + 120.0) * 0.30;
 
-    // Phase offsets
     float px1 = hash(seed + 200.0) * TAU;
     float px2 = hash(seed + 210.0) * TAU;
-    float px3 = hash(seed + 220.0) * TAU;
     float py1 = hash(seed + 230.0) * TAU;
     float py2 = hash(seed + 240.0) * TAU;
-    float py3 = hash(seed + 250.0) * TAU;
 
-    float x = ax1 * sin(wx1 * t + px1)
-            + ax2 * sin(wx2 * t + px2)
-            + ax3 * sin(wx3 * t + px3);
-    float y = ay1 * cos(wy1 * t + py1)
-            + ay2 * cos(wy2 * t + py2)
-            + ay3 * cos(wy3 * t + py3);
+    return vec2(
+        ax1 * sin(wx1 * t + px1 + phaseOff) + ax2 * sin(wx2 * t + px2 + phaseOff),
+        ay1 * cos(wy1 * t + py1 + phaseOff) + ay2 * cos(wy2 * t + py2 + phaseOff)
+    );
+}
 
-    return vec2(x, y);
+// Velocity of snakePath (analytical derivative)
+vec2 snakePathVel(float t, float seed, float rangeScale, float phaseOff) {
+    float ax1 = (0.28 + hash(seed + 10.0) * 0.12) * rangeScale;
+    float ax2 = (0.10 + hash(seed + 20.0) * 0.08) * rangeScale;
+    float ay1 = (0.22 + hash(seed + 40.0) * 0.12) * rangeScale;
+    float ay2 = (0.08 + hash(seed + 55.0) * 0.08) * rangeScale;
+
+    float wx1 = 0.30 + hash(seed + 70.0) * 0.20;
+    float wx2 = 0.55 + hash(seed + 80.0) * 0.30;
+    float wy1 = 0.25 + hash(seed + 110.0) * 0.20;
+    float wy2 = 0.50 + hash(seed + 120.0) * 0.30;
+
+    float px1 = hash(seed + 200.0) * TAU;
+    float px2 = hash(seed + 210.0) * TAU;
+    float py1 = hash(seed + 230.0) * TAU;
+    float py2 = hash(seed + 240.0) * TAU;
+
+    return vec2(
+        ax1 * wx1 * cos(wx1 * t + px1 + phaseOff) + ax2 * wx2 * cos(wx2 * t + px2 + phaseOff),
+       -ay1 * wy1 * sin(wy1 * t + py1 + phaseOff) - ay2 * wy2 * sin(wy2 * t + py2 + phaseOff)
+    );
 }
 
 // ============================================================
 // Single snake — returns premultiplied RGBA
-// Uses parametric path for smooth on-screen movement
+// Body trails behind head by sampling past positions
 // ============================================================
 vec4 drawSnake(vec2 p, float time, int i) {
     float fi   = float(i);
     float seed = fi * 127.1;
 
-    // Snake parameters — randomized per snake
+    // Per-snake randomized params
     float snakeLen = snake_length * (0.7 + hash(seed + 150.0) * 0.6);
-    float freq1    = 4.0 + hash(seed + 100.0) * 3.0;
-    float amp1     = 0.03 + hash(seed + 300.0) * 0.04;
-    float phase    = hash(seed + 400.0) * TAU;
-    float speed    = 0.8 + hash(seed + 500.0) * 0.8;
+    float mr = move_range;
+    // move_speed as additive phase offset — smooth regardless of TIME
+    float phaseOff = move_speed * TAU * 2.0;
+    // Per-snake base slither spatial frequency (S-bends per body length)
+    float sFreqBase = 2.0 + hash(seed + 160.0) * 1.5;
+    float sAmpBase  = 0.03 + hash(seed + 170.0) * 0.02;
 
-    // Time step between spine samples — controls how much path history the body covers
-    float bodyTimeSpan = snakeLen / (speed * 0.6 + 0.3);
+    const int SPINE_N = 40;
 
-    // === BUILD SPINE by sampling parametric path at past times ===
-    const int SPINE_N = 25;
-    float dt = bodyTimeSpan / float(SPINE_N);
+    float headTime = time;
+    vec2 headPos = snakePath(headTime, seed, mr, phaseOff);
+    vec2 headVel = snakePathVel(headTime, seed, mr, phaseOff);
+    float headAngle = atan(headVel.y, headVel.x);
 
-    // Find closest spine point to pixel
+    // Estimate speed to calibrate trail duration so body ≈ snakeLen
+    float speedEst = (length(snakePathVel(headTime, seed, mr, phaseOff))
+                    + length(snakePathVel(headTime - 1.0, seed, mr, phaseOff))
+                    + length(snakePathVel(headTime - 2.0, seed, mr, phaseOff))) / 3.0;
+    speedEst = max(speedEst, 0.03);
+    float stepLen = snakeLen / float(SPINE_N);
+    float dt = stepLen / speedEst;
+
+    // Find closest point on any body segment to the pixel
+    // Slither is applied as spatial deformation perpendicular to the base path
     float minDist = 1e6;
-    float bestT = 0.0;        // normalized 0..1 along body
-    float bestSigned = 0.0;   // signed perpendicular distance
+    float bestT = 0.0;
+    float bestSigned = 0.0;
     vec2 bestTangent = vec2(1.0, 0.0);
 
-    // Head is at current time, tail is in the past
-    float headTime = time * speed;
+    vec2 prevBasePt = headPos;
+    vec2 prevPt = headPos;
+    for (int s = 1; s <= 40; s++) {
+        float bodyFrac = float(s) / float(SPINE_N); // 0=head, 1=tail
+        vec2 basePt = snakePath(headTime - float(s) * dt, seed, mr, phaseOff);
 
-    vec2 prevPt = snakePath(headTime - float(SPINE_N) * dt, seed);
-    vec2 headPos = prevPt;
-    float headAngle = 0.0;
+        // Spatial slither: S-bends along body, perpendicular to path tangent
+        vec2 tangent = prevBasePt - basePt;
+        float tanLen = length(tangent);
+        vec2 tanDir = tangent / max(tanLen, 0.0001);
+        vec2 perp = vec2(-tanDir.y, tanDir.x);
+        float bodyTaper = smoothstep(0.0, 0.1, bodyFrac) * smoothstep(1.0, 0.85, bodyFrac);
+        float slitherOffset = sin(bodyFrac * sFreqBase * slither_freq * TAU)
+                            * sAmpBase * slither_amp * bodyTaper;
+        vec2 curPt = basePt + perp * slitherOffset;
 
-    for (int s = 0; s <= SPINE_N; s++) {
-        float t = float(s) / float(SPINE_N); // 0=tail, 1=head
+        vec2 seg = prevPt - curPt;
+        float segLen = length(seg);
+        vec2 segDir = seg / max(segLen, 0.0001);
+        vec2 toP = p - curPt;
+        float proj = clamp(dot(toP, segDir), 0.0, segLen);
+        vec2 closest = curPt + segDir * proj;
+        float d = length(p - closest);
 
-        // Sample path at this time (tail=oldest, head=newest)
-        float sampleTime = headTime - float(SPINE_N - s) * dt;
-        vec2 curPt = snakePath(sampleTime, seed);
-
-        // Add sine undulation perpendicular to path for slithering feel
-        if (s > 0 && s < SPINE_N) {
-            vec2 tangent = normalize(curPt - prevPt);
-            vec2 perp = vec2(-tangent.y, tangent.x);
-            float wave = sin(t * snakeLen * freq1 + time * speed + phase) * amp1;
-            curPt += perp * wave;
+        if (d < minDist) {
+            minDist = d;
+            float prevFrac = float(s - 1) / float(SPINE_N);
+            bestT = 1.0 - prevFrac - (bodyFrac - prevFrac) * (1.0 - proj / max(segLen, 0.0001));
+            bestTangent = segDir;
+            vec2 norm = vec2(-segDir.y, segDir.x);
+            bestSigned = dot(p - closest, norm);
         }
 
-        // Distance from pixel to this spine segment
-        if (s > 0) {
-            vec2 seg = curPt - prevPt;
-            float segLen = length(seg);
-            vec2 segDir = seg / max(segLen, 0.0001);
-            vec2 toP = p - prevPt;
-            float proj = clamp(dot(toP, segDir), 0.0, segLen);
-            vec2 closest = prevPt + segDir * proj;
-            float d = length(p - closest);
-
-            if (d < minDist) {
-                minDist = d;
-                bestT = (float(s - 1) + proj / max(segLen, 0.0001)) / float(SPINE_N);
-                bestTangent = segDir;
-                vec2 norm = vec2(-segDir.y, segDir.x);
-                bestSigned = dot(p - closest, norm);
-            }
-        }
-
-        if (s == SPINE_N) {
-            headPos = curPt;
-            vec2 tangent = normalize(curPt - prevPt);
-            headAngle = atan(tangent.y, tangent.x);
-        }
-
+        prevBasePt = basePt;
         prevPt = curPt;
     }
 

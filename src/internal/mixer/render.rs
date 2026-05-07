@@ -78,6 +78,12 @@ impl Mixer {
             self.channels.iter().map(|ch| ch.opacity).collect()
         };
 
+        // Always tick video frames on every channel so players stay in sync
+        // even when a channel is fully faded out by the crossfader.
+        for channel in self.channels.iter_mut() {
+            channel.tick_video_frames(context);
+        }
+
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
             if effective_opacities[ch_idx] < 0.001 {
                 continue;
