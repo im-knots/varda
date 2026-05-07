@@ -29,7 +29,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                 .map(|p| p + 1)
                 .unwrap_or(9001);
             actions.output_actions.push(OutputAction::CreateHeadless {
-                target: OutputTarget::SrtStream { url: format!("srt://127.0.0.1:{}", next_port) },
+                target: OutputTarget::SrtStream { url: format!("srt://0.0.0.0:{}", next_port) },
             });
         }
         if ui.button("+ NDI").clicked() {
