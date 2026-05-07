@@ -1,6 +1,5 @@
 //! Mixer render pipeline — compositing, master effects, sub-mixes.
 
-use crate::channel::BlendMode;
 use crate::renderer::{GpuContext, ISFUniforms};
 use anyhow::Result;
 use super::{Mixer, CrossfadeEasing, AutoCrossfade};

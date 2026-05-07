@@ -17,7 +17,7 @@ mod midi;
 mod mixer;
 mod sequence;
 
-use super::{UIData, UIActions, NotificationUI, LibraryDrag, EffectDrag};
+use super::{UIData, UIActions, LibraryDrag, EffectDrag};
 use library::render_library_panel;
 use right_panel::render_right_panel;
 use deck_detail::render_bottom_panel;
@@ -107,13 +107,11 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                         egui::Label::new(egui::RichText::new(&bpm_text).color(bpm_color).monospace())
                             .sense(egui::Sense::click()),
                     ).on_hover_text("Click to select clock source");
-                    let popup_id = egui::Id::new("clock_source_popover");
-                    if bpm_response.clicked() {
-                        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-                    }
-                    egui::popup_below_widget(ui, popup_id, &bpm_response, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                        render_clock_popover(ui, data, &mut actions);
-                    });
+                    egui::Popup::from_toggle_button_response(&bpm_response)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            render_clock_popover(ui, data, &mut actions);
+                        });
 
                     ui.separator();
 

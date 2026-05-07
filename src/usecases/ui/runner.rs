@@ -132,8 +132,6 @@ impl ApplicationHandler for UIRunner {
                     }
                 }
                 WindowEvent::RedrawRequested => {
-                    // Need to drop varda borrow before calling self.render()
-                    drop(varda);
                     self.render(event_loop);
                     if let Some(w) = self.window { w.request_redraw(); }
                 }
@@ -229,7 +227,6 @@ impl UIRunner {
         let Some(varda_ref) = self.varda.as_ref() else { return; };
         let ui_data = varda_ref
             .collect_ui_data(&self.layout, &self.deck_preview_textures, self.main_output_texture);
-        drop(varda_ref);
 
         // 5. Run egui frame
         let raw_input = {

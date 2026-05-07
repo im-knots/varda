@@ -1,7 +1,6 @@
 //! Output windows management and warp calibration.
 
-use crate::renderer::context::{OutputSource, OutputTarget};
-use crate::surface::SurfaceOutputType;
+use crate::renderer::context::OutputTarget;
 use super::super::{UIData, UIActions, OutputAction};
 
 pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {

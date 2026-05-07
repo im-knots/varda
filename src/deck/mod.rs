@@ -6,7 +6,7 @@ pub use render::get_current_date;
 
 use crate::isf::{ISFShader, ISFPass};
 use crate::params::ShaderParams;
-use crate::renderer::{GpuContext, UnifiedPipeline, BlitPipeline, HapConvertPipeline};
+use crate::renderer::{UnifiedPipeline, BlitPipeline, HapConvertPipeline};
 use crate::video::{VideoPlayer, HapTextureFormat, hap::HapPlayer};
 use std::collections::HashMap;
 use std::time::Instant;

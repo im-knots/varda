@@ -65,6 +65,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                     .fill(dim_color)
                     .stroke(egui::Stroke::new(1.0, mod_color))
                     .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.set_min_height(160.0);
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(format!("{}{}", header_label, value_text)).strong().color(mod_color));

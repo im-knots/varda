@@ -272,7 +272,7 @@ impl MidiDeviceManager {
         let mut matched_outputs: Vec<bool> = vec![false; output_port_names.len()];
 
         // For each input: assign DeviceId, check matching output, connect
-        for (i, in_name) in input_port_names.iter().enumerate() {
+        for (_i, in_name) in input_port_names.iter().enumerate() {
             let device_id = self.next_device_id;
             self.next_device_id += 1;
 

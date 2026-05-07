@@ -58,7 +58,7 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
 
         ui.add_space(4.0);
 
-        egui::CollapsingHeader::new(egui::RichText::new("∿ Modulation").strong())
+        egui::CollapsingHeader::new(egui::RichText::new("〰 Modulation").strong())
             .default_open(false)
             .show(ui, |ui| {
                 render_modulation_section(ui, data, actions);

@@ -1,6 +1,6 @@
 //! Shared UI utilities.
 
-use super::super::{UIActions, EffectDrag};
+use super::super::EffectDrag;
 
 /// Format seconds as MM:SS
 pub(super) fn format_time(secs: f64) -> String {

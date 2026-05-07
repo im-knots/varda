@@ -309,7 +309,7 @@ fn click_new_output_creates_output_action() {
 fn click_add_lfo() {
     let mut harness = make_harness(UIData::test_fixture());
 
-    harness.get_by_label("∿ Modulation").click();
+    harness.get_by_label("〰 Modulation").click();
     harness.run();
     *harness.state_mut() = AccActions::default();
 
@@ -323,7 +323,7 @@ fn click_add_lfo() {
 fn click_add_audio_mod() {
     let mut harness = make_harness(UIData::test_fixture());
 
-    harness.get_by_label("∿ Modulation").click();
+    harness.get_by_label("〰 Modulation").click();
     harness.run();
     *harness.state_mut() = AccActions::default();
 
@@ -337,7 +337,7 @@ fn click_add_audio_mod() {
 fn click_add_adsr() {
     let mut harness = make_harness(UIData::test_fixture());
 
-    harness.get_by_label("∿ Modulation").click();
+    harness.get_by_label("〰 Modulation").click();
     harness.run();
     *harness.state_mut() = AccActions::default();
 
@@ -351,7 +351,7 @@ fn click_add_adsr() {
 fn click_add_step_seq() {
     let mut harness = make_harness(UIData::test_fixture());
 
-    harness.get_by_label("∿ Modulation").click();
+    harness.get_by_label("〰 Modulation").click();
     harness.run();
     *harness.state_mut() = AccActions::default();
 
