@@ -252,6 +252,11 @@ pub struct Channel {
 
     /// Blit pipelines for each blend mode (for compositing decks)
     blend_blit_pipelines: std::collections::HashMap<BlendMode, BlitPipeline>,
+
+    /// Smoothed render time for this channel in milliseconds (EMA over recent frames)
+    pub render_time_ms: f32,
+    /// Number of active (rendered) decks in the last frame
+    pub active_deck_count: u32,
 }
 
 impl Channel {
@@ -287,6 +292,8 @@ impl Channel {
             effect_ping_view,
             frame_count: 0,
             blend_blit_pipelines,
+            render_time_ms: 0.0,
+            active_deck_count: 0,
         })
     }
 
@@ -339,6 +346,8 @@ impl Channel {
         time: f32,
         dt: f32,
     ) -> Result<()> {
+        let render_start = std::time::Instant::now();
+
         // Tick auto-transition state before rendering
         let bpm = audio_data.bpm.map(|b| b as f64);
         self.tick_auto_transitions(dt as f64, bpm);
@@ -360,12 +369,15 @@ impl Channel {
         // Render each deck to its texture (skip muted, non-solo'd, zero-opacity)
         // Done decks still render — they serve as visible background for transitioning decks above.
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
+        let mut active_count: u32 = 0;
         for (deck_idx, slot) in self.decks.iter_mut().enumerate() {
             if !slot.mute && (!any_solo || slot.solo) && slot.opacity > 0.0 {
+                active_count += 1;
                 let param_prefix = format!("ch{}_deck{}", channel_idx, deck_idx);
                 slot.deck.render_with_prefix(context, audio_data, modulation, &param_prefix, &mut cmd_buffers)?;
             }
         }
+        self.active_deck_count = active_count;
         // Batch submit all deck renders at once
         if !cmd_buffers.is_empty() {
             context.queue.submit(cmd_buffers);
@@ -628,6 +640,11 @@ impl Channel {
         }
 
         self.frame_count += 1;
+
+        // Update smoothed render time (EMA, α = 0.1)
+        let raw_ms = render_start.elapsed().as_secs_f32() * 1000.0;
+        self.render_time_ms = 0.1 * raw_ms + 0.9 * self.render_time_ms;
+
         Ok(())
     }
 
@@ -1096,5 +1113,193 @@ mod tests {
         let e = effects.remove(from);
         effects.insert(to, e);
         assert_eq!(effects, vec!["ch_color", "ch_distort", "ch_blur"]);
+    }
+
+    // ── Render timing tests ─────────────────────────────────────────
+
+    #[test]
+    fn new_channel_render_time_starts_at_zero() {
+        let gpu = headless_gpu();
+        let ch = test_channel(&gpu, "Test");
+        assert!((ch.render_time_ms - 0.0).abs() < 1e-5);
+        assert_eq!(ch.active_deck_count, 0);
+    }
+
+    #[test]
+    fn render_updates_timing_fields() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+        add_solid_deck(&mut ch, &gpu, [0.0, 1.0, 0.0, 1.0]);
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+
+        // After one render, render_time_ms should be > 0 (something was measured)
+        assert!(ch.render_time_ms > 0.0);
+        // Both decks are active (opacity 1.0, not muted)
+        assert_eq!(ch.active_deck_count, 2);
+    }
+
+    #[test]
+    fn muted_decks_not_counted_as_active() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+        add_solid_deck(&mut ch, &gpu, [0.0, 1.0, 0.0, 1.0]);
+        ch.decks[1].mute = true;
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+
+        assert_eq!(ch.active_deck_count, 1);
+    }
+
+    #[test]
+    fn zero_opacity_decks_not_counted_as_active() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+        add_solid_deck(&mut ch, &gpu, [0.0, 1.0, 0.0, 1.0]);
+        ch.decks[0].opacity = 0.0;
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+
+        assert_eq!(ch.active_deck_count, 1);
+    }
+
+    #[test]
+    fn render_time_smooths_over_frames() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+
+        // Render multiple frames — EMA should converge
+        for _ in 0..10 {
+            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+        }
+        let time_after_10 = ch.render_time_ms;
+
+        // Render more frames
+        for _ in 0..10 {
+            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+        }
+        let time_after_20 = ch.render_time_ms;
+
+        // Both should be positive
+        assert!(time_after_10 > 0.0);
+        assert!(time_after_20 > 0.0);
+    }
+
+    #[test]
+    fn empty_channel_render_timing() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        // No decks — render should still work and measure time
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+
+        // Time should be >= 0 (even empty channels do some work)
+        assert!(ch.render_time_ms >= 0.0);
+        assert_eq!(ch.active_deck_count, 0);
+    }
+
+    // ── Deck pipeline FPS tests ─────────────────────────────────────
+
+    #[test]
+    fn new_deck_fps_starts_at_zero() {
+        let gpu = headless_gpu();
+        let deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
+        assert!((deck.fps() - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn deck_fps_becomes_positive_after_renders() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+
+        // Render several frames so EMA has time to converge
+        for _ in 0..5 {
+            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+        }
+
+        let deck_fps = ch.decks[0].deck.fps();
+        assert!(deck_fps > 0.0, "Deck FPS should be positive after rendering, got {}", deck_fps);
+    }
+
+    #[test]
+    fn deck_fps_ignores_huge_first_frame_delta() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+
+        // First render — time_delta may be very large (time since Deck creation)
+        // but the guard (time_delta < 1.0) should keep FPS sane
+        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+        let fps = ch.decks[0].deck.fps();
+        // Either 0 (if first delta was >= 1s) or some reasonable value
+        assert!(fps >= 0.0);
+        assert!(fps < 100_000.0, "FPS should not be absurdly high, got {}", fps);
+    }
+
+    #[test]
+    fn multiple_decks_have_independent_fps() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+        add_solid_deck(&mut ch, &gpu, [0.0, 1.0, 0.0, 1.0]);
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+
+        for _ in 0..5 {
+            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+        }
+
+        // Both decks should have positive FPS
+        let fps0 = ch.decks[0].deck.fps();
+        let fps1 = ch.decks[1].deck.fps();
+        assert!(fps0 > 0.0);
+        assert!(fps1 > 0.0);
+    }
+
+    #[test]
+    fn skipped_deck_keeps_old_fps() {
+        let gpu = headless_gpu();
+        let mut ch = test_channel(&gpu, "Test");
+        add_solid_deck(&mut ch, &gpu, [1.0, 0.0, 0.0, 1.0]);
+
+        let audio = crate::audio::AudioData::default();
+        let modulation = crate::modulation::ModulationEngine::new();
+
+        // Render to establish FPS
+        for _ in 0..5 {
+            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+        }
+        let fps_before = ch.decks[0].deck.fps();
+
+        // Mute the deck — it won't render
+        ch.decks[0].mute = true;
+        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0).unwrap();
+
+        // FPS should remain unchanged (deck wasn't rendered, no EMA update)
+        let fps_after = ch.decks[0].deck.fps();
+        assert!((fps_before - fps_after).abs() < 1e-5);
     }
 }

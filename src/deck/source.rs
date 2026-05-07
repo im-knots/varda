@@ -176,6 +176,7 @@ impl Deck {
             frame_count: 0,
             last_frame_time: now,
             camera_source_view: None,
+            fps_smoothed: 0.0,
         })
     }
 
@@ -484,6 +485,7 @@ impl Deck {
             frame_count: 0,
             last_frame_time: now,
             camera_source_view: None,
+            fps_smoothed: 0.0,
         })
     }
 }

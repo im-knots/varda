@@ -17,6 +17,7 @@ pub mod registry;
 pub mod renderer;
 pub mod scene;
 pub mod surface;
+pub mod sysmon;
 pub mod usecases;
 pub mod video;
 

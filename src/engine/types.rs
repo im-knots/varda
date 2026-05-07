@@ -117,6 +117,10 @@ pub struct ChannelSnapshot {
     pub blend_mode: BlendMode,
     pub decks: Vec<DeckSnapshot>,
     pub effects: Vec<EffectSnapshot>,
+    /// Smoothed render time for this channel in milliseconds
+    pub render_time_ms: f32,
+    /// Number of active (rendered) decks in the last frame
+    pub active_deck_count: u32,
 }
 
 #[derive(Clone)]
@@ -133,6 +137,8 @@ pub struct DeckSnapshot {
     pub effects: Vec<EffectSnapshot>,
     pub video_playback: Option<VideoPlaybackSnapshot>,
     pub auto_transition: Option<AutoTransitionSnapshot>,
+    /// Smoothed FPS from actual deck render pipeline timing
+    pub fps: f32,
 }
 
 #[derive(Clone)]
@@ -522,10 +528,14 @@ mod tests {
             blend_mode: BlendMode::Add,
             decks: vec![],
             effects: vec![],
+            render_time_ms: 1.5,
+            active_deck_count: 2,
         };
         assert_eq!(ch.idx, 0);
         assert!((ch.opacity - 0.75).abs() < 1e-5);
         assert_eq!(ch.blend_mode, BlendMode::Add);
+        assert!((ch.render_time_ms - 1.5).abs() < 1e-5);
+        assert_eq!(ch.active_deck_count, 2);
     }
 
     #[test]
@@ -546,9 +556,11 @@ mod tests {
             effects: vec![],
             video_playback: None,
             auto_transition: None,
+            fps: 59.5,
         };
         assert!(d.mute);
         assert!(!d.solo);
         assert!((d.effective_opacity - 0.5).abs() < 1e-5);
+        assert!((d.fps - 59.5).abs() < 1e-5);
     }
 }

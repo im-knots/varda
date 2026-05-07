@@ -92,19 +92,12 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                     } else {
                         "-- BPM".to_string()
                     };
-                    let bpm_color = match data.clock_source.as_str() {
-                        "MIDI" => egui::Color32::from_rgb(180, 100, 255),
-                        "OSC" => egui::Color32::from_rgb(100, 150, 255),
-                        "Audio" => egui::Color32::from_rgb(100, 220, 100),
-                        "Manual" => egui::Color32::from_rgb(255, 165, 0),
-                        _ => egui::Color32::from_rgb(120, 120, 120),
-                    };
                     if let Some(dev) = &data.clock_device_name {
                         ui.label(egui::RichText::new(format!("({})", dev)).weak().small());
                     }
                     // Clickable BPM label → opens clock source popover
                     let bpm_response = ui.add(
-                        egui::Label::new(egui::RichText::new(&bpm_text).color(bpm_color).monospace())
+                        egui::Label::new(egui::RichText::new(&bpm_text).monospace())
                             .sense(egui::Sense::click()),
                     ).on_hover_text("Click to select clock source");
                     egui::Popup::from_toggle_button_response(&bpm_response)
@@ -123,7 +116,54 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                     } else {
                         egui::Color32::from_rgb(220, 60, 60)
                     };
-                    ui.label(egui::RichText::new(format!("{:.0} FPS", fps)).color(fps_color).monospace());
+                    let fps_response = ui.add(
+                        egui::Label::new(egui::RichText::new(format!("{:.0} FPS", fps)).color(fps_color).monospace())
+                            .sense(egui::Sense::click()),
+                    ).on_hover_text("Click for render timing details");
+                    egui::Popup::from_toggle_button_response(&fps_response)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            render_fps_popover(ui, data);
+                        });
+
+                    ui.separator();
+
+                    // GPU device — clickable → popover with adapter details
+                    let gpu_response = ui.add(
+                        egui::Label::new(egui::RichText::new(format!("🖥 {}", data.gpu_device_name)).weak().small())
+                            .sense(egui::Sense::click()),
+                    ).on_hover_text("Click for GPU details");
+                    egui::Popup::from_toggle_button_response(&gpu_response)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            render_gpu_popover(ui, data);
+                        });
+
+                    ui.separator();
+
+                    // CPU & RAM usage
+                    let cpu_color = if data.cpu_usage < 50.0 {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else if data.cpu_usage < 80.0 {
+                        egui::Color32::from_rgb(220, 200, 60)
+                    } else {
+                        egui::Color32::from_rgb(220, 60, 60)
+                    };
+                    ui.label(egui::RichText::new(format!("CPU {:.0}%", data.cpu_usage))
+                        .color(cpu_color).monospace().small());
+
+                    let ram_gb = data.ram_used as f64 / (1024.0 * 1024.0 * 1024.0);
+                    let ram_total_gb = data.ram_total as f64 / (1024.0 * 1024.0 * 1024.0);
+                    let ram_pct = if data.ram_total > 0 { data.ram_used as f32 / data.ram_total as f32 * 100.0 } else { 0.0 };
+                    let ram_color = if ram_pct < 50.0 {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else if ram_pct < 80.0 {
+                        egui::Color32::from_rgb(220, 200, 60)
+                    } else {
+                        egui::Color32::from_rgb(220, 60, 60)
+                    };
+                    ui.label(egui::RichText::new(format!("RAM {:.1}/{:.0}G", ram_gb, ram_total_gb))
+                        .color(ram_color).monospace().small());
                 });
             });
         });
@@ -425,6 +465,91 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
             });
         }
     }
+}
+
+
+/// Render the FPS details popover (shown when clicking FPS in the top bar).
+fn render_fps_popover(ui: &mut egui::Ui, data: &UIData) {
+    ui.set_min_width(220.0);
+    ui.label(egui::RichText::new("⏱ Render Pipeline").strong());
+    ui.separator();
+
+    let fps_color = |fps: f32| {
+        if fps > 55.0 { egui::Color32::from_rgb(100, 220, 100) }
+        else if fps > 30.0 { egui::Color32::from_rgb(220, 200, 60) }
+        else { egui::Color32::from_rgb(220, 60, 60) }
+    };
+
+    ui.horizontal(|ui| {
+        ui.label("Avg pipeline FPS:");
+        ui.label(egui::RichText::new(format!("{:.0}", data.fps)).color(fps_color(data.fps)).monospace().strong());
+    });
+    ui.add_space(4.0);
+
+    if data.channel_render_stats.is_empty() {
+        ui.label(egui::RichText::new("No channels").weak());
+    } else {
+        egui::Grid::new("fps_channel_grid").striped(true).show(ui, |ui| {
+            ui.label(egui::RichText::new("Channel").strong().small());
+            ui.label(egui::RichText::new("Avg FPS").strong().small());
+            ui.label(egui::RichText::new("Decks").strong().small());
+            ui.label(egui::RichText::new("Time").strong().small());
+            ui.end_row();
+
+            for stat in &data.channel_render_stats {
+                ui.label(&stat.name);
+                if stat.avg_deck_fps > 0.0 {
+                    ui.label(egui::RichText::new(format!("{:.0}", stat.avg_deck_fps))
+                        .color(fps_color(stat.avg_deck_fps)).monospace());
+                } else {
+                    ui.label(egui::RichText::new("--").weak());
+                }
+                ui.label(format!("{}", stat.active_deck_count));
+                ui.label(egui::RichText::new(format!("{:.1}ms", stat.render_time_ms)).monospace());
+                ui.end_row();
+            }
+        });
+
+        let total_active: u32 = data.channel_render_stats.iter().map(|s| s.active_deck_count).sum();
+        let total_ms: f32 = data.channel_render_stats.iter().map(|s| s.render_time_ms).sum();
+        ui.add_space(4.0);
+        ui.separator();
+        ui.label(format!("{} active decks · {:.1}ms total render", total_active, total_ms));
+    }
+}
+
+
+/// Render the GPU details popover (shown when clicking GPU device in the top bar).
+fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
+    ui.set_min_width(220.0);
+    ui.label(egui::RichText::new("🖥 GPU Details").strong());
+    ui.separator();
+
+    egui::Grid::new("gpu_details_grid").show(ui, |ui| {
+        ui.label(egui::RichText::new("Device").strong().small());
+        ui.label(&data.gpu_device_name);
+        ui.end_row();
+
+        ui.label(egui::RichText::new("Type").strong().small());
+        ui.label(&data.gpu_device_type);
+        ui.end_row();
+
+        ui.label(egui::RichText::new("Backend").strong().small());
+        ui.label(&data.gpu_backend);
+        ui.end_row();
+
+        if !data.gpu_driver.is_empty() {
+            ui.label(egui::RichText::new("Driver").strong().small());
+            ui.label(&data.gpu_driver);
+            ui.end_row();
+        }
+
+        if !data.gpu_driver_info.is_empty() {
+            ui.label(egui::RichText::new("Driver info").strong().small());
+            ui.label(&data.gpu_driver_info);
+            ui.end_row();
+        }
+    });
 }
 
 

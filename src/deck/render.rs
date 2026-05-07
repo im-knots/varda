@@ -101,6 +101,12 @@ impl Deck {
         self.last_frame_time = now;
         self.frame_count += 1;
 
+        // Derive per-deck FPS from render-to-render interval (EMA, α = 0.1)
+        if time_delta > 0.0 && time_delta < 1.0 {
+            let instant_fps = 1.0 / time_delta;
+            self.fps_smoothed = 0.1 * instant_fps + 0.9 * self.fps_smoothed;
+        }
+
         let enabled_effects: Vec<usize> = self.effects.iter()
             .enumerate()
             .filter(|(_, e)| e.enabled)

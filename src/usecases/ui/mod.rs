@@ -311,6 +311,18 @@ pub struct NotificationUI {
     pub progress: f32,
 }
 
+/// Per-channel render statistics for the FPS popover
+pub struct ChannelRenderStats {
+    pub name: String,
+    /// Average FPS across active decks in this channel (from deck render pipeline timing)
+    pub avg_deck_fps: f32,
+    /// Number of active (rendered) decks
+    pub active_deck_count: u32,
+    /// Total channel render time in milliseconds
+    pub render_time_ms: f32,
+}
+
+
 /// All collected data needed to render the UI
 pub struct UIData {
     pub generators: Vec<(String, usize)>,
@@ -374,8 +386,26 @@ pub struct UIData {
     pub channel_count: usize,
     /// Channel names (for labels in sequence builder)
     pub channel_names: Vec<String>,
-    /// Smoothed FPS (rolling average over last 60 frames)
+    /// Pipeline-derived FPS: average of per-channel FPSes (from deck render timing)
     pub fps: f32,
+    /// Per-channel render stats: (channel_name, avg_deck_fps, active_deck_count, render_time_ms)
+    pub channel_render_stats: Vec<ChannelRenderStats>,
+    /// GPU device name (e.g. "Apple M1 Pro")
+    pub gpu_device_name: String,
+    /// GPU backend (e.g. "Metal", "Vulkan", "Dx12")
+    pub gpu_backend: String,
+    /// GPU driver info string
+    pub gpu_driver: String,
+    /// GPU driver version/info
+    pub gpu_driver_info: String,
+    /// GPU device type (e.g. "DiscreteGpu", "IntegratedGpu")
+    pub gpu_device_type: String,
+    /// CPU usage % (0–100)
+    pub cpu_usage: f32,
+    /// RAM used in bytes
+    pub ram_used: u64,
+    /// RAM total in bytes
+    pub ram_total: u64,
     /// Clock sync source label ("Audio", "MIDI", "OSC", "None")
     pub clock_source: String,
     /// Clock sync BPM (if active)
@@ -1039,6 +1069,18 @@ impl UIData {
             channel_count: 2,
             channel_names: vec!["Ch A".to_string(), "Ch B".to_string()],
             fps: 60.0,
+            channel_render_stats: vec![
+                ChannelRenderStats { name: "Ch A".to_string(), avg_deck_fps: 60.0, active_deck_count: 2, render_time_ms: 1.5 },
+                ChannelRenderStats { name: "Ch B".to_string(), avg_deck_fps: 58.0, active_deck_count: 1, render_time_ms: 0.8 },
+            ],
+            gpu_device_name: "Test GPU".to_string(),
+            gpu_backend: "Metal".to_string(),
+            gpu_driver: "Apple".to_string(),
+            gpu_driver_info: "Metal 3".to_string(),
+            gpu_device_type: "IntegratedGpu".to_string(),
+            cpu_usage: 25.0,
+            ram_used: 8 * 1024 * 1024 * 1024,
+            ram_total: 16 * 1024 * 1024 * 1024,
             clock_source: "Audio".to_string(),
             clock_bpm: None,
             clock_active: false,

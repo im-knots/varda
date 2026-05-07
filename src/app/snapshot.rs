@@ -73,6 +73,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                 effects,
                 video_playback,
                 auto_transition,
+                fps: slot.deck.fps(),
             }
         }).collect();
 
@@ -91,6 +92,8 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
             blend_mode: ch.blend_mode,
             decks,
             effects: ch_effects,
+            render_time_ms: ch.render_time_ms,
+            active_deck_count: ch.active_deck_count,
         }
     }).collect();
 
@@ -463,7 +466,54 @@ pub(crate) fn build_ui_data(
         cameras: engine.cameras.devices, sequences,
         channel_count: engine.mixer.channels.len(),
         channel_names: engine.mixer.channels.iter().map(|c| c.name.clone()).collect(),
-        fps: engine.fps,
+        channel_render_stats: {
+            let stats: Vec<crate::usecases::ui::ChannelRenderStats> = engine.mixer.channels.iter()
+                .map(|ch| {
+                    // Average FPS from active deck pipeline timing
+                    let active_deck_fps: Vec<f32> = ch.decks.iter()
+                        .filter(|d| d.fps > 0.0 && d.effective_opacity > 0.0)
+                        .map(|d| d.fps)
+                        .collect();
+                    let avg_fps = if active_deck_fps.is_empty() {
+                        0.0
+                    } else {
+                        active_deck_fps.iter().sum::<f32>() / active_deck_fps.len() as f32
+                    };
+                    crate::usecases::ui::ChannelRenderStats {
+                        name: ch.name.clone(),
+                        avg_deck_fps: avg_fps,
+                        active_deck_count: ch.active_deck_count,
+                        render_time_ms: ch.render_time_ms,
+                    }
+                })
+                .collect();
+            stats
+        },
+        fps: {
+            // Top-level FPS = average of channel FPSes (only channels with active decks)
+            let ch_fps: Vec<f32> = engine.mixer.channels.iter()
+                .filter_map(|ch| {
+                    let active: Vec<f32> = ch.decks.iter()
+                        .filter(|d| d.fps > 0.0 && d.effective_opacity > 0.0)
+                        .map(|d| d.fps)
+                        .collect();
+                    if active.is_empty() { None }
+                    else { Some(active.iter().sum::<f32>() / active.len() as f32) }
+                })
+                .collect();
+            if ch_fps.is_empty() { engine.fps } else { ch_fps.iter().sum::<f32>() / ch_fps.len() as f32 }
+        },
+        gpu_device_name: {
+            let info = app.context.adapter.get_info();
+            info.name
+        },
+        gpu_backend: format!("{:?}", app.context.adapter.get_info().backend),
+        gpu_driver: app.context.adapter.get_info().driver,
+        gpu_driver_info: app.context.adapter.get_info().driver_info,
+        gpu_device_type: format!("{:?}", app.context.adapter.get_info().device_type),
+        cpu_usage: app.system_monitor.cpu_usage(),
+        ram_used: app.system_monitor.ram_used(),
+        ram_total: app.system_monitor.ram_total(),
         clock_source: engine.clock.source_label,
         clock_bpm: engine.clock.bpm,
         clock_active: engine.clock.active,

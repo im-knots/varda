@@ -6,7 +6,7 @@ use crate::renderer::context::{OutputSource, SurfaceRenderInfo};
 use crate::surface::ContentMapping;
 
 impl VardaApp {
-    /// Update frame timing (FPS measurement). Call once per frame before any work.
+    /// Update frame timing (FPS measurement) and system stats. Call once per frame before any work.
     pub fn update_frame_timing(&mut self) {
         let now = std::time::Instant::now();
         let dt = now.duration_since(self.last_frame_instant).as_secs_f32();
@@ -19,6 +19,7 @@ impl VardaApp {
             }
             self.fps_smoothed = self.fps_history.iter().sum::<f32>() / self.fps_history.len() as f32;
         }
+        self.system_monitor.update();
     }
 
     /// Render the mixer frame: update cameras, collect audio, render mixer.

@@ -203,6 +203,9 @@ pub struct Deck {
 
     /// Camera source texture view (set each frame for Camera decks, cloned from CameraManager)
     pub camera_source_view: Option<wgpu::TextureView>,
+
+    /// Smoothed FPS derived from actual render pipeline timing (EMA of 1/time_delta)
+    fps_smoothed: f32,
 }
 
 /// Accessors for Deck properties.
@@ -296,5 +299,10 @@ impl Deck {
             DeckSource::Shader { shader, .. } => Some(shader),
             _ => None,
         }
+    }
+
+    /// Get the smoothed FPS derived from actual render pipeline timing
+    pub fn fps(&self) -> f32 {
+        self.fps_smoothed
     }
 }

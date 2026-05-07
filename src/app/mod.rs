@@ -85,6 +85,9 @@ pub struct VardaApp {
     fps_history: Vec<f32>,
     fps_smoothed: f32,
     frame_count: u64,
+
+    // ── System monitoring (CPU / RAM) ────────────────────────
+    system_monitor: crate::sysmon::SystemMonitor,
 }
 
 impl VardaApp {
@@ -164,6 +167,7 @@ impl VardaApp {
             fps_history: Vec::with_capacity(60),
             fps_smoothed: 0.0,
             frame_count: 0,
+            system_monitor: crate::sysmon::SystemMonitor::new(),
         })
     }
 
