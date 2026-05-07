@@ -1,6 +1,6 @@
 # Varda
 
-Open-source visual performance instrument with broadcast-style routing for VJs and installation artists. Linux and macOS.
+Open-source visual performance instrument with broadcast-style routing for VJs and installation artists targeting Linux and unix-like systems.
 
 ![Varda](img/screenshot.png)
 
