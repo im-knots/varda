@@ -3,6 +3,8 @@
 //! These types are used in engine trait signatures and snapshot structs.
 //! They MUST NOT reference wgpu, egui, winit, or any GPU/UI framework types.
 
+use serde::Serialize;
+
 // Re-export existing clean value types from domain modules
 pub use crate::channel::BlendMode;
 pub use crate::deck::ScalingMode;
@@ -16,7 +18,7 @@ pub use crate::renderer::context::OutputSource;
 pub use crate::surface::{ContentMapping, SurfaceOutputType, CircleHint};
 
 /// Identifies where to apply an effect in the signal chain.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub enum EffectTarget {
     /// Effect on a specific deck: (channel_idx, deck_idx)
     Deck(usize, usize),
@@ -30,7 +32,7 @@ pub enum EffectTarget {
 ///
 /// Produced by VardaApp each frame. Distributed to consumers via watch channel.
 /// UIData is derived from this for the egui UI consumer.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct EngineState {
     pub mixer: MixerSnapshot,
     pub audio: AudioSnapshot,
@@ -42,12 +44,30 @@ pub struct EngineState {
     pub clock: ClockSnapshot,
     pub fps: f32,
     pub frame_count: u64,
+    /// Discovered NDI sources (names)
+    pub ndi_sources: Vec<String>,
+    /// Whether NDI runtime is available
+    pub ndi_available: bool,
+    /// Discovered Syphon servers (names)
+    pub syphon_sources: Vec<String>,
+    /// Whether Syphon framework is available
+    pub syphon_available: bool,
+    /// Active SRT receiver configs (url, mode, connected)
+    pub srt_receivers: Vec<SrtReceiverSnapshot>,
+}
+
+/// Snapshot of an active SRT receiver for UI consumption.
+#[derive(Clone, Serialize)]
+pub struct SrtReceiverSnapshot {
+    pub url: String,
+    pub mode: String,
+    pub connected: bool,
 }
 
 // ── Clock Snapshot ──────────────────────────────────────────────
 
 /// A detected MIDI clock source for UI display.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DetectedClockSourceSnapshot {
     pub device_id: crate::midi::DeviceId,
     pub device_name: String,
@@ -55,7 +75,7 @@ pub struct DetectedClockSourceSnapshot {
 }
 
 /// Snapshot of the unified clock state for UI display.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct ClockSnapshot {
     /// Current BPM from the resolved clock source.
     pub bpm: Option<f32>,
@@ -85,7 +105,7 @@ pub struct ClockSnapshot {
 
 // ── Registry Snapshot ──────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct RegistrySnapshot {
     /// Generator shaders: (name, index)
     pub generators: Vec<(String, usize)>,
@@ -97,7 +117,7 @@ pub struct RegistrySnapshot {
 
 // ── Mixer Snapshot ──────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct MixerSnapshot {
     pub channels: Vec<ChannelSnapshot>,
     pub crossfader: f32,
@@ -109,7 +129,7 @@ pub struct MixerSnapshot {
     pub sequences: Vec<SequenceSnapshot>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct ChannelSnapshot {
     pub idx: usize,
     pub name: String,
@@ -123,7 +143,7 @@ pub struct ChannelSnapshot {
     pub active_deck_count: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct DeckSnapshot {
     pub idx: usize,
     pub name: String,
@@ -141,20 +161,20 @@ pub struct DeckSnapshot {
     pub fps: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct EffectSnapshot {
     pub name: String,
     pub enabled: bool,
     pub params: ShaderParamsSnapshot,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct ShaderParamsSnapshot {
     pub shader_name: String,
     pub params: Vec<ParamSnapshot>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct ParamSnapshot {
     pub name: String,
     pub label: Option<String>,
@@ -163,7 +183,7 @@ pub struct ParamSnapshot {
     pub max: Option<f32>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct VideoPlaybackSnapshot {
     pub playing: bool,
     pub position: f64,
@@ -175,7 +195,7 @@ pub struct VideoPlaybackSnapshot {
     pub frame_rate: f64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct AutoTransitionSnapshot {
     pub enabled: bool,
     pub trigger_is_clip_end: bool,
@@ -189,7 +209,7 @@ pub struct AutoTransitionSnapshot {
 
 // ── Audio Snapshot ──────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct AudioSnapshot {
     pub level: f32,
     pub bass: f32,
@@ -203,7 +223,7 @@ pub struct AudioSnapshot {
     pub sample_rate: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct AudioDeviceSnapshot {
     pub id: AudioSourceId,
     pub name: String,
@@ -212,14 +232,14 @@ pub struct AudioDeviceSnapshot {
 
 // ── Modulation Snapshot ─────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct ModulationSnapshot {
     pub sources: Vec<ModulationSourceSnapshot>,
     pub current_values: Vec<f32>,
     pub assignments: std::collections::HashMap<String, Vec<ModulationAssignmentSnapshot>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub enum ModulationSourceSnapshot {
     LFO { waveform: LFOWaveform, frequency: f32, phase: f32, amplitude: f32, bipolar: bool },
     Audio { source_id: Option<AudioSourceId>, freq_low: f32, freq_high: f32, gain: f32, smoothing: f32, mode: AudioReactMode, noise_gate: f32 },
@@ -227,7 +247,7 @@ pub enum ModulationSourceSnapshot {
     StepSequencer { steps: Vec<f32>, rate: f32, interpolation: StepInterpolation, bipolar: bool },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct ModulationAssignmentSnapshot {
     pub source_idx: usize,
     pub amount: f32,
@@ -235,7 +255,7 @@ pub struct ModulationAssignmentSnapshot {
 
 // ── Sequence Snapshot ───────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct SequenceSnapshot {
     pub name: String,
     pub enabled: bool,
@@ -244,13 +264,13 @@ pub struct SequenceSnapshot {
     pub steps: Vec<SequenceStepSnapshot>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct SequenceStepSnapshot {
     pub label: String,
     pub kind: SequenceStepKindSnapshot,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub enum SequenceStepKindSnapshot {
     Fade { from_ch: usize, to_ch: usize, duration_val: f64, is_beats: bool, easing: String, transition_shader: Option<String> },
     Wait { duration_val: f64, is_beats: bool },
@@ -259,14 +279,14 @@ pub enum SequenceStepKindSnapshot {
 
 // ── Output Snapshot ─────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct OutputSnapshot {
     pub windows: Vec<OutputWindowSnapshot>,
     pub surfaces: Vec<SurfaceSnapshot>,
     pub monitors: Vec<MonitorSnapshot>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct OutputWindowSnapshot {
     pub name: String,
     pub target_label: String,
@@ -275,7 +295,7 @@ pub struct OutputWindowSnapshot {
     pub calibration_mode: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct SurfaceAssignmentSnapshot {
     pub surface_idx: usize,
     pub surface_name: String,
@@ -283,7 +303,7 @@ pub struct SurfaceAssignmentSnapshot {
     pub enabled: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct SurfaceSnapshot {
     pub name: String,
     pub vertices: Vec<[f32; 2]>,
@@ -294,7 +314,7 @@ pub struct SurfaceSnapshot {
     pub circle_hint: Option<CircleHint>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct MonitorSnapshot {
     pub name: String,
     pub index: usize,
@@ -304,7 +324,7 @@ pub struct MonitorSnapshot {
 
 // ── MIDI Snapshot ───────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct MidiSnapshot {
     pub devices: Vec<MidiDeviceSnapshot>,
     pub mappings: Vec<MidiMappingSnapshot>,
@@ -312,7 +332,7 @@ pub struct MidiSnapshot {
     pub learn_target: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct MidiDeviceSnapshot {
     pub id: crate::midi::DeviceId,
     pub name: String,
@@ -321,7 +341,7 @@ pub struct MidiDeviceSnapshot {
     pub profile: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct MidiMappingSnapshot {
     pub key: crate::midi::MidiKey,
     pub key_display: String,
@@ -331,7 +351,7 @@ pub struct MidiMappingSnapshot {
 
 // ── Camera Snapshot ─────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct CameraSnapshot {
     pub devices: Vec<(String, CameraId)>,
 }
@@ -425,6 +445,11 @@ mod tests {
             },
             fps: 60.0,
             frame_count: 0,
+            ndi_sources: vec![],
+            ndi_available: false,
+            syphon_sources: vec![],
+            syphon_available: false,
+            srt_receivers: vec![],
         };
         assert!((state.fps - 60.0).abs() < 1e-5);
         assert_eq!(state.frame_count, 0);
@@ -468,6 +493,11 @@ mod tests {
             },
             fps: 59.9,
             frame_count: 42,
+            ndi_sources: vec![],
+            ndi_available: false,
+            syphon_sources: vec![],
+            syphon_available: false,
+            srt_receivers: vec![],
         };
         let cloned = state.clone();
         assert!((cloned.mixer.crossfader - 0.5).abs() < 1e-5);

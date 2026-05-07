@@ -197,7 +197,7 @@ impl VardaApp {
         }
     }
 
-    /// Apply MIDI/audio/camera device actions from UI.
+    /// Apply MIDI/audio/camera/NDI/Syphon device actions from UI.
     pub fn apply_device_actions(&mut self, ui_actions: &ui::UIActions) {
         if ui_actions.camera_rescan {
             self.camera_manager.scan_devices();
@@ -235,7 +235,18 @@ impl VardaApp {
         for key in &ui_actions.midi_remove_mapping {
             self.midi_mappings.remove(key);
         }
+        // NDI rescan
+        if ui_actions.ndi_rescan {
+            self.ndi_manager.discover();
+        }
+        // Syphon rescan
+        #[cfg(target_os = "macos")]
+        if ui_actions.syphon_rescan {
+            self.syphon_manager.discover();
+        }
     }
+
+    // Recording/SRT start/stop is now handled per-output in apply_output_actions()
 
     /// Update controller LEDs based on current state.
     pub fn update_controller_leds(&mut self) {

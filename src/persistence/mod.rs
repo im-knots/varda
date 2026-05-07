@@ -147,7 +147,7 @@ impl Workspace {
 // ── Snapshot: Live State → Config ───────────────────────────────────
 
 use crate::mixer::Mixer;
-use crate::renderer::context::{OutputTarget, OutputWindow};
+use crate::renderer::context::{OutputTarget, UnifiedOutput, RecordingCodec};
 use crate::scene::*;
 
 /// Build a SceneConfig snapshot from live app state (show-specific: channels, effects, modulation).
@@ -184,6 +184,29 @@ pub fn snapshot_scene(
                         .trim_start_matches("📹 ")
                         .to_string();
                     SourceConfig::Camera { name }
+                }
+                "ndi" => {
+                    // Store the NDI source name (strip the 📡 prefix we add)
+                    let name = slot.deck.source_name()
+                        .trim_start_matches("📡 ")
+                        .to_string();
+                    SourceConfig::Ndi { name }
+                }
+                "syphon" => {
+                    // Store the Syphon server name (strip the 🔗 prefix we add)
+                    let name = slot.deck.source_name()
+                        .trim_start_matches("🔗 ")
+                        .to_string();
+                    SourceConfig::Syphon { name }
+                }
+                "srt" => {
+                    // Store the SRT URL (strip the 📺 prefix we add)
+                    let url = slot.deck.source_name()
+                        .trim_start_matches("📺 ")
+                        .to_string();
+                    // Determine mode from the deck source
+                    let mode = "caller".to_string(); // Default; actual mode stored in manager
+                    SourceConfig::Srt { url, mode }
                 }
                 _ => return None,
             };
@@ -307,30 +330,82 @@ pub fn snapshot_scene(
     }
 }
 
+
+/// Convert a live OutputTarget to a serializable OutputTargetConfig.
+fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
+    match target {
+        OutputTarget::Windowed => OutputTargetConfig::Windowed,
+        OutputTarget::Display { name, .. } => OutputTargetConfig::Display { name: name.clone() },
+        OutputTarget::Recording { path, codec } => OutputTargetConfig::Recording {
+            path: path.clone(),
+            codec: codec.to_string(),
+        },
+        OutputTarget::SrtStream { url } => OutputTargetConfig::SrtStream { url: url.clone() },
+        OutputTarget::NdiSend { sender_name } => OutputTargetConfig::NdiSend { sender_name: sender_name.clone() },
+        OutputTarget::SyphonServer { server_name } => OutputTargetConfig::SyphonServer { server_name: server_name.clone() },
+    }
+}
+
+/// Convert a serializable OutputTargetConfig back to a live OutputTarget.
+/// Public variant for use from outputs.rs.
+pub fn config_to_target_pub(config: &OutputTargetConfig) -> OutputTarget {
+    config_to_target(config)
+}
+
+fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
+    match config {
+        OutputTargetConfig::Windowed => OutputTarget::Windowed,
+        OutputTargetConfig::Display { name } => OutputTarget::Display {
+            name: name.clone(),
+            monitor_index: 0, // Will be matched at runtime
+        },
+        OutputTargetConfig::Recording { path, codec } => OutputTarget::Recording {
+            path: path.clone(),
+            codec: match codec.as_str() {
+                "prores" | "ProRes" => RecordingCodec::ProRes,
+                "hapq" | "HapQ" => RecordingCodec::HapQ,
+                _ => RecordingCodec::H264,
+            },
+        },
+        OutputTargetConfig::SrtStream { url } => OutputTarget::SrtStream { url: url.clone() },
+        OutputTargetConfig::NdiSend { sender_name } => OutputTarget::NdiSend { sender_name: sender_name.clone() },
+        OutputTargetConfig::SyphonServer { server_name } => OutputTarget::SyphonServer { server_name: server_name.clone() },
+    }
+}
+
 /// Build a StagePrefs snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
 pub fn snapshot_stage(
     surface_manager: &crate::surface::SurfaceManager,
-    output_windows: &[OutputWindow],
+    outputs_list: &[UnifiedOutput],
     grid_size: f32,
     snap: bool,
     library_panel_open: bool,
     stage_editor_open: bool,
 ) -> StagePrefs {
-    let outputs = output_windows.iter().map(|o| {
-        let target_display = match &o.target {
-            OutputTarget::Windowed => None,
-            OutputTarget::Display { name, .. } => Some(name.clone()),
+    let outputs = outputs_list.iter().map(|unified| {
+        let (name, target, surface_assignments) = match unified {
+            UnifiedOutput::Window(w) => (
+                w.name.clone(),
+                target_to_config(&w.target),
+                w.surface_assignments.iter().map(|a| {
+                    SurfaceAssignmentConfig {
+                        surface_idx: a.surface_idx,
+                        warp_corners: a.warp_corners,
+                        enabled: a.enabled,
+                    }
+                }).collect(),
+            ),
+            UnifiedOutput::Headless(h) => (
+                h.name.clone(),
+                target_to_config(&h.target),
+                Vec::new(), // Headless outputs don't have surface assignments
+            ),
         };
         OutputConfig {
-            name: o.name.clone(),
-            target_display,
-            surface_assignments: o.surface_assignments.iter().map(|a| {
-                SurfaceAssignmentConfig {
-                    surface_idx: a.surface_idx,
-                    warp_corners: a.warp_corners,
-                    enabled: a.enabled,
-                }
-            }).collect(),
+            name,
+            target: target,
+            target_display: None,
+            surface_assignments,
         }
     }).collect();
 
@@ -363,6 +438,8 @@ pub fn restore_scene(
     context: &GpuContext,
     registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    ndi_manager: &mut crate::ndi::NdiManager,
+    srt_manager: &mut crate::srt::SrtManager,
     render_width: u32,
     render_height: u32,
 ) -> Result<RestoreResult> {
@@ -383,7 +460,7 @@ pub fn restore_scene(
         channel.blend_mode = ch_config.blend_mode.into();
 
         for deck_config in &ch_config.decks {
-            match restore_deck(deck_config, context, registry, camera_manager, render_width, render_height) {
+            match restore_deck(deck_config, context, registry, camera_manager, ndi_manager, srt_manager, render_width, render_height) {
                 Ok(deck) => {
                     let mut slot = crate::channel::DeckSlot::new(deck);
                     slot.opacity = deck_config.opacity;
@@ -547,6 +624,8 @@ fn restore_deck(
     context: &GpuContext,
     _registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    ndi_manager: &mut crate::ndi::NdiManager,
+    srt_manager: &mut crate::srt::SrtManager,
     render_width: u32,
     render_height: u32,
 ) -> Result<Deck> {
@@ -582,6 +661,37 @@ fn restore_deck(
                 .with_context(|| format!("Failed to open camera '{}'", name))?;
 
             Deck::new_from_camera(context, camera_id, &cam_name, src_w, src_h, render_width, render_height)?
+        }
+        SourceConfig::Ndi { name } => {
+            match ndi_manager.start_receive(name, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = ndi_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    Deck::new_from_ndi(context, receiver_idx, name, src_w, src_h, render_width, render_height)?
+                }
+                None => {
+                    return Err(anyhow::anyhow!("NDI source '{}' not available for restore", name));
+                }
+            }
+        }
+        SourceConfig::Syphon { name } => {
+            // Syphon sources are resolved at runtime — skip if not on macOS
+            log::warn!("Syphon source '{}' restoration not yet implemented (needs SyphonManager)", name);
+            return Err(anyhow::anyhow!("Syphon source '{}' not available for restore", name));
+        }
+        SourceConfig::Srt { url, mode } => {
+            let srt_mode = match mode.as_str() {
+                "listener" => crate::srt::SrtMode::Listener,
+                _ => crate::srt::SrtMode::Caller,
+            };
+            match srt_manager.start_receive(url, srt_mode, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = srt_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    Deck::new_from_srt(context, receiver_idx, url, src_w, src_h, render_width, render_height)?
+                }
+                None => {
+                    return Err(anyhow::anyhow!("SRT source '{}' not available for restore", url));
+                }
+            }
         }
     };
 

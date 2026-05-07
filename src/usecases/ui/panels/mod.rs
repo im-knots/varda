@@ -294,6 +294,27 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     log::info!("Library drop (deferred): camera {} -> ch{}", cam_id, ch_idx);
                     actions.camera_to_add = Some((ch_idx, cam_id));
                 }
+
+                let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
+                let ndi_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(ndi_key));
+                if let Some(ndi_name) = ndi_name {
+                    log::info!("Library drop (deferred): NDI '{}' -> ch{}", ndi_name, ch_idx);
+                    actions.ndi_to_add = Some((ch_idx, ndi_name));
+                }
+
+                let syph_key = egui::Id::new("__lib_dnd_syph_name");
+                let syph_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(syph_key));
+                if let Some(syph_name) = syph_name {
+                    log::info!("Library drop (deferred): Syphon '{}' -> ch{}", syph_name, ch_idx);
+                    actions.syphon_to_add = Some((ch_idx, syph_name));
+                }
+
+                let srt_key = egui::Id::new("__lib_dnd_srt_config");
+                let srt_config: Option<(String, crate::srt::SrtMode)> = ctx.memory(|mem| mem.data.get_temp(srt_key));
+                if let Some((url, mode)) = srt_config {
+                    log::info!("Library drop (deferred): SRT '{}' ({:?}) -> ch{}", url, mode, ch_idx);
+                    actions.srt_to_add = Some((ch_idx, url, mode));
+                }
             }
 
             if let Some((target_type, ch_idx, deck_idx)) = hover_fx {
@@ -325,6 +346,9 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_gen_idx"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
                 mem.data.remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));
+                mem.data.remove::<String>(egui::Id::new("__lib_dnd_ndi_name"));
+                mem.data.remove::<String>(egui::Id::new("__lib_dnd_syph_name"));
+                mem.data.remove::<(String, crate::srt::SrtMode)>(egui::Id::new("__lib_dnd_srt_config"));
             });
         }
     }

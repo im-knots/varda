@@ -323,6 +323,14 @@ pub struct ChannelRenderStats {
 }
 
 
+/// SRT source entry for the library panel config card
+#[derive(Clone)]
+pub struct SrtLibraryEntry {
+    pub url: String,
+    pub mode: crate::srt::SrtMode,
+    pub connected: bool,
+}
+
 /// All collected data needed to render the UI
 pub struct UIData {
     pub generators: Vec<(String, usize)>,
@@ -360,8 +368,8 @@ pub struct UIData {
     pub selected_channel: Option<usize>,
     /// Whether the master output is selected for detail view in bottom bar
     pub selected_master: bool,
-    /// Output windows state for UI display
-    pub output_windows: Vec<OutputWindowUI>,
+    /// Unified outputs (windowed + headless) for UI display
+    pub outputs: Vec<OutputUI>,
     /// Surfaces in the stage layout
     pub surfaces: Vec<SurfaceUI>,
     /// Whether the full-screen stage editor is open (replaces deck view)
@@ -380,6 +388,17 @@ pub struct UIData {
     pub midi_mappings: Vec<MidiMappingUI>,
     /// Available camera devices (name, id)
     pub cameras: Vec<(String, crate::camera::CameraId)>,
+    /// Discovered NDI sources (name)
+    pub ndi_sources: Vec<String>,
+    /// Whether NDI runtime is available
+    pub ndi_available: bool,
+    /// Discovered Syphon servers (name)
+    pub syphon_sources: Vec<String>,
+    /// Whether Syphon framework is available
+    pub syphon_available: bool,
+    /// SRT library source configs for the library panel
+    pub srt_library_configs: Vec<SrtLibraryEntry>,
+    // Recording/SRT state is now per-output (see OutputUI.is_active, active_duration)
     /// Transition sequences (multiple named sequences)
     pub sequences: Vec<SequenceUIData>,
     /// Number of channels (for channel dropdowns in sequence builder)
@@ -492,19 +511,25 @@ pub struct MidiMappingUI {
     pub param_path: String,
 }
 
-/// Output window action from UI
+/// Output action from UI (unified — covers windowed and headless outputs)
 pub enum OutputAction {
-    /// Create a new output window
+    /// Create a new windowed output (default)
     Create,
-    /// Close an output window by index
+    /// Create a new headless output with the given target
+    CreateHeadless { target: crate::renderer::context::OutputTarget },
+    /// Close/remove an output by index
     Close { idx: usize },
-    /// Set the display target for an output window (Windowed or a specific display)
+    /// Set the target for an output (may swap windowed↔headless)
     SetTarget { idx: usize, target: crate::renderer::context::OutputTarget },
+    /// Start a headless output (begin recording/streaming)
+    Start { idx: usize },
+    /// Stop a headless output (end recording/streaming)
+    Stop { idx: usize },
     /// Assign a surface to this output (adds a SurfaceAssignment)
     AssignSurface { output_idx: usize, surface_idx: usize },
     /// Remove a surface assignment from this output
     UnassignSurface { output_idx: usize, assignment_idx: usize },
-    /// Toggle calibration mode on an output
+    /// Toggle calibration mode on an output (windowed only)
     ToggleCalibration { idx: usize },
     /// Update a warp corner for a surface assignment
     SetWarpCorner { output_idx: usize, assignment_idx: usize, corner_idx: usize, position: [f32; 2] },
@@ -521,14 +546,20 @@ pub struct SurfaceAssignmentUI {
     pub enabled: bool,
 }
 
-/// Snapshot of an output window's state for UI display
+/// Snapshot of an output's state for UI display (unified — windowed or headless)
 #[derive(Clone)]
-pub struct OutputWindowUI {
+pub struct OutputUI {
     pub name: String,
-    /// Current display target label (e.g. "Windowed", "HDMI-1 (1920x1080)")
+    /// The output target (unified enum)
+    pub target: crate::renderer::context::OutputTarget,
+    /// Current display target label (e.g. "Windowed", "Rec: /path", "SRT: srt://...")
     pub target_label: String,
-    /// Whether currently targeting a display (vs windowed)
-    pub is_on_display: bool,
+    /// Whether this output is windowed (has an OS window)
+    pub is_windowed: bool,
+    /// Whether this output is actively recording/streaming (headless only)
+    pub is_active: bool,
+    /// Duration of active recording/streaming
+    pub active_duration: std::time::Duration,
     pub surface_assignments: Vec<SurfaceAssignmentUI>,
     pub calibration_mode: bool,
 }
@@ -688,6 +719,17 @@ pub struct UIActions {
     pub camera_to_add: Option<(usize, crate::camera::CameraId)>,
     /// Rescan for camera devices
     pub camera_rescan: bool,
+    /// (ch_idx, ndi_source_name) — add an NDI source as a new deck to channel
+    pub ndi_to_add: Option<(usize, String)>,
+    /// Rescan for NDI sources
+    pub ndi_rescan: bool,
+    /// (ch_idx, syphon_server_name) — add a Syphon server as a new deck to channel
+    pub syphon_to_add: Option<(usize, String)>,
+    /// Rescan for Syphon servers
+    pub syphon_rescan: bool,
+    /// (ch_idx, url, mode) — add an SRT source as a new deck to channel
+    pub srt_to_add: Option<(usize, String, crate::srt::SrtMode)>,
+    // Recording/SRT start/stop is now via OutputAction::Start/Stop per output
     /// Rescan for audio input devices
     pub audio_rescan: bool,
     /// Toggle an audio source on/off (source_id, enabled)
@@ -836,6 +878,12 @@ impl UIActions {
             master_effect_to_move: None,
             camera_to_add: None,
             camera_rescan: false,
+            ndi_to_add: None,
+            ndi_rescan: false,
+            syphon_to_add: None,
+            syphon_rescan: false,
+            srt_to_add: None,
+            // Recording/SRT now per-output via OutputAction
             audio_rescan: false,
             audio_source_toggles: Vec::new(),
             video_actions: Vec::new(),
@@ -858,6 +906,12 @@ pub enum LibraryDrag {
     Effect(usize),
     /// Camera device from library (CameraId)
     Camera(crate::camera::CameraId),
+    /// NDI network source (source name)
+    Ndi(String),
+    /// Syphon server (server name)
+    Syphon(String),
+    /// SRT network source (url, mode)
+    Srt(String, crate::srt::SrtMode),
 }
 
 /// Drag payload for effect reordering within a chain
@@ -1062,7 +1116,7 @@ impl UIData {
             selected_deck: Some((0, 0)),
             selected_channel: None,
             selected_master: false,
-            output_windows: vec![],
+            outputs: vec![],
             surfaces: vec![],
             stage_editor_open: false,
             library_panel_open: true,
@@ -1072,6 +1126,12 @@ impl UIData {
             midi_devices: vec![],
             midi_mappings: vec![],
             cameras: vec![],
+            ndi_sources: vec![],
+            ndi_available: false,
+            syphon_sources: vec![],
+            syphon_available: false,
+            srt_library_configs: vec![],
+
             sequences: vec![],
             channel_count: 2,
             channel_names: vec!["Ch A".to_string(), "Ch B".to_string()],

@@ -80,7 +80,25 @@
   "outputs": [
     {
       "name": "Output 1",
-      "target_display": null,
+      "target": {
+        "type": "windowed"
+      },
+      "surface_assignments": []
+    },
+    {
+      "name": "Output 2",
+      "target": {
+        "type": "ndi_send",
+        "sender_name": "Varda NDI"
+      },
+      "surface_assignments": []
+    },
+    {
+      "name": "Output 3",
+      "target": {
+        "type": "srt_stream",
+        "url": "srt://127.0.0.1:9000"
+      },
       "surface_assignments": []
     }
   ]

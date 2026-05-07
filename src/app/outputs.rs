@@ -1,8 +1,8 @@
-//! Output window and surface action processing for VardaApp.
+//! Output action processing for VardaApp (unified windowed + headless).
 
 use super::VardaApp;
 use crate::usecases::ui;
-use crate::renderer::context::{OutputWindow, OutputTarget, SurfaceAssignment};
+use crate::renderer::context::{OutputWindow, OutputTarget, HeadlessOutput, UnifiedOutput, SurfaceAssignment, OutputSource};
 
 impl VardaApp {
     /// Apply output-related UI actions.
@@ -10,30 +10,124 @@ impl VardaApp {
         for action in &ui_actions.output_actions {
             match action {
                 ui::OutputAction::Create => {
-                    self.pending_output_creates.push(());
+                    self.pending_output_creates.push(crate::scene::OutputConfig::default_windowed());
+                }
+                ui::OutputAction::CreateHeadless { target } => {
+                    let idx = self.outputs.len() + 1;
+                    let name = format!("Output {}", idx);
+                    let headless = HeadlessOutput::new(
+                        &self.context.device,
+                        name.clone(),
+                        OutputSource::Master,
+                        target.clone(),
+                        self.render_width,
+                        self.render_height,
+                    );
+                    log::info!("Created headless output '{}' → {}", name, target);
+                    self.outputs.push(UnifiedOutput::Headless(headless));
                 }
                 ui::OutputAction::Close { idx } => {
-                    if *idx < self.output_windows.len() {
-                        let name = self.output_windows[*idx].name.clone();
-                        let output = self.output_windows.remove(*idx);
-                        output.destroy();
-                        log::info!("Closed output window '{}'", name);
+                    if *idx < self.outputs.len() {
+                        let name = self.outputs[*idx].name().to_string();
+                        let removed = self.outputs.remove(*idx);
+                        if let UnifiedOutput::Window(w) = removed {
+                            w.destroy();
+                        }
+                        log::info!("Closed output '{}'", name);
                     }
                 }
                 ui::OutputAction::SetTarget { idx, target } => {
-                    if let Some(output) = self.output_windows.get_mut(*idx) {
-                        let monitor = match target {
-                            OutputTarget::Display { monitor_index, .. } => {
-                                self.cached_monitors.get(*monitor_index).map(|(_, h)| h.clone())
+                    if let Some(output) = self.outputs.get_mut(*idx) {
+                        match output {
+                            UnifiedOutput::Window(w) => {
+                                // Windowed targets stay windowed
+                                if target.is_windowed() {
+                                    let monitor = match target {
+                                        OutputTarget::Display { monitor_index, .. } => {
+                                            self.cached_monitors.get(*monitor_index).map(|(_, h)| h.clone())
+                                        }
+                                        _ => None,
+                                    };
+                                    log::info!("Output '{}' target: {}", w.name, target);
+                                    w.set_target(target.clone(), monitor);
+                                }
+                                // TODO: windowed→headless swap (destroy window, create headless)
                             }
-                            _ => None,
-                        };
-                        log::info!("Output '{}' target: {}", output.name, target);
-                        output.set_target(target.clone(), monitor);
+                            UnifiedOutput::Headless(h) => {
+                                if target.is_headless() {
+                                    log::info!("Output '{}' target: {} → {}", h.name, h.target, target);
+                                    h.target = target.clone();
+                                }
+                                // TODO: headless→windowed swap
+                            }
+                        }
+                    }
+                }
+                ui::OutputAction::Start { idx } => {
+                    if let Some(UnifiedOutput::Headless(h)) = self.outputs.get_mut(*idx) {
+                        if !h.active {
+                            match &h.target {
+                                OutputTarget::Recording { path, codec } => {
+                                    match crate::renderer::FfmpegSubprocess::spawn_recording(
+                                        path, codec, h.width, h.height, 30,
+                                    ) {
+                                        Ok(sub) => {
+                                            h.subprocess = Some(sub);
+                                            h.active = true;
+                                            log::info!("Started recording on output '{}'", h.name);
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to start recording: {}", e);
+                                            self.notifications.error(format!("Recording failed: {}", e));
+                                        }
+                                    }
+                                }
+                                OutputTarget::SrtStream { url } => {
+                                    match crate::renderer::FfmpegSubprocess::spawn_srt(
+                                        url, h.width, h.height, 30,
+                                    ) {
+                                        Ok(sub) => {
+                                            h.subprocess = Some(sub);
+                                            h.active = true;
+                                            log::info!("Started SRT stream on output '{}'", h.name);
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to start SRT: {}", e);
+                                            self.notifications.error(format!("SRT failed: {}", e));
+                                        }
+                                    }
+                                }
+                                OutputTarget::NdiSend { .. } => {
+                                    h.active = true;
+                                    h.started_at = Some(std::time::Instant::now());
+                                    log::info!("Started NDI send on output '{}'", h.name);
+                                }
+                                OutputTarget::SyphonServer { .. } => {
+                                    h.active = true;
+                                    h.started_at = Some(std::time::Instant::now());
+                                    log::info!("Started Syphon server on output '{}'", h.name);
+                                }
+                                _ => {
+                                    log::warn!("Cannot start windowed target as headless");
+                                }
+                            }
+                        }
+                    }
+                }
+                ui::OutputAction::Stop { idx } => {
+                    if let Some(UnifiedOutput::Headless(h)) = self.outputs.get_mut(*idx) {
+                        if h.active {
+                            if let Some(mut sub) = h.subprocess.take() {
+                                sub.stop();
+                            }
+                            h.active = false;
+                            h.started_at = None;
+                            log::info!("Stopped output '{}'", h.name);
+                        }
                     }
                 }
                 ui::OutputAction::AssignSurface { output_idx, surface_idx } => {
-                    if let Some(output) = self.output_windows.get_mut(*output_idx) {
+                    if let Some(UnifiedOutput::Window(output)) = self.outputs.get_mut(*output_idx) {
                         if !output.surface_assignments.iter().any(|a| a.surface_idx == *surface_idx) {
                             if let Some(surface) = self.surface_manager.surfaces.get(*surface_idx) {
                                 let bb = surface.bounding_box();
@@ -54,7 +148,7 @@ impl VardaApp {
                     }
                 }
                 ui::OutputAction::UnassignSurface { output_idx, assignment_idx } => {
-                    if let Some(output) = self.output_windows.get_mut(*output_idx) {
+                    if let Some(UnifiedOutput::Window(output)) = self.outputs.get_mut(*output_idx) {
                         if *assignment_idx < output.surface_assignments.len() {
                             output.surface_assignments.remove(*assignment_idx);
                             log::info!("Removed surface assignment from output '{}'", output.name);
@@ -62,13 +156,13 @@ impl VardaApp {
                     }
                 }
                 ui::OutputAction::ToggleCalibration { idx } => {
-                    if let Some(output) = self.output_windows.get_mut(*idx) {
+                    if let Some(UnifiedOutput::Window(output)) = self.outputs.get_mut(*idx) {
                         output.calibration_mode = !output.calibration_mode;
                         log::info!("Output '{}' calibration mode: {}", output.name, output.calibration_mode);
                     }
                 }
                 ui::OutputAction::SetWarpCorner { output_idx, assignment_idx, corner_idx, position } => {
-                    if let Some(output) = self.output_windows.get_mut(*output_idx) {
+                    if let Some(UnifiedOutput::Window(output)) = self.outputs.get_mut(*output_idx) {
                         if let Some(assignment) = output.surface_assignments.get_mut(*assignment_idx) {
                             if *corner_idx < 4 {
                                 assignment.warp_corners[*corner_idx] = *position;
@@ -77,7 +171,7 @@ impl VardaApp {
                     }
                 }
                 ui::OutputAction::ResetWarp { output_idx, assignment_idx } => {
-                    if let Some(output) = self.output_windows.get_mut(*output_idx) {
+                    if let Some(UnifiedOutput::Window(output)) = self.outputs.get_mut(*output_idx) {
                         if let Some(assignment) = output.surface_assignments.get_mut(*assignment_idx) {
                             if let Some(surface) = self.surface_manager.surfaces.get(assignment.surface_idx) {
                                 let bb = surface.bounding_box();
@@ -96,36 +190,72 @@ impl VardaApp {
         }
     }
 
-
-    /// Create pending output windows (deferred from UI actions).
+    /// Create pending outputs (deferred from UI actions).
+    /// Windowed/Display outputs need the event loop; headless outputs are created directly.
     pub fn create_pending_outputs(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         use winit::window::Window;
-        let pending: Vec<()> = self.pending_output_creates.drain(..).collect();
-        for _ in pending {
-            let idx = self.output_windows.len() + 1;
-            let name = format!("Output {}", idx);
-            let window_attrs = Window::default_attributes()
-                .with_title(format!("Varda - {}", name))
-                .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
 
-            match event_loop.create_window(window_attrs) {
-                Ok(window) => {
-                    let window_static: &'static Window = Box::leak(Box::new(window));
-                    match OutputWindow::new(&self.context, window_static, name.clone()) {
-                        Ok(output) => {
-                            log::info!("Created output window '{}'", name);
-                            self.output_windows.push(output);
-                        }
-                        Err(e) => {
-                            log::error!("Failed to create output window: {}", e);
-                            self.notifications.error(format!("Failed to create output: {}", e));
+        let pending: Vec<crate::scene::OutputConfig> = self.pending_output_creates.drain(..).collect();
+        for config in pending {
+            let idx = self.outputs.len() + 1;
+            let name = if config.name.is_empty() { format!("Output {}", idx) } else { config.name.clone() };
+            let target = crate::persistence::config_to_target_pub(&config.target);
+
+            if target.is_windowed() {
+                // Windowed/Display: needs an OS window
+                let window_attrs = Window::default_attributes()
+                    .with_title(format!("Varda - {}", name))
+                    .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+
+                match event_loop.create_window(window_attrs) {
+                    Ok(window) => {
+                        let window_static: &'static Window = Box::leak(Box::new(window));
+                        match OutputWindow::new(&self.context, window_static, name.clone()) {
+                            Ok(mut output) => {
+                                // Restore surface assignments from config
+                                output.surface_assignments = config.surface_assignments.iter().map(|a| {
+                                    SurfaceAssignment {
+                                        surface_idx: a.surface_idx,
+                                        warp_corners: a.warp_corners,
+                                        enabled: a.enabled,
+                                    }
+                                }).collect();
+                                // If Display target, set fullscreen
+                                if let OutputTarget::Display { ref name, .. } = target {
+                                    output.target = target.clone();
+                                    // Try to find the matching monitor
+                                    let monitor = self.cached_monitors.iter()
+                                        .find(|(n, _)| n == name)
+                                        .map(|(_, m)| m.clone());
+                                    output.set_target(target.clone(), monitor);
+                                }
+                                log::info!("Created output window '{}'", output.name);
+                                self.outputs.push(UnifiedOutput::Window(output));
+                            }
+                            Err(e) => {
+                                log::error!("Failed to create output window: {}", e);
+                                self.notifications.error(format!("Failed to create output: {}", e));
+                            }
                         }
                     }
+                    Err(e) => {
+                        log::error!("Failed to create output window: {}", e);
+                        self.notifications.error(format!("Failed to create window: {}", e));
+                    }
                 }
-                Err(e) => {
-                    log::error!("Failed to create output window: {}", e);
-                    self.notifications.error(format!("Failed to create window: {}", e));
-                }
+            } else {
+                // Headless output (Recording, SRT, NDI, Syphon)
+                let headless = HeadlessOutput::new(
+                    &self.context.device,
+                    name.clone(),
+                    OutputSource::Master,
+                    target,
+                    self.render_width,
+                    self.render_height,
+                );
+                // Headless outputs don't use surface assignments (they render from a source directly)
+                log::info!("Created headless output '{}'", name);
+                self.outputs.push(UnifiedOutput::Headless(headless));
             }
         }
     }

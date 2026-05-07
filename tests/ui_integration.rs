@@ -297,7 +297,7 @@ fn click_new_output_creates_output_action() {
     harness.run();
     *harness.state_mut() = AccActions::default();
 
-    harness.get_by_label("+ New Output").click();
+    harness.get_by_label("+ Windowed").click();
     harness.run();
 
     assert!(harness.state().output_create, "Expected OutputAction::Create");

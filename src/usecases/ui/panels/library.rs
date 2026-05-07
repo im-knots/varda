@@ -121,6 +121,137 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             }
         });
 
+        ui.add_space(4.0);
+
+        // === NDI SOURCES ===
+        {
+            let ndi_header = egui::RichText::new(format!("📡 NDI Sources ({})", data.ndi_sources.len())).strong();
+            egui::CollapsingHeader::new(ndi_header).default_open(false).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.small_button("🔄 Rescan").clicked() {
+                        actions.ndi_rescan = true;
+                    }
+                    if !data.ndi_available {
+                        ui.label(egui::RichText::new("(SDK not found)").small().weak());
+                    }
+                });
+                if data.ndi_sources.is_empty() {
+                    ui.label(egui::RichText::new("No NDI sources found").small().weak());
+                }
+                for (i, name) in data.ndi_sources.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_ndi", i));
+                    ui.dnd_drag_source(item_id, LibraryDrag::Ndi(name.clone()), |ui| {
+                        ui.label(egui::RichText::new(format!("  📡 {}", name)).size(12.0));
+                    }).response;
+                    if ui.ctx().is_being_dragged(item_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__lib_dnd_ndi_name"), name.clone());
+                        });
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+        }
+
+        // === SRT SOURCES ===
+        {
+            let srt_header = egui::RichText::new(format!("📺 SRT Sources ({})", data.srt_library_configs.len())).strong();
+            egui::CollapsingHeader::new(srt_header).default_open(false).show(ui, |ui| {
+                // "+ Add SRT" button with inline config
+                let adding_id = ui.id().with("srt_adding");
+                let url_id = ui.id().with("srt_url_input");
+                let mode_id = ui.id().with("srt_mode_input");
+                let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                if is_adding {
+                    let mut url: String = ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| "srt://:9000".to_string());
+                    let mut mode_idx: usize = ui.data(|d| d.get_temp(mode_id)).unwrap_or(0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("URL:");
+                        ui.text_edit_singleline(&mut url);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Mode:");
+                        egui::ComboBox::from_id_salt("srt_mode_combo")
+                            .selected_text(if mode_idx == 0 { "Listener" } else { "Caller" })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut mode_idx, 0, "Listener");
+                                ui.selectable_value(&mut mode_idx, 1, "Caller");
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                            let mode = if mode_idx == 0 { crate::srt::SrtMode::Listener } else { crate::srt::SrtMode::Caller };
+                            // Add to first channel via double-click-style action
+                            actions.srt_to_add = Some((0, url.clone(), mode));
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                        if ui.small_button("✕ Cancel").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                    });
+
+                    ui.data_mut(|d| {
+                        d.insert_temp(url_id, url);
+                        d.insert_temp(mode_id, mode_idx);
+                    });
+                } else if ui.small_button("+ Add SRT").clicked() {
+                    ui.data_mut(|d| d.insert_temp(adding_id, true));
+                }
+
+                // Existing SRT configs as draggable cards
+                for (i, entry) in data.srt_library_configs.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_srt", i));
+                    let status_color = if entry.connected {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else {
+                        egui::Color32::from_rgb(120, 120, 120)
+                    };
+                    let mode = entry.mode;
+                    ui.dnd_drag_source(item_id, LibraryDrag::Srt(entry.url.clone(), mode), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("●").color(status_color));
+                            ui.label(egui::RichText::new(format!("📺 {}", entry.url)).size(12.0));
+                        });
+                        ui.label(egui::RichText::new(format!("  Mode: {}", entry.mode)).size(10.0).weak());
+                    }).response;
+                    if ui.ctx().is_being_dragged(item_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__lib_dnd_srt_config"), (entry.url.clone(), mode));
+                        });
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+        }
+
+        // === SYPHON SERVERS ===
+        if data.syphon_available {
+            let syph_header = egui::RichText::new(format!("🔗 Syphon Servers ({})", data.syphon_sources.len())).strong();
+            egui::CollapsingHeader::new(syph_header).default_open(false).show(ui, |ui| {
+                if ui.small_button("🔄 Rescan").clicked() {
+                    actions.syphon_rescan = true;
+                }
+                if data.syphon_sources.is_empty() {
+                    ui.label(egui::RichText::new("No Syphon servers found").small().weak());
+                }
+                for (i, name) in data.syphon_sources.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_syph", i));
+                    ui.dnd_drag_source(item_id, LibraryDrag::Syphon(name.clone()), |ui| {
+                        ui.label(egui::RichText::new(format!("  🔗 {}", name)).size(12.0));
+                    }).response;
+                    if ui.ctx().is_being_dragged(item_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__lib_dnd_syph_name"), name.clone());
+                        });
+                    }
+                }
+            });
+        }
+
     });
 }
 

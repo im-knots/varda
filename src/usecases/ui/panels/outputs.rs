@@ -1,27 +1,64 @@
-//! Output windows management and warp calibration.
+//! Unified output management and warp calibration.
 
 use crate::renderer::context::OutputTarget;
 use super::super::{UIData, UIActions, OutputAction};
 
 pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    // New output button
+    // New output buttons
     ui.horizontal(|ui| {
-        if ui.button("+ New Output").clicked() {
+        if ui.button("+ Windowed").clicked() {
             actions.output_actions.push(OutputAction::Create);
+        }
+        if ui.button("+ Recording").clicked() {
+            use crate::renderer::context::RecordingCodec;
+            actions.output_actions.push(OutputAction::CreateHeadless {
+                target: OutputTarget::Recording { path: "output.mp4".to_string(), codec: RecordingCodec::H264 },
+            });
+        }
+        if ui.button("+ SRT").clicked() {
+            // Auto-increment port: find the highest SRT port in use and add 1
+            let next_port = data.outputs.iter()
+                .filter_map(|o| {
+                    if let OutputTarget::SrtStream { ref url } = o.target {
+                        url.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())
+                    } else {
+                        None
+                    }
+                })
+                .max()
+                .map(|p| p + 1)
+                .unwrap_or(9000);
+            actions.output_actions.push(OutputAction::CreateHeadless {
+                target: OutputTarget::SrtStream { url: format!("srt://127.0.0.1:{}", next_port) },
+            });
+        }
+        if ui.button("+ NDI").clicked() {
+            actions.output_actions.push(OutputAction::CreateHeadless {
+                target: OutputTarget::NdiSend { sender_name: "Varda NDI".to_string() },
+            });
         }
     });
 
-    // List existing output windows
-    if data.output_windows.is_empty() {
-        ui.label(egui::RichText::new("No output windows").small().color(egui::Color32::GRAY));
+    ui.add_space(4.0);
+
+    // List all outputs (unified)
+    if data.outputs.is_empty() {
+        ui.label(egui::RichText::new("No outputs").small().color(egui::Color32::GRAY));
     } else {
-        for (idx, output) in data.output_windows.iter().enumerate() {
+        for (idx, output) in data.outputs.iter().enumerate() {
             egui::Frame::default()
                 .inner_margin(6.0)
                 .corner_radius(4.0)
                 .fill(egui::Color32::from_rgb(30, 30, 45))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        // Status indicator
+                        let status_color = if output.is_active {
+                            egui::Color32::from_rgb(80, 255, 80)
+                        } else {
+                            egui::Color32::from_rgb(128, 128, 128)
+                        };
+                        ui.colored_label(status_color, "●");
                         ui.label(egui::RichText::new(&output.name).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("x").on_hover_text("Close output").clicked() {
@@ -30,91 +67,15 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         });
                     });
 
-                    // Display target selector
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Display:").small());
-                        egui::ComboBox::from_id_salt(format!("output_target_{}", idx))
-                            .selected_text(egui::RichText::new(&output.target_label).small())
-                            .width(160.0)
-                            .show_ui(ui, |ui| {
-                                // Windowed option
-                                if ui.selectable_label(!output.is_on_display, "Windowed").clicked() {
-                                    actions.output_actions.push(OutputAction::SetTarget {
-                                        idx,
-                                        target: OutputTarget::Windowed,
-                                    });
-                                }
-                                // Available display monitors
-                                for monitor in &data.available_monitors {
-                                    let label = format!("{} ({}x{})", monitor.name, monitor.width, monitor.height);
-                                    if ui.selectable_label(false, &label).clicked() {
-                                        actions.output_actions.push(OutputAction::SetTarget {
-                                            idx,
-                                            target: OutputTarget::Display {
-                                                name: monitor.name.clone(),
-                                                monitor_index: monitor.index,
-                                            },
-                                        });
-                                    }
-                                }
-                            });
-                    });
+                    // Target label
+                    ui.label(egui::RichText::new(&output.target_label).small().weak());
 
-                    // Calibration toggle
-                    ui.horizontal(|ui| {
-                        let cal_label = if output.calibration_mode { "🔧 Done" } else { "🔧 Calibrate" };
-                        if ui.button(egui::RichText::new(cal_label).small()).clicked() {
-                            actions.output_actions.push(OutputAction::ToggleCalibration { idx });
-                        }
-                    });
-
-                    // Surface assignments
-                    ui.add_space(2.0);
-                    ui.label(egui::RichText::new("Surfaces:").small().strong());
-
-                    // Assign surface dropdown
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt(format!("assign_surf_{}", idx))
-                            .selected_text("+ Assign Surface")
-                            .width(140.0)
-                            .show_ui(ui, |ui| {
-                                for (si, surface) in data.surfaces.iter().enumerate() {
-                                    let already_assigned = output.surface_assignments.iter()
-                                        .any(|a| a.surface_idx == si);
-                                    if !already_assigned {
-                                        if ui.selectable_label(false, &surface.name).clicked() {
-                                            actions.output_actions.push(OutputAction::AssignSurface {
-                                                output_idx: idx,
-                                                surface_idx: si,
-                                            });
-                                        }
-                                    }
-                                }
-                            });
-                    });
-
-                    // List assigned surfaces with warp controls
-                    for (ai, assignment) in output.surface_assignments.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&assignment.surface_name).small());
-                            if ui.small_button("↺").on_hover_text("Reset warp").clicked() {
-                                actions.output_actions.push(OutputAction::ResetWarp {
-                                    output_idx: idx,
-                                    assignment_idx: ai,
-                                });
-                            }
-                            if ui.small_button("x").on_hover_text("Unassign").clicked() {
-                                actions.output_actions.push(OutputAction::UnassignSurface {
-                                    output_idx: idx,
-                                    assignment_idx: ai,
-                                });
-                            }
-                        });
-                    }
-
-                    // Warp calibration mini-canvas (when in calibration mode)
-                    if output.calibration_mode && !output.surface_assignments.is_empty() {
-                        render_warp_calibration(ui, idx, output, actions);
+                    if output.is_windowed {
+                        // Windowed output controls
+                        render_windowed_controls(ui, idx, output, data, actions);
+                    } else {
+                        // Headless output controls (recording/SRT/NDI/Syphon)
+                        render_headless_controls(ui, idx, output, actions);
                     }
                 });
             ui.add_space(4.0);
@@ -122,12 +83,203 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
     }
 }
 
+/// Controls specific to windowed outputs (display selector, calibration, surfaces).
+fn render_windowed_controls(ui: &mut egui::Ui, idx: usize, output: &super::super::OutputUI, data: &UIData, actions: &mut UIActions) {
+    // Display target selector
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Display:").small());
+        egui::ComboBox::from_id_salt(format!("output_target_{}", idx))
+            .selected_text(egui::RichText::new(&output.target_label).small())
+            .width(160.0)
+            .show_ui(ui, |ui| {
+                let is_windowed = matches!(output.target, OutputTarget::Windowed);
+                if ui.selectable_label(is_windowed, "Windowed").clicked() {
+                    actions.output_actions.push(OutputAction::SetTarget {
+                        idx, target: OutputTarget::Windowed,
+                    });
+                }
+                for monitor in &data.available_monitors {
+                    let label = format!("{} ({}x{})", monitor.name, monitor.width, monitor.height);
+                    if ui.selectable_label(false, &label).clicked() {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: OutputTarget::Display {
+                                name: monitor.name.clone(),
+                                monitor_index: monitor.index,
+                            },
+                        });
+                    }
+                }
+            });
+    });
+
+    // Calibration toggle
+    ui.horizontal(|ui| {
+        let cal_label = if output.calibration_mode { "🔧 Done" } else { "🔧 Calibrate" };
+        if ui.button(egui::RichText::new(cal_label).small()).clicked() {
+            actions.output_actions.push(OutputAction::ToggleCalibration { idx });
+        }
+    });
+
+    // Surface assignments
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new("Surfaces:").small().strong());
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(format!("assign_surf_{}", idx))
+            .selected_text("+ Assign Surface")
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                for (si, surface) in data.surfaces.iter().enumerate() {
+                    let already_assigned = output.surface_assignments.iter().any(|a| a.surface_idx == si);
+                    if !already_assigned {
+                        if ui.selectable_label(false, &surface.name).clicked() {
+                            actions.output_actions.push(OutputAction::AssignSurface {
+                                output_idx: idx, surface_idx: si,
+                            });
+                        }
+                    }
+                }
+            });
+    });
+
+    for (ai, assignment) in output.surface_assignments.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(&assignment.surface_name).small());
+            if ui.small_button("↺").on_hover_text("Reset warp").clicked() {
+                actions.output_actions.push(OutputAction::ResetWarp { output_idx: idx, assignment_idx: ai });
+            }
+            if ui.small_button("x").on_hover_text("Unassign").clicked() {
+                actions.output_actions.push(OutputAction::UnassignSurface { output_idx: idx, assignment_idx: ai });
+            }
+        });
+    }
+
+    if output.calibration_mode && !output.surface_assignments.is_empty() {
+        render_warp_calibration(ui, idx, output, actions);
+    }
+}
+
+/// Controls specific to headless outputs (start/stop, duration, inline config).
+fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super::OutputUI, actions: &mut UIActions) {
+    use crate::renderer::context::RecordingCodec;
+
+    // Inline config for Recording outputs
+    if let OutputTarget::Recording { ref path, ref codec } = output.target {
+        if !output.is_active {
+            // Codec selector
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Codec:").small());
+                let codec_id = egui::Id::new(format!("rec_codec_{}", idx));
+                egui::ComboBox::from_id_salt(codec_id)
+                    .selected_text(egui::RichText::new(codec.to_string()).small())
+                    .width(120.0)
+                    .show_ui(ui, |ui| {
+                        for c in &[RecordingCodec::H264, RecordingCodec::ProRes, RecordingCodec::HapQ] {
+                            if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
+                                actions.output_actions.push(OutputAction::SetTarget {
+                                    idx,
+                                    target: OutputTarget::Recording { path: path.clone(), codec: c.clone() },
+                                });
+                            }
+                        }
+                    });
+            });
+            // File path input
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("File:").small());
+                let path_id = egui::Id::new(format!("rec_path_{}", idx));
+                let mut current_path: String = ui.data(|d| d.get_temp(path_id))
+                    .unwrap_or_else(|| path.clone());
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut current_path)
+                        .desired_width(160.0)
+                        .font(egui::TextStyle::Small)
+                );
+                if response.lost_focus() || response.changed() {
+                    ui.data_mut(|d| d.insert_temp(path_id, current_path.clone()));
+                    if response.lost_focus() {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: OutputTarget::Recording { path: current_path, codec: codec.clone() },
+                        });
+                    }
+                }
+            });
+        }
+    }
+
+    // Inline config for SRT outputs
+    if let OutputTarget::SrtStream { ref url } = output.target {
+        if !output.is_active {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("URL:").small());
+                let url_id = egui::Id::new(format!("srt_url_{}", idx));
+                let mut current_url: String = ui.data(|d| d.get_temp(url_id))
+                    .unwrap_or_else(|| url.clone());
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut current_url)
+                        .desired_width(180.0)
+                        .font(egui::TextStyle::Small)
+                );
+                if response.lost_focus() || response.changed() {
+                    ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
+                    if response.lost_focus() {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: OutputTarget::SrtStream { url: current_url },
+                        });
+                    }
+                }
+            });
+        }
+    }
+
+    // Inline config for NDI outputs
+    if let OutputTarget::NdiSend { ref sender_name } = output.target {
+        if !output.is_active {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Name:").small());
+                let name_id = egui::Id::new(format!("ndi_name_{}", idx));
+                let mut current_name: String = ui.data(|d| d.get_temp(name_id))
+                    .unwrap_or_else(|| sender_name.clone());
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut current_name)
+                        .desired_width(140.0)
+                        .font(egui::TextStyle::Small)
+                );
+                if response.lost_focus() || response.changed() {
+                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
+                    if response.lost_focus() {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: OutputTarget::NdiSend { sender_name: current_name },
+                        });
+                    }
+                }
+            });
+        }
+    }
+
+    // Start/Stop + duration
+    ui.horizontal(|ui| {
+        if output.is_active {
+            let dur = output.active_duration.as_secs_f32();
+            ui.label(egui::RichText::new(format!("{:.1}s", dur)).monospace().color(egui::Color32::from_rgb(255, 80, 80)));
+            if ui.button("⏹ Stop").clicked() {
+                actions.output_actions.push(OutputAction::Stop { idx });
+            }
+        } else if ui.button("▶ Start").clicked() {
+            actions.output_actions.push(OutputAction::Start { idx });
+        }
+    });
+}
+
 /// Render the warp calibration mini-canvas for an output.
 /// Shows surface assignments as quads with draggable corner handles.
 pub(super) fn render_warp_calibration(
     ui: &mut egui::Ui,
     output_idx: usize,
-    output: &super::super::OutputWindowUI,
+    output: &super::super::OutputUI,
     actions: &mut UIActions,
 ) {
     ui.add_space(4.0);
@@ -276,12 +428,15 @@ mod tests {
     }
 
     #[test]
-    fn render_output_section_smoke_with_windows() {
+    fn render_output_section_smoke_with_outputs() {
         let mut data = UIData::test_fixture();
-        data.output_windows.push(crate::usecases::ui::OutputWindowUI {
+        data.outputs.push(crate::usecases::ui::OutputUI {
             name: "Main".to_string(),
+            target: OutputTarget::Windowed,
             target_label: "Windowed".to_string(),
-            is_on_display: false,
+            is_windowed: true,
+            is_active: true,
+            active_duration: std::time::Duration::ZERO,
             surface_assignments: vec![],
             calibration_mode: false,
         });

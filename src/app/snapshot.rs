@@ -306,7 +306,33 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         clock: build_clock_snapshot(app),
         fps: app.fps_smoothed,
         frame_count: app.frame_count,
+        ndi_sources: app.ndi_manager.discovered_sources(),
+        ndi_available: app.ndi_manager.is_available(),
+        #[cfg(target_os = "macos")]
+        syphon_sources: app.syphon_manager.discovered_sources(),
+        #[cfg(target_os = "macos")]
+        syphon_available: app.syphon_manager.is_available(),
+        #[cfg(not(target_os = "macos"))]
+        syphon_sources: vec![],
+        #[cfg(not(target_os = "macos"))]
+        syphon_available: false,
+        srt_receivers: build_srt_receiver_snapshots(app),
     }
+}
+
+/// Build SRT receiver snapshots from the SrtManager.
+fn build_srt_receiver_snapshots(app: &VardaApp) -> Vec<crate::engine::types::SrtReceiverSnapshot> {
+    (0..app.srt_manager.receiver_count())
+        .filter_map(|i| {
+            let url = app.srt_manager.receiver_url(i)?.to_string();
+            let mode = app.srt_manager.receiver_mode(i)?;
+            Some(crate::engine::types::SrtReceiverSnapshot {
+                url,
+                mode: format!("{}", mode).to_lowercase(),
+                connected: app.srt_manager.is_connected(i),
+            })
+        })
+        .collect()
 }
 
 /// Build a UIData snapshot from VardaApp state + UI layout state + egui texture IDs.
@@ -389,15 +415,30 @@ pub(crate) fn build_ui_data(
         fft: engine.audio.fft.clone(), sample_rate: engine.audio.sample_rate,
     };
 
-    // Outputs: map snapshots → UI types
-    let output_windows = engine.outputs.windows.iter().map(|o| OutputWindowUI {
-        name: o.name.clone(), target_label: o.target_label.clone(),
-        is_on_display: o.is_on_display,
-        surface_assignments: o.surface_assignments.iter().map(|a| SurfaceAssignmentUI {
-            surface_idx: a.surface_idx, surface_name: a.surface_name.clone(),
-            warp_corners: a.warp_corners, enabled: a.enabled,
-        }).collect(),
-        calibration_mode: o.calibration_mode,
+    // Outputs: build unified OutputUI list from VardaApp's outputs
+    let outputs: Vec<OutputUI> = app.outputs.iter().map(|o| {
+        let (target, target_label, is_windowed, is_active, active_duration, surface_assignments, calibration_mode) = match o {
+            crate::renderer::context::UnifiedOutput::Window(w) => {
+                let sa = w.surface_assignments.iter().map(|a| {
+                    let surface_name = app.surface_manager.surfaces.get(a.surface_idx)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_else(|| format!("Surface {}", a.surface_idx));
+                    SurfaceAssignmentUI {
+                        surface_idx: a.surface_idx, surface_name,
+                        warp_corners: a.warp_corners, enabled: a.enabled,
+                    }
+                }).collect();
+                (w.target.clone(), format!("{}", w.target), true, true, std::time::Duration::ZERO, sa, w.calibration_mode)
+            }
+            crate::renderer::context::UnifiedOutput::Headless(h) => {
+                (h.target.clone(), format!("{}", h.target), false, h.active, o.active_duration(), vec![], false)
+            }
+        };
+        OutputUI {
+            name: o.name().to_string(), target, target_label,
+            is_windowed, is_active, active_duration,
+            surface_assignments, calibration_mode,
+        }
     }).collect();
 
     let surfaces = engine.outputs.surfaces.iter().map(|s| SurfaceUI {
@@ -459,11 +500,28 @@ pub(crate) fn build_ui_data(
         // UI layout/selection state — owned by the UI consumer, not the engine
         selected_deck: layout.selected_deck, selected_channel: layout.selected_channel,
         selected_master: layout.selected_master,
-        output_windows, surfaces,
+        outputs, surfaces,
         stage_editor_open: layout.stage_editor_open, library_panel_open: layout.library_panel_open,
         stage_editor_grid_size: layout.stage_editor_grid_size, stage_editor_snap: layout.stage_editor_snap,
         available_monitors, midi_devices, midi_mappings,
-        cameras: engine.cameras.devices, sequences,
+        cameras: engine.cameras.devices,
+        ndi_sources: engine.ndi_sources.clone(),
+        ndi_available: engine.ndi_available,
+        syphon_sources: engine.syphon_sources.clone(),
+        syphon_available: engine.syphon_available,
+        srt_library_configs: engine.srt_receivers.iter().map(|r| {
+            let mode = match r.mode.as_str() {
+                "listener" => crate::srt::SrtMode::Listener,
+                _ => crate::srt::SrtMode::Caller,
+            };
+            SrtLibraryEntry {
+                url: r.url.clone(),
+                mode,
+                connected: r.connected,
+            }
+        }).collect(),
+
+        sequences,
         channel_count: engine.mixer.channels.len(),
         channel_names: engine.mixer.channels.iter().map(|c| c.name.clone()).collect(),
         channel_render_stats: {

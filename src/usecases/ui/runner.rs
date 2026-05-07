@@ -255,6 +255,7 @@ impl UIRunner {
             varda.apply_output_actions(&ui_actions);
             varda.apply_surface_actions(&ui_actions, self.layout.stage_editor_grid_size);
             varda.apply_device_actions(&ui_actions);
+            // Recording/SRT now handled per-output in apply_output_actions()
             varda.apply_clock_actions(&ui_actions);
             let resolution_changed = varda.apply_resolution_change(&ui_actions);
             varda.update_controller_leds();
@@ -306,7 +307,7 @@ impl UIRunner {
         // 8. Render output windows + publish state
         {
             let Some(varda) = self.varda.as_mut() else { return; };
-            varda.render_output_windows();
+            varda.render_outputs();
             varda.publish_state();
         }
     }

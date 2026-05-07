@@ -27,7 +27,7 @@ use crate::mixer::Mixer;
 use crate::osc::OscReceiver;
 use crate::persistence::Workspace;
 use crate::registry::ShaderRegistry;
-use crate::renderer::context::{OutputWindow, GpuContext};
+use crate::renderer::context::{GpuContext, UnifiedOutput};
 use crate::surface::SurfaceManager;
 use crate::notifications::NotificationSystem;
 
@@ -56,7 +56,7 @@ pub struct VardaApp {
     clock_manager: crate::clock::ClockManager,
 
     // ── Output & surfaces ──────────────────────────────────────
-    output_windows: Vec<OutputWindow>,
+    outputs: Vec<UnifiedOutput>,
     surface_manager: SurfaceManager,
     calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
 
@@ -67,7 +67,7 @@ pub struct VardaApp {
     workspace: Workspace,
 
     // ── Pending actions (deferred to event loop) ───────────────
-    pending_output_creates: Vec<()>,
+    pending_output_creates: Vec<crate::scene::OutputConfig>,
     cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
 
     // ── Audio textures (GPU resource, owned here) ──────────────
@@ -92,6 +92,12 @@ pub struct VardaApp {
     // ── Render resolution (configurable, scene-level) ───────
     render_width: u32,
     render_height: u32,
+
+    // ── External I/O (input/discovery only — output is per-UnifiedOutput) ──
+    ndi_manager: crate::ndi::NdiManager,
+    #[cfg(target_os = "macos")]
+    syphon_manager: crate::syphon::SyphonManager,
+    srt_manager: crate::srt::SrtManager,
 }
 
 impl VardaApp {
@@ -156,7 +162,7 @@ impl VardaApp {
             midi_mappings: midi::MidiMappingStore::new(),
             controller_led_mgr,
             clock_manager: crate::clock::ClockManager::new(),
-            output_windows: Vec::new(),
+            outputs: Vec::new(),
             surface_manager: SurfaceManager::new(),
             calibration_textures,
             notifications: NotificationSystem::new(),
@@ -174,6 +180,10 @@ impl VardaApp {
             system_monitor: crate::sysmon::SystemMonitor::new(),
             render_width: DEFAULT_RENDER_WIDTH,
             render_height: DEFAULT_RENDER_HEIGHT,
+            ndi_manager: crate::ndi::NdiManager::new(),
+            #[cfg(target_os = "macos")]
+            syphon_manager: crate::syphon::SyphonManager::new(),
+            srt_manager: crate::srt::SrtManager::new(),
         })
     }
 
@@ -392,9 +402,13 @@ impl VardaApp {
 
     /// Close an output window by its winit WindowId. Returns the name if found.
     pub fn close_output_window_by_id(&mut self, window_id: winit::window::WindowId) -> Option<String> {
-        if let Some(idx) = self.output_windows.iter().position(|o| o.window.id() == window_id) {
-            let name = self.output_windows[idx].name.clone();
-            self.output_windows.remove(idx).destroy();
+        if let Some(idx) = self.outputs.iter().position(|o| {
+            if let UnifiedOutput::Window(w) = o { w.window.id() == window_id } else { false }
+        }) {
+            let name = self.outputs[idx].name().to_string();
+            if let UnifiedOutput::Window(w) = self.outputs.remove(idx) {
+                w.destroy();
+            }
             Some(name)
         } else {
             None
@@ -407,8 +421,13 @@ impl VardaApp {
         window_id: winit::window::WindowId,
         new_size: winit::dpi::PhysicalSize<u32>,
     ) {
-        if let Some(o) = self.output_windows.iter_mut().find(|o| o.window.id() == window_id) {
-            o.resize(&self.context.device, new_size);
+        for o in &mut self.outputs {
+            if let UnifiedOutput::Window(w) = o {
+                if w.window.id() == window_id {
+                    w.resize(&self.context.device, new_size);
+                    return;
+                }
+            }
         }
     }
 

@@ -265,7 +265,7 @@ pub struct SurfaceAssignment {
     pub enabled: bool,
 }
 
-/// Where an output window is displayed.
+/// Where an output sends its content — unified across windowed and headless outputs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputTarget {
     /// Floating window (default)
@@ -277,6 +277,26 @@ pub enum OutputTarget {
         /// Index into the available monitors list (for lookup)
         monitor_index: usize,
     },
+    /// Record frames to a video file via ffmpeg subprocess
+    Recording { path: String, codec: RecordingCodec },
+    /// Stream frames via SRT (Secure Reliable Transport) through ffmpeg
+    SrtStream { url: String },
+    /// Send frames over NDI network protocol
+    NdiSend { sender_name: String },
+    /// Publish frames via Syphon (macOS inter-app sharing)
+    SyphonServer { server_name: String },
+}
+
+impl OutputTarget {
+    /// Whether this target requires an OS window.
+    pub fn is_windowed(&self) -> bool {
+        matches!(self, OutputTarget::Windowed | OutputTarget::Display { .. })
+    }
+
+    /// Whether this target is headless (no OS window).
+    pub fn is_headless(&self) -> bool {
+        !self.is_windowed()
+    }
 }
 
 impl std::fmt::Display for OutputTarget {
@@ -284,6 +304,10 @@ impl std::fmt::Display for OutputTarget {
         match self {
             OutputTarget::Windowed => write!(f, "Windowed"),
             OutputTarget::Display { name, .. } => write!(f, "{}", name),
+            OutputTarget::Recording { path, codec } => write!(f, "Rec [{}]: {}", codec, path),
+            OutputTarget::SrtStream { url } => write!(f, "SRT: {}", url),
+            OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {}", sender_name),
+            OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {}", server_name),
         }
     }
 }
@@ -482,6 +506,10 @@ impl OutputWindow {
             }
             OutputTarget::Display { .. } => {
                 self.window.set_fullscreen(Some(Fullscreen::Borderless(monitor)));
+            }
+            _ => {
+                log::warn!("Cannot set headless target on a windowed output");
+                return;
             }
         }
         self.target = target;
@@ -708,4 +736,167 @@ pub fn create_calibration_textures(
             (texture, view)
         })
         .collect()
+}
+
+
+// ── Headless Output ─────────────────────────────────────────────────
+
+/// Recording codec for ffmpeg subprocess.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecordingCodec {
+    /// H264 ultrafast preset (-c:v libx264 -preset ultrafast -crf 18)
+    H264,
+    /// ProRes 422 (-c:v prores_ks -profile:v 2)
+    ProRes,
+    /// HAP Q (-c:v hap -format hap_q)
+    HapQ,
+}
+
+impl std::fmt::Display for RecordingCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RecordingCodec::H264 => write!(f, "H.264 (fast)"),
+            RecordingCodec::ProRes => write!(f, "ProRes 422"),
+            RecordingCodec::HapQ => write!(f, "HAP Q"),
+        }
+    }
+}
+
+// HeadlessOutputTarget has been merged into the unified OutputTarget enum above.
+
+/// A headless output renders content to a GPU texture, reads it back to CPU,
+/// and sends it to an external target (NDI, Syphon, recording, SRT).
+///
+/// Unlike OutputWindow, this has no OS window or surface — it renders
+/// offscreen via ReadbackBuffer.
+pub struct HeadlessOutput {
+    /// Human-readable name for this output
+    pub name: String,
+    /// What content to render (Master, Channel, Deck, etc.)
+    pub source: OutputSource,
+    /// GPU readback infrastructure (double-buffered staging)
+    pub readback: super::ReadbackBuffer,
+    /// Where to send the readback frames (unified target)
+    pub target: OutputTarget,
+    /// Offscreen render texture (COPY_SRC for readback)
+    pub texture: wgpu::Texture,
+    /// View into the offscreen render texture
+    pub texture_view: wgpu::TextureView,
+    /// Blit pipeline for copying source content into the offscreen texture
+    pub blit_pipeline: BlitPipeline,
+    /// Width of the output
+    pub width: u32,
+    /// Height of the output
+    pub height: u32,
+    /// Active ffmpeg subprocess (for Recording/SRT targets)
+    pub subprocess: Option<super::FfmpegSubprocess>,
+    /// Whether this output is actively streaming/recording
+    pub active: bool,
+    /// When this output was started (for duration tracking on non-subprocess outputs)
+    pub started_at: Option<std::time::Instant>,
+}
+
+impl HeadlessOutput {
+    /// Create a new headless output with the given resolution and target.
+    pub fn new(
+        device: &wgpu::Device,
+        name: String,
+        source: OutputSource,
+        target: OutputTarget,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Headless Output Texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let readback = super::ReadbackBuffer::new(device, width, height);
+        let blit_pipeline = BlitPipeline::new(device, format)
+            .expect("Failed to create headless blit pipeline");
+
+        Self {
+            name,
+            source,
+            readback,
+            target,
+            texture,
+            texture_view,
+            blit_pipeline,
+            width,
+            height,
+            subprocess: None,
+            active: false,
+            started_at: None,
+        }
+    }
+}
+
+/// Unified output — wraps either a windowed or headless output.
+/// Provides shared accessors for name, target, and source.
+pub enum UnifiedOutput {
+    Window(OutputWindow),
+    Headless(HeadlessOutput),
+}
+
+impl UnifiedOutput {
+    /// Human-readable name of this output.
+    pub fn name(&self) -> &str {
+        match self {
+            UnifiedOutput::Window(w) => &w.name,
+            UnifiedOutput::Headless(h) => &h.name,
+        }
+    }
+
+    /// The output target for this output.
+    pub fn target(&self) -> &OutputTarget {
+        match self {
+            UnifiedOutput::Window(w) => &w.target,
+            UnifiedOutput::Headless(h) => &h.target,
+        }
+    }
+
+    /// Whether this output is windowed.
+    pub fn is_windowed(&self) -> bool {
+        matches!(self, UnifiedOutput::Window(_))
+    }
+
+    /// Whether this output is headless.
+    pub fn is_headless(&self) -> bool {
+        matches!(self, UnifiedOutput::Headless(_))
+    }
+
+    /// Whether this headless output is actively streaming/recording.
+    pub fn is_active(&self) -> bool {
+        match self {
+            UnifiedOutput::Window(_) => true, // windowed outputs are always "active"
+            UnifiedOutput::Headless(h) => h.active,
+        }
+    }
+
+    /// Active duration for headless outputs (subprocess or NDI/Syphon).
+    pub fn active_duration(&self) -> std::time::Duration {
+        match self {
+            UnifiedOutput::Window(_) => std::time::Duration::ZERO,
+            UnifiedOutput::Headless(h) => {
+                // Subprocess-based outputs (Recording/SRT) track their own duration
+                if let Some(sub) = &h.subprocess {
+                    return sub.duration();
+                }
+                // Non-subprocess outputs (NDI/Syphon) use started_at timestamp
+                h.started_at
+                    .map(|t| t.elapsed())
+                    .unwrap_or_default()
+            }
+        }
+    }
 }

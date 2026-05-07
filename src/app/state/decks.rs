@@ -187,6 +187,103 @@ impl VardaApp {
             }
         }
 
+        // Add NDI source deck if requested
+        if let Some((ch_idx, ndi_name)) = actions.ndi_to_add.take() {
+            match self.ndi_manager.start_receive(&ndi_name, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = self.ndi_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    match Deck::new_from_ndi(context, receiver_idx, &ndi_name, src_w, src_h, self.render_width, self.render_height) {
+                        Ok(deck) => {
+                            if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                let idx = ch.add_deck(deck);
+                                log::info!("Added NDI deck {} to channel {}: {}", idx, ch_idx, ndi_name);
+                                let texture_id = egui_renderer.register_native_texture(
+                                    &context.device,
+                                    &ch.decks[idx].deck.texture_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                deck_preview_textures.insert((ch_idx, idx), texture_id);
+                                self.notifications.info(format!("📡 NDI '{}' added to Ch {}", ndi_name, ch_idx + 1));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create NDI deck: {}", e);
+                            self.notifications.error(format!("Failed to create NDI deck: {}", e));
+                        }
+                    }
+                }
+                None => {
+                    log::error!("Failed to start NDI receive for '{}'", ndi_name);
+                    self.notifications.error(format!("Failed to receive NDI source '{}'", ndi_name));
+                }
+            }
+        }
+
+        // Add SRT source deck if requested
+        if let Some((ch_idx, url, mode)) = actions.srt_to_add.take() {
+            match self.srt_manager.start_receive(&url, mode, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = self.srt_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    match Deck::new_from_srt(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                        Ok(deck) => {
+                            if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                let idx = ch.add_deck(deck);
+                                log::info!("Added SRT deck {} to channel {}: {}", idx, ch_idx, url);
+                                let texture_id = egui_renderer.register_native_texture(
+                                    &context.device,
+                                    &ch.decks[idx].deck.texture_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                deck_preview_textures.insert((ch_idx, idx), texture_id);
+                                self.notifications.info(format!("📺 SRT '{}' added to Ch {}", url, ch_idx + 1));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create SRT deck: {}", e);
+                            self.notifications.error(format!("Failed to create SRT deck: {}", e));
+                        }
+                    }
+                }
+                None => {
+                    log::error!("Failed to start SRT receive for '{}'", url);
+                    self.notifications.error(format!("Failed to receive SRT source '{}'", url));
+                }
+            }
+        }
+
+        // Add Syphon server deck if requested
+        #[cfg(target_os = "macos")]
+        if let Some((ch_idx, syph_name)) = actions.syphon_to_add.take() {
+            match self.syphon_manager.start_receive(&syph_name, &context.device) {
+                Some(client_idx) => {
+                    let (src_w, src_h) = self.syphon_manager.client_dimensions(client_idx).unwrap_or((1920, 1080));
+                    match Deck::new_from_syphon(context, client_idx, &syph_name, src_w, src_h, self.render_width, self.render_height) {
+                        Ok(deck) => {
+                            if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                let idx = ch.add_deck(deck);
+                                log::info!("Added Syphon deck {} to channel {}: {}", idx, ch_idx, syph_name);
+                                let texture_id = egui_renderer.register_native_texture(
+                                    &context.device,
+                                    &ch.decks[idx].deck.texture_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                deck_preview_textures.insert((ch_idx, idx), texture_id);
+                                self.notifications.info(format!("🔗 Syphon '{}' added to Ch {}", syph_name, ch_idx + 1));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create Syphon deck: {}", e);
+                            self.notifications.error(format!("Failed to create Syphon deck: {}", e));
+                        }
+                    }
+                }
+                None => {
+                    log::error!("Failed to start Syphon receive for '{}'", syph_name);
+                    self.notifications.error(format!("Failed to receive Syphon server '{}'", syph_name));
+                }
+            }
+        }
+
         // Add effect to deck
         if let Some((ch_idx, deck_idx, filter_idx)) = actions.effect_to_add {
             let filters = self.registry.filters();

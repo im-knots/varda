@@ -8,7 +8,7 @@ use crate::renderer::{GpuContext, BlitPipeline, ISFUniforms, TransitionPipeline}
 use anyhow::{Context as _, Result};
 
 /// Blend modes for compositing decks and channels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum BlendMode {
     #[default]
     Normal,
@@ -64,7 +64,7 @@ impl BlendMode {
 // ── Auto-Transition Types ──────────────────────────────────────────
 
 /// Duration specified in beats or wall-clock seconds.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DurationSpec {
     Beats(f64),
     Seconds(f64),
@@ -90,7 +90,7 @@ impl DurationSpec {
 }
 
 /// What starts the transition countdown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TransitionTrigger {
     /// Timer-based: starts counting when deck becomes the active (topmost visible) deck.
     Timer,
@@ -100,7 +100,7 @@ pub enum TransitionTrigger {
 }
 
 /// Runtime phase of a deck's auto-transition.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DeckTransitionPhase {
     /// Not the active top deck, or auto-transition disabled.
     Inactive,

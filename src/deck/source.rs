@@ -176,6 +176,9 @@ impl Deck {
             frame_count: 0,
             last_frame_time: now,
             camera_source_view: None,
+            ndi_source_view: None,
+            syphon_source_view: None,
+            srt_source_view: None,
             fps_smoothed: 0.0,
         })
     }
@@ -485,7 +488,85 @@ impl Deck {
             frame_count: 0,
             last_frame_time: now,
             camera_source_view: None,
+            ndi_source_view: None,
+            syphon_source_view: None,
+            srt_source_view: None,
             fps_smoothed: 0.0,
         })
+    }
+
+    /// Create a new deck from an NDI network source.
+    /// The NDI receiver is managed by NdiManager — this deck reads from the shared texture.
+    pub fn new_from_ndi(
+        context: &GpuContext,
+        receiver_idx: usize,
+        source_name: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name_str = format!("📡 {}", source_name);
+        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+        let source = DeckSource::Ndi {
+            receiver_idx,
+            blit_pipeline,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        Self::build_media_deck(context, source_name_str, None, source, width, height)
+    }
+
+    /// Create a new deck from a Syphon server (macOS inter-app sharing).
+    /// The Syphon client is managed by SyphonManager — this deck reads from the shared texture.
+    pub fn new_from_syphon(
+        context: &GpuContext,
+        client_idx: usize,
+        server_name: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name_str = format!("🔗 {}", server_name);
+        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+        let source = DeckSource::Syphon {
+            client_idx,
+            blit_pipeline,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        Self::build_media_deck(context, source_name_str, None, source, width, height)
+    }
+
+    /// Create a new deck from an SRT network source.
+    /// The SRT receiver is managed by SrtManager — this deck reads from the shared texture.
+    pub fn new_from_srt(
+        context: &GpuContext,
+        receiver_idx: usize,
+        url: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name_str = format!("📺 {}", url);
+        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+        let source = DeckSource::Srt {
+            receiver_idx,
+            blit_pipeline,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        Self::build_media_deck(context, source_name_str, None, source, width, height)
     }
 }

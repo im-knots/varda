@@ -255,6 +255,19 @@ pub enum SourceConfig {
     Camera {
         name: String,
     },
+    /// NDI network video source (matched by name on restore)
+    Ndi {
+        name: String,
+    },
+    /// Syphon inter-app video source (matched by server name on restore, macOS only)
+    Syphon {
+        name: String,
+    },
+    /// SRT network video source (url + mode, reconnected on restore)
+    Srt {
+        url: String,
+        mode: String,
+    },
 }
 
 // ── Effect ─────────────────────────────────────────────────────────
@@ -276,17 +289,50 @@ fn default_true() -> bool { true }
 
 // ── Output ─────────────────────────────────────────────────────────
 
-/// Serializable output window configuration.
+/// Serializable output target configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OutputTargetConfig {
+    Windowed,
+    Display { name: String },
+    Recording { path: String, codec: String },
+    SrtStream { url: String },
+    NdiSend { sender_name: String },
+    SyphonServer { server_name: String },
+}
+
+impl Default for OutputTargetConfig {
+    fn default() -> Self { Self::Windowed }
+}
+
+/// Serializable output configuration (unified model).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputConfig {
     pub name: String,
-    /// Display target name (matched by monitor name on load). None = windowed.
+    /// The output target type and config.
     #[serde(default)]
+    pub target: OutputTargetConfig,
+    /// Legacy field — Display target name. Kept for backwards compat during migration.
+    /// Ignored if `target` is present and not Windowed.
+    #[serde(default, skip_serializing)]
     pub target_display: Option<String>,
     /// Surface assignments with warp calibration
     #[serde(default)]
     pub surface_assignments: Vec<SurfaceAssignmentConfig>,
 }
+
+impl OutputConfig {
+    /// Create a default windowed output config with an auto-generated name.
+    pub fn default_windowed() -> Self {
+        Self {
+            name: String::new(), // Will be assigned a name at creation time
+            target: OutputTargetConfig::Windowed,
+            target_display: None,
+            surface_assignments: Vec::new(),
+        }
+    }
+}
+
 
 /// Per-surface warp calibration in an output.
 #[derive(Debug, Clone, Serialize, Deserialize)]

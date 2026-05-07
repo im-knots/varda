@@ -26,7 +26,7 @@ impl VardaApp {
             }
         }
         let stage = crate::persistence::snapshot_stage(
-            &self.surface_manager, &self.output_windows,
+            &self.surface_manager, &self.outputs,
             layout.stage_editor_grid_size, layout.stage_editor_snap,
             layout.library_panel_open, layout.stage_editor_open,
         );
@@ -56,8 +56,15 @@ impl VardaApp {
                         ..UILayoutState::default()
                     });
                     self.surface_manager = prefs.surfaces;
-                    for _output_config in &prefs.outputs {
-                        self.pending_output_creates.push(());
+                    for output_config in &prefs.outputs {
+                        // Migrate legacy target_display field to new target config
+                        let mut config = output_config.clone();
+                        if matches!(config.target, crate::scene::OutputTargetConfig::Windowed) {
+                            if let Some(ref display_name) = config.target_display {
+                                config.target = crate::scene::OutputTargetConfig::Display { name: display_name.clone() };
+                            }
+                        }
+                        self.pending_output_creates.push(config);
                     }
                     log::info!("Loaded stage with {} surfaces, {} outputs",
                         self.surface_manager.surfaces.len(), prefs.outputs.len());
@@ -76,7 +83,7 @@ impl VardaApp {
                             log::info!("Scene render resolution: {}×{}", w, h);
                         }
                     }
-                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager, self.render_width, self.render_height) {
+                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager, self.render_width, self.render_height) {
                         Ok(result) => {
                             self.mixer = result.mixer;
                             for warn in &result.warnings {

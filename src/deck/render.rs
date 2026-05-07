@@ -8,7 +8,8 @@ use crate::renderer::{GpuContext, UnifiedPipeline, ISFUniforms};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::time::Instant;
-use super::{Deck, DeckSource, PassBuffer};
+use crate::renderer::BlitPipeline;
+use super::{Deck, DeckSource, ScalingMode, PassBuffer};
 
 impl Deck {
     /// Update video frame (call before render if using video source).
@@ -253,35 +254,30 @@ impl Deck {
             }
             DeckSource::Camera { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
                 if let Some(cam_view) = &self.camera_source_view {
-                    let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
-                        *source_width, *source_height,
-                        self.texture.width(), self.texture.height(),
-                    );
-                    blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
-
-                    let bind_group = blit_pipeline.create_bind_group(&context.device, cam_view);
-                    let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Camera Blit Encoder"),
-                    });
-                    {
-                        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Camera Blit Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: generator_target,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                                depth_slice: None,
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
-                        blit_pipeline.render(&mut render_pass, &bind_group);
-                    }
-                    cmd_buffers.push(encoder.finish());
+                    Self::blit_external_source(context, blit_pipeline, cam_view,
+                        *source_width, *source_height, self.texture.width(), self.texture.height(),
+                        *scaling_mode, generator_target, "Camera", cmd_buffers);
+                }
+            }
+            DeckSource::Ndi { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
+                if let Some(ndi_view) = &self.ndi_source_view {
+                    Self::blit_external_source(context, blit_pipeline, ndi_view,
+                        *source_width, *source_height, self.texture.width(), self.texture.height(),
+                        *scaling_mode, generator_target, "NDI", cmd_buffers);
+                }
+            }
+            DeckSource::Syphon { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
+                if let Some(syph_view) = &self.syphon_source_view {
+                    Self::blit_external_source(context, blit_pipeline, syph_view,
+                        *source_width, *source_height, self.texture.width(), self.texture.height(),
+                        *scaling_mode, generator_target, "Syphon", cmd_buffers);
+                }
+            }
+            DeckSource::Srt { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
+                if let Some(srt_view) = &self.srt_source_view {
+                    Self::blit_external_source(context, blit_pipeline, srt_view,
+                        *source_width, *source_height, self.texture.width(), self.texture.height(),
+                        *scaling_mode, generator_target, "SRT", cmd_buffers);
                 }
             }
         }
@@ -555,6 +551,50 @@ impl Deck {
         }
 
         Ok(())
+    }
+
+    /// Blit an external source (Camera, NDI, Syphon) with scaling to the generator target.
+    fn blit_external_source(
+        context: &GpuContext,
+        blit_pipeline: &BlitPipeline,
+        source_view: &wgpu::TextureView,
+        source_width: u32,
+        source_height: u32,
+        target_width: u32,
+        target_height: u32,
+        scaling_mode: ScalingMode,
+        generator_target: &wgpu::TextureView,
+        label: &str,
+        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+    ) {
+        let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
+            source_width, source_height, target_width, target_height,
+        );
+        blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
+
+        let bind_group = blit_pipeline.create_bind_group(&context.device, source_view);
+        let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some(&format!("{} Blit Encoder", label)),
+        });
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&format!("{} Blit Pass", label)),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: generator_target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            blit_pipeline.render(&mut render_pass, &bind_group);
+        }
+        cmd_buffers.push(encoder.finish());
     }
 
     /// Resize the deck's render targets

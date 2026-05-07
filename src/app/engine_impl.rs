@@ -433,20 +433,22 @@ impl ModulationQueries for VardaApp {
 
 impl OutputCommands for VardaApp {
     fn request_create_output(&mut self) {
-        self.pending_output_creates.push(());
+        self.pending_output_creates.push(crate::scene::OutputConfig::default_windowed());
     }
 
     fn close_output(&mut self, idx: usize) {
-        if idx < self.output_windows.len() {
-            let name = self.output_windows[idx].name.clone();
-            let output = self.output_windows.remove(idx);
-            output.destroy();
-            log::info!("Closed output window '{}'", name);
+        if idx < self.outputs.len() {
+            let name = self.outputs[idx].name().to_string();
+            let removed = self.outputs.remove(idx);
+            if let crate::renderer::context::UnifiedOutput::Window(w) = removed {
+                w.destroy();
+            }
+            log::info!("Closed output '{}'", name);
         }
     }
 
     fn set_output_display(&mut self, idx: usize, monitor_name: &str) {
-        if let Some(output) = self.output_windows.get_mut(idx) {
+        if let Some(crate::renderer::context::UnifiedOutput::Window(output)) = self.outputs.get_mut(idx) {
             if let Some((mi, (_, handle))) = self.cached_monitors.iter().enumerate()
                 .find(|(_, (name, _))| name == monitor_name)
             {
@@ -463,23 +465,27 @@ impl OutputCommands for VardaApp {
 impl OutputQueries for VardaApp {
     fn output_snapshot(&self) -> OutputSnapshot {
         OutputSnapshot {
-            windows: self.output_windows.iter().map(|o| {
-                OutputWindowSnapshot {
-                    name: o.name.clone(),
-                    target_label: format!("{}", o.target),
-                    is_on_display: matches!(o.target, crate::renderer::context::OutputTarget::Display { .. }),
-                    surface_assignments: o.surface_assignments.iter().map(|a| {
-                        let surface_name = self.surface_manager.surfaces.get(a.surface_idx)
-                            .map(|s| s.name.clone())
-                            .unwrap_or_else(|| format!("Surface {}", a.surface_idx));
-                        SurfaceAssignmentSnapshot {
-                            surface_idx: a.surface_idx,
-                            surface_name,
-                            warp_corners: a.warp_corners,
-                            enabled: a.enabled,
-                        }
-                    }).collect(),
-                    calibration_mode: o.calibration_mode,
+            windows: self.outputs.iter().filter_map(|o| {
+                if let crate::renderer::context::UnifiedOutput::Window(w) = o {
+                    Some(OutputWindowSnapshot {
+                        name: w.name.clone(),
+                        target_label: format!("{}", w.target),
+                        is_on_display: matches!(w.target, crate::renderer::context::OutputTarget::Display { .. }),
+                        surface_assignments: w.surface_assignments.iter().map(|a| {
+                            let surface_name = self.surface_manager.surfaces.get(a.surface_idx)
+                                .map(|s| s.name.clone())
+                                .unwrap_or_else(|| format!("Surface {}", a.surface_idx));
+                            SurfaceAssignmentSnapshot {
+                                surface_idx: a.surface_idx,
+                                surface_name,
+                                warp_corners: a.warp_corners,
+                                enabled: a.enabled,
+                            }
+                        }).collect(),
+                        calibration_mode: w.calibration_mode,
+                    })
+                } else {
+                    None
                 }
             }).collect(),
             surfaces: self.surface_manager.surfaces.iter().map(|s| SurfaceSnapshot {

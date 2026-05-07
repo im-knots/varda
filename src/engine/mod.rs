@@ -17,7 +17,7 @@ pub use types::*;
 /// Each variant mirrors a trait method 1:1. Cross-thread consumers
 /// (HTTP API, CLI) send these via `mpsc::Sender<EngineCommand>`.
 /// The engine processes them once per frame.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum EngineCommand {
     // ── Mixer ──────────────────────────────────────────────────
     SetCrossfader(f32),
