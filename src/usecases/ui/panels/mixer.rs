@@ -251,31 +251,37 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                     ui.add(egui::ProgressBar::new(data.auto_crossfade_progress)
                         .text("Transitioning..."));
                 } else {
+                    // Toggle state: beats vs seconds (stored in egui memory)
+                    let mode_id = egui::Id::new("crossfade_duration_is_beats");
+                    let has_bpm = data.clock_bpm.is_some();
+                    let is_beats = has_bpm && ui.data(|d| d.get_temp::<bool>(mode_id).unwrap_or(false));
+
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        if ui.small_button(format!("{} 1s", auto_label)).clicked() {
-                            actions.crossfader_action = Some(CrossfaderAction::AutoTransition {
-                                target: auto_target, duration_secs: 1.0,
-                                easing: CrossfadeEasing::EaseInOut,
-                            });
+                        ui.label(egui::RichText::new(&auto_label).small().strong());
+                        if is_beats {
+                            for &beats in &[1.0f32, 2.0, 4.0, 8.0, 16.0] {
+                                if ui.small_button(format!("{}", beats as u32)).clicked() {
+                                    actions.crossfader_action = Some(CrossfaderAction::BeatTransition {
+                                        target: auto_target, beats,
+                                    });
+                                }
+                            }
+                        } else {
+                            for &secs in &[1.0f32, 2.0, 4.0, 8.0, 16.0] {
+                                if ui.small_button(format!("{}", secs as u32)).clicked() {
+                                    actions.crossfader_action = Some(CrossfaderAction::AutoTransition {
+                                        target: auto_target, duration_secs: secs,
+                                        easing: CrossfadeEasing::EaseInOut,
+                                    });
+                                }
+                            }
                         }
-                        if ui.small_button("2s").clicked() {
-                            actions.crossfader_action = Some(CrossfaderAction::AutoTransition {
-                                target: auto_target, duration_secs: 2.0,
-                                easing: CrossfadeEasing::EaseInOut,
-                            });
-                        }
-                        if ui.small_button("4s").clicked() {
-                            actions.crossfader_action = Some(CrossfaderAction::AutoTransition {
-                                target: auto_target, duration_secs: 4.0,
-                                easing: CrossfadeEasing::EaseInOut,
-                            });
-                        }
-                        if data.audio.bpm.is_some() {
-                            if ui.small_button("4beat").clicked() {
-                                actions.crossfader_action = Some(CrossfaderAction::BeatTransition {
-                                    target: auto_target, beats: 4.0,
-                                });
+                        // Unit toggle button (only show when BPM is available)
+                        if has_bpm {
+                            let toggle_label = if is_beats { "♩" } else { "s" };
+                            if ui.small_button(toggle_label).on_hover_text("Toggle beats/seconds").clicked() {
+                                ui.data_mut(|d| d.insert_temp(mode_id, !is_beats));
                             }
                         }
                     });
