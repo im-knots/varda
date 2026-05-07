@@ -78,6 +78,13 @@ The **Mixer** composites channels together. With two channels you get an A/B cro
 
 At every junction you can branch, split, or re-route. Two channels feeding different surfaces on the same output. The main mix on one output, a single channel isolated on another. A sub-mix of specific channels to an NDI stream while the master goes to projection. You only use the complexity you need for your use case. Be it simple A/B crossfading between two decks, or a multi-channel mixing console with dedicated FX and transitions, or a complex multi-screen setup with individual content routing.
 
+### Clip triggering without clip triggering
+
+Most VJ software uses a clip-launch paradigm: press a button, a clip starts playing; press another, the previous one stops. Varda doesn't have clip triggers, but it doesn't need them, because the broadcast mixer model gives you the same result with more control.
+
+Load your sources into decks across your channels. Every deck is always "on": its source is running, its shaders are computing, its video is playing. What makes a deck live is its **opacity**. Map your MIDI controller buttons to deck mute or deck opacity. Press a button, a deck's opacity goes from 0 to 1, it's live. Press another, that deck goes to 0, it's gone. From the audience's perspective, you just triggered a clip. From the GPU's perspective, zero-opacity decks are **culled from the render pass entirely**, so they cost nothing. You're not "stopping and starting clips," you're mixing a live signal path where only the sources with non-zero opacity are rendered.
+
+This is how broadcast video works. A switcher doesn't start and stop cameras. Every camera is always hot, and the director cuts between them by routing signals onto buses. Varda applies the same idea: your decks are always ready, and you perform by controlling which signals are live in the mix. The result is instant transitions (no clip load latency), full MIDI control over the routing, and a mental model that scales naturally from 2 decks to 20.
 
 ## Architecture
 
