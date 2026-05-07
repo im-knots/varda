@@ -2,6 +2,8 @@
 
 Open-source live visual mixer and router for VJ performance and installation art. Linux and macOS.
 
+![Varda](img/screenshot.png)
+
 ## What it does
 
 Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, NDI streams, SRT feeds, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). There is no clip grid or trigger button. Every source runs continuously; you mix between them with opacity, blend modes, crossfaders, and effect chains, the same way a broadcast switcher operator works.
