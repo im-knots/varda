@@ -9,7 +9,7 @@ mod actions;
 mod engine_impl;
 mod inputs;
 mod outputs;
-mod render;
+pub(crate) mod render;
 mod snapshot;
 pub(crate) mod state;
 mod surfaces;

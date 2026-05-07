@@ -5,6 +5,7 @@
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
 use crate::app::VardaApp;
+use crate::app::render::{FileDialogKind, FileDialogResult};
 use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::{GpuContext, WindowSurface};
 use crate::usecases::ui;
@@ -31,12 +32,17 @@ pub struct UIRunner {
     // ── UI-consumer-owned layout/selection state ─────────────────────
     layout: super::UILayoutState,
 
+    // ── File dialog channel (async, non-blocking) ─────────────────────
+    file_dialog_tx: std::sync::mpsc::Sender<FileDialogResult>,
+    file_dialog_rx: std::sync::mpsc::Receiver<FileDialogResult>,
+
     // ── Engine (created after GPU init in resumed()) ─────────────────
     varda: Option<VardaApp>,
 }
 
 impl UIRunner {
     pub fn new() -> Self {
+        let (file_dialog_tx, file_dialog_rx) = std::sync::mpsc::channel();
         Self {
             window: None,
             window_surface: None,
@@ -48,6 +54,8 @@ impl UIRunner {
             main_output_texture: None,
             main_window_id: None,
             layout: super::UILayoutState::default(),
+            file_dialog_tx,
+            file_dialog_rx,
             varda: None,
         }
     }
@@ -294,7 +302,26 @@ impl UIRunner {
                 varda.notify_info("💾 Workspace saved");
             }
 
-            varda.handle_file_dialogs(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
+            // Spawn file dialogs on background threads (non-blocking)
+            if let Some(ch_idx) = ui_actions.open_image_dialog_for_channel.take() {
+                VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Image, ch_idx);
+            }
+            if let Some(ch_idx) = ui_actions.open_video_dialog_for_channel.take() {
+                VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Video, ch_idx);
+            }
+
+            // Poll completed file dialog results
+            while let Ok(result) = self.file_dialog_rx.try_recv() {
+                match result.kind {
+                    FileDialogKind::Image => {
+                        ui_actions.image_to_add = Some((result.ch_idx, result.path));
+                    }
+                    FileDialogKind::Video => {
+                        ui_actions.video_to_add = Some((result.ch_idx, result.path));
+                    }
+                }
+                varda.apply_deck_and_effect_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
+            }
         }
 
         // 7. GPU: render mixer + blit + egui overlay + present

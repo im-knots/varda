@@ -5,6 +5,21 @@ use crate::mixer::Mixer;
 use crate::renderer::context::{OutputSource, SurfaceRenderInfo};
 use crate::surface::ContentMapping;
 
+/// Kind of file dialog to open.
+#[derive(Debug, Clone, Copy)]
+pub enum FileDialogKind {
+    Image,
+    Video,
+}
+
+/// Result from a completed file dialog (sent from background thread).
+#[derive(Debug)]
+pub struct FileDialogResult {
+    pub kind: FileDialogKind,
+    pub ch_idx: usize,
+    pub path: std::path::PathBuf,
+}
+
 impl VardaApp {
     /// Update frame timing (FPS measurement) and system stats. Call once per frame before any work.
     pub fn update_frame_timing(&mut self) {
@@ -400,30 +415,28 @@ impl VardaApp {
         }
     }
 
-    /// Handle file dialog actions (deferred from UI for macOS Finder focus).
-    pub fn handle_file_dialogs(
-        &mut self,
-        ui_actions: &mut crate::usecases::ui::UIActions,
-        egui_renderer: &mut egui_wgpu::Renderer,
-        deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
+    /// Spawn an async file dialog on the main thread (non-blocking).
+    /// The dialog runs via NSOpenPanel's beginWithCompletionHandler on macOS,
+    /// so the render loop continues while the Finder window is open.
+    /// Results are sent to the channel and polled each frame.
+    pub fn open_file_dialog(
+        sender: &std::sync::mpsc::Sender<FileDialogResult>,
+        kind: FileDialogKind,
+        ch_idx: usize,
     ) {
-        if let Some(ch_idx) = ui_actions.open_image_dialog_for_channel {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp"])
-                .pick_file()
-            {
-                ui_actions.image_to_add = Some((ch_idx, path));
-                self.apply_deck_and_effect_actions(ui_actions, egui_renderer, deck_preview_textures);
+        let tx = sender.clone();
+        let dialog = match kind {
+            FileDialogKind::Image => rfd::AsyncFileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp"]),
+            FileDialogKind::Video => rfd::AsyncFileDialog::new()
+                .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm"]),
+        };
+        let future = dialog.pick_file();
+        std::thread::spawn(move || {
+            let file = futures_lite::future::block_on(future);
+            if let Some(file) = file {
+                let _ = tx.send(FileDialogResult { kind, ch_idx, path: file.path().to_path_buf() });
             }
-        }
-        if let Some(ch_idx) = ui_actions.open_video_dialog_for_channel {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm"])
-                .pick_file()
-            {
-                ui_actions.video_to_add = Some((ch_idx, path));
-                self.apply_deck_and_effect_actions(ui_actions, egui_renderer, deck_preview_textures);
-            }
-        }
+        });
     }
 }

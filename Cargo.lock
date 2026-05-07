@@ -5274,6 +5274,7 @@ dependencies = [
  "egui_kittest",
  "env_logger",
  "ffmpeg-next",
+ "futures-lite",
  "futures-util",
  "geo",
  "image",
