@@ -55,8 +55,15 @@ impl SrtManager {
     }
 
     /// Start receiving from an SRT URL. Spawns a background ffmpeg decode thread.
-    /// Returns receiver index on success.
+    /// Returns receiver index on success. If an active receiver for the same URL
+    /// already exists, returns its index (SRT listeners only accept one client).
     pub fn start_receive(&mut self, url: &str, mode: SrtMode, device: &wgpu::Device) -> Option<usize> {
+        // Reuse existing receiver for the same URL if it's still alive
+        if let Some(idx) = self.receivers.iter().position(|r| r.url == url && !r.stop_flag.load(Ordering::SeqCst)) {
+            log::info!("Reusing existing SRT receiver {} for '{}'", idx, url);
+            return Some(idx);
+        }
+
         let frame_data: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
         let stop_flag = Arc::new(AtomicBool::new(false));
         let connected = Arc::new(AtomicBool::new(false));
@@ -265,17 +272,40 @@ fn srt_receive_thread(
                         if let Some(ref mut sws) = scaler {
                             let mut rgb_frame = ffmpeg_next::frame::Video::empty();
                             if sws.run(&decoded, &mut rgb_frame).is_ok() {
+                                let width = rgb_frame.width() as usize;
+                                let height = rgb_frame.height() as usize;
+                                let stride = rgb_frame.stride(0);
+                                let row_bytes = width * 4;
+                                let expected = row_bytes * height;
                                 let data = rgb_frame.data(0);
-                                let expected = (1920 * 1080 * 4) as usize;
-                                if data.len() >= expected {
-                                    let rgba = data[..expected].to_vec();
-                                    if let Ok(mut guard) = frame_data.lock() {
-                                        *guard = Some(rgba);
+
+                                let rgba = if stride == row_bytes {
+                                    // No padding — fast path
+                                    if data.len() >= expected {
+                                        data[..expected].to_vec()
+                                    } else {
+                                        continue;
                                     }
-                                    if !connected.load(Ordering::SeqCst) {
-                                        connected.store(true, Ordering::SeqCst);
-                                        log::info!("SRT '{}' first frame received", url_display);
+                                } else {
+                                    // Stride-aware copy (remove padding)
+                                    let mut buf = Vec::with_capacity(expected);
+                                    for row in 0..height {
+                                        let start = row * stride;
+                                        let end = start + row_bytes;
+                                        if end > data.len() { break; }
+                                        buf.extend_from_slice(&data[start..end]);
                                     }
+                                    if buf.len() != expected { continue; }
+                                    buf
+                                };
+
+                                if let Ok(mut guard) = frame_data.lock() {
+                                    *guard = Some(rgba);
+                                }
+                                if !connected.load(Ordering::SeqCst) {
+                                    connected.store(true, Ordering::SeqCst);
+                                    log::info!("SRT '{}' first frame received ({}x{}, stride={})",
+                                        url_display, width, height, stride);
                                 }
                             }
                         }
@@ -311,6 +341,47 @@ mod tests {
     }
 
     #[test]
+    fn srt_manager_receiver_count_empty() {
+        let mgr = SrtManager::new();
+        assert_eq!(mgr.receiver_count(), 0);
+    }
+
+    #[test]
+    fn srt_manager_receiver_url_out_of_bounds() {
+        let mgr = SrtManager::new();
+        assert!(mgr.receiver_url(0).is_none());
+        assert!(mgr.receiver_url(999).is_none());
+    }
+
+    #[test]
+    fn srt_manager_receiver_mode_out_of_bounds() {
+        let mgr = SrtManager::new();
+        assert!(mgr.receiver_mode(0).is_none());
+        assert!(mgr.receiver_mode(999).is_none());
+    }
+
+    #[test]
+    fn srt_manager_is_connected_out_of_bounds() {
+        let mgr = SrtManager::new();
+        assert!(!mgr.is_connected(0));
+        assert!(!mgr.is_connected(100));
+    }
+
+    #[test]
+    fn srt_manager_receiver_dimensions_out_of_bounds() {
+        let mgr = SrtManager::new();
+        assert!(mgr.receiver_dimensions(0).is_none());
+    }
+
+    #[test]
+    fn srt_manager_stop_receive_out_of_bounds_no_panic() {
+        let mut mgr = SrtManager::new();
+        // Should not panic on invalid indices
+        mgr.stop_receive(0);
+        mgr.stop_receive(999);
+    }
+
+    #[test]
     fn srt_mode_serialization_roundtrip() {
         let listener = SrtMode::Listener;
         let json = serde_json::to_string(&listener).unwrap();
@@ -330,6 +401,43 @@ mod tests {
     }
 
     #[test]
+    fn srt_mode_equality() {
+        assert_eq!(SrtMode::Listener, SrtMode::Listener);
+        assert_eq!(SrtMode::Caller, SrtMode::Caller);
+        assert_ne!(SrtMode::Listener, SrtMode::Caller);
+    }
+
+    #[test]
+    fn srt_mode_clone() {
+        let original = SrtMode::Caller;
+        let cloned = original;
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn srt_mode_debug() {
+        let debug = format!("{:?}", SrtMode::Listener);
+        assert!(debug.contains("Listener"));
+        let debug = format!("{:?}", SrtMode::Caller);
+        assert!(debug.contains("Caller"));
+    }
+
+    #[test]
+    fn srt_mode_deserialize_from_string() {
+        // Verify it can deserialize from JSON strings
+        let listener: SrtMode = serde_json::from_str("\"Listener\"").unwrap();
+        assert_eq!(listener, SrtMode::Listener);
+        let caller: SrtMode = serde_json::from_str("\"Caller\"").unwrap();
+        assert_eq!(caller, SrtMode::Caller);
+    }
+
+    #[test]
+    fn srt_mode_deserialize_invalid() {
+        let result: Result<SrtMode, _> = serde_json::from_str("\"InvalidMode\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn build_srt_url_caller() {
         let url = build_srt_url("srt://192.168.1.100:9000", SrtMode::Caller);
         assert_eq!(url, "srt://192.168.1.100:9000?mode=caller");
@@ -345,5 +453,23 @@ mod tests {
     fn build_srt_url_with_existing_params() {
         let url = build_srt_url("srt://host:9000?latency=0", SrtMode::Caller);
         assert_eq!(url, "srt://host:9000?latency=0&mode=caller");
+    }
+
+    #[test]
+    fn build_srt_url_localhost_default_port() {
+        let url = build_srt_url("srt://127.0.0.1:9001", SrtMode::Caller);
+        assert_eq!(url, "srt://127.0.0.1:9001?mode=caller");
+    }
+
+    #[test]
+    fn build_srt_url_listener_wildcard() {
+        let url = build_srt_url("srt://:9001", SrtMode::Listener);
+        assert_eq!(url, "srt://:9001?mode=listener");
+    }
+
+    #[test]
+    fn build_srt_url_multiple_existing_params() {
+        let url = build_srt_url("srt://host:9000?latency=0&passphrase=test", SrtMode::Listener);
+        assert_eq!(url, "srt://host:9000?latency=0&passphrase=test&mode=listener");
     }
 }

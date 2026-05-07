@@ -27,7 +27,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                 })
                 .max()
                 .map(|p| p + 1)
-                .unwrap_or(9000);
+                .unwrap_or(9001);
             actions.output_actions.push(OutputAction::CreateHeadless {
                 target: OutputTarget::SrtStream { url: format!("srt://127.0.0.1:{}", next_port) },
             });
@@ -75,7 +75,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         render_windowed_controls(ui, idx, output, data, actions);
                     } else {
                         // Headless output controls (recording/SRT/NDI/Syphon)
-                        render_headless_controls(ui, idx, output, actions);
+                        render_headless_controls(ui, idx, output, data, actions);
                     }
                 });
             ui.add_space(4.0);
@@ -160,7 +160,7 @@ fn render_windowed_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
 }
 
 /// Controls specific to headless outputs (start/stop, duration, inline config).
-fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super::OutputUI, actions: &mut UIActions) {
+fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super::OutputUI, data: &UIData, actions: &mut UIActions) {
     use crate::renderer::context::RecordingCodec;
 
     // Inline config for Recording outputs
@@ -258,6 +258,39 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
                 }
             });
         }
+    }
+
+    // Surface assignments
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new("Surfaces:").small().strong());
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(format!("assign_surf_{}", idx))
+            .selected_text("+ Assign Surface")
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                for (si, surface) in data.surfaces.iter().enumerate() {
+                    let already_assigned = output.surface_assignments.iter().any(|a| a.surface_idx == si);
+                    if !already_assigned {
+                        if ui.selectable_label(false, &surface.name).clicked() {
+                            actions.output_actions.push(OutputAction::AssignSurface {
+                                output_idx: idx, surface_idx: si,
+                            });
+                        }
+                    }
+                }
+            });
+    });
+
+    for (ai, assignment) in output.surface_assignments.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(&assignment.surface_name).small());
+            if ui.small_button("↺").on_hover_text("Reset warp").clicked() {
+                actions.output_actions.push(OutputAction::ResetWarp { output_idx: idx, assignment_idx: ai });
+            }
+            if ui.small_button("x").on_hover_text("Unassign").clicked() {
+                actions.output_actions.push(OutputAction::UnassignSurface { output_idx: idx, assignment_idx: ai });
+            }
+        });
     }
 
     // Start/Stop + duration

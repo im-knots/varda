@@ -29,6 +29,12 @@ impl VardaApp {
                 ui::OutputAction::Close { idx } => {
                     if *idx < self.outputs.len() {
                         let name = self.outputs[*idx].name().to_string();
+                        // Stop active subprocess before removing to release ports/resources
+                        if let UnifiedOutput::Headless(h) = &mut self.outputs[*idx] {
+                            if let Some(mut sub) = h.subprocess.take() {
+                                sub.stop();
+                            }
+                        }
                         let removed = self.outputs.remove(*idx);
                         if let UnifiedOutput::Window(w) = removed {
                             w.destroy();
@@ -55,6 +61,14 @@ impl VardaApp {
                             }
                             UnifiedOutput::Headless(h) => {
                                 if target.is_headless() {
+                                    // Stop active subprocess before changing target to release ports
+                                    if h.active {
+                                        if let Some(mut sub) = h.subprocess.take() {
+                                            sub.stop();
+                                        }
+                                        h.active = false;
+                                        h.started_at = None;
+                                    }
                                     log::info!("Output '{}' target: {} → {}", h.name, h.target, target);
                                     h.target = target.clone();
                                 }
@@ -127,8 +141,10 @@ impl VardaApp {
                     }
                 }
                 ui::OutputAction::AssignSurface { output_idx, surface_idx } => {
-                    if let Some(UnifiedOutput::Window(output)) = self.outputs.get_mut(*output_idx) {
-                        if !output.surface_assignments.iter().any(|a| a.surface_idx == *surface_idx) {
+                    if let Some(output) = self.outputs.get_mut(*output_idx) {
+                        let name = output.name().to_string();
+                        let assignments = output.surface_assignments_mut();
+                        if !assignments.iter().any(|a| a.surface_idx == *surface_idx) {
                             if let Some(surface) = self.surface_manager.surfaces.get(*surface_idx) {
                                 let bb = surface.bounding_box();
                                 let assignment = SurfaceAssignment {
@@ -141,17 +157,18 @@ impl VardaApp {
                                     ],
                                     enabled: true,
                                 };
-                                log::info!("Assigned surface '{}' to output '{}'", surface.name, output.name);
-                                output.surface_assignments.push(assignment);
+                                log::info!("Assigned surface '{}' to output '{}'", surface.name, name);
+                                assignments.push(assignment);
                             }
                         }
                     }
                 }
                 ui::OutputAction::UnassignSurface { output_idx, assignment_idx } => {
-                    if let Some(UnifiedOutput::Window(output)) = self.outputs.get_mut(*output_idx) {
-                        if *assignment_idx < output.surface_assignments.len() {
-                            output.surface_assignments.remove(*assignment_idx);
-                            log::info!("Removed surface assignment from output '{}'", output.name);
+                    if let Some(output) = self.outputs.get_mut(*output_idx) {
+                        let assignments = output.surface_assignments_mut();
+                        if *assignment_idx < assignments.len() {
+                            assignments.remove(*assignment_idx);
+                            log::info!("Removed surface assignment from output '{}'", output.name());
                         }
                     }
                 }
@@ -171,8 +188,10 @@ impl VardaApp {
                     }
                 }
                 ui::OutputAction::ResetWarp { output_idx, assignment_idx } => {
-                    if let Some(UnifiedOutput::Window(output)) = self.outputs.get_mut(*output_idx) {
-                        if let Some(assignment) = output.surface_assignments.get_mut(*assignment_idx) {
+                    if let Some(output) = self.outputs.get_mut(*output_idx) {
+                        let name = output.name().to_string();
+                        let assignments = output.surface_assignments_mut();
+                        if let Some(assignment) = assignments.get_mut(*assignment_idx) {
                             if let Some(surface) = self.surface_manager.surfaces.get(assignment.surface_idx) {
                                 let bb = surface.bounding_box();
                                 assignment.warp_corners = [
@@ -181,7 +200,7 @@ impl VardaApp {
                                     [bb.x + bb.width, bb.y + bb.height],
                                     [bb.x, bb.y + bb.height],
                                 ];
-                                log::info!("Reset warp for surface in output '{}'", output.name);
+                                log::info!("Reset warp for surface in output '{}'", name);
                             }
                         }
                     }
@@ -245,7 +264,7 @@ impl VardaApp {
                 }
             } else {
                 // Headless output (Recording, SRT, NDI, Syphon)
-                let headless = HeadlessOutput::new(
+                let mut headless = HeadlessOutput::new(
                     &self.context.device,
                     name.clone(),
                     OutputSource::Master,
@@ -253,7 +272,14 @@ impl VardaApp {
                     self.render_width,
                     self.render_height,
                 );
-                // Headless outputs don't use surface assignments (they render from a source directly)
+                // Restore surface assignments from config
+                headless.surface_assignments = config.surface_assignments.iter().map(|a| {
+                    SurfaceAssignment {
+                        surface_idx: a.surface_idx,
+                        warp_corners: a.warp_corners,
+                        enabled: a.enabled,
+                    }
+                }).collect();
                 log::info!("Created headless output '{}'", name);
                 self.outputs.push(UnifiedOutput::Headless(headless));
             }

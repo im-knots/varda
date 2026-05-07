@@ -398,7 +398,13 @@ pub fn snapshot_stage(
             UnifiedOutput::Headless(h) => (
                 h.name.clone(),
                 target_to_config(&h.target),
-                Vec::new(), // Headless outputs don't have surface assignments
+                h.surface_assignments.iter().map(|a| {
+                    SurfaceAssignmentConfig {
+                        surface_idx: a.surface_idx,
+                        warp_corners: a.warp_corners,
+                        enabled: a.enabled,
+                    }
+                }).collect(),
             ),
         };
         OutputConfig {

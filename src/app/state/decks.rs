@@ -19,11 +19,14 @@ impl VardaApp {
 
         // Remove deck if requested
         if let Some((ch_idx, deck_idx)) = actions.deck_to_remove {
-            // Release camera before removal
+            // Release external resources before removal
             if let Some(ch) = mixer.channels().get(ch_idx) {
                 if let Some(slot) = ch.decks.get(deck_idx) {
                     if let Some(cam_id) = slot.deck.camera_id() {
                         self.camera_manager.release_camera(cam_id);
+                    }
+                    if let Some(idx) = slot.deck.srt_receiver_idx() {
+                        self.srt_manager.stop_receive(idx);
                     }
                 }
             }
@@ -249,6 +252,20 @@ impl VardaApp {
                     self.notifications.error(format!("Failed to receive SRT source '{}'", url));
                 }
             }
+        }
+
+        // Add SRT source to library (no deck created — user drags to channel)
+        if let Some((url, mode)) = actions.srt_library_add.take() {
+            if !self.srt_library.iter().any(|(u, _)| u == &url) {
+                log::info!("Added SRT source to library: {} ({})", url, mode);
+                self.srt_library.push((url, mode));
+            }
+        }
+
+        // Remove SRT source from library
+        if let Some(url) = actions.srt_library_remove.take() {
+            self.srt_library.retain(|(u, _)| u != &url);
+            log::info!("Removed SRT source from library: {}", url);
         }
 
         // Add Syphon server deck if requested

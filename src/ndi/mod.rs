@@ -497,3 +497,192 @@ fn rgba_to_uyvy(rgba: &[u8], uyvy: &mut [u8], w: u32, h: u32) {
     }
 }
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ndi_manager_new_no_crash() {
+        // NdiManager::new() attempts to load SDK dynamically.
+        // On machines without NDI SDK, it gracefully returns with sdk=None.
+        let mgr = NdiManager::new();
+        // is_available depends on whether SDK is installed — just verify no panic
+        let _ = mgr.is_available();
+    }
+
+    #[test]
+    fn ndi_manager_sources_empty() {
+        let mgr = NdiManager::new();
+        assert!(mgr.sources().is_empty());
+        assert!(mgr.discovered_sources().is_empty());
+    }
+
+    #[test]
+    fn ndi_manager_texture_view_out_of_bounds() {
+        let mgr = NdiManager::new();
+        assert!(mgr.texture_view(0).is_none());
+        assert!(mgr.texture_view(999).is_none());
+    }
+
+    #[test]
+    fn ndi_manager_receiver_dimensions_out_of_bounds() {
+        let mgr = NdiManager::new();
+        assert!(mgr.receiver_dimensions(0).is_none());
+    }
+
+    #[test]
+    fn ndi_source_debug() {
+        let src = NdiSource { name: "Test Source".to_string() };
+        let debug = format!("{:?}", src);
+        assert!(debug.contains("Test Source"));
+    }
+
+    #[test]
+    fn ndi_source_clone() {
+        let src = NdiSource { name: "Test".to_string() };
+        let cloned = src.clone();
+        assert_eq!(src.name, cloned.name);
+    }
+
+    // ── Color conversion tests ──────────────────────────────────────
+
+    #[test]
+    fn uyvy_to_rgba_pure_white() {
+        // UYVY for white: Y=235, U=128, V=128
+        // Two pixels per macropixel: [U, Y0, V, Y1]
+        let uyvy = vec![128, 235, 128, 235];
+        let mut rgba = vec![0u8; 2 * 4]; // 2 pixels
+        uyvy_to_rgba(&uyvy, &mut rgba, 2, 1, 4);
+        // Y=235, U=0 (128-128), V=0 (128-128) → R=235, G=235, B=235
+        assert_eq!(rgba[0], 235); // R
+        assert_eq!(rgba[1], 235); // G
+        assert_eq!(rgba[2], 235); // B
+        assert_eq!(rgba[3], 255); // A
+        assert_eq!(rgba[4], 235); // R (second pixel)
+        assert_eq!(rgba[7], 255); // A
+    }
+
+    #[test]
+    fn uyvy_to_rgba_pure_black() {
+        // UYVY for black: Y=0, U=128, V=128
+        let uyvy = vec![128, 0, 128, 0];
+        let mut rgba = vec![0u8; 2 * 4];
+        uyvy_to_rgba(&uyvy, &mut rgba, 2, 1, 4);
+        assert_eq!(rgba[0], 0); // R
+        assert_eq!(rgba[1], 0); // G
+        assert_eq!(rgba[2], 0); // B
+        assert_eq!(rgba[3], 255); // A (always opaque)
+    }
+
+    #[test]
+    fn uyvy_to_rgba_alpha_always_255() {
+        // Regardless of input, alpha should always be 255
+        let uyvy = vec![100, 150, 200, 100];
+        let mut rgba = vec![0u8; 2 * 4];
+        uyvy_to_rgba(&uyvy, &mut rgba, 2, 1, 4);
+        assert_eq!(rgba[3], 255);
+        assert_eq!(rgba[7], 255);
+    }
+
+    #[test]
+    fn uyvy_to_rgba_multirow() {
+        let w = 4u32;
+        let h = 2u32;
+        let stride = w as usize * 2;
+        // Fill with neutral gray (Y=128, U=128, V=128)
+        let uyvy = vec![128u8; (h as usize) * stride];
+        let mut rgba = vec![0u8; (w * h) as usize * 4];
+        uyvy_to_rgba(&uyvy, &mut rgba, w, h, stride);
+        // Check all alphas are 255
+        for i in 0..(w * h) as usize {
+            assert_eq!(rgba[i * 4 + 3], 255, "alpha at pixel {} should be 255", i);
+        }
+    }
+
+    #[test]
+    fn rgba_to_uyvy_pure_black() {
+        let rgba = vec![0u8; 2 * 4]; // 2 black pixels
+        let mut uyvy = vec![0u8; 4]; // 1 macropixel
+        rgba_to_uyvy(&rgba, &mut uyvy, 2, 1);
+        // Black: Y≈0, U≈128, V≈128
+        assert_eq!(uyvy[1], 0); // Y0
+        assert_eq!(uyvy[3], 0); // Y1
+        assert_eq!(uyvy[0], 128); // U
+        assert_eq!(uyvy[2], 128); // V
+    }
+
+    #[test]
+    fn rgba_to_uyvy_pure_white() {
+        let rgba = vec![255, 255, 255, 255, 255, 255, 255, 255];
+        let mut uyvy = vec![0u8; 4];
+        rgba_to_uyvy(&rgba, &mut uyvy, 2, 1);
+        // White: Y≈255, U≈128, V≈128
+        assert_eq!(uyvy[1], 255); // Y0
+        assert_eq!(uyvy[3], 255); // Y1
+        assert_eq!(uyvy[0], 128); // U
+        assert_eq!(uyvy[2], 128); // V
+    }
+
+    #[test]
+    fn rgba_uyvy_roundtrip_gray() {
+        // Roundtrip test: RGBA → UYVY → RGBA should be close to original
+        let original_rgba = vec![128, 128, 128, 255, 128, 128, 128, 255];
+        let mut uyvy = vec![0u8; 4];
+        rgba_to_uyvy(&original_rgba, &mut uyvy, 2, 1);
+
+        let mut restored = vec![0u8; 2 * 4];
+        uyvy_to_rgba(&uyvy, &mut restored, 2, 1, 4);
+
+        // Allow ±2 tolerance for floating point in color space conversion
+        for i in 0..2 {
+            for c in 0..3 {
+                let orig = original_rgba[i * 4 + c] as i32;
+                let rest = restored[i * 4 + c] as i32;
+                assert!((orig - rest).abs() <= 2,
+                    "pixel {} channel {} mismatch: {} vs {}", i, c, orig, rest);
+            }
+        }
+    }
+
+    #[test]
+    fn rgba_uyvy_roundtrip_red() {
+        let original = vec![255, 0, 0, 255, 255, 0, 0, 255];
+        let mut uyvy = vec![0u8; 4];
+        rgba_to_uyvy(&original, &mut uyvy, 2, 1);
+
+        let mut restored = vec![0u8; 2 * 4];
+        uyvy_to_rgba(&uyvy, &mut restored, 2, 1, 4);
+
+        // Red should survive roundtrip within tolerance
+        for i in 0..2 {
+            let r = restored[i * 4] as i32;
+            let g = restored[i * 4 + 1] as i32;
+            let b = restored[i * 4 + 2] as i32;
+            assert!(r > 200, "red channel should be high: {}", r);
+            assert!(g < 50, "green channel should be low: {}", g);
+            assert!(b < 50, "blue channel should be low: {}", b);
+        }
+    }
+
+    #[test]
+    fn uyvy_to_rgba_stride_larger_than_width() {
+        // Stride can be larger than width*2 (padding)
+        let w = 2u32;
+        let h = 1u32;
+        let stride = 8; // padded stride (width*2=4, but stride=8)
+        let mut uyvy = vec![0u8; stride];
+        // Set actual pixel data in first 4 bytes
+        uyvy[0] = 128; // U
+        uyvy[1] = 200; // Y0
+        uyvy[2] = 128; // V
+        uyvy[3] = 200; // Y1
+        // Bytes 4-7 are padding
+
+        let mut rgba = vec![0u8; 2 * 4];
+        uyvy_to_rgba(&uyvy, &mut rgba, w, h, stride);
+        assert_eq!(rgba[0], 200); // R = Y + 0 = 200
+        assert_eq!(rgba[3], 255); // A
+    }
+}

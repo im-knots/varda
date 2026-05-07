@@ -20,7 +20,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
     }).show(ui, |ui| {
         // === GENERATORS ===
         let gen_header = egui::RichText::new(format!("🎨 Generators ({})", data.generators.len())).strong();
-        egui::CollapsingHeader::new(gen_header).default_open(false).show(ui, |ui| {
+        egui::CollapsingHeader::new(gen_header).id_salt("lib_generators").default_open(false).show(ui, |ui| {
             for (name, gen_idx) in &data.generators {
                 let item_id = egui::Id::new(("lib_gen", *gen_idx));
                 let resp = ui.dnd_drag_source(item_id, LibraryDrag::Generator(*gen_idx), |ui| {
@@ -44,7 +44,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 
         // === EFFECTS ===
         let fx_header = egui::RichText::new(format!("🔮 Effects ({})", data.filters.len())).strong();
-        egui::CollapsingHeader::new(fx_header).default_open(false).show(ui, |ui| {
+        egui::CollapsingHeader::new(fx_header).id_salt("lib_effects").default_open(false).show(ui, |ui| {
             for (name, filter_idx) in &data.filters {
                 let item_id = egui::Id::new(("lib_fx", *filter_idx));
                 ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
@@ -101,7 +101,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 
         // === CAMERAS ===
         let cam_header = egui::RichText::new(format!("📹 Cameras ({})", data.cameras.len())).strong();
-        egui::CollapsingHeader::new(cam_header).default_open(false).show(ui, |ui| {
+        egui::CollapsingHeader::new(cam_header).id_salt("lib_cameras").default_open(false).show(ui, |ui| {
             if ui.small_button("🔄 Rescan").clicked() {
                 actions.camera_rescan = true;
             }
@@ -126,7 +126,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
         // === NDI SOURCES ===
         {
             let ndi_header = egui::RichText::new(format!("📡 NDI Sources ({})", data.ndi_sources.len())).strong();
-            egui::CollapsingHeader::new(ndi_header).default_open(false).show(ui, |ui| {
+            egui::CollapsingHeader::new(ndi_header).id_salt("lib_ndi").default_open(false).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.small_button("🔄 Rescan").clicked() {
                         actions.ndi_rescan = true;
@@ -157,7 +157,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
         // === SRT SOURCES ===
         {
             let srt_header = egui::RichText::new(format!("📺 SRT Sources ({})", data.srt_library_configs.len())).strong();
-            egui::CollapsingHeader::new(srt_header).default_open(false).show(ui, |ui| {
+            egui::CollapsingHeader::new(srt_header).id_salt("lib_srt").default_open(false).show(ui, |ui| {
                 // "+ Add SRT" button with inline config
                 let adding_id = ui.id().with("srt_adding");
                 let url_id = ui.id().with("srt_url_input");
@@ -165,8 +165,8 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
 
                 if is_adding {
-                    let mut url: String = ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| "srt://:9000".to_string());
-                    let mut mode_idx: usize = ui.data(|d| d.get_temp(mode_id)).unwrap_or(0);
+                    let mut url: String = ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| "srt://127.0.0.1:9001".to_string());
+                    let mut mode_idx: usize = ui.data(|d| d.get_temp(mode_id)).unwrap_or(1);
 
                     ui.horizontal(|ui| {
                         ui.label("URL:");
@@ -184,8 +184,8 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     ui.horizontal(|ui| {
                         if ui.small_button("✓ Add").clicked() && !url.is_empty() {
                             let mode = if mode_idx == 0 { crate::srt::SrtMode::Listener } else { crate::srt::SrtMode::Caller };
-                            // Add to first channel via double-click-style action
-                            actions.srt_to_add = Some((0, url.clone(), mode));
+                            // Add to library only — user drags to channel to create deck
+                            actions.srt_library_add = Some((url.clone(), mode));
                             ui.data_mut(|d| d.insert_temp(adding_id, false));
                         }
                         if ui.small_button("✕ Cancel").clicked() {
@@ -210,16 +210,22 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                         egui::Color32::from_rgb(120, 120, 120)
                     };
                     let mode = entry.mode;
-                    ui.dnd_drag_source(item_id, LibraryDrag::Srt(entry.url.clone(), mode), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("●").color(status_color));
-                            ui.label(egui::RichText::new(format!("📺 {}", entry.url)).size(12.0));
-                        });
-                        ui.label(egui::RichText::new(format!("  Mode: {}", entry.mode)).size(10.0).weak());
-                    }).response;
+                    let url = entry.url.clone();
+                    ui.horizontal(|ui| {
+                        ui.dnd_drag_source(item_id, LibraryDrag::Srt(url.clone(), mode), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("●").color(status_color));
+                                ui.label(egui::RichText::new(format!("📺 {}", url)).size(12.0));
+                            });
+                        }).response;
+                        if ui.small_button("✕").on_hover_text("Remove from library").clicked() {
+                            actions.srt_library_remove = Some(url.clone());
+                        }
+                    });
+                    ui.label(egui::RichText::new(format!("  Mode: {}", entry.mode)).size(10.0).weak());
                     if ui.ctx().is_being_dragged(item_id) {
                         ui.ctx().memory_mut(|mem| {
-                            mem.data.insert_temp(egui::Id::new("__lib_dnd_srt_config"), (entry.url.clone(), mode));
+                            mem.data.insert_temp(egui::Id::new("__lib_dnd_srt_config"), (url, mode));
                         });
                     }
                 }
@@ -231,7 +237,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
         // === SYPHON SERVERS ===
         if data.syphon_available {
             let syph_header = egui::RichText::new(format!("🔗 Syphon Servers ({})", data.syphon_sources.len())).strong();
-            egui::CollapsingHeader::new(syph_header).default_open(false).show(ui, |ui| {
+            egui::CollapsingHeader::new(syph_header).id_salt("lib_syphon").default_open(false).show(ui, |ui| {
                 if ui.small_button("🔄 Rescan").clicked() {
                     actions.syphon_rescan = true;
                 }

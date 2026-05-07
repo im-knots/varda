@@ -98,6 +98,9 @@ pub struct VardaApp {
     #[cfg(target_os = "macos")]
     syphon_manager: crate::syphon::SyphonManager,
     srt_manager: crate::srt::SrtManager,
+    /// Configured SRT input sources in the library (url, mode).
+    /// These appear in the library panel for drag-and-drop to channels.
+    srt_library: Vec<(String, crate::srt::SrtMode)>,
 }
 
 impl VardaApp {
@@ -184,6 +187,7 @@ impl VardaApp {
             #[cfg(target_os = "macos")]
             syphon_manager: crate::syphon::SyphonManager::new(),
             srt_manager: crate::srt::SrtManager::new(),
+            srt_library: Vec::new(),
         })
     }
 

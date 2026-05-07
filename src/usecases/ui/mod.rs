@@ -729,6 +729,10 @@ pub struct UIActions {
     pub syphon_rescan: bool,
     /// (ch_idx, url, mode) — add an SRT source as a new deck to channel
     pub srt_to_add: Option<(usize, String, crate::srt::SrtMode)>,
+    /// (url, mode) — add an SRT source config to the library (no deck created)
+    pub srt_library_add: Option<(String, crate::srt::SrtMode)>,
+    /// URL to remove from the SRT library
+    pub srt_library_remove: Option<String>,
     // Recording/SRT start/stop is now via OutputAction::Start/Stop per output
     /// Rescan for audio input devices
     pub audio_rescan: bool,
@@ -883,6 +887,8 @@ impl UIActions {
             syphon_to_add: None,
             syphon_rescan: false,
             srt_to_add: None,
+            srt_library_add: None,
+            srt_library_remove: None,
             // Recording/SRT now per-output via OutputAction
             audio_rescan: false,
             audio_source_toggles: Vec::new(),

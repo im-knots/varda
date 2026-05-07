@@ -74,11 +74,14 @@ impl MixerCommands for VardaApp {
     }
 
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()> {
-        // Release camera if applicable
+        // Release external resources before removal
         if let Some(ch) = self.mixer.channels().get(channel_idx) {
             if let Some(slot) = ch.decks.get(deck_idx) {
                 if let Some(cam_id) = slot.deck.camera_id() {
                     self.camera_manager.release_camera(cam_id);
+                }
+                if let Some(idx) = slot.deck.srt_receiver_idx() {
+                    self.srt_manager.stop_receive(idx);
                 }
             }
         }
@@ -439,6 +442,12 @@ impl OutputCommands for VardaApp {
     fn close_output(&mut self, idx: usize) {
         if idx < self.outputs.len() {
             let name = self.outputs[idx].name().to_string();
+            // Stop active subprocess before removing to release ports/resources
+            if let crate::renderer::context::UnifiedOutput::Headless(h) = &mut self.outputs[idx] {
+                if let Some(mut sub) = h.subprocess.take() {
+                    sub.stop();
+                }
+            }
             let removed = self.outputs.remove(idx);
             if let crate::renderer::context::UnifiedOutput::Window(w) = removed {
                 w.destroy();

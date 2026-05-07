@@ -1,20 +1,24 @@
 # Varda
 
-Open-source VJ performance tool for Linux and macOS.
+Open-source live visual mixer and router for VJ performance and installation art. Linux and macOS.
 
 ## What it does
 
-Live visual mixing with generative shaders, videos, live cameras, NDI/SRT, and images. Drag sources onto channels, chain effects, modulate parameters, define surfaces, assign them to outputs, and send output to projectors, recordings, and streams.
+Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, NDI streams, SRT feeds, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). There is no clip grid or trigger button. Every source runs continuously; you mix between them with opacity, blend modes, crossfaders, and effect chains, the same way a broadcast switcher operator works.
 
-- **ISF shader pipeline** — community shaders work out of the box
-- **NDI/SRT I/O** — receive and send video streams
-- **Multi-channel mixer** — crossfader, per-channel blend modes, N-channel compositing
-- **Effect chains** — deck → channel → master, drag-and-drop from library
-- **Modulation** — LFO, audio-reactive, ADSR, step sequencer, mod-on-mod, and audio reactivity
-- **MIDI control** — multi-device, learn mode, controller profiles with LED feedback
-- **Projection mapping** — 2D stage editor, polygon/circle surfaces, per-surface warp
-- **Video** — HAP (GPU-native) + ffmpeg fallback
-- **Multi-output** — multiple windows, fullscreen on any display, NDI, SRT, and recording
+- **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
+- **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, images, solid color
+- **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 6 blend modes
+- **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer
+- **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
+- **Modulation**: LFO, audio-reactive, ADSR, step sequencer, mod-on-mod chaining on any parameter
+- **Audio**: 512-bin FFT, beat detection, bass/mid/treble bands, BPM with beat phase
+- **Control**: MIDI (multi-device, learn mode, controller profiles, LED feedback), OSC in/out
+- **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards
+- **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments
+- **Network I/O**: NDI send/receive, SRT stream/receive, source library with drag-to-channel
+- **Recording**: H.264, ProRes 422, HAP Q per-output
+- **Persistence**: full scene/venue/MIDI state saved and restored across sessions
 
 ## Build & run
 
@@ -46,9 +50,9 @@ ISF shaders go in `shaders/`. The app scans these on startup.
 
 ## Abstractions you should know about
 
-**Content** is a source of some visual input. It can be a shader, a video, an image, a solid color, an NDI/SRT input, or a camera feed. It is the lowest level of abstraction in the engine. Content becomes a **Deck**. Decks have their own parameters and effect chains, transition settings, and blend modes. Decks are always active in their channel. Deck opacity determiines if they are visible or not
+Varda uses a routing graph model, similar to broadcast video routers, rather than a clip-trigger workflow. Every deck renders every frame according to its opacity. There is no "launch" or "trigger" action. You mix between always-running sources by adjusting opacity, blend modes, and crossfader position.
 
-A **Deck** is an independent render unit. It wraps a content source and renders it to a texture each frame. Decks have their own effect chains and parameters.
+A **Deck** is an independent render unit. It wraps a source (a shader, video, image, solid color, camera feed, NDI stream, or SRT stream) and renders it to a texture every frame. Decks have their own effect chains and parameters. A deck at zero opacity still renders but does not contribute to the channel composite.
 
 Decks live inside **Channels**. A channel composites its decks together using per-deck opacity, blend modes, and optional auto-transitions. Channels also have their own effect chain applied after deck compositing.
 
@@ -58,4 +62,4 @@ Channels are composited into the **Main Channel** by the mixer. With two channel
 
 **Outputs** define where rendered frames are sent: a window, a fullscreen display, an NDI stream, an SRT stream, or a recording. Surfaces are assigned to outputs to complete the routing chain.
 
-With these abstractions you can build complex routing. Two channels with their own decks and effects, each assigned to a different surface on the same output, or to different outputs entirely. The main channel on one output, a single channel isolated on another.
+The default/simple full signal path is: **Sources → Decks → Channels → (Main Channel) → Surfaces → Outputs**. At every junction you can branch, split, or re-route. Two channels feeding different surfaces on the same output. The main channel on one output, a single channel isolated on another. A sub-mix of specific channels to an NDI stream while the master goes to projection. This is a broadcast style routing matrix/graph model. 

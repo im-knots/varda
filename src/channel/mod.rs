@@ -1088,7 +1088,7 @@ mod tests {
         // Manually push named effects (requires ISF shader + GPU pipeline)
         // Since Effect::new requires real shaders, test the vec operation directly
         // which is what apply_deck_and_effect_actions does
-        let deck = &mut ch.decks[0].deck;
+        let _deck = &mut ch.decks[0].deck;
 
         // Simulate 3 effects by checking vec operations match action processing logic
         // The action processing code does: effects.remove(from); effects.insert(to, effect);

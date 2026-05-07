@@ -132,6 +132,7 @@ impl VardaApp {
         // Render headless outputs (needs &mut self for subprocess feeding)
         Self::render_headless_outputs_inner(
             &mut self.outputs, context, mixer,
+            &self.surface_manager,
             &mut self.ndi_manager,
             #[cfg(target_os = "macos")]
             &mut self.syphon_manager,
@@ -245,6 +246,7 @@ impl VardaApp {
         outputs: &mut [crate::renderer::context::UnifiedOutput],
         context: &crate::renderer::context::GpuContext,
         mixer: &crate::mixer::Mixer,
+        surface_manager: &crate::surface::SurfaceManager,
         ndi_manager: &mut crate::ndi::NdiManager,
         #[cfg(target_os = "macos")]
         syphon_manager: &mut crate::syphon::SyphonManager,
@@ -255,33 +257,89 @@ impl VardaApp {
                 _ => continue,
             };
 
-            let source_view = match Self::resolve_source(mixer, &h.source) {
-                Some(view) => view,
-                None => continue,
-            };
-
-            // Blit source content into the headless output texture
-            let bind_group = h.blit_pipeline.create_bind_group(&context.device, source_view);
             let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Headless Output Encoder"),
             });
-            {
-                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Headless Blit Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &h.texture_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-                h.blit_pipeline.render(&mut rp, &bind_group);
+
+            if !h.surface_assignments.is_empty() {
+                // Surface-routed rendering: render assigned surfaces with warp
+                let prepared: Vec<_> = h.surface_assignments.iter()
+                    .filter(|a| a.enabled)
+                    .filter_map(|assignment| {
+                        let surface = surface_manager.surfaces.get(assignment.surface_idx)?;
+                        let bb = surface.bounding_box();
+                        let content_view = Self::resolve_source(mixer, &surface.source)?;
+                        let (uv_scale, uv_offset) = Self::compute_uv(surface.content_mapping, &bb);
+                        let homography = {
+                            let src_corners = [
+                                [bb.x, bb.y],
+                                [bb.x + bb.width, bb.y],
+                                [bb.x + bb.width, bb.y + bb.height],
+                                [bb.x, bb.y + bb.height],
+                            ];
+                            crate::renderer::warp::compute_forward_homography(&src_corners, &assignment.warp_corners)
+                        };
+                        let bind_group = h.polygon_pipeline.create_bind_group(
+                            &context.device, content_view,
+                            uv_scale, uv_offset, Some(&homography),
+                        );
+                        let (vb, num_tris) = crate::renderer::blit::PolygonBlitPipeline::triangulate(
+                            &context.device, &surface.vertices,
+                            bb.x, bb.y, bb.width, bb.height,
+                        );
+                        Some((bind_group, vb, num_tris))
+                    })
+                    .collect();
+
+                {
+                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Headless Surface Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &h.texture_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    for (bind_group, vb, num_tris) in &prepared {
+                        if *num_tris > 0 {
+                            h.polygon_pipeline.render_polygon(
+                                &context.device, &mut rp, bind_group, vb, *num_tris,
+                            );
+                        }
+                    }
+                }
+            } else {
+                // Fallback: simple blit from source
+                let source_view = match Self::resolve_source(mixer, &h.source) {
+                    Some(view) => view,
+                    None => continue,
+                };
+                let bind_group = h.blit_pipeline.create_bind_group(&context.device, source_view);
+                {
+                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Headless Blit Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &h.texture_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    h.blit_pipeline.render(&mut rp, &bind_group);
+                }
             }
 
             // Enqueue readback copy from the now-rendered texture
@@ -291,12 +349,37 @@ impl VardaApp {
             // Deliver previous frame's readback data to target
             if let Some(frame_data) = h.readback.try_read(&context.device) {
                 match &mut h.target {
-                    crate::renderer::context::OutputTarget::Recording { .. } |
-                    crate::renderer::context::OutputTarget::SrtStream { .. } => {
+                    crate::renderer::context::OutputTarget::Recording { .. } => {
                         if let Some(sub) = &mut h.subprocess {
                             if !sub.feed_frame(&frame_data) {
                                 log::error!("Subprocess write failed for '{}', stopping", h.name);
+                                if let Some(mut sub) = h.subprocess.take() {
+                                    sub.stop();
+                                }
                                 h.active = false;
+                            }
+                        }
+                    }
+                    crate::renderer::context::OutputTarget::SrtStream { ref url } => {
+                        if let Some(sub) = &mut h.subprocess {
+                            if !sub.feed_frame(&frame_data) {
+                                // SRT client disconnected — auto-restart the listener
+                                log::info!("SRT client disconnected on '{}', restarting listener", h.name);
+                                if let Some(mut sub) = h.subprocess.take() {
+                                    sub.stop();
+                                }
+                                match crate::renderer::FfmpegSubprocess::spawn_srt(
+                                    url, h.width, h.height, 30,
+                                ) {
+                                    Ok(new_sub) => {
+                                        h.subprocess = Some(new_sub);
+                                        // h.active stays true — ready for next client
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to restart SRT listener: {}", e);
+                                        h.active = false;
+                                    }
+                                }
                             }
                         }
                     }

@@ -784,6 +784,8 @@ pub struct HeadlessOutput {
     pub texture_view: wgpu::TextureView,
     /// Blit pipeline for copying source content into the offscreen texture
     pub blit_pipeline: BlitPipeline,
+    /// Polygon pipeline for rendering assigned surfaces with warp
+    pub polygon_pipeline: PolygonBlitPipeline,
     /// Width of the output
     pub width: u32,
     /// Height of the output
@@ -794,6 +796,9 @@ pub struct HeadlessOutput {
     pub active: bool,
     /// When this output was started (for duration tracking on non-subprocess outputs)
     pub started_at: Option<std::time::Instant>,
+    /// Surface assignments — which surfaces this output renders, with per-surface warp.
+    /// Empty = render source directly (fallback behavior).
+    pub surface_assignments: Vec<SurfaceAssignment>,
 }
 
 impl HeadlessOutput {
@@ -823,6 +828,8 @@ impl HeadlessOutput {
         let readback = super::ReadbackBuffer::new(device, width, height);
         let blit_pipeline = BlitPipeline::new(device, format)
             .expect("Failed to create headless blit pipeline");
+        let polygon_pipeline = PolygonBlitPipeline::new(device, format)
+            .expect("Failed to create headless polygon pipeline");
 
         Self {
             name,
@@ -832,11 +839,13 @@ impl HeadlessOutput {
             texture,
             texture_view,
             blit_pipeline,
+            polygon_pipeline,
             width,
             height,
             subprocess: None,
             active: false,
             started_at: None,
+            surface_assignments: Vec::new(),
         }
     }
 }
@@ -880,6 +889,22 @@ impl UnifiedOutput {
         match self {
             UnifiedOutput::Window(_) => true, // windowed outputs are always "active"
             UnifiedOutput::Headless(h) => h.active,
+        }
+    }
+
+    /// Mutable access to surface assignments for either variant.
+    pub fn surface_assignments_mut(&mut self) -> &mut Vec<SurfaceAssignment> {
+        match self {
+            UnifiedOutput::Window(w) => &mut w.surface_assignments,
+            UnifiedOutput::Headless(h) => &mut h.surface_assignments,
+        }
+    }
+
+    /// Immutable access to surface assignments for either variant.
+    pub fn surface_assignments(&self) -> &[SurfaceAssignment] {
+        match self {
+            UnifiedOutput::Window(w) => &w.surface_assignments,
+            UnifiedOutput::Headless(h) => &h.surface_assignments,
         }
     }
 

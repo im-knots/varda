@@ -320,19 +320,38 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
     }
 }
 
-/// Build SRT receiver snapshots from the SrtManager.
+/// Build SRT library snapshots: library entries merged with active receiver status.
 fn build_srt_receiver_snapshots(app: &VardaApp) -> Vec<crate::engine::types::SrtReceiverSnapshot> {
-    (0..app.srt_manager.receiver_count())
-        .filter_map(|i| {
-            let url = app.srt_manager.receiver_url(i)?.to_string();
-            let mode = app.srt_manager.receiver_mode(i)?;
-            Some(crate::engine::types::SrtReceiverSnapshot {
-                url,
-                mode: format!("{}", mode).to_lowercase(),
-                connected: app.srt_manager.is_connected(i),
-            })
-        })
-        .collect()
+    let mut result: Vec<crate::engine::types::SrtReceiverSnapshot> = Vec::new();
+
+    // Add library entries (configured but possibly not connected)
+    for (url, mode) in &app.srt_library {
+        let connected = (0..app.srt_manager.receiver_count())
+            .any(|i| {
+                app.srt_manager.receiver_url(i) == Some(url.as_str())
+                    && app.srt_manager.is_connected(i)
+            });
+        result.push(crate::engine::types::SrtReceiverSnapshot {
+            url: url.clone(),
+            mode: format!("{}", mode).to_lowercase(),
+            connected,
+        });
+    }
+
+    // Add active receivers not already in the library (e.g. restored from scene)
+    for i in 0..app.srt_manager.receiver_count() {
+        if let (Some(url), Some(mode)) = (app.srt_manager.receiver_url(i), app.srt_manager.receiver_mode(i)) {
+            if !result.iter().any(|r| r.url == url) {
+                result.push(crate::engine::types::SrtReceiverSnapshot {
+                    url: url.to_string(),
+                    mode: format!("{}", mode).to_lowercase(),
+                    connected: app.srt_manager.is_connected(i),
+                });
+            }
+        }
+    }
+
+    result
 }
 
 /// Build a UIData snapshot from VardaApp state + UI layout state + egui texture IDs.
@@ -431,7 +450,15 @@ pub(crate) fn build_ui_data(
                 (w.target.clone(), format!("{}", w.target), true, true, std::time::Duration::ZERO, sa, w.calibration_mode)
             }
             crate::renderer::context::UnifiedOutput::Headless(h) => {
-                (h.target.clone(), format!("{}", h.target), false, h.active, o.active_duration(), vec![], false)
+                let sa = h.surface_assignments.iter().map(|a| {
+                    SurfaceAssignmentUI {
+                        surface_idx: a.surface_idx,
+                        surface_name: app.surface_manager.surfaces.get(a.surface_idx)
+                            .map(|s| s.name.clone()).unwrap_or_else(|| format!("Surface {}", a.surface_idx)),
+                        warp_corners: a.warp_corners, enabled: a.enabled,
+                    }
+                }).collect();
+                (h.target.clone(), format!("{}", h.target), false, h.active, o.active_duration(), sa, false)
             }
         };
         OutputUI {
