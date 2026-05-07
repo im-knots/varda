@@ -15,10 +15,10 @@ pub(crate) mod state;
 mod surfaces;
 mod workspace;
 
-/// Fixed render resolution for all decks and stage output (Full HD 1080p)
-pub const RENDER_WIDTH: u32 = 1920;
-/// Fixed render resolution for all decks and stage output (Full HD 1080p)
-pub const RENDER_HEIGHT: u32 = 1080;
+/// Default render resolution for all decks and stage output (Full HD 1080p)
+pub const DEFAULT_RENDER_WIDTH: u32 = 1920;
+/// Default render resolution for all decks and stage output (Full HD 1080p)
+pub const DEFAULT_RENDER_HEIGHT: u32 = 1080;
 
 use crate::audio::AudioManager;
 use crate::camera::CameraManager;
@@ -88,6 +88,10 @@ pub struct VardaApp {
 
     // ── System monitoring (CPU / RAM) ────────────────────────
     system_monitor: crate::sysmon::SystemMonitor,
+
+    // ── Render resolution (configurable, scene-level) ───────
+    render_width: u32,
+    render_height: u32,
 }
 
 impl VardaApp {
@@ -139,7 +143,7 @@ impl VardaApp {
         let audio_textures = crate::audio::AudioTextures::new(&gpu.device);
         let calibration_textures =
             crate::renderer::context::create_calibration_textures(&gpu.device, &gpu.queue, 8);
-        let mixer = Mixer::new(&gpu, RENDER_WIDTH, RENDER_HEIGHT)?;
+        let mixer = Mixer::new(&gpu, DEFAULT_RENDER_WIDTH, DEFAULT_RENDER_HEIGHT)?;
 
         Ok(Self {
             mixer,
@@ -168,6 +172,8 @@ impl VardaApp {
             fps_smoothed: 0.0,
             frame_count: 0,
             system_monitor: crate::sysmon::SystemMonitor::new(),
+            render_width: DEFAULT_RENDER_WIDTH,
+            render_height: DEFAULT_RENDER_HEIGHT,
         })
     }
 
@@ -404,5 +410,33 @@ impl VardaApp {
         if let Some(o) = self.output_windows.iter_mut().find(|o| o.window.id() == window_id) {
             o.resize(&self.context.device, new_size);
         }
+    }
+
+    /// Current render width.
+    pub fn render_width(&self) -> u32 {
+        self.render_width
+    }
+
+    /// Current render height.
+    pub fn render_height(&self) -> u32 {
+        self.render_height
+    }
+
+    /// Change the master render resolution. Resizes all textures in the pipeline.
+    pub fn set_render_resolution(&mut self, width: u32, height: u32) {
+        if width == self.render_width && height == self.render_height {
+            return;
+        }
+        if width == 0 || height == 0 {
+            log::warn!("Ignoring zero render resolution {}×{}", width, height);
+            return;
+        }
+        log::info!("Changing render resolution: {}×{} → {}×{}", self.render_width, self.render_height, width, height);
+        self.render_width = width;
+        self.render_height = height;
+        self.mixer.resize(&self.context, width, height);
+        // Clear sub-mix cache since textures were recreated
+        self.mixer.clear_sub_mix_cache();
+        self.notifications.info(format!("📐 Resolution changed to {}×{}", width, height));
     }
 }

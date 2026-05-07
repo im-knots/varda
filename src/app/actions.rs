@@ -105,7 +105,7 @@ impl VardaApp {
 
     fn apply_add_channel(&mut self, ui_actions: &ui::UIActions) {
         if !ui_actions.add_channel { return; }
-        match self.mixer.add_channel(&self.context, crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT) {
+        match self.mixer.add_channel(&self.context, self.render_width, self.render_height) {
             Ok(idx) => {
                 self.notifications.info(format!("Added channel {} (index {})",
                     self.mixer.channels()[idx].name, idx));
@@ -133,7 +133,7 @@ impl VardaApp {
         match self.camera_manager.open_camera(camera_id, &self.context.device) {
             Ok((src_w, src_h)) => {
                 match Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h,
-                    crate::app::RENDER_WIDTH, crate::app::RENDER_HEIGHT)
+                    self.render_width, self.render_height)
                 {
                     Ok(deck) => {
                         if let Some(ch) = self.mixer.channel_mut(ch_idx) {
@@ -173,6 +173,18 @@ impl VardaApp {
             self.notifications.error("Cannot remove channel (minimum 2 required)".to_string());
             None
         }
+    }
+
+    /// Apply resolution change from UI. Returns true if resolution was changed
+    /// (caller must re-register egui textures).
+    pub fn apply_resolution_change(&mut self, ui_actions: &ui::UIActions) -> bool {
+        if let Some((w, h)) = ui_actions.resolution_change {
+            if w > 0 && h > 0 && (w != self.render_width || h != self.render_height) {
+                self.set_render_resolution(w, h);
+                return true;
+            }
+        }
+        false
     }
 
     /// Apply clock preference changes from UI.

@@ -153,6 +153,8 @@ use crate::scene::*;
 /// Build a SceneConfig snapshot from live app state (show-specific: channels, effects, modulation).
 pub fn snapshot_scene(
     mixer: &Mixer,
+    render_width: u32,
+    render_height: u32,
 ) -> SceneConfig {
     let channels = mixer.channels().iter().map(|ch| {
         let decks = ch.decks.iter().map(|slot| {
@@ -300,6 +302,8 @@ pub fn snapshot_scene(
         master_effects,
         modulation: mixer.modulation().clone(),
         transition_sequences,
+        render_width: Some(render_width),
+        render_height: Some(render_height),
     }
 }
 
@@ -345,7 +349,6 @@ pub fn snapshot_stage(
 use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
 use crate::renderer::GpuContext;
-use crate::app::{RENDER_WIDTH, RENDER_HEIGHT};
 
 /// Restore result — contains reconstructed mixer.
 /// Surfaces and outputs are loaded separately from stage.json.
@@ -360,9 +363,11 @@ pub fn restore_scene(
     context: &GpuContext,
     registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    render_width: u32,
+    render_height: u32,
 ) -> Result<RestoreResult> {
     let mut warnings = Vec::new();
-    let mut mixer = Mixer::new(context, RENDER_WIDTH, RENDER_HEIGHT)?;
+    let mut mixer = Mixer::new(context, render_width, render_height)?;
 
     // Clear default channels — we'll create from config
     mixer.channels_mut().clear();
@@ -371,14 +376,14 @@ pub fn restore_scene(
         let mut channel = crate::channel::Channel::new(
             ch_config.name.clone(),
             context,
-            RENDER_WIDTH,
-            RENDER_HEIGHT,
+            render_width,
+            render_height,
         )?;
         channel.opacity = ch_config.opacity;
         channel.blend_mode = ch_config.blend_mode.into();
 
         for deck_config in &ch_config.decks {
-            match restore_deck(deck_config, context, registry, camera_manager) {
+            match restore_deck(deck_config, context, registry, camera_manager, render_width, render_height) {
                 Ok(deck) => {
                     let mut slot = crate::channel::DeckSlot::new(deck);
                     slot.opacity = deck_config.opacity;
@@ -542,12 +547,14 @@ fn restore_deck(
     context: &GpuContext,
     _registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    render_width: u32,
+    render_height: u32,
 ) -> Result<Deck> {
     let mut deck = match &config.source {
         SourceConfig::Shader { path, params } => {
             let shader = ISFShader::from_file(path)
                 .with_context(|| format!("Failed to load shader: {}", path))?;
-            let mut deck = Deck::new(context, shader, RENDER_WIDTH, RENDER_HEIGHT)?;
+            let mut deck = Deck::new(context, shader, render_width, render_height)?;
             // Restore parameter values
             for (name, value) in params {
                 deck.generator_params.set(name, *value);
@@ -555,13 +562,13 @@ fn restore_deck(
             deck
         }
         SourceConfig::Video { path } => {
-            Deck::new_from_video(context, path, RENDER_WIDTH, RENDER_HEIGHT)?
+            Deck::new_from_video(context, path, render_width, render_height)?
         }
         SourceConfig::Image { path } => {
-            Deck::new_from_image(context, path, RENDER_WIDTH, RENDER_HEIGHT)?
+            Deck::new_from_image(context, path, render_width, render_height)?
         }
         SourceConfig::SolidColor { color } => {
-            Deck::new_solid_color(context, *color, RENDER_WIDTH, RENDER_HEIGHT)?
+            Deck::new_solid_color(context, *color, render_width, render_height)?
         }
         SourceConfig::Camera { name } => {
             // Find the camera by name in the manager's device list
@@ -574,7 +581,7 @@ fn restore_deck(
             let (src_w, src_h) = camera_manager.open_camera(camera_id, &context.device)
                 .with_context(|| format!("Failed to open camera '{}'", name))?;
 
-            Deck::new_from_camera(context, camera_id, &cam_name, src_w, src_h, RENDER_WIDTH, RENDER_HEIGHT)?
+            Deck::new_from_camera(context, camera_id, &cam_name, src_w, src_h, render_width, render_height)?
         }
     };
 

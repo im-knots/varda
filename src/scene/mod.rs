@@ -44,6 +44,14 @@ pub struct SceneConfig {
     /// Transition sequences (channel-to-channel automation). Multiple named sequences.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transition_sequences: Vec<TransitionSequenceConfig>,
+
+    /// Master render width (defaults to 1920 if absent in old files)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_width: Option<u32>,
+
+    /// Master render height (defaults to 1080 if absent in old files)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_height: Option<u32>,
 }
 
 fn default_version() -> u32 { 2 }
@@ -367,6 +375,8 @@ mod tests {
             master_effects: vec![],
             modulation: Default::default(),
             transition_sequences: vec![],
+            render_width: None,
+            render_height: None,
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -408,6 +418,8 @@ mod tests {
             master_effects: vec![],
             modulation: Default::default(),
             transition_sequences: vec![],
+            render_width: None,
+            render_height: None,
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -437,6 +449,8 @@ mod tests {
             }],
             modulation: Default::default(),
             transition_sequences: vec![],
+            render_width: None,
+            render_height: None,
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -617,6 +631,8 @@ mod tests {
             master_effects: vec![],
             modulation: Default::default(),
             transition_sequences: vec![],
+            render_width: Some(1920),
+            render_height: Some(1080),
         };
         scene.save(&path).unwrap();
         let loaded = SceneConfig::load(&path).unwrap();

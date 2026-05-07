@@ -11,8 +11,8 @@ use crate::renderer::context::OutputSource;
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
-// Re-export render resolution constants from the engine layer for backwards compatibility
-pub use crate::app::{RENDER_WIDTH, RENDER_HEIGHT};
+// Re-export default render resolution constants from the engine layer
+pub use crate::app::{DEFAULT_RENDER_WIDTH, DEFAULT_RENDER_HEIGHT};
 
 /// UI-consumer-owned layout and selection state.
 ///
@@ -428,6 +428,10 @@ pub struct UIData {
     pub clock_preference_force_device_id: Option<crate::midi::DeviceId>,
     /// Manual BPM value (if preference is ForceManual)
     pub clock_manual_bpm: Option<f32>,
+    /// Current master render width
+    pub render_width: u32,
+    /// Current master render height
+    pub render_height: u32,
 }
 
 /// Read-only snapshot of a single transition sequence
@@ -700,6 +704,8 @@ pub struct UIActions {
     pub clock_preference: Option<crate::clock::ClockPreference>,
     /// Manual BPM change (from UI DragValue)
     pub manual_bpm: Option<f32>,
+    /// Resolution change request: (width, height)
+    pub resolution_change: Option<(u32, u32)>,
 }
 
 /// Action for controlling video deck playback
@@ -838,6 +844,7 @@ impl UIActions {
             sequence_actions: Vec::new(),
             clock_preference: None,
             manual_bpm: None,
+            resolution_change: None,
         }
     }
 }
@@ -1092,6 +1099,8 @@ impl UIData {
             clock_preference: "Auto".to_string(),
             clock_preference_force_device_id: None,
             clock_manual_bpm: None,
+            render_width: 1920,
+            render_height: 1080,
         }
     }
 }

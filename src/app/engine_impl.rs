@@ -5,7 +5,7 @@ use crate::engine::traits::*;
 use crate::engine::types::*;
 use crate::deck::{Deck, Effect};
 use crate::modulation::ModulationSource;
-use super::{RENDER_WIDTH, RENDER_HEIGHT};
+
 use anyhow::{Context as _, Result};
 
 impl MixerCommands for VardaApp {
@@ -26,7 +26,7 @@ impl MixerCommands for VardaApp {
         let shader = generators.iter()
             .find(|s| s.name() == shader_name)
             .context("Shader not found")?;
-        let deck = Deck::new(&self.context, (*shader).clone(), RENDER_WIDTH, RENDER_HEIGHT)?;
+        let deck = Deck::new(&self.context, (*shader).clone(), self.render_width, self.render_height)?;
         let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
         let idx = ch.add_deck(deck);
         log::info!("Added deck {} to channel {} with shader: {}", idx, channel_idx, shader_name);
@@ -34,7 +34,7 @@ impl MixerCommands for VardaApp {
     }
 
     fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()> {
-        let deck = Deck::new_from_image(&self.context, path, RENDER_WIDTH, RENDER_HEIGHT)?;
+        let deck = Deck::new_from_image(&self.context, path, self.render_width, self.render_height)?;
         let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
@@ -43,7 +43,7 @@ impl MixerCommands for VardaApp {
     }
 
     fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()> {
-        let deck = Deck::new_from_video(&self.context, path, RENDER_WIDTH, RENDER_HEIGHT)?;
+        let deck = Deck::new_from_video(&self.context, path, self.render_width, self.render_height)?;
         let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
@@ -52,7 +52,7 @@ impl MixerCommands for VardaApp {
     }
 
     fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<()> {
-        let deck = Deck::new_solid_color(&self.context, color, RENDER_WIDTH, RENDER_HEIGHT)?;
+        let deck = Deck::new_solid_color(&self.context, color, self.render_width, self.render_height)?;
         let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
@@ -66,7 +66,7 @@ impl MixerCommands for VardaApp {
             .map(|d| d.name.clone())
             .unwrap_or_else(|| format!("Camera {}", camera_id));
         let (src_w, src_h) = self.camera_manager.open_camera(camera_id, &self.context.device)?;
-        let deck = Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h, RENDER_WIDTH, RENDER_HEIGHT)?;
+        let deck = Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h, self.render_width, self.render_height)?;
         let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
         let idx = ch.add_deck(deck);
         log::info!("Added camera deck {} to channel {}: {}", idx, channel_idx, cam_name);
@@ -162,7 +162,7 @@ impl MixerCommands for VardaApp {
     }
 
     fn add_channel(&mut self) -> Result<usize> {
-        self.mixer.add_channel(&self.context, RENDER_WIDTH, RENDER_HEIGHT)
+        self.mixer.add_channel(&self.context, self.render_width, self.render_height)
     }
 
     fn remove_channel(&mut self, channel_idx: usize) -> Result<()> {

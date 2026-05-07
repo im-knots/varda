@@ -109,7 +109,7 @@ impl VardaApp {
             let generators = self.registry.generators();
             if gen_idx < generators.len() {
                 let shader = generators[gen_idx].clone();
-                match Deck::new(context, shader.clone(), super::super::RENDER_WIDTH, super::super::RENDER_HEIGHT) {
+                match Deck::new(context, shader.clone(), self.render_width, self.render_height) {
                     Ok(deck) => {
                         if let Some(ch) = mixer.channel_mut(ch_idx) {
                             let idx = ch.add_deck(deck);
@@ -129,7 +129,7 @@ impl VardaApp {
 
         // Add image deck if requested
         if let Some((ch_idx, path)) = actions.image_to_add.take() {
-            match Deck::new_from_image(context, &path, super::super::RENDER_WIDTH, super::super::RENDER_HEIGHT) {
+            match Deck::new_from_image(context, &path, self.render_width, self.render_height) {
                 Ok(deck) => {
                     if let Some(ch) = mixer.channel_mut(ch_idx) {
                         let name = deck.source_name().to_string();
@@ -149,7 +149,7 @@ impl VardaApp {
 
         // Add video deck if requested
         if let Some((ch_idx, path)) = actions.video_to_add.take() {
-            match Deck::new_from_video(context, &path, super::super::RENDER_WIDTH, super::super::RENDER_HEIGHT) {
+            match Deck::new_from_video(context, &path, self.render_width, self.render_height) {
                 Ok(deck) => {
                     if let Some(ch) = mixer.channel_mut(ch_idx) {
                         let name = deck.source_name().to_string();
@@ -169,7 +169,7 @@ impl VardaApp {
 
         // Add solid color deck if requested
         if let Some((ch_idx, color)) = actions.solid_color_to_add.take() {
-            match Deck::new_solid_color(context, color, super::super::RENDER_WIDTH, super::super::RENDER_HEIGHT) {
+            match Deck::new_solid_color(context, color, self.render_width, self.render_height) {
                 Ok(deck) => {
                     if let Some(ch) = mixer.channel_mut(ch_idx) {
                         let name = deck.source_name().to_string();

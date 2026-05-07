@@ -256,7 +256,32 @@ impl UIRunner {
             varda.apply_surface_actions(&ui_actions, self.layout.stage_editor_grid_size);
             varda.apply_device_actions(&ui_actions);
             varda.apply_clock_actions(&ui_actions);
+            let resolution_changed = varda.apply_resolution_change(&ui_actions);
             varda.update_controller_leds();
+
+            // After resolution change, all GPU textures were recreated —
+            // re-register them with egui so previews point to the new views.
+            if resolution_changed {
+                let context = varda.gpu_context();
+                let mixer = varda.mixer_ref();
+                for (ch_idx, ch) in mixer.channels().iter().enumerate() {
+                    for (deck_idx, slot) in ch.decks.iter().enumerate() {
+                        let key = (ch_idx, deck_idx);
+                        if let Some(&tex_id) = self.deck_preview_textures.get(&key) {
+                            egui_renderer.update_egui_texture_from_wgpu_texture(
+                                &context.device, &slot.deck.texture_view,
+                                wgpu::FilterMode::Linear, tex_id,
+                            );
+                        }
+                    }
+                }
+                if let Some(main_id) = self.main_output_texture {
+                    egui_renderer.update_egui_texture_from_wgpu_texture(
+                        &context.device, &mixer.composite_view(),
+                        wgpu::FilterMode::Linear, main_id,
+                    );
+                }
+            }
 
             // Fix up selection state after channel removal
             if let Some(ch_idx) = removed_ch {

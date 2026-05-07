@@ -12,7 +12,7 @@ impl VardaApp {
             return;
         }
         {
-            let scene = crate::persistence::snapshot_scene(&self.mixer);
+            let scene = crate::persistence::snapshot_scene(&self.mixer, self.render_width, self.render_height);
             match scene.save(self.workspace.scene_path()) {
                 Ok(()) => log::info!("Saved scene to {}", self.workspace.scene_path().display()),
                 Err(e) => log::error!("Failed to save scene: {}", e),
@@ -68,7 +68,15 @@ impl VardaApp {
         if self.workspace.has_scene() {
             match crate::scene::SceneConfig::load(self.workspace.scene_path()) {
                 Ok(scene_config) => {
-                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager) {
+                    // Apply render resolution from scene if present
+                    if let (Some(w), Some(h)) = (scene_config.render_width, scene_config.render_height) {
+                        if w > 0 && h > 0 {
+                            self.render_width = w;
+                            self.render_height = h;
+                            log::info!("Scene render resolution: {}×{}", w, h);
+                        }
+                    }
+                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager, self.render_width, self.render_height) {
                         Ok(result) => {
                             self.mixer = result.mixer;
                             for warn in &result.warnings {

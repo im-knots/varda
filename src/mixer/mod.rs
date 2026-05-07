@@ -134,6 +134,12 @@ impl Mixer {
         for channel in &mut self.channels {
             channel.resize(context, width, height);
         }
+        self.sub_mix_cache.clear();
+    }
+
+    /// Clear the sub-mix texture cache (e.g. after resolution change).
+    pub fn clear_sub_mix_cache(&mut self) {
+        self.sub_mix_cache.clear();
     }
 
     /// Add a master effect

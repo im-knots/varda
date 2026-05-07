@@ -525,6 +525,8 @@ pub(crate) fn build_ui_data(
         clock_preference: engine.clock.preference_label,
         clock_preference_force_device_id: engine.clock.preference_force_device_id,
         clock_manual_bpm: engine.clock.manual_bpm,
+        render_width: app.render_width,
+        render_height: app.render_height,
     }
 }
 

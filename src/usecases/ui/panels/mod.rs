@@ -128,11 +128,21 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
 
                     ui.separator();
 
-                    // GPU device — clickable → popover with adapter details
+                    // GPU load — render budget % (total render time / 16.67ms target)
+                    let total_render_ms: f32 = data.channel_render_stats.iter().map(|s| s.render_time_ms).sum();
+                    let gpu_load_pct = (total_render_ms / 16.67) * 100.0;
+                    let gpu_color = if gpu_load_pct < 50.0 {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else if gpu_load_pct < 80.0 {
+                        egui::Color32::from_rgb(220, 200, 60)
+                    } else {
+                        egui::Color32::from_rgb(220, 60, 60)
+                    };
                     let gpu_response = ui.add(
-                        egui::Label::new(egui::RichText::new(format!("🖥 {}", data.gpu_device_name)).weak().small())
+                        egui::Label::new(egui::RichText::new(format!("🖥 {:.0}%", gpu_load_pct))
+                            .color(gpu_color).monospace())
                             .sense(egui::Sense::click()),
-                    ).on_hover_text("Click for GPU details");
+                    ).on_hover_text("GPU render load — click for details");
                     egui::Popup::from_toggle_button_response(&gpu_response)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
@@ -164,6 +174,20 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                     };
                     ui.label(egui::RichText::new(format!("RAM {:.1}/{:.0}G", ram_gb, ram_total_gb))
                         .color(ram_color).monospace().small());
+
+                    ui.separator();
+
+                    // Resolution selector
+                    let res_label = format!("📐 {}×{}", data.render_width, data.render_height);
+                    let res_response = ui.add(
+                        egui::Label::new(egui::RichText::new(&res_label).monospace())
+                            .sense(egui::Sense::click()),
+                    ).on_hover_text("Click to change render resolution");
+                    egui::Popup::from_toggle_button_response(&res_response)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            render_resolution_popover(ui, data, &mut actions);
+                        });
                 });
             });
         });
@@ -549,6 +573,20 @@ fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
             ui.label(&data.gpu_driver_info);
             ui.end_row();
         }
+
+        let total_render_ms: f32 = data.channel_render_stats.iter().map(|s| s.render_time_ms).sum();
+        let load_pct = (total_render_ms / 16.67) * 100.0;
+        ui.label(egui::RichText::new("Render load").strong().small());
+        let load_color = if load_pct < 50.0 {
+            egui::Color32::from_rgb(100, 220, 100)
+        } else if load_pct < 80.0 {
+            egui::Color32::from_rgb(220, 200, 60)
+        } else {
+            egui::Color32::from_rgb(220, 60, 60)
+        };
+        ui.label(egui::RichText::new(format!("{:.1}ms / 16.7ms ({:.0}%)", total_render_ms, load_pct))
+            .color(load_color).monospace());
+        ui.end_row();
     });
 }
 
@@ -630,6 +668,65 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     };
     ui.label(egui::RichText::new(status).weak().small());
 }
+
+
+/// Render the resolution popover (shown when clicking resolution in the top bar).
+fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    ui.set_min_width(200.0);
+    ui.label(egui::RichText::new("📐 Render Resolution").strong());
+    ui.separator();
+
+    let current_w = data.render_width;
+    let current_h = data.render_height;
+
+    // Common presets
+    let presets: &[(&str, u32, u32)] = &[
+        ("720p", 1280, 720),
+        ("1080p", 1920, 1080),
+        ("1440p", 2560, 1440),
+        ("4K", 3840, 2160),
+    ];
+
+    for &(label, w, h) in presets {
+        let is_current = current_w == w && current_h == h;
+        let text = format!("{} ({}×{})", label, w, h);
+        if ui.radio(is_current, text).clicked() && !is_current {
+            actions.resolution_change = Some((w, h));
+        }
+    }
+
+    ui.separator();
+    ui.label(egui::RichText::new("Custom").strong().small());
+
+    // Custom W×H input — use persistent state via egui memory
+    let custom_w_id = ui.id().with("custom_res_w");
+    let custom_h_id = ui.id().with("custom_res_h");
+    let mut custom_w: u32 = ui.data(|d| d.get_temp(custom_w_id)).unwrap_or(current_w);
+    let mut custom_h: u32 = ui.data(|d| d.get_temp(custom_h_id)).unwrap_or(current_h);
+
+    ui.horizontal(|ui| {
+        ui.label("W:");
+        ui.add(egui::DragValue::new(&mut custom_w).range(64..=7680).speed(16));
+        ui.label("H:");
+        ui.add(egui::DragValue::new(&mut custom_h).range(64..=4320).speed(16));
+    });
+
+    ui.data_mut(|d| {
+        d.insert_temp(custom_w_id, custom_w);
+        d.insert_temp(custom_h_id, custom_h);
+    });
+
+    let is_custom_different = custom_w != current_w || custom_h != current_h;
+    if ui.add_enabled(is_custom_different && custom_w > 0 && custom_h > 0,
+        egui::Button::new("Apply")).clicked()
+    {
+        actions.resolution_change = Some((custom_w, custom_h));
+    }
+
+    ui.separator();
+    ui.label(egui::RichText::new(format!("Current: {}×{}", current_w, current_h)).weak().small());
+}
+
 
 #[cfg(test)]
 mod tests {
