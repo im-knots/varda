@@ -110,6 +110,28 @@ impl VardaApp {
                     Some(k) => k,
                     None => continue,
                 };
+
+                // Auto-map: intercept keys owned by auto-mapping before normal lookup
+                if self.auto_map_engine.handles_key(msg.device_id(), &key) {
+                    match &msg {
+                        crate::midi::MidiMessage::NoteOn { device_id, note, velocity, channel, .. } => {
+                            if *velocity > 0 {
+                                self.auto_map_engine.process_note_on(*device_id, *note, *channel);
+                            } else {
+                                self.auto_map_engine.process_note_off(*device_id, *note, *channel, &mut self.mixer);
+                            }
+                        }
+                        crate::midi::MidiMessage::NoteOff { device_id, note, channel, .. } => {
+                            self.auto_map_engine.process_note_off(*device_id, *note, *channel, &mut self.mixer);
+                        }
+                        crate::midi::MidiMessage::ControlChange { device_id, cc, value, .. } => {
+                            self.auto_map_engine.process_cc(*device_id, *cc, *value, &mut self.mixer);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 let value = msg.normalized_value();
 
                 // Learn mode: map next MIDI input to the learn target

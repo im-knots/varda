@@ -50,15 +50,51 @@ impl Default for StagePrefs {
 }
 
 impl StagePrefs {
+    /// Validate stage prefs for semantic correctness. Returns a list of errors.
+    /// An empty list means the config is valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !self.grid_size.is_finite() || self.grid_size <= 0.0 {
+            errors.push(format!("grid_size {} must be > 0 and finite", self.grid_size));
+        }
+        for (i, output) in self.outputs.iter().enumerate() {
+            let prefix = format!("outputs[{}]", i);
+            if output.name.trim().is_empty() {
+                errors.push(format!("{}: name is empty", prefix));
+            }
+            for (j, sa) in output.surface_assignments.iter().enumerate() {
+                for (c, corner) in sa.warp_corners.iter().enumerate() {
+                    for (k, v) in corner.iter().enumerate() {
+                        if !v.is_finite() {
+                            errors.push(format!(
+                                "{}/surface_assignments[{}]: warp_corners[{}][{}] is not finite",
+                                prefix, j, c, k
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        errors
+    }
+
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read stage prefs: {}", path.as_ref().display()))?;
         let prefs: StagePrefs = serde_json::from_str(&content)
             .with_context(|| format!("Failed to parse stage prefs: {}", path.as_ref().display()))?;
+        let warnings = prefs.validate();
+        for w in &warnings {
+            log::warn!("Stage prefs {}: {}", path.as_ref().display(), w);
+        }
         Ok(prefs)
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let errors = self.validate();
+        for e in &errors {
+            log::error!("Stage prefs save: {}", e);
+        }
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize stage prefs")?;
         std::fs::write(path.as_ref(), content)
@@ -870,5 +906,49 @@ mod tests {
         };
         // Should fail (file doesn't exist) but shouldn't be a compile error
         assert!(restore_effect(&cfg, &gpu, wgpu::TextureFormat::Rgba8Unorm).is_err());
+    }
+
+    #[test]
+    fn validate_stage_prefs_valid() {
+        let prefs = StagePrefs::default();
+        assert!(prefs.validate().is_empty());
+    }
+
+    #[test]
+    fn validate_stage_prefs_grid_size_invalid() {
+        let mut prefs = StagePrefs::default();
+        prefs.grid_size = 0.0;
+        assert!(prefs.validate().iter().any(|e| e.contains("grid_size")));
+        prefs.grid_size = f32::NAN;
+        assert!(prefs.validate().iter().any(|e| e.contains("grid_size")));
+        prefs.grid_size = -1.0;
+        assert!(prefs.validate().iter().any(|e| e.contains("grid_size")));
+    }
+
+    #[test]
+    fn validate_stage_prefs_output_name_empty() {
+        let mut prefs = StagePrefs::default();
+        prefs.outputs.push(crate::scene::OutputConfig::default_windowed());
+        let errors = prefs.validate();
+        assert!(errors.iter().any(|e| e.contains("name is empty")));
+    }
+
+    #[test]
+    fn validate_stage_prefs_warp_corners_non_finite() {
+        let mut prefs = StagePrefs::default();
+        prefs.outputs.push(crate::scene::OutputConfig {
+            name: "test".into(),
+            target: crate::scene::OutputTargetConfig::Windowed,
+            target_display: None,
+            surface_assignments: vec![crate::scene::SurfaceAssignmentConfig {
+                surface_idx: 0,
+                warp_corners: [[0.0, 0.0], [1.0, 0.0], [f32::INFINITY, 1.0], [0.0, 1.0]],
+                enabled: true,
+            }],
+            window_position: None,
+            window_size: None,
+        });
+        let errors = prefs.validate();
+        assert!(errors.iter().any(|e| e.contains("warp_corners")));
     }
 }

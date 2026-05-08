@@ -79,11 +79,12 @@ your-show/
     scene.json          # channels, decks, effects, modulation, crossfader, transition sequences
     stage.json          # surface layout, outputs, warp calibration
     midi.json           # MIDI controller mappings
+    keymap.json         # keyboard shortcut bindings
     presets/
       decks/            # saved deck presets (JSON)
       channels/          # saved channel presets (JSON)
   shaders/              # ISF shaders 
-  controller-profiles/  # MIDI controller profiles (TOML)
+  controller-profiles/  # MIDI controller profiles (JSON)
 ```
 
 Run Varda from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.

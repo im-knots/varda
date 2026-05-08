@@ -1,7 +1,7 @@
 //! Data-driven controller profiles for MIDI LED feedback.
 //!
 //! Profiles describe a controller's physical layout and LED protocol so the
-//! LED feedback system works with any hardware. Profiles are loaded from TOML
+//! LED feedback system works with any hardware. Profiles are loaded from JSON
 //! files in `.varda/controller-profiles/` or compiled-in as built-in defaults.
 
 use std::collections::HashMap;
@@ -15,13 +15,15 @@ use crate::mixer::Mixer;
 
 // ── Profile Data Model ────────────────────────────────────────────
 
-/// A controller profile loaded from TOML or compiled-in.
+/// A controller profile loaded from JSON or compiled-in.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ControllerProfileData {
     pub profile: ProfileMeta,
     pub leds: Option<LedConfig>,
     #[serde(default)]
     pub controls: Vec<ControlDef>,
+    #[serde(default)]
+    pub auto_map: Option<AutoMapConfig>,
 }
 
 /// Profile identity and detection.
@@ -46,6 +48,36 @@ pub struct LedConfig {
 }
 
 fn default_led_method() -> String { "note_velocity".to_string() }
+fn default_tap_hold_threshold() -> u64 { 300 }
+
+/// Auto-mapping configuration: drives grid/fader/button behavior from profile JSON.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutoMapConfig {
+    pub strategy: String,
+    pub grid_control: String,
+    pub fader_control: String,
+    pub shift_control: Option<String>,
+    pub page_buttons_control: Option<String>,
+    pub columns: u8,
+    pub rows: u8,
+    #[serde(default = "default_tap_hold_threshold")]
+    pub tap_hold_threshold_ms: u64,
+    pub tap_action: String,
+    pub hold_action: String,
+    pub fader_target: String,
+    pub last_fader_target: Option<String>,
+    pub led_rules: AutoMapLedRules,
+}
+
+/// LED color rules for auto-mapped grid positions.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutoMapLedRules {
+    pub active: String,
+    pub muted: String,
+    pub zero_opacity: String,
+    pub soloed: String,
+    pub empty: String,
+}
 
 /// A physical control on the device.
 #[derive(Debug, Clone, Deserialize)]
@@ -64,7 +96,136 @@ pub struct ControlDef {
     pub has_led: bool,
 }
 
+const VALID_LED_METHODS: &[&str] = &["note_velocity", "cc_value"];
+const VALID_CONTROL_TYPES: &[&str] = &["button", "fader", "encoder"];
+const VALID_MIDI_TYPES: &[&str] = &["note", "cc"];
+
 impl ControllerProfileData {
+    /// Validate the profile for semantic correctness. Returns a list of errors.
+    /// An empty list means the profile is valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        if self.profile.name.trim().is_empty() {
+            errors.push("profile.name is empty".into());
+        }
+        if self.profile.name_match.trim().is_empty() {
+            errors.push("profile.name_match is empty".into());
+        }
+
+        if let Some(leds) = &self.leds {
+            if !VALID_LED_METHODS.contains(&leds.method.as_str()) {
+                errors.push(format!(
+                    "leds.method '{}' is invalid (expected one of: {})",
+                    leds.method, VALID_LED_METHODS.join(", ")
+                ));
+            }
+            if leds.channel > 15 {
+                errors.push(format!("leds.channel {} exceeds MIDI range 0-15", leds.channel));
+            }
+        }
+
+        if self.controls.is_empty() {
+            errors.push("controls array is empty — profile defines no controls".into());
+        }
+
+        for (i, ctrl) in self.controls.iter().enumerate() {
+            let prefix = format!("controls[{}] '{}'", i, ctrl.name);
+            if ctrl.name.trim().is_empty() {
+                errors.push(format!("{}: name is empty", prefix));
+            }
+            if !VALID_CONTROL_TYPES.contains(&ctrl.control_type.as_str()) {
+                errors.push(format!(
+                    "{}: type '{}' is invalid (expected one of: {})",
+                    prefix, ctrl.control_type, VALID_CONTROL_TYPES.join(", ")
+                ));
+            }
+            if !VALID_MIDI_TYPES.contains(&ctrl.midi_type.as_str()) {
+                errors.push(format!(
+                    "{}: midi_type '{}' is invalid (expected one of: {})",
+                    prefix, ctrl.midi_type, VALID_MIDI_TYPES.join(", ")
+                ));
+            }
+            if ctrl.channel > 15 {
+                errors.push(format!("{}: channel {} exceeds MIDI range 0-15", prefix, ctrl.channel));
+            }
+            if ctrl.range[0] > ctrl.range[1] {
+                errors.push(format!(
+                    "{}: range [{}, {}] is inverted (min > max)",
+                    prefix, ctrl.range[0], ctrl.range[1]
+                ));
+            }
+            if ctrl.range[1] > 127 {
+                errors.push(format!(
+                    "{}: range max {} exceeds MIDI range 0-127",
+                    prefix, ctrl.range[1]
+                ));
+            }
+        }
+
+        // Validate auto_map if present
+        if let Some(am) = &self.auto_map {
+            const VALID_STRATEGIES: &[&str] = &["channel_grid"];
+            const VALID_ACTIONS: &[&str] = &["mute", "solo"];
+
+            if !VALID_STRATEGIES.contains(&am.strategy.as_str()) {
+                errors.push(format!(
+                    "auto_map.strategy '{}' is invalid (expected one of: {})",
+                    am.strategy, VALID_STRATEGIES.join(", ")
+                ));
+            }
+
+            let control_names: Vec<&str> = self.controls.iter().map(|c| c.name.as_str()).collect();
+
+            if !control_names.contains(&am.grid_control.as_str()) {
+                errors.push(format!(
+                    "auto_map.grid_control '{}' does not match any control name",
+                    am.grid_control
+                ));
+            }
+            if !control_names.contains(&am.fader_control.as_str()) {
+                errors.push(format!(
+                    "auto_map.fader_control '{}' does not match any control name",
+                    am.fader_control
+                ));
+            }
+            if let Some(ref sc) = am.shift_control {
+                if !control_names.contains(&sc.as_str()) {
+                    errors.push(format!(
+                        "auto_map.shift_control '{}' does not match any control name", sc
+                    ));
+                }
+            }
+            if let Some(ref pb) = am.page_buttons_control {
+                if !control_names.contains(&pb.as_str()) {
+                    errors.push(format!(
+                        "auto_map.page_buttons_control '{}' does not match any control name", pb
+                    ));
+                }
+            }
+            if !VALID_ACTIONS.contains(&am.tap_action.as_str()) {
+                errors.push(format!(
+                    "auto_map.tap_action '{}' is invalid (expected one of: {})",
+                    am.tap_action, VALID_ACTIONS.join(", ")
+                ));
+            }
+            if !VALID_ACTIONS.contains(&am.hold_action.as_str()) {
+                errors.push(format!(
+                    "auto_map.hold_action '{}' is invalid (expected one of: {})",
+                    am.hold_action, VALID_ACTIONS.join(", ")
+                ));
+            }
+            if am.columns == 0 {
+                errors.push("auto_map.columns must be > 0".into());
+            }
+            if am.rows == 0 {
+                errors.push("auto_map.rows must be > 0".into());
+            }
+        }
+
+        errors
+    }
+
     /// Check if a MIDI device name matches this profile.
     pub fn matches(&self, device_name: &str) -> bool {
         device_name.to_lowercase().contains(&self.profile.name_match.to_lowercase())
@@ -103,12 +264,15 @@ impl ControllerProfileData {
 
 // ── Built-in APC Mini Profile ─────────────────────────────────────
 
-const APC_MINI_PROFILE_TOML: &str = include_str!("apc_mini_profile.toml");
+const APC_MINI_PROFILE_JSON: &str = include_str!("apc_mini_profile.json");
 
 /// Load the compiled-in APC Mini mk1 profile.
 pub fn builtin_apc_mini() -> ControllerProfileData {
-    toml::from_str(APC_MINI_PROFILE_TOML)
-        .expect("Built-in APC Mini profile TOML is invalid")
+    let profile: ControllerProfileData = serde_json::from_str(APC_MINI_PROFILE_JSON)
+        .expect("Built-in APC Mini profile JSON is invalid");
+    let errors = profile.validate();
+    assert!(errors.is_empty(), "Built-in APC Mini profile validation failed: {:?}", errors);
+    profile
 }
 
 // ── Profile Registry ──────────────────────────────────────────────
@@ -149,15 +313,23 @@ impl ProfileRegistry {
         let mut user_profiles = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
             match std::fs::read_to_string(&path) {
-                Ok(content) => match toml::from_str::<ControllerProfileData>(&content) {
+                Ok(content) => match serde_json::from_str::<ControllerProfileData>(&content) {
                     Ok(profile) => {
-                        log::info!("Loaded controller profile '{}' from {}",
-                            profile.profile.name, path.display());
-                        user_profiles.push(Arc::new(profile));
+                        let errors = profile.validate();
+                        if errors.is_empty() {
+                            log::info!("Loaded controller profile '{}' from {}",
+                                profile.profile.name, path.display());
+                            user_profiles.push(Arc::new(profile));
+                        } else {
+                            log::warn!("Controller profile {} has validation errors, skipping:", path.display());
+                            for err in &errors {
+                                log::warn!("  - {}", err);
+                            }
+                        }
                     }
                     Err(e) => {
                         log::warn!("Failed to parse controller profile {}: {}", path.display(), e);
@@ -419,6 +591,19 @@ mod tests {
         assert_eq!(*leds.colors.get("green").unwrap(), 1);
         assert_eq!(*leds.colors.get("red_blink").unwrap(), 4);
         assert_eq!(profile.controls.len(), 5);
+        // Auto-map is present
+        assert!(profile.auto_map.is_some());
+        let am = profile.auto_map.as_ref().unwrap();
+        assert_eq!(am.strategy, "channel_grid");
+        assert_eq!(am.grid_control, "grid");
+        assert_eq!(am.fader_control, "faders");
+        assert_eq!(am.columns, 8);
+        assert_eq!(am.rows, 8);
+        assert_eq!(am.tap_hold_threshold_ms, 300);
+        assert_eq!(am.tap_action, "mute");
+        assert_eq!(am.hold_action, "solo");
+        assert_eq!(am.led_rules.active, "green");
+        assert_eq!(am.led_rules.soloed, "yellow");
     }
 
     #[test]
@@ -482,35 +667,184 @@ mod tests {
     }
 
     #[test]
-    fn test_toml_roundtrip() {
-        // Verify a minimal profile parses correctly
-        let toml_str = r#"
-[profile]
-name = "Test Controller"
-name_match = "test ctrl"
-
-[leds]
-method = "cc_value"
-channel = 1
-
-[leds.colors]
-off = 0
-on = 127
-
-[[controls]]
-name = "buttons"
-type = "button"
-midi_type = "cc"
-channel = 1
-range = [0, 7]
-has_led = true
-"#;
-        let profile: ControllerProfileData = toml::from_str(toml_str).unwrap();
+    fn test_json_roundtrip() {
+        let json_str = r#"{
+  "profile": { "name": "Test Controller", "name_match": "test ctrl" },
+  "leds": { "method": "cc_value", "channel": 1, "colors": { "off": 0, "on": 127 } },
+  "controls": [
+    { "name": "buttons", "type": "button", "midi_type": "cc", "channel": 1, "range": [0, 7], "has_led": true }
+  ]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json_str).unwrap();
+        assert!(profile.validate().is_empty());
         assert_eq!(profile.profile.name, "Test Controller");
         assert_eq!(profile.led_method(), "cc_value");
         assert_eq!(profile.led_channel(), 1);
         assert_eq!(profile.color_value("on"), 127);
         assert!(profile.control_has_led("cc", 1, 3));
-        assert!(!profile.control_has_led("cc", 0, 3)); // wrong channel
+        assert!(!profile.control_has_led("cc", 0, 3));
+    }
+
+    #[test]
+    fn test_validate_valid_profile() {
+        let profile = builtin_apc_mini();
+        assert!(profile.validate().is_empty());
+    }
+
+    #[test]
+    fn test_validate_empty_name() {
+        let json = r#"{
+  "profile": { "name": "", "name_match": "test" },
+  "controls": [{ "name": "btn", "type": "button", "midi_type": "note", "range": [0, 0] }]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("profile.name is empty")));
+    }
+
+    #[test]
+    fn test_validate_empty_name_match() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "" },
+  "controls": [{ "name": "btn", "type": "button", "midi_type": "note", "range": [0, 0] }]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("name_match is empty")));
+    }
+
+    #[test]
+    fn test_validate_bad_led_method() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "leds": { "method": "banana", "channel": 0, "colors": {} },
+  "controls": [{ "name": "btn", "type": "button", "midi_type": "note", "range": [0, 0] }]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("leds.method")));
+    }
+
+    #[test]
+    fn test_validate_inverted_range() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "controls": [{ "name": "btn", "type": "button", "midi_type": "note", "range": [63, 0] }]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("inverted")));
+    }
+
+    #[test]
+    fn test_validate_bad_control_type() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "controls": [{ "name": "btn", "type": "knob", "midi_type": "note", "range": [0, 0] }]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("type 'knob'")));
+    }
+
+    #[test]
+    fn test_validate_bad_midi_type() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "controls": [{ "name": "btn", "type": "button", "midi_type": "sysex", "range": [0, 0] }]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("midi_type 'sysex'")));
+    }
+
+    #[test]
+    fn test_validate_empty_controls() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "controls": []
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("controls array is empty")));
+    }
+
+    #[test]
+    fn test_validate_channel_out_of_range() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "leds": { "method": "note_velocity", "channel": 16, "colors": {} },
+  "controls": [{ "name": "btn", "type": "button", "midi_type": "note", "channel": 20, "range": [0, 0] }]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("leds.channel 16")));
+        assert!(errors.iter().any(|e| e.contains("channel 20")));
+    }
+
+    #[test]
+    fn test_malformed_json_does_not_panic() {
+        let bad_json = r#"{ "profile": { "name": 123 } }"#;
+        assert!(serde_json::from_str::<ControllerProfileData>(bad_json).is_err());
+
+        let not_json = "this is not json at all";
+        assert!(serde_json::from_str::<ControllerProfileData>(not_json).is_err());
+
+        let empty = "";
+        assert!(serde_json::from_str::<ControllerProfileData>(empty).is_err());
+    }
+
+    #[test]
+    fn test_auto_map_optional() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "controls": [{ "name": "btn", "type": "button", "midi_type": "note", "range": [0, 0] }]
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        assert!(profile.auto_map.is_none());
+        assert!(profile.validate().is_empty());
+    }
+
+    #[test]
+    fn test_auto_map_validation_bad_control_ref() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "controls": [{ "name": "btn", "type": "button", "midi_type": "note", "range": [0, 0] }],
+  "auto_map": {
+    "strategy": "channel_grid",
+    "grid_control": "nonexistent",
+    "fader_control": "also_bad",
+    "columns": 8, "rows": 8,
+    "tap_action": "mute", "hold_action": "solo",
+    "fader_target": "channel_opacity",
+    "led_rules": { "active": "green", "muted": "red", "zero_opacity": "red", "soloed": "yellow", "empty": "off" }
+  }
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("grid_control")));
+        assert!(errors.iter().any(|e| e.contains("fader_control")));
+    }
+
+    #[test]
+    fn test_auto_map_validation_bad_strategy() {
+        let json = r#"{
+  "profile": { "name": "Test", "name_match": "test" },
+  "controls": [{ "name": "grid", "type": "button", "midi_type": "note", "range": [0, 63] },
+               { "name": "faders", "type": "fader", "midi_type": "cc", "range": [48, 56] }],
+  "auto_map": {
+    "strategy": "banana",
+    "grid_control": "grid",
+    "fader_control": "faders",
+    "columns": 8, "rows": 8,
+    "tap_action": "invalid_action", "hold_action": "solo",
+    "fader_target": "channel_opacity",
+    "led_rules": { "active": "green", "muted": "red", "zero_opacity": "red", "soloed": "yellow", "empty": "off" }
+  }
+}"#;
+        let profile: ControllerProfileData = serde_json::from_str(json).unwrap();
+        let errors = profile.validate();
+        assert!(errors.iter().any(|e| e.contains("strategy 'banana'")));
+        assert!(errors.iter().any(|e| e.contains("tap_action")));
     }
 }

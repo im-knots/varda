@@ -19,7 +19,7 @@ impl VardaApp {
             }
         }
         if let Some(midi) = &self.midi_devices {
-            let midi_config = self.midi_mappings.to_config(&midi.devices);
+            let midi_config = self.midi_mappings.to_config(&midi.devices, &self.auto_map_engine);
             match midi_config.save(self.workspace.midi_path()) {
                 Ok(()) => log::info!("Saved MIDI mappings to {}", self.workspace.midi_path().display()),
                 Err(e) => log::error!("Failed to save MIDI config: {}", e),

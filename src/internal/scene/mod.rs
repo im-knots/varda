@@ -417,20 +417,151 @@ impl From<BlendModeConfig> for BlendMode {
     }
 }
 
+// ── Validation ─────────────────────────────────────────────────────
+
+impl SourceConfig {
+    /// Validate source config. Returns a list of errors (empty = valid).
+    pub fn validate(&self, prefix: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        match self {
+            SourceConfig::Shader { path, .. } => {
+                if path.trim().is_empty() {
+                    errors.push(format!("{}: shader path is empty", prefix));
+                }
+            }
+            SourceConfig::Video { path } => {
+                if path.trim().is_empty() {
+                    errors.push(format!("{}: video path is empty", prefix));
+                }
+            }
+            SourceConfig::Image { path } => {
+                if path.trim().is_empty() {
+                    errors.push(format!("{}: image path is empty", prefix));
+                }
+            }
+            SourceConfig::SolidColor { color } => {
+                for (i, c) in color.iter().enumerate() {
+                    if !c.is_finite() {
+                        errors.push(format!("{}: color[{}] is not finite", prefix, i));
+                    }
+                }
+            }
+            SourceConfig::Camera { name } => {
+                if name.trim().is_empty() {
+                    errors.push(format!("{}: camera name is empty", prefix));
+                }
+            }
+            SourceConfig::Ndi { name } => {
+                if name.trim().is_empty() {
+                    errors.push(format!("{}: NDI name is empty", prefix));
+                }
+            }
+            SourceConfig::Syphon { name } => {
+                if name.trim().is_empty() {
+                    errors.push(format!("{}: Syphon name is empty", prefix));
+                }
+            }
+            SourceConfig::Srt { url, .. } => {
+                if url.trim().is_empty() {
+                    errors.push(format!("{}: SRT url is empty", prefix));
+                }
+            }
+        }
+        errors
+    }
+}
+
+impl EffectConfig {
+    /// Validate effect config. Returns a list of errors (empty = valid).
+    pub fn validate(&self, prefix: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.path.trim().is_empty() {
+            errors.push(format!("{}: effect path is empty", prefix));
+        }
+        errors
+    }
+}
+
+impl DeckConfig {
+    /// Validate deck config. Returns a list of errors (empty = valid).
+    pub fn validate(&self, prefix: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !(0.0..=1.0).contains(&self.opacity) {
+            errors.push(format!("{}: opacity {} out of range 0.0-1.0", prefix, self.opacity));
+        }
+        errors.extend(self.source.validate(&format!("{}/source", prefix)));
+        for (i, fx) in self.effects.iter().enumerate() {
+            errors.extend(fx.validate(&format!("{}/effects[{}]", prefix, i)));
+        }
+        errors
+    }
+}
+
+impl ChannelConfig {
+    /// Validate channel config. Returns a list of errors (empty = valid).
+    pub fn validate(&self, prefix: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !(0.0..=1.0).contains(&self.opacity) {
+            errors.push(format!("{}: opacity {} out of range 0.0-1.0", prefix, self.opacity));
+        }
+        for (i, deck) in self.decks.iter().enumerate() {
+            errors.extend(deck.validate(&format!("{}/decks[{}]", prefix, i)));
+        }
+        for (i, fx) in self.effects.iter().enumerate() {
+            errors.extend(fx.validate(&format!("{}/effects[{}]", prefix, i)));
+        }
+        errors
+    }
+}
+
 // ── I/O ────────────────────────────────────────────────────────────
 
 impl SceneConfig {
+    /// Validate the scene config for semantic correctness. Returns a list of errors.
+    /// An empty list means the config is valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !(0.0..=1.0).contains(&self.crossfader) {
+            errors.push(format!("crossfader {} out of range 0.0-1.0", self.crossfader));
+        }
+        if let Some(w) = self.render_width {
+            if w == 0 {
+                errors.push("render_width is 0".into());
+            }
+        }
+        if let Some(h) = self.render_height {
+            if h == 0 {
+                errors.push("render_height is 0".into());
+            }
+        }
+        for (i, ch) in self.channels.iter().enumerate() {
+            errors.extend(ch.validate(&format!("channels[{}]", i)));
+        }
+        for (i, fx) in self.master_effects.iter().enumerate() {
+            errors.extend(fx.validate(&format!("master_effects[{}]", i)));
+        }
+        errors
+    }
+
     /// Load from a JSON file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read scene file: {}", path.as_ref().display()))?;
         let scene: SceneConfig = serde_json::from_str(&content)
             .with_context(|| format!("Failed to parse scene file: {}", path.as_ref().display()))?;
+        let warnings = scene.validate();
+        for w in &warnings {
+            log::warn!("Scene config {}: {}", path.as_ref().display(), w);
+        }
         Ok(scene)
     }
 
     /// Save to a JSON file
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let errors = self.validate();
+        for e in &errors {
+            log::error!("Scene config save: {}", e);
+        }
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize scene")?;
         std::fs::write(path.as_ref(), content)
@@ -724,5 +855,112 @@ mod tests {
         // Cleanup
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir(&dir).ok();
+    }
+
+    // ── Validation ──────────────────────────────────────────────────
+
+    #[test]
+    fn validate_valid_scene() {
+        let scene = SceneConfig {
+            version: 2,
+            channels: vec![ChannelConfig {
+                name: "Ch 0".into(),
+                opacity: 1.0,
+                blend_mode: BlendModeConfig::Normal,
+                decks: vec![DeckConfig {
+                    name: "Deck".into(),
+                    source: SourceConfig::Shader { path: "test.fs".into(), params: HashMap::new() },
+                    effects: vec![],
+                    opacity: 0.5,
+                    blend_mode: BlendModeConfig::Normal,
+                    mute: false, solo: false, z_index: 0,
+                    auto_transition: None, modulation: vec![],
+                }],
+                effects: vec![],
+            }],
+            crossfader: 0.5,
+            active_transition: None,
+            master_effects: vec![],
+            modulation: Default::default(),
+            transition_sequences: vec![],
+            render_width: Some(1920),
+            render_height: Some(1080),
+        };
+        assert!(scene.validate().is_empty());
+    }
+
+    #[test]
+    fn validate_crossfader_out_of_range() {
+        let mut scene = SceneConfig {
+            version: 2, channels: vec![], crossfader: 1.5,
+            active_transition: None, master_effects: vec![],
+            modulation: Default::default(), transition_sequences: vec![],
+            render_width: None, render_height: None,
+        };
+        let errors = scene.validate();
+        assert!(errors.iter().any(|e| e.contains("crossfader")));
+        scene.crossfader = -0.1;
+        assert!(scene.validate().iter().any(|e| e.contains("crossfader")));
+    }
+
+    #[test]
+    fn validate_render_dims_zero() {
+        let scene = SceneConfig {
+            version: 2, channels: vec![], crossfader: 0.0,
+            active_transition: None, master_effects: vec![],
+            modulation: Default::default(), transition_sequences: vec![],
+            render_width: Some(0), render_height: Some(0),
+        };
+        let errors = scene.validate();
+        assert!(errors.iter().any(|e| e.contains("render_width")));
+        assert!(errors.iter().any(|e| e.contains("render_height")));
+    }
+
+    #[test]
+    fn validate_channel_opacity_out_of_range() {
+        let ch = ChannelConfig {
+            name: "Bad".into(), opacity: 2.0,
+            blend_mode: BlendModeConfig::Normal, decks: vec![], effects: vec![],
+        };
+        let errors = ch.validate("ch[0]");
+        assert!(errors.iter().any(|e| e.contains("opacity")));
+    }
+
+    #[test]
+    fn validate_deck_opacity_out_of_range() {
+        let deck = DeckConfig {
+            name: "D".into(),
+            source: SourceConfig::Shader { path: "ok.fs".into(), params: HashMap::new() },
+            effects: vec![], opacity: -0.5,
+            blend_mode: BlendModeConfig::Normal,
+            mute: false, solo: false, z_index: 0,
+            auto_transition: None, modulation: vec![],
+        };
+        let errors = deck.validate("d[0]");
+        assert!(errors.iter().any(|e| e.contains("opacity")));
+    }
+
+    #[test]
+    fn validate_source_empty_path() {
+        let s = SourceConfig::Shader { path: "".into(), params: HashMap::new() };
+        assert!(!s.validate("src").is_empty());
+        let s = SourceConfig::Video { path: " ".into() };
+        assert!(!s.validate("src").is_empty());
+        let s = SourceConfig::Image { path: "".into() };
+        assert!(!s.validate("src").is_empty());
+    }
+
+    #[test]
+    fn validate_source_solid_color_non_finite() {
+        let s = SourceConfig::SolidColor { color: [1.0, f32::NAN, 0.0, 1.0] };
+        let errors = s.validate("src");
+        assert!(errors.iter().any(|e| e.contains("color[1]")));
+    }
+
+    #[test]
+    fn validate_effect_empty_path() {
+        let fx = EffectConfig { path: "".into(), enabled: true, params: HashMap::new() };
+        let errors = fx.validate("fx[0]");
+        assert!(!errors.is_empty());
     }
 }

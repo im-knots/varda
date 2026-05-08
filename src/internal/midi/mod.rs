@@ -5,6 +5,7 @@
 //! MIDI mappings are device-specific so two controllers can have the same CC#
 //! mapped to different parameters.
 
+pub mod auto_map;
 pub mod controller_profile;
 
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ use crate::mixer::Mixer;
 use crate::modulation::ModulationSource;
 use crate::params::ParamValue;
 
+pub use auto_map::AutoMapEngine;
 pub use controller_profile::{
     ControllerProfileData, ProfileRegistry, ControllerLedManager,
 };
@@ -566,8 +568,12 @@ impl MidiMappingStore {
     }
 
     /// Export mappings to a serializable config using device names instead of IDs.
-    pub fn to_config(&self, devices: &HashMap<DeviceId, MidiDeviceInfo>) -> MidiConfig {
-        let mappings = self.mappings.iter().map(|(key, path)| {
+    /// Filters out any mappings whose key is handled by the auto-map engine so
+    /// that `midi.json` only contains user-created manual mappings.
+    pub fn to_config(&self, devices: &HashMap<DeviceId, MidiDeviceInfo>, auto_map: &AutoMapEngine) -> MidiConfig {
+        let mappings = self.mappings.iter()
+            .filter(|(key, _)| !auto_map.handles_key(key.device_id(), key))
+            .map(|(key, path)| {
             let device_name = devices.get(&key.device_id())
                 .map(|d| d.name.clone())
                 .unwrap_or_else(|| format!("unknown_{}", key.device_id()));
@@ -639,18 +645,62 @@ pub struct MidiMappingEntry {
     pub param_path: String,
 }
 
+impl MidiMappingEntry {
+    /// Validate a single mapping entry. Returns a list of errors (empty = valid).
+    pub fn validate(&self, prefix: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.device_name.trim().is_empty() {
+            errors.push(format!("{}: device_name is empty", prefix));
+        }
+        if self.msg_type != "cc" && self.msg_type != "note" {
+            errors.push(format!(
+                "{}: msg_type '{}' is invalid (expected \"cc\" or \"note\")",
+                prefix, self.msg_type
+            ));
+        }
+        if self.channel > 15 {
+            errors.push(format!("{}: channel {} exceeds MIDI range 0-15", prefix, self.channel));
+        }
+        if self.number > 127 {
+            errors.push(format!("{}: number {} exceeds MIDI range 0-127", prefix, self.number));
+        }
+        if self.param_path.trim().is_empty() {
+            errors.push(format!("{}: param_path is empty", prefix));
+        }
+        errors
+    }
+}
+
 impl MidiConfig {
+    /// Validate the MIDI config for semantic correctness. Returns a list of errors.
+    /// An empty list means the config is valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (i, entry) in self.mappings.iter().enumerate() {
+            errors.extend(entry.validate(&format!("mappings[{}]", i)));
+        }
+        errors
+    }
+
     /// Load from a JSON file
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read MIDI config: {}", path.as_ref().display()))?;
         let config: MidiConfig = serde_json::from_str(&content)
             .with_context(|| format!("Failed to parse MIDI config: {}", path.as_ref().display()))?;
+        let warnings = config.validate();
+        for w in &warnings {
+            log::warn!("MIDI config {}: {}", path.as_ref().display(), w);
+        }
         Ok(config)
     }
 
     /// Save to a JSON file
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
+        let errors = self.validate();
+        for e in &errors {
+            log::error!("MIDI config save: {}", e);
+        }
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize MIDI config")?;
         std::fs::write(path.as_ref(), content)
@@ -1036,5 +1086,149 @@ mod tests {
 
         // Main and DAW should NOT match each other
         assert_ne!(in_stem, daw_in);
+    }
+
+    #[test]
+    fn test_midi_config_validate_valid() {
+        let config = MidiConfig {
+            version: 1,
+            mappings: vec![MidiMappingEntry {
+                device_name: "APC Mini".into(),
+                msg_type: "cc".into(),
+                channel: 0,
+                number: 48,
+                param_path: "ch/0/opacity".into(),
+            }],
+        };
+        assert!(config.validate().is_empty());
+    }
+
+    #[test]
+    fn test_midi_config_validate_empty_device() {
+        let entry = MidiMappingEntry {
+            device_name: "".into(),
+            msg_type: "cc".into(),
+            channel: 0, number: 0,
+            param_path: "ch/0/opacity".into(),
+        };
+        assert!(entry.validate("m[0]").iter().any(|e| e.contains("device_name")));
+    }
+
+    #[test]
+    fn test_midi_config_validate_bad_msg_type() {
+        let entry = MidiMappingEntry {
+            device_name: "dev".into(),
+            msg_type: "sysex".into(),
+            channel: 0, number: 0,
+            param_path: "ch/0/opacity".into(),
+        };
+        assert!(entry.validate("m[0]").iter().any(|e| e.contains("msg_type")));
+    }
+
+    #[test]
+    fn test_midi_config_validate_channel_out_of_range() {
+        let entry = MidiMappingEntry {
+            device_name: "dev".into(),
+            msg_type: "note".into(),
+            channel: 16, number: 60,
+            param_path: "ch/0/opacity".into(),
+        };
+        assert!(entry.validate("m[0]").iter().any(|e| e.contains("channel")));
+    }
+
+    #[test]
+    fn test_midi_config_validate_empty_param_path() {
+        let entry = MidiMappingEntry {
+            device_name: "dev".into(),
+            msg_type: "cc".into(),
+            channel: 0, number: 0,
+            param_path: "".into(),
+        };
+        assert!(entry.validate("m[0]").iter().any(|e| e.contains("param_path")));
+    }
+
+    // ── Helper for building an AutoMapEngine with a registered device ──
+
+    fn make_auto_map_engine(device_id: DeviceId, grid_range: [u8; 2], fader_range: [u8; 2]) -> AutoMapEngine {
+        use crate::midi::controller_profile::*;
+        use std::sync::Arc;
+
+        let profile = ControllerProfileData {
+            profile: ProfileMeta { name: "test".into(), name_match: "test".into() },
+            leds: None,
+            controls: vec![
+                ControlDef { name: "pads".into(), control_type: "button".into(), midi_type: "note".into(), channel: 0, range: grid_range, has_led: false },
+                ControlDef { name: "faders".into(), control_type: "fader".into(), midi_type: "cc".into(), channel: 0, range: fader_range, has_led: false },
+            ],
+            auto_map: Some(AutoMapConfig {
+                strategy: "grid".into(),
+                grid_control: "pads".into(),
+                fader_control: "faders".into(),
+                shift_control: None,
+                page_buttons_control: None,
+                columns: 8,
+                rows: 8,
+                tap_hold_threshold_ms: 300,
+                tap_action: "toggle_mute".into(),
+                hold_action: "solo".into(),
+                fader_target: "opacity".into(),
+                last_fader_target: None,
+                led_rules: AutoMapLedRules {
+                    active: "green".into(),
+                    muted: "red".into(),
+                    zero_opacity: "yellow".into(),
+                    soloed: "blue".into(),
+                    empty: "off".into(),
+                },
+            }),
+        };
+        let mut engine = AutoMapEngine::new();
+        engine.register_device(device_id, Arc::new(profile));
+        engine
+    }
+
+    #[test]
+    fn test_to_config_filters_auto_mapped_keys() {
+        let dev_id: DeviceId = 1;
+        // Grid pads: notes 0–63, faders: CC 48–55
+        let auto_map = make_auto_map_engine(dev_id, [0, 63], [48, 55]);
+
+        let mut store = MidiMappingStore::new();
+        // Auto-mapped key (grid note within 0–63) — should be filtered
+        store.mappings.insert(MidiKey::Note(dev_id, 0, 10), "ch/0/deck/0/play".into());
+        // Auto-mapped key (fader CC within 48–55) — should be filtered
+        store.mappings.insert(MidiKey::CC(dev_id, 0, 50), "ch/0/opacity".into());
+        // Manual mapping (CC outside auto-map range) — should be kept
+        store.mappings.insert(MidiKey::CC(dev_id, 0, 99), "ch/1/opacity".into());
+
+        let mut devices = HashMap::new();
+        devices.insert(dev_id, MidiDeviceInfo {
+            id: dev_id, name: "TestDev".into(), enabled: true,
+            has_output: false, profile: None,
+        });
+
+        let config = store.to_config(&devices, &auto_map);
+        assert_eq!(config.mappings.len(), 1);
+        assert_eq!(config.mappings[0].param_path, "ch/1/opacity");
+        assert_eq!(config.mappings[0].number, 99);
+    }
+
+    #[test]
+    fn test_to_config_no_automap_passes_all() {
+        let dev_id: DeviceId = 1;
+        let auto_map = AutoMapEngine::new(); // empty — no devices registered
+
+        let mut store = MidiMappingStore::new();
+        store.mappings.insert(MidiKey::Note(dev_id, 0, 10), "ch/0/deck/0/play".into());
+        store.mappings.insert(MidiKey::CC(dev_id, 0, 50), "ch/0/opacity".into());
+
+        let mut devices = HashMap::new();
+        devices.insert(dev_id, MidiDeviceInfo {
+            id: dev_id, name: "TestDev".into(), enabled: true,
+            has_output: false, profile: None,
+        });
+
+        let config = store.to_config(&devices, &auto_map);
+        assert_eq!(config.mappings.len(), 2);
     }
 }

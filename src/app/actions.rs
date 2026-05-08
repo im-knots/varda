@@ -247,6 +247,7 @@ impl VardaApp {
                     log::warn!("MIDI rescan failed: {}", e);
                 }
                 self.controller_led_mgr.sync_devices(mgr);
+                self.auto_map_engine.sync_devices(mgr);
             }
         }
         for (dev_id, enabled) in &ui_actions.midi_device_toggles {
@@ -283,6 +284,7 @@ impl VardaApp {
                 self.midi_mappings.learn_mode,
                 self.midi_mappings.learn_target.as_deref(),
             );
+            self.auto_map_engine.update_leds(mgr, &self.mixer);
         }
     }
 }

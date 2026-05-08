@@ -2,57 +2,12 @@
   "version": 1,
   "bindings": [
     {
-      "key": "Z",
-      "command": true,
-      "shift": true,
-      "alt": false,
-      "target": {
-        "Action": "Redo"
-      }
-    },
-    {
-      "key": "S",
+      "key": "G",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "ToolSelect"
-      }
-    },
-    {
-      "key": "R",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "ToolRectangle"
-      }
-    },
-    {
-      "key": "C",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "ToolCircle"
-      }
-    },
-    {
-      "key": "Delete",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "DeleteSurface"
-      }
-    },
-    {
-      "key": "Escape",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "ClearDrawing"
+        "Action": "CombineSurfaces"
       }
     },
     {
@@ -65,12 +20,30 @@
       }
     },
     {
-      "key": "G",
+      "key": "Z",
+      "command": true,
+      "shift": true,
+      "alt": false,
+      "target": {
+        "Action": "Redo"
+      }
+    },
+    {
+      "key": "Backspace",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "CombineSurfaces"
+        "Action": "DeleteSurface"
+      }
+    },
+    {
+      "key": "C",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "ToolCircle"
       }
     },
     {
@@ -80,6 +53,15 @@
       "alt": false,
       "target": {
         "Action": "DuplicateSurface"
+      }
+    },
+    {
+      "key": "Delete",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "DeleteSurface"
       }
     },
     {
@@ -101,12 +83,21 @@
       }
     },
     {
-      "key": "Z",
-      "command": true,
+      "key": "R",
+      "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "Undo"
+        "Action": "ToolRectangle"
+      }
+    },
+    {
+      "key": "Escape",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "ClearDrawing"
       }
     },
     {
@@ -119,12 +110,21 @@
       }
     },
     {
-      "key": "Backspace",
+      "key": "Z",
+      "command": true,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "Undo"
+      }
+    },
+    {
+      "key": "S",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "DeleteSurface"
+        "Action": "ToolSelect"
       }
     },
     {

@@ -38,6 +38,10 @@ impl PresetLibrary {
 
     /// Save a deck preset to disk.
     pub fn save_deck_preset(workspace: &Workspace, name: &str, config: &DeckConfig) -> Result<()> {
+        let errors = config.validate("deck_preset");
+        for e in &errors {
+            log::error!("Deck preset '{}' save: {}", name, e);
+        }
         workspace.ensure_preset_dirs()?;
         let filename = sanitize_filename(name);
         let path = workspace.deck_presets_dir().join(&filename);
@@ -51,6 +55,10 @@ impl PresetLibrary {
 
     /// Save a channel preset to disk.
     pub fn save_channel_preset(workspace: &Workspace, name: &str, config: &ChannelConfig) -> Result<()> {
+        let errors = config.validate("channel_preset");
+        for e in &errors {
+            log::error!("Channel preset '{}' save: {}", name, e);
+        }
         workspace.ensure_preset_dirs()?;
         let filename = sanitize_filename(name);
         let path = workspace.channel_presets_dir().join(&filename);
@@ -94,12 +102,24 @@ impl PresetLibrary {
 
             if is_deck {
                 match serde_json::from_str::<DeckConfig>(&content) {
-                    Ok(config) => self.deck_presets.push(DeckPreset { name: stem, config }),
+                    Ok(config) => {
+                        let warnings = config.validate(&format!("deck_preset '{}'", stem));
+                        for w in &warnings {
+                            log::warn!("Preset {}: {}", path.display(), w);
+                        }
+                        self.deck_presets.push(DeckPreset { name: stem, config });
+                    }
                     Err(e) => log::warn!("Failed to parse deck preset {}: {}", path.display(), e),
                 }
             } else {
                 match serde_json::from_str::<ChannelConfig>(&content) {
-                    Ok(config) => self.channel_presets.push(ChannelPreset { name: stem, config }),
+                    Ok(config) => {
+                        let warnings = config.validate(&format!("channel_preset '{}'", stem));
+                        for w in &warnings {
+                            log::warn!("Preset {}: {}", path.display(), w);
+                        }
+                        self.channel_presets.push(ChannelPreset { name: stem, config });
+                    }
                     Err(e) => log::warn!("Failed to parse channel preset {}: {}", path.display(), e),
                 }
             }
@@ -275,5 +295,18 @@ mod tests {
         let json = r#"{"name":"old","source":{"type":"SolidColor","color":[1,0,0,1]},"opacity":1.0,"blend_mode":"normal"}"#;
         let config: DeckConfig = serde_json::from_str(json).unwrap();
         assert!(config.modulation.is_empty());
+    }
+
+    #[test]
+    fn test_preset_validation_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path().to_path_buf());
+        // Deck with invalid opacity — should still save (logs error but doesn't block)
+        let mut config = sample_deck_config();
+        config.opacity = 5.0;
+        assert!(PresetLibrary::save_deck_preset(&ws, "bad_opacity", &config).is_ok());
+        // Verify it's loadable despite validation warnings
+        let lib = PresetLibrary::load(&ws);
+        assert_eq!(lib.deck_presets.len(), 1);
     }
 }

@@ -55,7 +55,6 @@ nokhwa = { version = "0.10.10", features = ["input-native", "output-threaded"] }
 midir = "0.11"
 yuvutils-rs = "0.8.3"
 geo = "0.33.1"
-toml = "1.1.2"
 sysinfo = "0.38.4"
 tokio = { version = "1.52.2", features = ["rt-multi-thread", "macros", "net", "sync"] }
 axum = { version = "0.8.9", features = ["ws"] }

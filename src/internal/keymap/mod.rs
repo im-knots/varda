@@ -244,18 +244,47 @@ pub struct KeyBinding {
     pub target: KeyTarget,
 }
 
+impl KeyBinding {
+    /// Validate a single key binding. Returns a list of errors (empty = valid).
+    pub fn validate(&self, prefix: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.key.trim().is_empty() {
+            errors.push(format!("{}: key is empty", prefix));
+        }
+        errors
+    }
+}
+
 impl KeymapConfig {
+    /// Validate the keymap config for semantic correctness. Returns a list of errors.
+    /// An empty list means the config is valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (i, binding) in self.bindings.iter().enumerate() {
+            errors.extend(binding.validate(&format!("bindings[{}]", i)));
+        }
+        errors
+    }
+
     /// Load from a JSON file.
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| anyhow::anyhow!("Failed to read keymap config: {}", e))?;
         let config: KeymapConfig = serde_json::from_str(&content)
             .map_err(|e| anyhow::anyhow!("Failed to parse keymap config: {}", e))?;
+        let warnings = config.validate();
+        for w in &warnings {
+            log::warn!("Keymap config {}: {}", path.as_ref().display(), w);
+        }
         Ok(config)
     }
 
     /// Save to a JSON file.
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
+        let errors = self.validate();
+        for e in &errors {
+            log::error!("Keymap config save: {}", e);
+        }
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| anyhow::anyhow!("Failed to serialize keymap config: {}", e))?;
         std::fs::write(path.as_ref(), content)
@@ -597,5 +626,30 @@ mod tests {
         // Other defaults remain
         let undo = combo("Z", true, false, false);
         assert_eq!(store.get(&undo), Some(&KeyTarget::Action(ActionId::Undo)));
+    }
+
+    #[test]
+    fn test_keymap_config_validate_valid() {
+        let config = KeymapConfig {
+            version: 1,
+            bindings: vec![KeyBinding {
+                key: "Z".into(), command: true, shift: false, alt: false,
+                target: KeyTarget::Action(ActionId::Undo),
+            }],
+        };
+        assert!(config.validate().is_empty());
+    }
+
+    #[test]
+    fn test_keymap_config_validate_empty_key() {
+        let config = KeymapConfig {
+            version: 1,
+            bindings: vec![KeyBinding {
+                key: "".into(), command: false, shift: false, alt: false,
+                target: KeyTarget::Action(ActionId::Save),
+            }],
+        };
+        let errors = config.validate();
+        assert!(errors.iter().any(|e| e.contains("key is empty")));
     }
 }

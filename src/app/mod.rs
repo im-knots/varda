@@ -58,6 +58,7 @@ pub struct VardaApp {
     midi_devices: Option<midi::MidiDeviceManager>,
     midi_mappings: midi::MidiMappingStore,
     controller_led_mgr: midi::ControllerLedManager,
+    auto_map_engine: midi::AutoMapEngine,
     clock_manager: crate::clock::ClockManager,
 
     // ── Output & surfaces ──────────────────────────────────────
@@ -145,6 +146,7 @@ impl VardaApp {
             .unwrap_or_else(|_| Workspace::new(std::path::PathBuf::from(".")));
 
         let mut controller_led_mgr = midi::ControllerLedManager::new();
+        let mut auto_map_engine = midi::AutoMapEngine::new();
         let midi_devices = match midi::MidiDeviceManager::new() {
             Ok(mut mgr) => {
                 mgr.load_user_profiles(&workspace.controller_profiles_dir());
@@ -153,6 +155,7 @@ impl VardaApp {
                 }
                 log::info!("MIDI initialized: {} device(s)", mgr.devices.len());
                 controller_led_mgr.sync_devices(&mgr);
+                auto_map_engine.sync_devices(&mgr);
                 Some(mgr)
             }
             Err(e) => { log::warn!("Failed to initialize MIDI: {}", e); None }
@@ -179,6 +182,7 @@ impl VardaApp {
             keymap: KeymapStore::with_defaults(),
             midi_mappings: midi::MidiMappingStore::new(),
             controller_led_mgr,
+            auto_map_engine,
             clock_manager: crate::clock::ClockManager::new(),
             outputs: Vec::new(),
             surface_manager: SurfaceManager::new(),
