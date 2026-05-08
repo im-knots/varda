@@ -169,6 +169,10 @@ pub struct Effect {
     pub target_format: wgpu::TextureFormat,
     /// GPU textures loaded from ISF IMPORTED images (sorted by name for deterministic binding)
     pub imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
+    /// Phase accumulators for smooth speed transitions
+    pub phase_accumulators: [f32; 4],
+    /// Phase input config from shader metadata
+    pub phase_inputs_config: Option<Vec<crate::isf::PhaseInput>>,
 }
 
 // Effect impl is in effect.rs
@@ -246,6 +250,12 @@ pub struct Deck {
 
     /// Smoothed FPS derived from actual render pipeline timing (EMA of 1/time_delta)
     fps_smoothed: f32,
+
+    /// Phase accumulators for smooth speed transitions (generator shader)
+    phase_accumulators: [f32; 4],
+
+    /// Phase input config from generator shader metadata
+    generator_phase_inputs: Option<Vec<crate::isf::PhaseInput>>,
 }
 
 /// Accessors for Deck properties.

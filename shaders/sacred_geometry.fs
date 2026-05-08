@@ -14,7 +14,8 @@
         {"NAME": "color1", "TYPE": "color", "DEFAULT": [0.9, 0.75, 0.3, 1.0], "LABEL": "Line Color"},
         {"NAME": "color2", "TYPE": "color", "DEFAULT": [0.3, 0.5, 0.9, 1.0], "LABEL": "Inner Color"},
         {"NAME": "bg_color", "TYPE": "color", "DEFAULT": [0.02, 0.01, 0.05, 1.0], "LABEL": "Background"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "anim_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -35,6 +36,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -367,7 +372,7 @@ float fibonacciSpiral(vec2 p, float r, int layerCount) {
 void main() {
     // Uniform guard — prevent SPIR-V from optimizing out unused uniforms
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     // Coordinate setup: centered, aspect-corrected
@@ -375,7 +380,7 @@ void main() {
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
     // Apply rotation (animated + manual)
-    float t = TIME * anim_speed;
+    float t = PHASE_TIME_0;
     float rot = rotation + t * 0.1;
     float cs = cos(rot), sn = sin(rot);
     p = mat2(cs, -sn, sn, cs) * p;

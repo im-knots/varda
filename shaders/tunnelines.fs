@@ -11,7 +11,8 @@
         {"NAME": "perspective", "TYPE": "float", "DEFAULT": 1.5, "MIN": 0.5, "MAX": 4.0, "LABEL": "Perspective"},
         {"NAME": "color1", "TYPE": "color", "DEFAULT": [0.0, 0.8, 1.0, 1.0], "LABEL": "Line Color"},
         {"NAME": "color2", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.1, 1.0], "LABEL": "Background"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "tunnel_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -32,6 +33,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -49,13 +54,13 @@ layout(set = 0, binding = 1) uniform UserParams {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 p = (uv - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
-    float t = TIME * tunnel_speed;
+    float t = PHASE_TIME_0;
 
     // Polar coordinates for tunnel
     float dist = length(p);

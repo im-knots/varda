@@ -11,7 +11,8 @@
         {"NAME": "rotation_speed", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 5.0, "LABEL": "Rotation Speed"},
         {"NAME": "color1", "TYPE": "color", "DEFAULT": [1.0, 0.3, 0.5, 1.0], "LABEL": "Shape Color"},
         {"NAME": "color2", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 1.0], "LABEL": "Background"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "rotation_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -32,6 +33,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -69,14 +74,14 @@ float sdStar(vec2 p, float r, int n) {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 p = (uv - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
     // Rotate
-    float rot = TIME * rotation_speed;
+    float rot = PHASE_TIME_0;
     float ca = cos(rot), sa = sin(rot);
     p = vec2(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
 

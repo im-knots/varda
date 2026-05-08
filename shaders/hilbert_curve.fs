@@ -14,7 +14,8 @@
         {"NAME": "bg_color", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.02, 1.0], "LABEL": "Background Color"},
         {"NAME": "glow_intensity", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0, "LABEL": "Glow Intensity"},
         {"NAME": "rainbow", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0, "LABEL": "Rainbow Amount"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "anim_speed", "INDEX": 0, "SCALE": 0.08}]
 }*/
 
 #version 450
@@ -35,6 +36,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -91,7 +96,7 @@ float distToSegment(vec2 p, vec2 a, vec2 b) {
 void main() {
     // Uniform preservation
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     // Aspect-corrected centered coordinates
@@ -111,7 +116,7 @@ void main() {
     // Animated growth: expand from center outward
     float growRadius = growth;
     if (anim_speed > 0.01) {
-        growRadius = fract(TIME * anim_speed * 0.08) * growth;
+        growRadius = fract(PHASE_TIME_0) * growth;
     }
     float growOuter = growRadius * 1.15 + 0.05;
 

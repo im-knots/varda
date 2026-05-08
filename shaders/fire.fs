@@ -12,7 +12,8 @@
         {"NAME": "color_hot", "TYPE": "color", "DEFAULT": [1.0, 1.0, 0.6, 1.0], "LABEL": "Hot Color"},
         {"NAME": "color_mid", "TYPE": "color", "DEFAULT": [1.0, 0.4, 0.0, 1.0], "LABEL": "Mid Color"},
         {"NAME": "color_cool", "TYPE": "color", "DEFAULT": [0.3, 0.0, 0.0, 1.0], "LABEL": "Cool Color"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "fire_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -33,6 +34,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -68,11 +73,11 @@ float fbm(vec2 p) {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 p = uv;
-    float t = TIME * fire_speed;
+    float t = PHASE_TIME_0;
 
     // Fire rises upward
     vec2 fireCoord = p * fire_scale;

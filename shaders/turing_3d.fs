@@ -15,6 +15,10 @@
         {"NAME": "color2", "TYPE": "color", "DEFAULT": [0.8, 0.3, 0.5, 1.0], "LABEL": "Mid Color"},
         {"NAME": "color3", "TYPE": "color", "DEFAULT": [1.0, 0.9, 0.7, 1.0], "LABEL": "Bright Color"},
         {"NAME": "glow_intensity", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0, "LABEL": "Glow"}
+    ],
+    "PHASE_INPUTS": [
+        {"PARAM": "evolution", "INDEX": 0},
+        {"PARAM": "rotation_speed", "INDEX": 1, "SCALE": 0.5}
     ]
 }*/
 
@@ -34,6 +38,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -127,14 +135,14 @@ void main() {
 
     // Uniform guard — keep all ISF uniforms alive for SPIR-V compiler
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
-    float time = TIME * evolution;
+    float time = PHASE_TIME_0;
     
     // Camera setup
     float camDist = 3.0 / max(zoom, 0.1);
-    float rotAngle = TIME * rotation_speed * 0.5;
+    float rotAngle = PHASE_TIME_1;
     
     vec3 ro = vec3(0.0, 0.0, camDist); // Ray origin
     ro = rotateY(rotAngle) * rotateX(sin(TIME * 0.3) * 0.3) * ro;

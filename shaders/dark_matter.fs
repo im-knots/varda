@@ -19,6 +19,12 @@
         {"NAME": "color_filament", "TYPE": "color", "DEFAULT": [0.08, 0.12, 0.5, 1.0], "LABEL": "Filament Color"},
         {"NAME": "color_warm", "TYPE": "color", "DEFAULT": [0.7, 0.75, 1.0, 1.0], "LABEL": "Dense Filament"},
         {"NAME": "color_cluster", "TYPE": "color", "DEFAULT": [1.0, 0.35, 0.1, 1.0], "LABEL": "Cluster Color"}
+    ],
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "INDEX": 0},
+        {"PARAM": "rot_speed_x", "INDEX": 1},
+        {"PARAM": "rot_speed_y", "INDEX": 2},
+        {"PARAM": "rot_speed_z", "INDEX": 3}
     ]
 }*/
 
@@ -40,6 +46,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -98,18 +108,18 @@ mat3 rotZ(float a) { float c=cos(a),s=sin(a); return mat3(c,-s,0,s,c,0,0,0,1); }
 void main() {
     // Uniform guard
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 p = (uv - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
-    float t = TIME * speed;
+    float t = PHASE_TIME_0;
 
     // Rotation: manual + auto-spin
-    float ax = rot_x + TIME * rot_speed_x;
-    float ay = rot_y + TIME * rot_speed_y;
-    float az = rot_z + TIME * rot_speed_z;
+    float ax = rot_x + PHASE_TIME_1;
+    float ay = rot_y + PHASE_TIME_2;
+    float az = rot_z + PHASE_TIME_3;
     mat3 rot = rotZ(az) * rotY(ay) * rotX(ax);
 
     // Camera

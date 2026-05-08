@@ -19,6 +19,8 @@ pub struct ISFUniforms {
     pub audio_bpm: f32,     // Detected BPM (0.0 if not detected)
     pub audio_beat_phase: f32, // Phase within beat cycle (0.0 to 1.0)
     pub date: [f32; 4],
+    /// Engine-side phase accumulators (accumulated dt * param * scale per frame)
+    pub phase_times: [f32; 4],
 }
 
 impl Default for ISFUniforms {
@@ -36,6 +38,7 @@ impl Default for ISFUniforms {
             audio_bpm: 0.0,
             audio_beat_phase: 0.0,
             date: [2026.0, 2.0, 27.0, 0.0],
+            phase_times: [0.0; 4],
         }
     }
 }

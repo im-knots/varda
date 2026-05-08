@@ -35,6 +35,10 @@ pub struct ISFMetadata {
     /// VSN (Version) - ISF spec version
     #[serde(rename = "VSN")]
     pub vsn: Option<String>,
+
+    /// Phase input mappings: which params drive which phase accumulators
+    #[serde(rename = "PHASE_INPUTS")]
+    pub phase_inputs: Option<Vec<PhaseInput>>,
 }
 
 /// ISF input definition
@@ -101,6 +105,26 @@ pub struct ISFPass {
     pub float: Option<bool>,
 }
 
+/// Phase input mapping: which user parameter drives which phase accumulator
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseInput {
+    /// Name of the user parameter that drives this accumulator (e.g., "anim_speed")
+    #[serde(rename = "PARAM")]
+    pub param: String,
+
+    /// Accumulator index (0–3)
+    #[serde(rename = "INDEX")]
+    pub index: usize,
+
+    /// Constant scale factor applied to `dt * param_value` (default 1.0)
+    #[serde(rename = "SCALE", default = "default_scale")]
+    pub scale: f32,
+}
+
+fn default_scale() -> f32 {
+    1.0
+}
+
 /// ISF imported resource definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ISFImported {
@@ -155,3 +179,59 @@ impl ISFMetadata {
     }
 }
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_phase_inputs_from_json() {
+        let json = r#"{
+            "DESCRIPTION": "Test shader",
+            "INPUTS": [],
+            "PHASE_INPUTS": [
+                {"PARAM": "anim_speed", "INDEX": 0, "SCALE": 0.3},
+                {"PARAM": "rot_speed", "INDEX": 1}
+            ]
+        }"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        let pi = meta.phase_inputs.unwrap();
+        assert_eq!(pi.len(), 2);
+        assert_eq!(pi[0].param, "anim_speed");
+        assert_eq!(pi[0].index, 0);
+        assert!((pi[0].scale - 0.3).abs() < 1e-5);
+        assert_eq!(pi[1].param, "rot_speed");
+        assert_eq!(pi[1].index, 1);
+        assert!((pi[1].scale - 1.0).abs() < 1e-5, "Default scale should be 1.0");
+    }
+
+    #[test]
+    fn parse_metadata_without_phase_inputs() {
+        let json = r#"{
+            "DESCRIPTION": "Test shader",
+            "INPUTS": []
+        }"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.phase_inputs.is_none());
+    }
+
+    #[test]
+    fn phase_input_index_range() {
+        let json = r#"{
+            "INPUTS": [],
+            "PHASE_INPUTS": [
+                {"PARAM": "a", "INDEX": 0},
+                {"PARAM": "b", "INDEX": 1},
+                {"PARAM": "c", "INDEX": 2},
+                {"PARAM": "d", "INDEX": 3}
+            ]
+        }"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        let pi = meta.phase_inputs.unwrap();
+        assert_eq!(pi.len(), 4);
+        for (i, p) in pi.iter().enumerate() {
+            assert_eq!(p.index, i);
+        }
+    }
+}

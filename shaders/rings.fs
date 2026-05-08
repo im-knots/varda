@@ -12,7 +12,8 @@
         {"NAME": "bg_color", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 1.0], "LABEL": "Background"},
         {"NAME": "center_x", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0, "LABEL": "Center X"},
         {"NAME": "center_y", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0, "LABEL": "Center Y"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "anim_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -33,6 +34,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -48,14 +53,14 @@ layout(set = 0, binding = 1) uniform UserParams {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 p = uv - vec2(center_x, center_y);
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
     float dist = length(p);
-    float t = TIME * anim_speed;
+    float t = PHASE_TIME_0;
 
     // Create rings using sine wave on distance
     float rings = sin((dist * ring_count * 6.283) - t) * 0.5 + 0.5;

@@ -40,7 +40,8 @@
         {"NAME": "palette_6", "LABEL": "Palette 7", "TYPE": "color", "DEFAULT": [1.0, 0.5, 0.0, 1.0]},
         {"NAME": "palette_7", "LABEL": "Palette 8", "TYPE": "color", "DEFAULT": [0.5, 0.0, 1.0, 1.0]},
         {"NAME": "background_fill", "LABEL": "Background Fill", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 0.0]}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "flow_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -61,6 +62,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform sampler texSampler;
@@ -251,12 +256,12 @@ void extractAutoPalette(int numGroups, out vec3 pal[MAX_PALETTE]) {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     int numGroups = clamp(int(floor(palette_size + 0.5)), 2, MAX_PALETTE);
     int ft = int(floor(flow_type + 0.5));
-    float t = TIME * flow_speed;
+    float t = PHASE_TIME_0;
     bool autoMode = palette_mode == 0u;
 
     // Build active palette (auto-detect or manual)

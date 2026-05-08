@@ -42,7 +42,8 @@
             "MIN": 0.0,
             "MAX": 1.0
         }
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "drip_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -64,6 +65,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform sampler texSampler;
@@ -100,7 +105,7 @@ void main() {
     // Use all ISF uniforms to prevent SPIRV from stripping them
     // Conditional based on UV - compiler cannot prove it's always false
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0 && uv.y < -1.0) {
         fragColor = vec4(audioSum, timeSum, 0.0, 1.0);
         return;
@@ -109,7 +114,7 @@ void main() {
     vec2 distorted_uv = uv;
 
     // Create dripping waves that move downward
-    float time = TIME * drip_speed;
+    float time = PHASE_TIME_0;
 
     // Multiple layers of sine waves for organic dripping
     float wave1 = sin(uv.x * wave_frequency + time) * melt_amount;

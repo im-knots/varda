@@ -9,7 +9,8 @@
         {"NAME": "strobe_duty", "LABEL": "Duty Cycle", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.05, "MAX": 0.95},
         {"NAME": "strobe_color", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Flash Color"},
         {"NAME": "mix_mode", "LABEL": "Mode (0=Replace 1=Add 2=Invert)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "strobe_rate", "INDEX": 0}]
 }*/
 
 #version 450
@@ -30,6 +31,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform sampler texSampler;
@@ -44,13 +49,13 @@ layout(set = 0, binding = 3) uniform UserParams {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec4 src = texture(sampler2D(inputImage, texSampler), uv);
 
     // Determine strobe phase
-    float phase = fract(TIME * strobe_rate);
+    float phase = fract(PHASE_TIME_0);
 
     float flash = step(phase, strobe_duty);
     int mode = int(floor(mix_mode + 0.5));

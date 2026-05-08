@@ -1,7 +1,7 @@
 //! Deck rendering — source rendering, effect chain, video frame updates, and resize.
 
 use crate::audio::AudioData;
-use crate::isf::ISFPass;
+use crate::isf::{ISFPass, PhaseInput};
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
 use crate::renderer::{GpuContext, UnifiedPipeline, ISFUniforms};
@@ -10,6 +10,23 @@ use std::collections::HashMap;
 use std::time::Instant;
 use crate::renderer::BlitPipeline;
 use super::{Deck, DeckSource, ScalingMode, PassBuffer};
+
+/// Accumulate phase times: for each PhaseInput, adds `dt * param_value * scale` to the accumulator.
+fn accumulate_phase_times(
+    accumulators: &mut [f32; 4],
+    dt: f32,
+    phase_inputs: Option<&[PhaseInput]>,
+    params: &ShaderParams,
+) {
+    if let Some(inputs) = phase_inputs {
+        for pi in inputs {
+            if pi.index < 4 {
+                let param_val = params.get_float(&pi.param).unwrap_or(1.0);
+                accumulators[pi.index] += dt * param_val * pi.scale;
+            }
+        }
+    }
+}
 
 impl Deck {
     /// Update video frame (call before render if using video source).
@@ -108,6 +125,15 @@ impl Deck {
             self.fps_smoothed = 0.1 * instant_fps + 0.9 * self.fps_smoothed;
         }
 
+        // Accumulate generator phase times
+        accumulate_phase_times(
+            &mut self.phase_accumulators,
+            time_delta,
+            self.generator_phase_inputs.as_deref(),
+            &self.generator_params,
+        );
+        let generator_phase_times = self.phase_accumulators;
+
         let enabled_effects: Vec<usize> = self.effects.iter()
             .enumerate()
             .filter(|(_, e)| e.enabled)
@@ -131,6 +157,7 @@ impl Deck {
                         generator_target, audio_data,
                         &mut self.generator_params, modulation, &param_prefix,
                         &imported_views,
+                        generator_phase_times,
                         cmd_buffers,
                     )?;
                 } else {
@@ -139,6 +166,7 @@ impl Deck {
                         time, time_delta, self.frame_count, generator_target, audio_data,
                         &mut self.generator_params, modulation, &param_prefix,
                         &imported_views,
+                        generator_phase_times,
                         cmd_buffers,
                     )?;
                 }
@@ -291,6 +319,16 @@ impl Deck {
         // Apply effect chain (ping-pong between textures)
         let mut read_from_b = source_to_b;
         for &effect_idx in &enabled_effects {
+            // Accumulate phase times for this effect
+            let effect = &mut self.effects[effect_idx];
+            accumulate_phase_times(
+                &mut effect.phase_accumulators,
+                time_delta,
+                effect.phase_inputs_config.as_deref(),
+                &effect.params,
+            );
+            let effect_phase_times = effect.phase_accumulators;
+
             let uniforms = ISFUniforms {
                 time,
                 time_delta,
@@ -304,6 +342,7 @@ impl Deck {
                 audio_bpm: audio_data.bpm.unwrap_or(0.0),
                 audio_beat_phase: audio_data.beat_phase(),
                 date: get_current_date(),
+                phase_times: effect_phase_times,
             };
             let (input_view, output_view) = if read_from_b {
                 (&self.texture_b_view, &self.texture_view)
@@ -336,6 +375,7 @@ impl Deck {
         modulation: &ModulationEngine,
         param_prefix: &str,
         imported_views: &[&wgpu::TextureView],
+        phase_times: [f32; 4],
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         let uniforms = ISFUniforms {
@@ -351,6 +391,7 @@ impl Deck {
             audio_bpm: audio_data.bpm.unwrap_or(0.0),
             audio_beat_phase: audio_data.beat_phase(),
             date: get_current_date(),
+            phase_times,
         };
 
         pipeline.update_uniforms(&context.queue, &uniforms);
@@ -410,6 +451,7 @@ impl Deck {
         modulation: &ModulationEngine,
         param_prefix: &str,
         imported_views: &[&wgpu::TextureView],
+        phase_times: [f32; 4],
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         generator_params.ensure_buffer(&context.device);
@@ -454,6 +496,7 @@ impl Deck {
                     audio_bpm: audio_data.bpm.unwrap_or(0.0),
                     audio_beat_phase: audio_data.beat_phase(),
                     date: get_current_date(),
+                    phase_times,
                 };
 
                 multi_pass.update_uniforms(&context.queue, &uniforms);
@@ -519,6 +562,7 @@ impl Deck {
                 audio_bpm: audio_data.bpm.unwrap_or(0.0),
                 audio_beat_phase: audio_data.beat_phase(),
                 date: get_current_date(),
+                phase_times,
             };
 
             multi_pass.update_uniforms(&context.queue, &uniforms);
@@ -655,4 +699,136 @@ pub fn get_current_date() -> [f32; 4] {
     let day = (day_of_year % 30.0) + 1.0;
 
     [year, month, day, seconds_in_day]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isf::PhaseInput;
+    use crate::params::ShaderParams;
+    use crate::isf::ISFInput;
+
+    #[test]
+    fn isf_uniforms_size_is_80_bytes() {
+        assert_eq!(
+            std::mem::size_of::<ISFUniforms>(),
+            80,
+            "ISFUniforms should be 80 bytes (64 original + 16 for phase_times)"
+        );
+    }
+
+    #[test]
+    fn accumulate_phase_times_basic() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![
+            PhaseInput { param: "speed".into(), index: 0, scale: 1.0 },
+        ];
+        let isf_inputs = vec![ISFInput {
+            name: "speed".into(), input_type: "float".into(),
+            default: Some(serde_json::json!(2.0)),
+            min: Some(0.0), max: Some(5.0),
+            label: None, values: None, labels: None, identity: None,
+        }];
+        let params = ShaderParams::from_inputs(&isf_inputs);
+
+        // dt=0.1, speed=2.0, scale=1.0 → accumulate 0.2
+        accumulate_phase_times(&mut accum, 0.1, Some(&inputs), &params);
+        assert!((accum[0] - 0.2).abs() < 1e-5);
+        assert_eq!(accum[1], 0.0);
+
+        // Accumulate again: 0.2 + 0.2 = 0.4
+        accumulate_phase_times(&mut accum, 0.1, Some(&inputs), &params);
+        assert!((accum[0] - 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn accumulate_phase_times_with_scale() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![
+            PhaseInput { param: "speed".into(), index: 0, scale: 0.3 },
+        ];
+        let isf_inputs = vec![ISFInput {
+            name: "speed".into(), input_type: "float".into(),
+            default: Some(serde_json::json!(1.0)),
+            min: Some(0.0), max: Some(5.0),
+            label: None, values: None, labels: None, identity: None,
+        }];
+        let params = ShaderParams::from_inputs(&isf_inputs);
+
+        // dt=0.5, speed=1.0, scale=0.3 → 0.15
+        accumulate_phase_times(&mut accum, 0.5, Some(&inputs), &params);
+        assert!((accum[0] - 0.15).abs() < 1e-5);
+    }
+
+    #[test]
+    fn accumulate_phase_times_speed_change_is_continuous() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![
+            PhaseInput { param: "speed".into(), index: 0, scale: 1.0 },
+        ];
+        let isf_inputs = vec![ISFInput {
+            name: "speed".into(), input_type: "float".into(),
+            default: Some(serde_json::json!(1.0)),
+            min: Some(0.0), max: Some(5.0),
+            label: None, values: None, labels: None, identity: None,
+        }];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+
+        // Run 10 frames at speed=1.0, dt=0.016
+        for _ in 0..10 {
+            accumulate_phase_times(&mut accum, 0.016, Some(&inputs), &params);
+        }
+        let before_change = accum[0];
+
+        // Change speed to 3.0 — no jump should occur
+        params.set_float("speed", 3.0);
+        accumulate_phase_times(&mut accum, 0.016, Some(&inputs), &params);
+        let after_change = accum[0];
+
+        // Value should increase by dt*3.0, not jump to TIME*3.0
+        let expected_delta = 0.016 * 3.0;
+        assert!((after_change - before_change - expected_delta).abs() < 1e-5,
+            "Phase time should be continuous: before={}, after={}, expected delta={}",
+            before_change, after_change, expected_delta);
+    }
+
+    #[test]
+    fn accumulate_phase_times_multi_index() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![
+            PhaseInput { param: "speed".into(), index: 0, scale: 1.0 },
+            PhaseInput { param: "rot_x".into(), index: 1, scale: 1.0 },
+            PhaseInput { param: "rot_y".into(), index: 2, scale: 1.0 },
+            PhaseInput { param: "rot_z".into(), index: 3, scale: 1.0 },
+        ];
+        let isf_inputs = vec![
+            ISFInput { name: "speed".into(), input_type: "float".into(),
+                default: Some(serde_json::json!(1.0)), min: Some(0.0), max: Some(5.0),
+                label: None, values: None, labels: None, identity: None },
+            ISFInput { name: "rot_x".into(), input_type: "float".into(),
+                default: Some(serde_json::json!(0.5)), min: Some(-1.0), max: Some(1.0),
+                label: None, values: None, labels: None, identity: None },
+            ISFInput { name: "rot_y".into(), input_type: "float".into(),
+                default: Some(serde_json::json!(0.3)), min: Some(-1.0), max: Some(1.0),
+                label: None, values: None, labels: None, identity: None },
+            ISFInput { name: "rot_z".into(), input_type: "float".into(),
+                default: Some(serde_json::json!(0.0)), min: Some(-1.0), max: Some(1.0),
+                label: None, values: None, labels: None, identity: None },
+        ];
+        let params = ShaderParams::from_inputs(&isf_inputs);
+
+        accumulate_phase_times(&mut accum, 0.1, Some(&inputs), &params);
+        assert!((accum[0] - 0.1).abs() < 1e-5);   // speed=1.0 * 0.1
+        assert!((accum[1] - 0.05).abs() < 1e-5);   // rot_x=0.5 * 0.1
+        assert!((accum[2] - 0.03).abs() < 1e-5);   // rot_y=0.3 * 0.1
+        assert!((accum[3] - 0.0).abs() < 1e-5);    // rot_z=0.0 * 0.1
+    }
+
+    #[test]
+    fn accumulate_phase_times_none_is_noop() {
+        let mut accum = [0.0f32; 4];
+        let params = ShaderParams::from_inputs(&[]);
+        accumulate_phase_times(&mut accum, 0.1, None, &params);
+        assert_eq!(accum, [0.0; 4]);
+    }
 }

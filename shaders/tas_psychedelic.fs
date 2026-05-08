@@ -14,7 +14,8 @@
         {"NAME": "slither_freq",    "TYPE": "float",  "DEFAULT": 1.0, "MIN": 0.0, "MAX": 4.0},
         {"NAME": "slither_amp",     "TYPE": "float",  "DEFAULT": 1.0, "MIN": 0.0, "MAX": 4.0},
         {"NAME": "anim_speed",      "TYPE": "float",  "DEFAULT": 0.5, "MIN": 0.0, "MAX": 2.0}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "anim_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -35,6 +36,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -737,7 +742,7 @@ void main() {
     // Aspect-corrected centered coordinates
     vec2 p = (gl_FragCoord.xy - 0.5 * RENDERSIZE) / min(RENDERSIZE.x, RENDERSIZE.y);
 
-    float time = TIME * anim_speed;
+    float time = PHASE_TIME_0;
 
     vec4 result = vec4(bg_color.rgb * bg_color.a, bg_color.a);
 

@@ -10,7 +10,8 @@
         {"NAME": "shift_intensity", "LABEL": "Shift Intensity", "TYPE": "float", "DEFAULT": 0.05, "MIN": 0.0, "MAX": 0.2},
         {"NAME": "color_shift", "LABEL": "Color Shift", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "glitch_rate", "LABEL": "Rate", "TYPE": "float", "DEFAULT": 5.0, "MIN": 0.5, "MAX": 30.0}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "glitch_rate", "INDEX": 0}]
 }*/
 
 #version 450
@@ -31,6 +32,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform sampler texSampler;
@@ -50,13 +55,13 @@ float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453)
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     float amt = glitch_amount;
 
     // Time-quantized seed for glitch blocks
-    float timeSeed = floor(TIME * glitch_rate);
+    float timeSeed = floor(PHASE_TIME_0);
 
     // Block row
     float blockY = floor(uv.y / block_size);

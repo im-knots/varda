@@ -10,7 +10,8 @@
         {"NAME": "repeat_count", "LABEL": "Repeats", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.5, "MAX": 4.0},
         {"NAME": "center_x", "LABEL": "Center X", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "center_y", "LABEL": "Center Y", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "zoom_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -31,6 +32,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform sampler texSampler;
@@ -49,7 +54,7 @@ layout(set = 0, binding = 3) uniform UserParams {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 center = vec2(center_x, center_y);
@@ -60,7 +65,7 @@ void main() {
     float dist = length(p);
     float angle = atan(p.y, p.x);
 
-    float t = TIME * zoom_speed;
+    float t = PHASE_TIME_0;
 
     // Tunnel mapping: polar to cartesian with depth
     float depth = repeat_count / (dist + 0.01);

@@ -25,7 +25,8 @@
         {"NAME": "sun_azim", "TYPE": "float", "DEFAULT": 0.8, "MIN": -3.14159, "MAX": 3.14159, "LABEL": "Sun Azimuth"},
         {"NAME": "shadow_strength", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0, "LABEL": "Shadow Strength"},
         {"NAME": "bg_color", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 1.0], "LABEL": "Background"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "fly_speed", "INDEX": 0, "SCALE": 0.3}]
 }*/
 
 #version 450
@@ -46,6 +47,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -127,7 +132,7 @@ float softShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 p = (uv - 0.5) * 2.0;
@@ -140,7 +145,7 @@ void main() {
     float cr = cos(rot_z), sr = sin(rot_z);
     vec3 ri2 = ri * cr + up * sr;
     vec3 up2 = up * cr - ri * sr;
-    float ft = fly_speed * TIME * 0.3;
+    float ft = PHASE_TIME_0;
     vec3 ro = vec3(cam_x, cam_y, cam_z) + vec3(sin(ft*0.7)*0.4, sin(ft*0.4)*0.25, cos(ft*0.3)*0.4);
     vec3 rd = normalize(p.x * ri2 + p.y * up2 + fw / tan(fov * 0.5 + 0.3));
 

@@ -472,6 +472,7 @@ impl Channel {
                         frame_index: self.frame_count,
                         pass_index: 0,
                         render_size: [width as f32, height as f32],
+                        phase_times: [0.0; 4],
                         ..Default::default()
                     };
 
@@ -607,6 +608,7 @@ impl Channel {
                 audio_bpm: audio_data.bpm.unwrap_or(0.0),
                 audio_beat_phase: audio_data.beat_phase(),
                 date: crate::deck::get_current_date(),
+                phase_times: [0.0; 4],
             };
 
             let mut read_from_composite = true;

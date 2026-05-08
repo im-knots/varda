@@ -108,6 +108,7 @@ impl Effect {
         // Initialize parameters from shader inputs
         let inputs = shader.metadata.inputs.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
         let params = ShaderParams::from_inputs(inputs);
+        let phase_inputs_config = shader.metadata.phase_inputs.clone();
 
         Ok(Self {
             shader,
@@ -118,6 +119,8 @@ impl Effect {
             passes,
             target_format,
             imported_textures,
+            phase_accumulators: [0.0; 4],
+            phase_inputs_config,
         })
     }
 

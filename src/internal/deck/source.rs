@@ -251,6 +251,7 @@ impl Deck {
 
         let inputs = shader.metadata.inputs.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
         let generator_params = ShaderParams::from_inputs(inputs);
+        let generator_phase_inputs = shader.metadata.phase_inputs.clone();
 
         let source = DeckSource::Shader {
             shader,
@@ -284,6 +285,8 @@ impl Deck {
             syphon_source_view: None,
             srt_source_view: None,
             fps_smoothed: 0.0,
+            phase_accumulators: [0.0; 4],
+            generator_phase_inputs,
         })
     }
 
@@ -610,6 +613,8 @@ impl Deck {
             syphon_source_view: None,
             srt_source_view: None,
             fps_smoothed: 0.0,
+            phase_accumulators: [0.0; 4],
+            generator_phase_inputs: None,
         })
     }
 

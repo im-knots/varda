@@ -11,7 +11,8 @@
         {"NAME": "color1", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 1.0], "LABEL": "Color 1"},
         {"NAME": "color2", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Color 2"},
         {"NAME": "color_mode", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0, "LABEL": "Color Mode (0=Gradient 1=RGB)"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "anim_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -32,6 +33,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -86,13 +91,13 @@ float fbm(vec3 p, int oct) {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 p = uv;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
-    float t = TIME * anim_speed;
+    float t = PHASE_TIME_0;
     int oct = int(clamp(octaves, 1.0, 8.0));
 
     float n = fbm(vec3(p * scale, t), oct);

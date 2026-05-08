@@ -26,6 +26,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_level; float audio_bass; float audio_mid; float audio_treble;
     float audio_bpm; float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 layout(set = 0, binding = 1) uniform sampler samp;
 layout(set = 0, binding = 2) uniform texture2D inputImage;

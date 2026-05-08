@@ -10,7 +10,8 @@
         {"NAME": "wave_speed", "LABEL": "Speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 5.0},
         {"NAME": "direction", "LABEL": "Direction (0=H 1=V 2=Both)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0},
         {"NAME": "wave_type", "LABEL": "Type (0=Sine 1=Triangle 2=Square)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "wave_speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -31,6 +32,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform sampler texSampler;
@@ -59,12 +64,12 @@ float waveFunc(float x, float wt) {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     float amp = amplitude;
 
-    float t = TIME * wave_speed;
+    float t = PHASE_TIME_0;
     float dir = floor(direction + 0.5);
 
     vec2 warpedUV = uv;

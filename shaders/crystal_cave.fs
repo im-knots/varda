@@ -20,6 +20,12 @@
         {"NAME": "color_glow", "TYPE": "color", "DEFAULT": [0.7, 0.4, 1.0, 1.0], "LABEL": "Crystal Glow"},
         {"NAME": "color_cave", "TYPE": "color", "DEFAULT": [0.08, 0.05, 0.12, 1.0], "LABEL": "Cave Wall"},
         {"NAME": "glow_strength", "TYPE": "float", "DEFAULT": 0.6, "MIN": 0.0, "MAX": 2.0, "LABEL": "Glow Strength"}
+    ],
+    "PHASE_INPUTS": [
+        {"PARAM": "fly_speed", "INDEX": 0},
+        {"PARAM": "rot_speed_x", "INDEX": 1},
+        {"PARAM": "rot_speed_y", "INDEX": 2},
+        {"PARAM": "rot_speed_z", "INDEX": 3}
     ]
 }*/
 
@@ -41,6 +47,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
@@ -160,15 +170,15 @@ vec3 calcNormal(vec3 p) {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec2 p = (uv - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
-    float t = TIME * fly_speed;
+    float t = PHASE_TIME_0;
 
     // Rotation
-    mat3 rot = rotZ(rot_z + TIME*rot_speed_z) * rotY(rot_y + TIME*rot_speed_y) * rotX(rot_x + TIME*rot_speed_x);
+    mat3 rot = rotZ(rot_z + PHASE_TIME_3) * rotY(rot_y + PHASE_TIME_2) * rotX(rot_x + PHASE_TIME_1);
 
     // Camera: fly through tunnel with gentle sway
     vec3 ro = vec3(sin(t*0.3)*0.4, cos(t*0.45)*0.3, t*2.0);

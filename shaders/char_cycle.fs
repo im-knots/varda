@@ -28,7 +28,8 @@
         "sanskrit_font_atlas":        { "PATH": "character_atlases/sanskrit_font_atlas.png" },
         "secretlanguage_font_atlas":  { "PATH": "character_atlases/secretlanguage_font_atlas.png" },
         "witchy_font_atlas":          { "PATH": "character_atlases/witchy_font_atlas.png" }
-    }
+    },
+    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -49,6 +50,10 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 layout(set = 0, binding = 1) uniform sampler texSampler;
@@ -157,7 +162,7 @@ float sampleSet(int s, float idx, vec2 cellUV) {
 
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     int s = int(floor(char_set + 0.5));
@@ -169,7 +174,7 @@ void main() {
 
     if (g <= 1) {
         // Single big character centered
-        float charIdx = floor(mod(TIME * speed, numChars));
+        float charIdx = floor(mod(PHASE_TIME_0, numChars));
 
         // Scale UV to fill ~80% of screen, aspect-corrected
         vec2 charUV = uv;
@@ -204,7 +209,7 @@ void main() {
         float h = fract(sin(cellId * 127.1 + 311.7) * 43758.5453);
         float cellSpeed = speed * (1.0 + (h * 2.0 - 1.0) * speed_variation);
 
-        float charIdx = floor(mod(TIME * cellSpeed + cellOffset, numChars));
+        float charIdx = floor(mod(PHASE_TIME_0 * (1.0 + (h * 2.0 - 1.0) * speed_variation) + cellOffset, numChars));
 
         // Clamp UV to avoid sampling neighboring cells
         if (cellUV.x < 0.05 || cellUV.x > 0.95 || cellUV.y < 0.05 || cellUV.y > 0.95) {

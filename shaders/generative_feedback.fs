@@ -49,7 +49,8 @@
             "TARGET": "feedbackBuffer",
             "PERSISTENT": true
         }
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0}]
 }*/
 
 #version 450
@@ -71,6 +72,10 @@ layout(std140, set = 0, binding = 0) uniform ISFUniforms {
     float audio_bpm;
     float audio_beat_phase;
     vec4 DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
 };
 
 // Pass buffer texture (from PASSES array)
@@ -130,7 +135,7 @@ void main() {
         vec2 p = uv * 2.0 - 1.0;
         p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
-        float t = TIME * speed;
+        float t = PHASE_TIME_0;
         float v = 0.0;
         v += sin(p.x * 4.0 + t * 1.2);
         v += sin(p.y * 4.0 + t * 0.9);
