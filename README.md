@@ -78,7 +78,7 @@ your-show/
   .varda/
     scene.json          # channels, decks, effects, modulation, crossfader, transition sequences
     stage.json          # surface layout, outputs, warp calibration
-    midi.json           # MIDI controller mappings
+    midi.json           # MIDI controller mappings that differ from the auto-mapped defaults
     keymap.json         # keyboard shortcut bindings
     presets/
       decks/            # saved deck presets (JSON)
