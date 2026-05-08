@@ -47,6 +47,7 @@ brew install --cask libndi
 cargo run
 ```
 
+## The Varda workspace
 Varda treats the current working directory as a workspace. All state lives in a `.varda/` directory created automatically:
 
 ```
