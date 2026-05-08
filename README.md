@@ -24,24 +24,47 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 
 ## Build & run
 
-Requires Rust (stable) and a GPU with Metal (macOS) or Vulkan support.
+Requires [Rust](https://rustup.rs/) (stable) and a GPU with Metal (macOS) or Vulkan (Linux) support.
 
+### Ubuntu / Debian
 
-### (Optional) Install ffmpeg with SRT support for SRT I/O
-#### macOS
 ```bash
-brew tap homebrew-ffmpeg/ffmpeg
-brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
+sudo apt install build-essential cmake pkg-config libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavdevice-dev libsrt-gnutls-dev libasound2-dev libv4l-dev libshaderc-dev libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
 ```
 
-### (Optional) Install NDI support for NDI I/O
-#### macOS
 ```bash
+cargo build --release
+./target/release/varda
+```
+
+#### Optional: NDI
+NDI is proprietary and not available via apt. To enable NDI send/receive:
+```bash
+wget https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz
+tar -xzf Install_NDI_SDK_v6_Linux.tar.gz
+sudo ./Install_NDI_SDK_v6_Linux.sh
+sudo cp -P NDI\ SDK\ for\ Linux/lib/x86_64-linux-gnu/* /usr/local/lib/
+sudo ldconfig
+```
+Without it, NDI features are silently disabled 
+
+### macOS
+
+```bash
+# FFmpeg (with SRT support)
+brew tap homebrew-ffmpeg/ffmpeg
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
+
+# Optional: NDI
 brew install --cask libndi
 ```
 
+```bash
+cargo build --release
+./target/release/varda
+```
 
-### Run
+### Run from source
 
 ```
 cargo run
@@ -58,12 +81,12 @@ your-show/
     midi.json           # MIDI controller mappings
     presets/
       decks/            # saved deck presets (JSON)
-      schannels/         # saved channel presets (JSON)
+      channels/          # saved channel presets (JSON)
   shaders/              # ISF shaders 
   controller-profiles/  # MIDI controller profiles (TOML)
 ```
 
-Run `cargo run` from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
+Run Varda from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
 
 
 ## Abstractions you should know about
