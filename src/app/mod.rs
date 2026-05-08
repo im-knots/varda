@@ -390,6 +390,11 @@ impl VardaApp {
         &self.mixer
     }
 
+    /// Mutable access to the mixer (for deck insertion from background loads).
+    pub fn mixer_mut(&mut self) -> &mut crate::mixer::Mixer {
+        &mut self.mixer
+    }
+
     /// Number of loaded shaders.
     pub fn shader_count(&self) -> usize {
         self.registry.count()

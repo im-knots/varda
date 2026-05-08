@@ -9,6 +9,11 @@ use winit::window::Window;
 /// the UI consumer (WindowSurface) or output windows (OutputWindow).
 ///
 /// Can be created with a window hint (for adapter compatibility) or headless.
+///
+/// `Clone` is cheap — wgpu types are internally `Arc`-wrapped.
+/// Cloning produces a handle to the same GPU resources, useful for
+/// background thread deck creation.
+#[derive(Clone)]
 pub struct GpuContext {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,

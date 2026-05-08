@@ -612,9 +612,10 @@ pub(crate) fn build_ui_data(
         clock_manual_bpm: engine.clock.manual_bpm,
         render_width: app.render_width,
         render_height: app.render_height,
-        // Populated by UIRunner after build (history lives on runner, not app)
+        // Populated by UIRunner after build (history/pending loads live on runner, not app)
         can_undo: false,
         can_redo: false,
+        pending_deck_loads: 0,
     }
 }
 

@@ -348,13 +348,27 @@ impl Deck {
         let img = image::open(&path)
             .with_context(|| format!("Failed to load image: {}", path.as_ref().display()))?;
         let rgba = img.to_rgba8();
-        let (img_w, img_h) = rgba.dimensions();
 
         let source_name = path.as_ref()
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or("image")
             .to_string();
+
+        Self::new_from_rgba(context, rgba, source_name, source_path_str, width, height)
+    }
+
+    /// Create a new deck from pre-decoded RGBA image data.
+    /// Used by parallel image loading to separate CPU decode from GPU upload.
+    pub fn new_from_rgba(
+        context: &GpuContext,
+        rgba: image::RgbaImage,
+        source_name: String,
+        source_path_str: String,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let (img_w, img_h) = rgba.dimensions();
 
         let img_texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Image Source Texture"),

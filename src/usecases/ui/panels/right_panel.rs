@@ -95,6 +95,23 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
             .show(ui, |ui| {
                 render_output_section(ui, data, actions);
             });
+
+        // Loading indicator for background deck loads
+        if data.pending_deck_loads > 0 {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+            let label = if data.pending_deck_loads == 1 {
+                "Loading 1 deck…".to_string()
+            } else {
+                format!("Loading {} decks…", data.pending_deck_loads)
+            };
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new(label).small().color(egui::Color32::from_rgb(180, 180, 255)));
+            });
+            ui.ctx().request_repaint();
+        }
     });
 }
 

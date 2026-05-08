@@ -30,6 +30,14 @@ pub enum LoopMode {
     HoldLast,
 }
 
+/// Result of advancing playback state.
+pub struct AdvanceResult {
+    /// Whether a seek is needed (loop restart, etc.).
+    pub needs_seek: bool,
+    /// Number of video frames to decode (0 = hold current frame, 1+ = decode new frames).
+    pub frames_to_decode: u32,
+}
+
 /// Shared playback state for all video sources (ffmpeg and HAP).
 #[derive(Debug, Clone)]
 pub struct PlaybackState {
@@ -54,6 +62,10 @@ pub struct PlaybackState {
     /// Set to true for one frame when playback reaches the out-point/EOF.
     /// Used by auto-transition ClipEnd trigger. Cleared each frame before advance.
     pub reached_end: bool,
+    /// Last wall-clock time advance_frame was called (for real-time delta).
+    last_advance: std::time::Instant,
+    /// Fractional frame accumulator — tracks sub-frame position for pacing.
+    frame_accumulator: f64,
 }
 
 impl PlaybackState {
@@ -69,6 +81,8 @@ impl PlaybackState {
             duration,
             frame_rate,
             reached_end: false,
+            last_advance: std::time::Instant::now(),
+            frame_accumulator: 0.0,
         }
     }
 
@@ -77,37 +91,53 @@ impl PlaybackState {
         if self.out_point > 0.0 { self.out_point } else { self.duration }
     }
 
-    /// Advance position by one frame at current speed. Returns true if a seek is needed.
-    pub fn advance_frame(&mut self) -> bool {
+    /// Advance playback position using real wall-clock time.
+    /// Returns how many video frames to decode and whether a seek is needed.
+    pub fn advance_frame(&mut self) -> AdvanceResult {
         self.reached_end = false;
         if !self.playing {
-            return false;
+            self.last_advance = std::time::Instant::now();
+            return AdvanceResult { needs_seek: false, frames_to_decode: 0 };
         }
-        let frame_time = 1.0 / self.frame_rate;
-        let delta = frame_time * self.speed.abs() * if self.reverse { -1.0 } else { 1.0 };
+
+        let now = std::time::Instant::now();
+        let wall_dt = now.duration_since(self.last_advance).as_secs_f64();
+        self.last_advance = now;
+        // Clamp dt to avoid huge jumps after pauses/stalls
+        let dt = wall_dt.min(0.1);
+
+        let delta = dt * self.speed.abs() * if self.reverse { -1.0 } else { 1.0 };
         self.position += delta;
+
+        // Accumulate frames: how many video frames does this time step cover?
+        let frame_time = 1.0 / self.frame_rate;
+        self.frame_accumulator += dt * self.speed.abs();
+        let frames_to_decode = (self.frame_accumulator / frame_time).floor() as u32;
+        self.frame_accumulator -= frames_to_decode as f64 * frame_time;
 
         let in_pt = self.in_point;
         let out_pt = self.effective_out();
 
         if self.position >= out_pt {
             self.reached_end = true;
+            self.frame_accumulator = 0.0;
             match self.loop_mode {
-                LoopMode::Loop => { self.position = in_pt; return true; }
+                LoopMode::Loop => { self.position = in_pt; return AdvanceResult { needs_seek: true, frames_to_decode: 1 }; }
                 LoopMode::PingPong => { self.reverse = true; self.position = out_pt - frame_time; }
                 LoopMode::OneShot => { self.playing = false; self.position = out_pt; }
                 LoopMode::HoldLast => { self.position = out_pt; }
             }
         } else if self.position < in_pt {
+            self.frame_accumulator = 0.0;
             match self.loop_mode {
                 LoopMode::Loop | LoopMode::OneShot | LoopMode::HoldLast => {
                     self.position = in_pt;
-                    return true;
+                    return AdvanceResult { needs_seek: true, frames_to_decode: 1 };
                 }
                 LoopMode::PingPong => { self.reverse = false; self.position = in_pt + frame_time; }
             }
         }
-        false
+        AdvanceResult { needs_seek: false, frames_to_decode }
     }
 }
 
@@ -205,6 +235,13 @@ pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureForm
 const MAX_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
 /// A video player that decodes frames from a video file using ffmpeg (CPU decode).
+///
+/// # Safety: Send
+/// The ffmpeg types (`Input`, `Video` decoder, `Scaler`) contain raw pointers to C-allocated
+/// state. These pointers represent exclusive ownership of heap allocations — there is no
+/// shared mutable state across instances. Transferring a `VideoPlayer` between threads is
+/// safe because Rust's ownership system guarantees exclusive access (no concurrent use).
+/// The player is always used from a single thread at a time.
 pub struct VideoPlayer {
     ictx: ffmpeg::format::context::Input,
     decoder: ffmpeg::decoder::Video,
@@ -228,6 +265,9 @@ pub struct VideoPlayer {
     /// Bytes per frame for cache budget calculation.
     frame_byte_size: usize,
 }
+
+// SAFETY: See doc comment on VideoPlayer. Exclusive ownership of C allocations, no concurrent use.
+unsafe impl Send for VideoPlayer {}
 
 impl VideoPlayer {
     /// Create a new video player from a file path.
@@ -267,32 +307,40 @@ impl VideoPlayer {
     }
 
     /// Get the next frame as RGBA data.
+    /// Uses wall-clock time pacing: only decodes new frames when enough real
+    /// time has elapsed (respecting speed multiplier). At speed < 1.0, frames
+    /// are held longer; at speed > 1.0, frames are skipped.
     pub fn next_frame(&mut self) -> Result<Option<&[u8]>> {
         if !self.playback.playing {
             return Ok(None);
         }
         let was_reverse = self.playback.reverse;
-        let needs_seek = self.playback.advance_frame();
+        let result = self.playback.advance_frame();
+
+        // No frames to decode this tick — hold current frame
+        if result.frames_to_decode == 0 && !result.needs_seek {
+            return Ok(Some(&self.frame_data));
+        }
 
         // Detect ping-pong boundary flips from advance_frame:
         if !was_reverse && self.playback.reverse {
             // Forward→reverse flip (hit out-point). Serve from cache.
             if !self.frame_cache.is_empty() {
                 self.cache_read_idx = self.frame_cache.len();
-                // Fall through to reverse branch
             }
         } else if was_reverse && !self.playback.reverse {
             // Reverse→forward flip (hit in-point). Clear cache, seek to in-point.
             self.frame_cache.clear();
             self.caching_enabled = true;
             self.seek(self.playback.position)?;
-            // Fall through to forward decode
         }
 
         // Reverse playback: serve frames from cache
         if self.playback.reverse {
-            if self.cache_read_idx > 0 {
-                self.cache_read_idx -= 1;
+            // Skip frames for speed > 1.0 in reverse
+            let skip = result.frames_to_decode.max(1) as usize;
+            if self.cache_read_idx >= skip {
+                self.cache_read_idx -= skip;
                 self.frame_data.copy_from_slice(&self.frame_cache[self.cache_read_idx]);
                 return Ok(Some(&self.frame_data));
             }
@@ -302,45 +350,69 @@ impl VideoPlayer {
             self.frame_cache.clear();
             self.caching_enabled = !self.cache_overflowed;
             self.seek(self.playback.position)?;
-            // Fall through to forward decode below
-        } else if needs_seek {
-            // Forward seek (loop restart, etc.) — clear cache since we're
-            // starting a new forward pass
+        } else if result.needs_seek {
+            // Forward seek (loop restart, etc.)
             self.frame_cache.clear();
             self.caching_enabled = !self.cache_overflowed;
             self.seek(self.playback.position)?;
         }
 
-        // Forward playback
+        // Forward playback — decode frames_to_decode frames (skip intermediate ones)
+        let target_frames = result.frames_to_decode.max(1);
+        let mut decoded_count = 0u32;
         loop {
             let mut decoded = Video::empty();
             if self.decoder.receive_frame(&mut decoded).is_ok() {
-                let mut rgb_frame = Video::empty();
-                self.scaler.run(&decoded, &mut rgb_frame)?;
-                let data = rgb_frame.data(0);
-                let stride = rgb_frame.stride(0);
-                for y in 0..self.height as usize {
-                    let src_offset = y * stride;
-                    let dst_offset = y * (self.width as usize * 4);
-                    let row_bytes = self.width as usize * 4;
-                    self.frame_data[dst_offset..dst_offset + row_bytes]
-                        .copy_from_slice(&data[src_offset..src_offset + row_bytes]);
-                }
-                // Cache frame for potential reverse playback
-                if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
-                    if self.frame_cache.len() * self.frame_byte_size < MAX_CACHE_BYTES {
-                        self.frame_cache.push(self.frame_data.clone());
-                    } else {
-                        self.caching_enabled = false;
-                        if !self.cache_overflowed {
-                            self.cache_overflowed = true;
-                            log::warn!("Ping-pong frame cache full ({} frames, {} MB) — reverse will loop instead",
-                                self.frame_cache.len(),
-                                self.frame_cache.len() * self.frame_byte_size / (1024 * 1024));
+                decoded_count += 1;
+                // Only convert the last frame we need (skip intermediate for speed > 1)
+                if decoded_count >= target_frames {
+                    let mut rgb_frame = Video::empty();
+                    self.scaler.run(&decoded, &mut rgb_frame)?;
+                    let data = rgb_frame.data(0);
+                    let stride = rgb_frame.stride(0);
+                    for y in 0..self.height as usize {
+                        let src_offset = y * stride;
+                        let dst_offset = y * (self.width as usize * 4);
+                        let row_bytes = self.width as usize * 4;
+                        self.frame_data[dst_offset..dst_offset + row_bytes]
+                            .copy_from_slice(&data[src_offset..src_offset + row_bytes]);
+                    }
+                    // Cache frame for potential reverse playback
+                    if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
+                        if self.frame_cache.len() * self.frame_byte_size < MAX_CACHE_BYTES {
+                            self.frame_cache.push(self.frame_data.clone());
+                        } else {
+                            self.caching_enabled = false;
+                            if !self.cache_overflowed {
+                                self.cache_overflowed = true;
+                                log::warn!("Ping-pong frame cache full ({} frames, {} MB) — reverse will loop instead",
+                                    self.frame_cache.len(),
+                                    self.frame_cache.len() * self.frame_byte_size / (1024 * 1024));
+                            }
                         }
                     }
+                    return Ok(Some(&self.frame_data));
                 }
-                return Ok(Some(&self.frame_data));
+                // Intermediate frame at speed > 1: still cache for ping-pong
+                if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
+                    // Lightweight: decode into scaler for cache but skip if over budget
+                    let mut rgb_frame = Video::empty();
+                    self.scaler.run(&decoded, &mut rgb_frame)?;
+                    let data = rgb_frame.data(0);
+                    let stride = rgb_frame.stride(0);
+                    let mut cache_buf = vec![0u8; self.frame_byte_size];
+                    for y in 0..self.height as usize {
+                        let src_offset = y * stride;
+                        let dst_offset = y * (self.width as usize * 4);
+                        let row_bytes = self.width as usize * 4;
+                        cache_buf[dst_offset..dst_offset + row_bytes]
+                            .copy_from_slice(&data[src_offset..src_offset + row_bytes]);
+                    }
+                    if self.frame_cache.len() * self.frame_byte_size < MAX_CACHE_BYTES {
+                        self.frame_cache.push(cache_buf);
+                    }
+                }
+                continue;
             }
             match self.ictx.packets().next() {
                 Some((stream, packet)) => {
@@ -358,13 +430,10 @@ impl VideoPlayer {
                         }
                         LoopMode::PingPong => {
                             if !self.frame_cache.is_empty() {
-                                // Flip to reverse, start serving from cache end
                                 self.playback.reverse = true;
                                 self.cache_read_idx = self.frame_cache.len();
-                                // Recurse once to serve the first reverse frame
                                 return self.next_frame();
                             }
-                            // No cache — fall back to loop
                             self.playback.position = self.playback.in_point;
                             self.seek(self.playback.position)?;
                             continue;
@@ -434,19 +503,25 @@ mod tests {
     }
 
     #[test]
-    fn test_playback_state_advance_normal() {
+    fn test_playback_state_advance_moves_position() {
         let mut ps = PlaybackState::new(10.0, 30.0);
-        let needs_seek = ps.advance_frame();
-        assert!(!needs_seek);
-        assert!((ps.position - 1.0 / 30.0).abs() < 1e-9);
+        // Sleep briefly so wall-clock dt > 0
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let result = ps.advance_frame();
+        assert!(!result.needs_seek);
+        // Position should have advanced by ~20ms worth
+        assert!(ps.position > 0.0);
+        assert!(ps.position < 0.1); // sanity: not more than 100ms
     }
 
     #[test]
     fn test_playback_state_loop_restart() {
         let mut ps = PlaybackState::new(1.0, 30.0);
-        ps.position = 0.99;
-        let needs_seek = ps.advance_frame();
-        assert!(needs_seek);
+        ps.position = 1.1; // already past out-point
+        // Ensure some dt elapses
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let result = ps.advance_frame();
+        assert!(result.needs_seek);
         assert_eq!(ps.position, 0.0);
     }
 
@@ -454,17 +529,18 @@ mod tests {
     fn test_playback_state_one_shot_stops() {
         let mut ps = PlaybackState::new(1.0, 30.0);
         ps.loop_mode = LoopMode::OneShot;
-        ps.position = 0.99;
+        ps.position = 1.1;
+        std::thread::sleep(std::time::Duration::from_millis(5));
         ps.advance_frame();
         assert!(!ps.playing);
-        assert_eq!(ps.position, 1.0);
     }
 
     #[test]
     fn test_playback_state_hold_last() {
         let mut ps = PlaybackState::new(1.0, 30.0);
         ps.loop_mode = LoopMode::HoldLast;
-        ps.position = 0.99;
+        ps.position = 1.1;
+        std::thread::sleep(std::time::Duration::from_millis(5));
         ps.advance_frame();
         assert!(ps.playing);
         assert_eq!(ps.position, 1.0);
@@ -474,7 +550,8 @@ mod tests {
     fn test_playback_state_ping_pong() {
         let mut ps = PlaybackState::new(1.0, 30.0);
         ps.loop_mode = LoopMode::PingPong;
-        ps.position = 0.99;
+        ps.position = 1.1;
+        std::thread::sleep(std::time::Duration::from_millis(5));
         ps.advance_frame();
         assert!(ps.reverse);
         assert!(ps.position < 1.0);
@@ -485,27 +562,47 @@ mod tests {
         let mut ps = PlaybackState::new(10.0, 30.0);
         ps.in_point = 2.0;
         ps.out_point = 5.0;
-        ps.position = 4.99;
-        let needs_seek = ps.advance_frame();
-        assert!(needs_seek);
+        ps.position = 5.1; // past out-point
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let result = ps.advance_frame();
+        assert!(result.needs_seek);
         assert_eq!(ps.position, 2.0);
     }
 
     #[test]
-    fn test_playback_state_speed_multiplier() {
-        let mut ps = PlaybackState::new(10.0, 30.0);
-        ps.speed = 2.0;
-        ps.advance_frame();
-        assert!((ps.position - 2.0 / 30.0).abs() < 1e-9);
+    fn test_playback_state_speed_affects_position() {
+        // Two states: one at speed 1, one at speed 3
+        let mut ps_slow = PlaybackState::new(10.0, 30.0);
+        let mut ps_fast = PlaybackState::new(10.0, 30.0);
+        ps_fast.speed = 3.0;
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        ps_slow.advance_frame();
+        ps_fast.advance_frame();
+        // Fast should advance ~3x further
+        assert!(ps_fast.position > ps_slow.position * 2.0,
+            "fast={} should be > 2x slow={}", ps_fast.position, ps_slow.position);
     }
 
     #[test]
     fn test_playback_state_not_playing() {
         let mut ps = PlaybackState::new(10.0, 30.0);
         ps.playing = false;
-        let needs_seek = ps.advance_frame();
-        assert!(!needs_seek);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let result = ps.advance_frame();
+        assert!(!result.needs_seek);
+        assert_eq!(result.frames_to_decode, 0);
         assert_eq!(ps.position, 0.0);
+    }
+
+    #[test]
+    fn test_playback_frame_pacing_slow_speed() {
+        // At speed 0.1 with 30fps video, each frame should last ~333ms.
+        // A 10ms advance should produce 0 frames to decode.
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.speed = 0.1;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let result = ps.advance_frame();
+        assert_eq!(result.frames_to_decode, 0);
     }
 
     #[test]

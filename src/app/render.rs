@@ -13,14 +13,76 @@ pub enum FileDialogKind {
 }
 
 /// Result from a completed file dialog (sent from background thread).
+/// Supports multi-select: `paths` may contain one or more files.
 #[derive(Debug)]
 pub struct FileDialogResult {
     pub kind: FileDialogKind,
     pub ch_idx: usize,
-    pub path: std::path::PathBuf,
+    pub paths: Vec<std::path::PathBuf>,
+}
+
+/// Result from a background deck load (sent from a spawned thread).
+/// Contains a ready-to-use Deck that just needs mixer insertion + egui texture registration.
+pub struct DeckLoadResult {
+    pub ch_idx: usize,
+    pub deck: anyhow::Result<crate::deck::Deck>,
+    pub name: String,
 }
 
 impl VardaApp {
+    /// Spawn background threads to create decks from file paths.
+    /// Each thread creates a full Deck (CPU decode + GPU upload) and sends
+    /// the result via the channel. The render loop polls for completed decks.
+    /// `pending` is incremented per-spawn and decremented when each thread completes.
+    pub fn spawn_deck_loads(
+        sender: &std::sync::mpsc::Sender<DeckLoadResult>,
+        context: &crate::renderer::context::GpuContext,
+        pending: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        render_width: u32,
+        render_height: u32,
+        images: Vec<(usize, std::path::PathBuf)>,
+        videos: Vec<(usize, std::path::PathBuf)>,
+    ) {
+        use crate::deck::Deck;
+        use std::sync::atomic::Ordering;
+
+        for (ch_idx, path) in images {
+            let tx = sender.clone();
+            let ctx = context.clone();
+            let counter = pending.clone();
+            let w = render_width;
+            let h = render_height;
+            counter.fetch_add(1, Ordering::Relaxed);
+            std::thread::spawn(move || {
+                let name = path.file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("image")
+                    .to_string();
+                let deck = Deck::new_from_image(&ctx, &path, w, h);
+                let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
+                counter.fetch_sub(1, Ordering::Relaxed);
+            });
+        }
+
+        for (ch_idx, path) in videos {
+            let tx = sender.clone();
+            let ctx = context.clone();
+            let counter = pending.clone();
+            let w = render_width;
+            let h = render_height;
+            counter.fetch_add(1, Ordering::Relaxed);
+            std::thread::spawn(move || {
+                let name = path.file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("video")
+                    .to_string();
+                let deck = Deck::new_from_video(&ctx, &path, w, h);
+                let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
+                counter.fetch_sub(1, Ordering::Relaxed);
+            });
+        }
+    }
+
     /// Update frame timing (FPS measurement) and system stats. Call once per frame before any work.
     pub fn update_frame_timing(&mut self) {
         let now = std::time::Instant::now();
@@ -429,13 +491,16 @@ impl VardaApp {
             FileDialogKind::Image => rfd::AsyncFileDialog::new()
                 .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp"]),
             FileDialogKind::Video => rfd::AsyncFileDialog::new()
-                .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm"]),
+                .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm", "gif"]),
         };
-        let future = dialog.pick_file();
+        let future = dialog.pick_files();
         std::thread::spawn(move || {
-            let file = futures_lite::future::block_on(future);
-            if let Some(file) = file {
-                let _ = tx.send(FileDialogResult { kind, ch_idx, path: file.path().to_path_buf() });
+            let files = futures_lite::future::block_on(future);
+            if let Some(files) = files {
+                if !files.is_empty() {
+                    let paths: Vec<_> = files.iter().map(|f| f.path().to_path_buf()).collect();
+                    let _ = tx.send(FileDialogResult { kind, ch_idx, paths });
+                }
             }
         });
     }

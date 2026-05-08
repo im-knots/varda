@@ -180,6 +180,10 @@ pub struct HapFrameResult<'a> {
 }
 
 /// HAP video player — demuxes container with ffmpeg, decodes HAP frames to BCn data.
+///
+/// # Safety: Send
+/// Same rationale as `VideoPlayer` — exclusive ownership of C-allocated ffmpeg state.
+/// Transferred between threads but never accessed concurrently.
 pub struct HapPlayer {
     ictx: ffmpeg::format::context::Input,
     video_stream_index: usize,
@@ -195,6 +199,9 @@ pub struct HapPlayer {
     /// Alpha plane buffer (for dual-plane HAP Q Alpha).
     alpha_data: Vec<u8>,
 }
+
+// SAFETY: See doc comment on HapPlayer. Exclusive ownership of C allocations, no concurrent use.
+unsafe impl Send for HapPlayer {}
 
 impl HapPlayer {
     /// Create a new HAP player from a video file path.
@@ -231,39 +238,53 @@ impl HapPlayer {
         if !self.playback.playing {
             return Ok(None);
         }
-        let needs_seek = self.playback.advance_frame();
-        if self.playback.reverse || needs_seek {
+        let result = self.playback.advance_frame();
+
+        // No frames to decode — hold current (HAP doesn't have a "current frame" buffer,
+        // so return None and let the caller keep the existing texture)
+        if result.frames_to_decode == 0 && !result.needs_seek {
+            return Ok(None);
+        }
+
+        if self.playback.reverse || result.needs_seek {
             self.seek(self.playback.position)?;
         }
 
+        // Decode frames, skipping intermediate ones for speed > 1
+        let target_frames = result.frames_to_decode.max(1);
+        let mut decoded_count = 0u32;
         loop {
             match self.ictx.packets().next() {
                 Some((stream, packet)) => {
                     if stream.index() == self.video_stream_index {
                         if let Some(data) = packet.data() {
-                            let frame = decode_hap_frame(data, &mut self.frame_data, &mut self.alpha_data)?;
-                            match frame {
-                                HapFrame::Single { format } => {
-                                    self.texture_format = format;
-                                    self.is_dual_plane = false;
-                                    return Ok(Some(HapFrameResult {
-                                        color_data: &self.frame_data,
-                                        color_format: format,
-                                        alpha_data: None,
-                                        alpha_format: None,
-                                    }));
-                                }
-                                HapFrame::DualPlane { color_format, alpha_format } => {
-                                    self.texture_format = color_format;
-                                    self.is_dual_plane = true;
-                                    return Ok(Some(HapFrameResult {
-                                        color_data: &self.frame_data,
-                                        color_format,
-                                        alpha_data: Some(&self.alpha_data),
-                                        alpha_format: Some(alpha_format),
-                                    }));
+                            decoded_count += 1;
+                            if decoded_count >= target_frames {
+                                let frame = decode_hap_frame(data, &mut self.frame_data, &mut self.alpha_data)?;
+                                match frame {
+                                    HapFrame::Single { format } => {
+                                        self.texture_format = format;
+                                        self.is_dual_plane = false;
+                                        return Ok(Some(HapFrameResult {
+                                            color_data: &self.frame_data,
+                                            color_format: format,
+                                            alpha_data: None,
+                                            alpha_format: None,
+                                        }));
+                                    }
+                                    HapFrame::DualPlane { color_format, alpha_format } => {
+                                        self.texture_format = color_format;
+                                        self.is_dual_plane = true;
+                                        return Ok(Some(HapFrameResult {
+                                            color_data: &self.frame_data,
+                                            color_format,
+                                            alpha_data: Some(&self.alpha_data),
+                                            alpha_format: Some(alpha_format),
+                                        }));
+                                    }
                                 }
                             }
+                            // Skip intermediate frames for speed > 1
                         }
                     }
                 }

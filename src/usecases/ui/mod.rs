@@ -455,6 +455,8 @@ pub struct UIData {
     pub can_undo: bool,
     /// Whether redo is available
     pub can_redo: bool,
+    /// Number of decks currently loading in background threads
+    pub pending_deck_loads: usize,
 }
 
 /// Read-only snapshot of a single transition sequence
@@ -638,12 +640,12 @@ pub enum CrossfaderAction {
 pub struct UIActions {
     /// (ch_idx, generator_registry_idx) — add a shader as a new deck to channel
     pub shader_to_add: Option<(usize, usize)>,
-    /// (ch_idx, path) — add an image file as a new deck to channel
-    pub image_to_add: Option<(usize, std::path::PathBuf)>,
+    /// (ch_idx, path) — add image files as new decks to channel (supports multi-select)
+    pub images_to_add: Vec<(usize, std::path::PathBuf)>,
     /// Channel index to open an image file dialog for (deferred to outside egui frame)
     pub open_image_dialog_for_channel: Option<usize>,
-    /// (ch_idx, path) — add a video file as a new deck to channel
-    pub video_to_add: Option<(usize, std::path::PathBuf)>,
+    /// (ch_idx, path) — add video files as new decks to channel (supports multi-select)
+    pub videos_to_add: Vec<(usize, std::path::PathBuf)>,
     /// Channel index to open a video file dialog for (deferred to outside egui frame)
     pub open_video_dialog_for_channel: Option<usize>,
     /// (ch_idx, color_rgba) — add a solid color deck to channel
@@ -844,9 +846,9 @@ impl UIActions {
     pub fn new() -> Self {
         Self {
             shader_to_add: None,
-            image_to_add: None,
+            images_to_add: Vec::new(),
             open_image_dialog_for_channel: None,
-            video_to_add: None,
+            videos_to_add: Vec::new(),
             open_video_dialog_for_channel: None,
             solid_color_to_add: None,
             deck_to_remove: None,
@@ -915,8 +917,8 @@ impl UIActions {
     /// Whether this frame's actions include any undoable mutation.
     pub fn has_undoable_action(&self) -> bool {
         self.shader_to_add.is_some()
-            || self.image_to_add.is_some()
-            || self.video_to_add.is_some()
+            || !self.images_to_add.is_empty()
+            || !self.videos_to_add.is_empty()
             || self.solid_color_to_add.is_some()
             || self.deck_to_remove.is_some()
             || !self.deck_updates.is_empty()
@@ -1215,6 +1217,7 @@ impl UIData {
             render_height: 1080,
             can_undo: false,
             can_redo: false,
+            pending_deck_loads: 0,
         }
     }
 }

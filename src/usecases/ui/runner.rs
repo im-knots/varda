@@ -6,7 +6,7 @@
 
 use crate::app::VardaApp;
 use crate::app::history::HistoryManager;
-use crate::app::render::{FileDialogKind, FileDialogResult};
+use crate::app::render::{DeckLoadResult, FileDialogKind, FileDialogResult};
 use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::{GpuContext, WindowSurface};
 use crate::usecases::ui;
@@ -37,6 +37,12 @@ pub struct UIRunner {
     file_dialog_tx: std::sync::mpsc::Sender<FileDialogResult>,
     file_dialog_rx: std::sync::mpsc::Receiver<FileDialogResult>,
 
+    // ── Background deck loading channel (async, non-blocking) ────────
+    deck_load_tx: std::sync::mpsc::Sender<DeckLoadResult>,
+    deck_load_rx: std::sync::mpsc::Receiver<DeckLoadResult>,
+    /// Number of deck loads currently in-flight on background threads
+    pending_deck_loads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+
     // ── Engine (created after GPU init in resumed()) ─────────────────
     varda: Option<VardaApp>,
 
@@ -47,6 +53,7 @@ pub struct UIRunner {
 impl UIRunner {
     pub fn new() -> Self {
         let (file_dialog_tx, file_dialog_rx) = std::sync::mpsc::channel();
+        let (deck_load_tx, deck_load_rx) = std::sync::mpsc::channel();
         Self {
             window: None,
             window_surface: None,
@@ -60,6 +67,9 @@ impl UIRunner {
             layout: super::UILayoutState::default(),
             file_dialog_tx,
             file_dialog_rx,
+            deck_load_tx,
+            deck_load_rx,
+            pending_deck_loads: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             varda: None,
             history: HistoryManager::new(),
         }
@@ -243,6 +253,7 @@ impl UIRunner {
             .collect_ui_data(&self.layout, &self.deck_preview_textures, self.main_output_texture);
         ui_data.can_undo = self.history.can_undo();
         ui_data.can_redo = self.history.can_redo();
+        ui_data.pending_deck_loads = self.pending_deck_loads.load(std::sync::atomic::Ordering::Relaxed);
 
         // 5. Run egui frame
         let raw_input = {
@@ -372,17 +383,52 @@ impl UIRunner {
                 VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Video, ch_idx);
             }
 
-            // Poll completed file dialog results
+            // Poll completed file dialog results → spawn background deck loads
             while let Ok(result) = self.file_dialog_rx.try_recv() {
-                match result.kind {
-                    FileDialogKind::Image => {
-                        ui_actions.image_to_add = Some((result.ch_idx, result.path));
-                    }
-                    FileDialogKind::Video => {
-                        ui_actions.video_to_add = Some((result.ch_idx, result.path));
+                let mut images = Vec::new();
+                let mut videos = Vec::new();
+                for path in result.paths {
+                    match result.kind {
+                        FileDialogKind::Image => images.push((result.ch_idx, path)),
+                        FileDialogKind::Video => videos.push((result.ch_idx, path)),
                     }
                 }
-                varda.apply_deck_and_effect_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
+                if !images.is_empty() || !videos.is_empty() {
+                    let context = varda.gpu_context();
+                    VardaApp::spawn_deck_loads(
+                        &self.deck_load_tx,
+                        context,
+                        &self.pending_deck_loads,
+                        varda.render_width(),
+                        varda.render_height(),
+                        images,
+                        videos,
+                    );
+                }
+            }
+
+            // Poll completed background deck loads (non-blocking)
+            while let Ok(result) = self.deck_load_rx.try_recv() {
+                match result.deck {
+                    Ok(deck) => {
+                        let ch_idx = result.ch_idx;
+                        if let Some(ch) = varda.mixer_mut().channel_mut(ch_idx) {
+                            let idx = ch.add_deck(deck);
+                            log::info!("Background load complete: deck {} to channel {}: {}", idx, ch_idx, result.name);
+                        }
+                        // Re-borrow for texture registration (separate from mixer borrow)
+                        if let Some(ch) = varda.mixer_ref().channels().get(ch_idx) {
+                            let idx = ch.decks.len() - 1;
+                            let texture_id = egui_renderer.register_native_texture(
+                                &varda.gpu_context().device,
+                                &ch.decks[idx].deck.texture_view,
+                                wgpu::FilterMode::Linear,
+                            );
+                            self.deck_preview_textures.insert((ch_idx, idx), texture_id);
+                        }
+                    }
+                    Err(e) => log::error!("Background deck load failed for '{}': {}", result.name, e),
+                }
             }
         }
 

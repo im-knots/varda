@@ -10,8 +10,7 @@
     {
       "name": "Output 1",
       "target": {
-        "type": "display",
-        "name": "Monitor #41041"
+        "type": "windowed"
       },
       "surface_assignments": []
     }

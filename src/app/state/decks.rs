@@ -130,8 +130,8 @@ impl VardaApp {
             }
         }
 
-        // Add image deck if requested
-        if let Some((ch_idx, path)) = actions.image_to_add.take() {
+        // Add image decks (synchronous fallback — file dialog path uses background threads)
+        for (ch_idx, path) in std::mem::take(&mut actions.images_to_add) {
             match Deck::new_from_image(context, &path, self.render_width, self.render_height) {
                 Ok(deck) => {
                     if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -146,12 +146,12 @@ impl VardaApp {
                         deck_preview_textures.insert((ch_idx, idx), texture_id);
                     }
                 }
-                Err(e) => log::error!("Failed to create image deck: {}", e),
+                Err(e) => log::error!("Failed to create image deck from {:?}: {}", path, e),
             }
         }
 
-        // Add video deck if requested
-        if let Some((ch_idx, path)) = actions.video_to_add.take() {
+        // Add video decks (synchronous fallback — file dialog path uses background threads)
+        for (ch_idx, path) in std::mem::take(&mut actions.videos_to_add) {
             match Deck::new_from_video(context, &path, self.render_width, self.render_height) {
                 Ok(deck) => {
                     if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -166,7 +166,7 @@ impl VardaApp {
                         deck_preview_textures.insert((ch_idx, idx), texture_id);
                     }
                 }
-                Err(e) => log::error!("Failed to create video deck: {}", e),
+                Err(e) => log::error!("Failed to create video deck from {:?}: {}", path, e),
             }
         }
 
