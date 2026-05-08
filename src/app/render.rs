@@ -493,28 +493,25 @@ impl VardaApp {
         }
     }
 
-    /// Spawn an async file dialog on the main thread (non-blocking).
-    /// The dialog runs via NSOpenPanel's beginWithCompletionHandler on macOS,
-    /// so the render loop continues while the Finder window is open.
-    /// Results are sent to the channel and polled each frame.
+    /// Open a native file picker on a background thread.
+    /// Uses rfd's synchronous FileDialog which correctly dispatches to the
+    /// main thread on macOS (NSOpenPanel requires main-thread presentation
+    /// for proper focus/activation). Results are sent via channel.
     pub fn open_file_dialog(
         sender: &std::sync::mpsc::Sender<FileDialogResult>,
         kind: FileDialogKind,
         ch_idx: usize,
     ) {
         let tx = sender.clone();
-        let dialog = match kind {
-            FileDialogKind::Image => rfd::AsyncFileDialog::new()
-                .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp"]),
-            FileDialogKind::Video => rfd::AsyncFileDialog::new()
-                .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm", "gif"]),
-        };
-        let future = dialog.pick_files();
         std::thread::spawn(move || {
-            let files = futures_lite::future::block_on(future);
-            if let Some(files) = files {
-                if !files.is_empty() {
-                    let paths: Vec<_> = files.iter().map(|f| f.path().to_path_buf()).collect();
+            let dialog = match kind {
+                FileDialogKind::Image => rfd::FileDialog::new()
+                    .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp"]),
+                FileDialogKind::Video => rfd::FileDialog::new()
+                    .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm", "gif"]),
+            };
+            if let Some(paths) = dialog.pick_files() {
+                if !paths.is_empty() {
                     let _ = tx.send(FileDialogResult { kind, ch_idx, paths });
                 }
             }

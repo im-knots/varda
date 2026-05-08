@@ -319,16 +319,24 @@ pub struct OutputConfig {
     /// Surface assignments with warp calibration
     #[serde(default)]
     pub surface_assignments: Vec<SurfaceAssignmentConfig>,
+    /// Saved window position [x, y] in physical pixels (for Windowed targets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_position: Option<[i32; 2]>,
+    /// Saved window size [width, height] in physical pixels (for Windowed targets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_size: Option<[u32; 2]>,
 }
 
 impl OutputConfig {
     /// Create a default windowed output config with an auto-generated name.
     pub fn default_windowed() -> Self {
         Self {
-            name: String::new(), // Will be assigned a name at creation time
+            name: String::new(),
             target: OutputTargetConfig::Windowed,
             target_display: None,
             surface_assignments: Vec::new(),
+            window_position: None,
+            window_size: None,
         }
     }
 }

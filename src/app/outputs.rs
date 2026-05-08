@@ -222,15 +222,35 @@ impl VardaApp {
 
             if target.is_windowed() {
                 // Windowed/Display: needs an OS window
-                let window_attrs = Window::default_attributes()
-                    .with_title(format!("Varda - {}", name))
-                    .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+                let mut window_attrs = Window::default_attributes()
+                    .with_title(format!("Varda - {}", name));
+
+                // Restore saved window size, or default to 1280x720
+                if let Some([w, h]) = config.window_size {
+                    window_attrs = window_attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
+                } else {
+                    window_attrs = window_attrs.with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+                }
+
+                // Set position hint in attributes (works on some platforms)
+                if let Some([x, y]) = config.window_position {
+                    window_attrs = window_attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
+                }
 
                 match event_loop.create_window(window_attrs) {
                     Ok(window) => {
                         let window_static: &'static Window = Box::leak(Box::new(window));
                         match OutputWindow::new(&self.context, window_static, name.clone()) {
                             Ok(mut output) => {
+                                // Force position after full initialization — macOS
+                                // ignores with_position() in attrs and surface.configure()
+                                // can reset position, so we set it last.
+                                if let Some([x, y]) = config.window_position {
+                                    output.window.set_outer_position(
+                                        winit::dpi::PhysicalPosition::new(x, y),
+                                    );
+                                    log::info!("Restored output '{}' position to ({}, {})", output.name, x, y);
+                                }
                                 // Restore surface assignments from config
                                 output.surface_assignments = config.surface_assignments.iter().map(|a| {
                                     SurfaceAssignment {
@@ -239,14 +259,24 @@ impl VardaApp {
                                         enabled: a.enabled,
                                     }
                                 }).collect();
-                                // If Display target, set fullscreen
+                                // If Display target, set fullscreen — or fall back to
+                                // Windowed if the target monitor is no longer connected.
                                 if let OutputTarget::Display { ref name, .. } = target {
-                                    output.target = target.clone();
-                                    // Try to find the matching monitor
-                                    let monitor = self.cached_monitors.iter()
+                                    if let Some((_, handle)) = self.cached_monitors.iter()
                                         .find(|(n, _)| n == name)
-                                        .map(|(_, m)| m.clone());
-                                    output.set_target(target.clone(), monitor);
+                                    {
+                                        output.set_target(target.clone(), Some(handle.clone()));
+                                    } else {
+                                        log::warn!(
+                                            "Monitor '{}' not available for output '{}' — falling back to windowed",
+                                            name, output.name,
+                                        );
+                                        self.notifications.warn(format!(
+                                            "Monitor '{}' not connected — output '{}' opened as window",
+                                            name, output.name,
+                                        ));
+                                        output.set_target(OutputTarget::Windowed, None);
+                                    }
                                 }
                                 log::info!("Created output window '{}'", output.name);
                                 self.outputs.push(UnifiedOutput::Window(output));

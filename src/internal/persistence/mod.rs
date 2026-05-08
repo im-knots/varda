@@ -383,18 +383,32 @@ pub fn snapshot_stage(
     stage_editor_open: bool,
 ) -> StagePrefs {
     let outputs = outputs_list.iter().map(|unified| {
-        let (name, target, surface_assignments) = match unified {
-            UnifiedOutput::Window(w) => (
-                w.name.clone(),
-                target_to_config(&w.target),
-                w.surface_assignments.iter().map(|a| {
-                    SurfaceAssignmentConfig {
-                        surface_idx: a.surface_idx,
-                        warp_corners: a.warp_corners,
-                        enabled: a.enabled,
+        let (name, target, surface_assignments, window_position, window_size) = match unified {
+            UnifiedOutput::Window(w) => {
+                // Capture window position and size for restoration
+                let pos = w.window.outer_position().ok().map(|p| [p.x, p.y]);
+                let sz = {
+                    let s = w.window.inner_size();
+                    if s.width > 0 && s.height > 0 {
+                        Some([s.width, s.height])
+                    } else {
+                        None
                     }
-                }).collect(),
-            ),
+                };
+                (
+                    w.name.clone(),
+                    target_to_config(&w.target),
+                    w.surface_assignments.iter().map(|a| {
+                        SurfaceAssignmentConfig {
+                            surface_idx: a.surface_idx,
+                            warp_corners: a.warp_corners,
+                            enabled: a.enabled,
+                        }
+                    }).collect(),
+                    pos,
+                    sz,
+                )
+            },
             UnifiedOutput::Headless(h) => (
                 h.name.clone(),
                 target_to_config(&h.target),
@@ -405,13 +419,17 @@ pub fn snapshot_stage(
                         enabled: a.enabled,
                     }
                 }).collect(),
+                None,
+                None,
             ),
         };
         OutputConfig {
             name,
-            target: target,
+            target,
             target_display: None,
             surface_assignments,
+            window_position,
+            window_size,
         }
     }).collect();
 
