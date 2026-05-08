@@ -117,7 +117,7 @@ impl VardaApp {
                     self.midi_mappings.process_learn(key);
                 }
 
-                // Apply mapped value to mixer or clock (both normal and learn mode)
+                // Apply mapped value to mixer, clock, or global actions
                 if let Some(path) = self.midi_mappings.get(&key).cloned() {
                     if path == "clock/bpm" {
                         // Map normalized 0.0–1.0 → 20–300 BPM range
@@ -126,6 +126,14 @@ impl VardaApp {
                             self.clock_manager.set_preference(crate::clock::ClockPreference::ForceManual { bpm });
                         } else {
                             self.clock_manager.set_manual_bpm(bpm);
+                        }
+                    } else if path.starts_with("action/") && value > 0.5 {
+                        // Global actions — trigger on note-on / CC > 50%
+                        match path.as_str() {
+                            "action/undo" => self.midi_pending_undo = true,
+                            "action/redo" => self.midi_pending_redo = true,
+                            "action/save" => self.midi_pending_save = true,
+                            _ => { log::debug!("Unknown action path: {}", path); }
                         }
                     } else {
                         crate::midi::apply_midi_to_param(&mut self.mixer, &path, value);

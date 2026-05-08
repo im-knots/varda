@@ -23,6 +23,7 @@ pub const DEFAULT_RENDER_HEIGHT: u32 = 1080;
 
 use crate::audio::AudioManager;
 use crate::camera::CameraManager;
+use crate::keymap::KeymapStore;
 use crate::midi;
 use crate::mixer::Mixer;
 use crate::osc::OscReceiver;
@@ -48,6 +49,9 @@ pub struct VardaApp {
     camera_manager: CameraManager,
     registry: ShaderRegistry,
     context: GpuContext,
+
+    // ── Keyboard shortcuts ────────────────────────────────────
+    keymap: KeymapStore,
 
     // ── Control subsystems ─────────────────────────────────────
     osc_receiver: Option<OscReceiver>,
@@ -105,6 +109,11 @@ pub struct VardaApp {
 
     // ── Presets ─────────────────────────────────────────────────
     preset_library: crate::persistence::presets::PresetLibrary,
+
+    // ── Pending MIDI-triggered actions (consumed by runner) ──
+    pub(crate) midi_pending_undo: bool,
+    pub(crate) midi_pending_redo: bool,
+    pub(crate) midi_pending_save: bool,
 }
 
 impl VardaApp {
@@ -167,6 +176,7 @@ impl VardaApp {
             context: gpu,
             osc_receiver,
             midi_devices,
+            keymap: KeymapStore::with_defaults(),
             midi_mappings: midi::MidiMappingStore::new(),
             controller_led_mgr,
             clock_manager: crate::clock::ClockManager::new(),
@@ -194,6 +204,9 @@ impl VardaApp {
             srt_manager: crate::srt::SrtManager::new(),
             srt_library: Vec::new(),
             preset_library,
+            midi_pending_undo: false,
+            midi_pending_redo: false,
+            midi_pending_save: false,
         })
     }
 

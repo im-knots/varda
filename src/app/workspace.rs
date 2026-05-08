@@ -34,6 +34,12 @@ impl VardaApp {
             Ok(()) => log::info!("Saved stage to {}", self.workspace.stage_path().display()),
             Err(e) => log::error!("Failed to save stage: {}", e),
         }
+        // Save keyboard shortcuts
+        let keymap_config = self.keymap.to_config();
+        match keymap_config.save(self.workspace.keymap_path()) {
+            Ok(()) => log::info!("Saved keymap to {}", self.workspace.keymap_path().display()),
+            Err(e) => log::error!("Failed to save keymap: {}", e),
+        }
     }
 
     /// Load workspace from `.varda/` if it exists.
@@ -114,6 +120,16 @@ impl VardaApp {
                     }
                 }
                 Err(e) => log::warn!("Failed to load MIDI config: {}", e),
+            }
+        }
+        // Load keyboard shortcuts
+        if self.workspace.has_keymap() {
+            match crate::keymap::KeymapConfig::load(self.workspace.keymap_path()) {
+                Ok(keymap_config) => {
+                    self.keymap.load_config(&keymap_config);
+                    log::info!("Loaded {} keyboard shortcuts", keymap_config.bindings.len());
+                }
+                Err(e) => log::warn!("Failed to load keymap config: {}", e),
             }
         }
         loaded_layout

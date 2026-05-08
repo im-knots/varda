@@ -42,6 +42,9 @@ pub fn render_params(
     mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>>,
     mod_current_values: &[f32],
     mod_param_prefix: &str,
+    keyboard_learn_active: bool,
+    keyboard_learn_select: &mut Option<crate::keymap::KeyTarget>,
+    keyboard_learn_target: Option<&str>,
 ) {
     let hidden = hidden_prefixes(params);
     for param in params {
@@ -66,7 +69,8 @@ pub fn render_params(
                     }
                     // Render slider — in learn mode, disable mouse interaction via a scope
                     let slider_rect;
-                    if midi_learn_active {
+                    let any_learn_active = midi_learn_active || keyboard_learn_active;
+                    if any_learn_active {
                         let inner = ui.scope(|ui| {
                             ui.disable();
                             ui.add(egui::Slider::new(&mut v, min..=max).show_value(false))
@@ -93,6 +97,23 @@ pub fn render_params(
                             let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
                                 *midi_learn_select = Some(path);
+                            }
+                        }
+                    }
+                    // Keyboard learn mode: orange glow + click overlay
+                    if keyboard_learn_active {
+                        if let Some(prefix) = midi_learn_path_prefix {
+                            let path = format!("{}/param/{}", prefix, param.name);
+                            let is_target = keyboard_learn_target.map_or(false, |t| t == path);
+                            if is_target {
+                                draw_keyboard_learn_selected(ui, slider_rect);
+                            } else {
+                                draw_keyboard_learn_glow(ui, slider_rect);
+                            }
+                            let click_id = ui.id().with(("kb_learn_param", &param.name));
+                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            if click_resp.clicked() {
+                                *keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
                             }
                         }
                     }
@@ -185,6 +206,9 @@ pub fn render_effect_params(
     mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>>,
     mod_current_values: &[f32],
     mod_param_prefix: &str,
+    keyboard_learn_active: bool,
+    keyboard_learn_select: &mut Option<crate::keymap::KeyTarget>,
+    keyboard_learn_target: Option<&str>,
 ) {
     let hidden = hidden_prefixes(params);
     for param in params {
@@ -206,7 +230,8 @@ pub fn render_effect_params(
                     }
                     // Render slider — in learn mode, disable mouse interaction via a scope
                     let slider_rect;
-                    if midi_learn_active {
+                    let any_learn_active = midi_learn_active || keyboard_learn_active;
+                    if any_learn_active {
                         let inner = ui.scope(|ui| {
                             ui.disable();
                             ui.add(egui::Slider::new(&mut v, min..=max).show_value(false))
@@ -233,6 +258,23 @@ pub fn render_effect_params(
                             let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
                                 *midi_learn_select = Some(path);
+                            }
+                        }
+                    }
+                    // Keyboard learn mode: orange glow + click overlay
+                    if keyboard_learn_active {
+                        if let Some(prefix) = midi_learn_path_prefix {
+                            let path = format!("{}/param/{}", prefix, param.name);
+                            let is_target = keyboard_learn_target.map_or(false, |t| t == path);
+                            if is_target {
+                                draw_keyboard_learn_selected(ui, slider_rect);
+                            } else {
+                                draw_keyboard_learn_glow(ui, slider_rect);
+                            }
+                            let click_id = ui.id().with(("kb_learn_fx_param", &param.name));
+                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            if click_resp.clicked() {
+                                *keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
                             }
                         }
                     }
@@ -350,6 +392,22 @@ pub fn draw_midi_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
 pub fn draw_midi_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(255, 100, 50, 120);
+    let expanded = rect.expand(3.0);
+    painter.rect_stroke(expanded, 3.0, egui::Stroke::new(3.0, glow_color), egui::StrokeKind::Outside);
+}
+
+/// Draw an orange glow around a rect for keyboard-learnable target.
+pub fn draw_keyboard_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter();
+    let glow_color = egui::Color32::from_rgba_unmultiplied(255, 165, 0, 80);
+    let expanded = rect.expand(2.0);
+    painter.rect_stroke(expanded, 3.0, egui::Stroke::new(2.0, glow_color), egui::StrokeKind::Outside);
+}
+
+/// Draw a brighter orange glow for the currently selected keyboard learn target.
+pub fn draw_keyboard_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter();
+    let glow_color = egui::Color32::from_rgba_unmultiplied(255, 120, 0, 120);
     let expanded = rect.expand(3.0);
     painter.rect_stroke(expanded, 3.0, egui::Stroke::new(3.0, glow_color), egui::StrokeKind::Outside);
 }

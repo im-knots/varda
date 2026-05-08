@@ -87,6 +87,14 @@ impl DurationSpec {
     }
 
     pub fn is_beats(&self) -> bool { matches!(self, DurationSpec::Beats(_)) }
+
+    /// Set the numeric value, preserving the unit.
+    pub fn set_value(&mut self, v: f64) {
+        match self {
+            DurationSpec::Beats(ref mut b) => *b = v,
+            DurationSpec::Seconds(ref mut s) => *s = v,
+        }
+    }
 }
 
 /// What starts the transition countdown.

@@ -305,6 +305,17 @@ impl UIRunner {
 
             let removed_ch = varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
 
+            // ── Drain MIDI-triggered global actions ──
+            if std::mem::take(&mut varda.midi_pending_undo) {
+                ui_actions.undo_requested = true;
+            }
+            if std::mem::take(&mut varda.midi_pending_redo) {
+                ui_actions.redo_requested = true;
+            }
+            if std::mem::take(&mut varda.midi_pending_save) {
+                ui_actions.save_requested = true;
+            }
+
             // ── Undo/redo: diff-apply from history ──
             if ui_actions.undo_requested || ui_actions.redo_requested {
                 let current = crate::persistence::snapshot_scene(

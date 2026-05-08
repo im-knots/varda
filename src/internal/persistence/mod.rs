@@ -105,6 +105,16 @@ impl Workspace {
         self.varda_dir().join("stage.json")
     }
 
+    /// Path to `keymap.json`.
+    pub fn keymap_path(&self) -> PathBuf {
+        self.varda_dir().join("keymap.json")
+    }
+
+    /// Check if a keymap config file exists.
+    pub fn has_keymap(&self) -> bool {
+        self.keymap_path().is_file()
+    }
+
     /// Path to `controller-profiles/` directory for MIDI controller profiles.
     pub fn controller_profiles_dir(&self) -> PathBuf {
         self.varda_dir().join("controller-profiles")

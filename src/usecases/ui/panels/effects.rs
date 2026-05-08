@@ -64,6 +64,9 @@ pub(super) fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, acti
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
                                         &format!("master_fx{}", eff_idx_copy),
+                                        data.keyboard_learn_active,
+                                        &mut actions.keyboard_learn_select,
+                                        data.keyboard_learn_target.as_deref(),
                                     );
                                 }
                             });
@@ -228,6 +231,9 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
                                         &format!("ch{}_fx{}", ch_copy, eff_idx_copy),
+                                        data.keyboard_learn_active,
+                                        &mut actions.keyboard_learn_select,
+                                        data.keyboard_learn_target.as_deref(),
                                     );
                                 }
                             });

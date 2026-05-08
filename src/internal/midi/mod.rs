@@ -733,6 +733,36 @@ pub fn apply_midi_to_param(mixer: &mut Mixer, path: &str, value: f32) -> bool {
             }
             false
         }
+        // ch/<n>/deck/<m>/at/play_duration — auto-transition play duration
+        ["ch", ch_s, "deck", dk_s, "at", "play_duration"] => {
+            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
+                if let Some(channel) = mixer.channel_mut(ch) {
+                    if dk < channel.decks.len() {
+                        if let Some(ref mut at) = channel.decks[dk].auto_transition {
+                            let max = if at.play_duration.is_beats() { 128.0 } else { 300.0 };
+                            at.play_duration.set_value(0.5 + value as f64 * (max - 0.5));
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+        // ch/<n>/deck/<m>/at/trans_duration — auto-transition transition duration
+        ["ch", ch_s, "deck", dk_s, "at", "trans_duration"] => {
+            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
+                if let Some(channel) = mixer.channel_mut(ch) {
+                    if dk < channel.decks.len() {
+                        if let Some(ref mut at) = channel.decks[dk].auto_transition {
+                            let max = if at.transition_duration.is_beats() { 32.0 } else { 30.0 };
+                            at.transition_duration.set_value(0.1 + value as f64 * (max - 0.1));
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
         // ch/<n>/deck/<m>/param/<name>
         ["ch", ch_s, "deck", dk_s, "param", name] => {
             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {

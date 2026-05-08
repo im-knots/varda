@@ -403,21 +403,36 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         let slider = egui::Slider::new(&mut val, 0.0..=1.0)
                                             .vertical()
                                             .show_value(false);
-                                        if data.midi_learn_active {
+                                        let any_learn = data.midi_learn_active || data.keyboard_learn_active;
+                                        if any_learn {
                                             let inner = ui.scope(|ui| {
                                                 ui.disable();
                                                 ui.add_sized([12.0, 30.0], slider)
                                             });
                                             let step_path = format!("mod/{}/step/{}", idx, step_idx);
-                                            let is_target = data.midi_learn_target.as_deref() == Some(step_path.as_str());
-                                            if is_target {
-                                                widgets::draw_midi_learn_selected(ui, inner.inner.rect);
-                                            } else {
-                                                widgets::draw_midi_learn_glow(ui, inner.inner.rect);
+                                            if data.midi_learn_active {
+                                                let is_target = data.midi_learn_target.as_deref() == Some(step_path.as_str());
+                                                if is_target {
+                                                    widgets::draw_midi_learn_selected(ui, inner.inner.rect);
+                                                } else {
+                                                    widgets::draw_midi_learn_glow(ui, inner.inner.rect);
+                                                }
+                                                let click_id = ui.id().with(("midi_learn_step", idx, step_idx));
+                                                if ui.interact(inner.inner.rect, click_id, egui::Sense::click()).clicked() {
+                                                    actions.midi_learn_select = Some(step_path.clone());
+                                                }
                                             }
-                                            let click_id = ui.id().with(("midi_learn_step", idx, step_idx));
-                                            if ui.interact(inner.inner.rect, click_id, egui::Sense::click()).clicked() {
-                                                actions.midi_learn_select = Some(step_path);
+                                            if data.keyboard_learn_active {
+                                                let is_target = data.keyboard_learn_target.as_deref() == Some(step_path.as_str());
+                                                if is_target {
+                                                    widgets::draw_keyboard_learn_selected(ui, inner.inner.rect);
+                                                } else {
+                                                    widgets::draw_keyboard_learn_glow(ui, inner.inner.rect);
+                                                }
+                                                let click_id = ui.id().with(("kb_learn_step", idx, step_idx));
+                                                if ui.interact(inner.inner.rect, click_id, egui::Sense::click()).clicked() {
+                                                    actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(step_path));
+                                                }
                                             }
                                         } else {
                                             if ui.add_sized([12.0, 30.0], slider).on_hover_text(format!("Step {}", step_idx + 1)).changed() {
@@ -435,7 +450,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
     }
 }
 
-/// Render a modulation source slider with MIDI learn support.
+/// Render a modulation source slider with MIDI/keyboard learn support.
 /// Returns true if the slider value changed (only in non-learn mode).
 pub(super) fn render_mod_learn_slider(
     ui: &mut egui::Ui,
@@ -447,22 +462,38 @@ pub(super) fn render_mod_learn_slider(
     actions: &mut UIActions,
 ) -> bool {
     let mut changed = false;
-    if data.midi_learn_active {
+    let any_learn = data.midi_learn_active || data.keyboard_learn_active;
+    if any_learn {
         let inner = ui.scope(|ui| {
             ui.disable();
             ui.add(slider_opts(egui::Slider::new(value, range)))
         });
         let slider_rect = inner.inner.rect;
-        let is_target = data.midi_learn_target.as_deref() == Some(midi_path);
-        if is_target {
-            widgets::draw_midi_learn_selected(ui, slider_rect);
-        } else {
-            widgets::draw_midi_learn_glow(ui, slider_rect);
+        if data.midi_learn_active {
+            let is_target = data.midi_learn_target.as_deref() == Some(midi_path);
+            if is_target {
+                widgets::draw_midi_learn_selected(ui, slider_rect);
+            } else {
+                widgets::draw_midi_learn_glow(ui, slider_rect);
+            }
+            let click_id = ui.id().with(("midi_learn_mod", midi_path));
+            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+            if click_resp.clicked() {
+                actions.midi_learn_select = Some(midi_path.to_string());
+            }
         }
-        let click_id = ui.id().with(("midi_learn_mod", midi_path));
-        let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
-        if click_resp.clicked() {
-            actions.midi_learn_select = Some(midi_path.to_string());
+        if data.keyboard_learn_active {
+            let is_target = data.keyboard_learn_target.as_deref() == Some(midi_path);
+            if is_target {
+                widgets::draw_keyboard_learn_selected(ui, slider_rect);
+            } else {
+                widgets::draw_keyboard_learn_glow(ui, slider_rect);
+            }
+            let click_id = ui.id().with(("kb_learn_mod", midi_path));
+            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+            if click_resp.clicked() {
+                actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(midi_path.to_string()));
+            }
         }
     } else {
         if ui.add(slider_opts(egui::Slider::new(value, range))).changed() {

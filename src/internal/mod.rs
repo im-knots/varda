@@ -4,6 +4,7 @@ pub mod channel;
 pub mod clock;
 pub mod deck;
 pub mod isf;
+pub mod keymap;
 pub mod midi;
 pub mod mixer;
 pub mod modulation;

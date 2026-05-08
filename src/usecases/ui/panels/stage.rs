@@ -1053,17 +1053,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 state.dragging_radius = None;
             }
 
-            // Delete selected surfaces with delete key
-            if !state.selected_surfaces.is_empty() {
-                if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
-                    // Remove in reverse order to preserve indices
-                    let indices: Vec<usize> = state.selected_surfaces.iter().copied().rev().collect();
-                    for idx in indices {
-                        actions.surface_actions.push(SurfaceAction::Remove { idx });
-                    }
-                    state.selected_surfaces.clear();
-                }
-            }
+            // Delete selected surfaces (handled below via keymap)
         }
 
         DrawingTool::Rectangle => {
@@ -1194,37 +1184,57 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         }
     }
 
-    // Keyboard shortcuts
-    if ui.input(|i| i.key_pressed(egui::Key::S)) { state.tool = DrawingTool::Select; }
-    if ui.input(|i| i.key_pressed(egui::Key::R)) { state.tool = DrawingTool::Rectangle; }
-    if ui.input(|i| i.key_pressed(egui::Key::P)) { state.tool = DrawingTool::Polygon; }
-    if ui.input(|i| i.key_pressed(egui::Key::C)) { state.tool = DrawingTool::Circle; }
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        state.polygon_verts.clear();
-        state.rect_start = None;
-        state.circle_center = None;
-    }
-    // Duplicate & flip shortcuts (when any surfaces are selected)
-    if !state.selected_surfaces.is_empty() {
-        if ui.input(|i| i.key_pressed(egui::Key::D)) {
-            for &idx in &state.selected_surfaces {
-                actions.surface_actions.push(SurfaceAction::Duplicate { idx });
+    // Keyboard shortcuts (data-driven via keymap)
+    if !data.keyboard_learn_active {
+        use crate::keymap::{KeyCombo, KeyTarget, ActionId, collect_pressed_keys};
+        let pressed = collect_pressed_keys(ui.ctx());
+        for (key, mods) in &pressed {
+            let combo = KeyCombo::from_egui(*key, mods);
+            if let Some(target) = data.keymap_bindings.get(&combo) {
+                match target {
+                    KeyTarget::Action(ActionId::ToolSelect) => state.tool = DrawingTool::Select,
+                    KeyTarget::Action(ActionId::ToolRectangle) => state.tool = DrawingTool::Rectangle,
+                    KeyTarget::Action(ActionId::ToolPolygon) => state.tool = DrawingTool::Polygon,
+                    KeyTarget::Action(ActionId::ToolCircle) => state.tool = DrawingTool::Circle,
+                    KeyTarget::Action(ActionId::ClearDrawing) => {
+                        state.polygon_verts.clear();
+                        state.rect_start = None;
+                        state.circle_center = None;
+                    }
+                    KeyTarget::Action(ActionId::DeleteSurface) => {
+                        if !state.selected_surfaces.is_empty() {
+                            let indices: Vec<usize> = state.selected_surfaces.iter().copied().rev().collect();
+                            for idx in indices {
+                                actions.surface_actions.push(SurfaceAction::Remove { idx });
+                            }
+                            state.selected_surfaces.clear();
+                        }
+                    }
+                    KeyTarget::Action(ActionId::DuplicateSurface) => {
+                        for &idx in &state.selected_surfaces {
+                            actions.surface_actions.push(SurfaceAction::Duplicate { idx });
+                        }
+                    }
+                    KeyTarget::Action(ActionId::FlipHorizontal) => {
+                        for &idx in &state.selected_surfaces {
+                            actions.surface_actions.push(SurfaceAction::FlipHorizontal { idx });
+                        }
+                    }
+                    KeyTarget::Action(ActionId::FlipVertical) => {
+                        for &idx in &state.selected_surfaces {
+                            actions.surface_actions.push(SurfaceAction::FlipVertical { idx });
+                        }
+                    }
+                    KeyTarget::Action(ActionId::CombineSurfaces) => {
+                        if state.selected_surfaces.len() >= 2 {
+                            let indices: Vec<usize> = state.selected_surfaces.iter().copied().collect();
+                            actions.surface_actions.push(SurfaceAction::Combine { indices });
+                            state.selected_surfaces.clear();
+                        }
+                    }
+                    _ => {}
+                }
             }
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::H)) {
-            for &idx in &state.selected_surfaces {
-                actions.surface_actions.push(SurfaceAction::FlipHorizontal { idx });
-            }
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::V)) {
-            for &idx in &state.selected_surfaces {
-                actions.surface_actions.push(SurfaceAction::FlipVertical { idx });
-            }
-        }
-        if state.selected_surfaces.len() >= 2 && ui.input(|i| i.key_pressed(egui::Key::G)) {
-            let indices: Vec<usize> = state.selected_surfaces.iter().copied().collect();
-            actions.surface_actions.push(SurfaceAction::Combine { indices });
-            state.selected_surfaces.clear();
         }
     }
 

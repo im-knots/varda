@@ -297,40 +297,107 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                                     AutoTransitionAction::SetTrigger(true)));
                                             }
                                         });
+                                        let any_learn = data.midi_learn_active || data.keyboard_learn_active;
                                         ui.horizontal(|ui| {
                                             ui.label("Play:");
                                             let mut val = at.play_duration_value as f32;
                                             let max = if at.play_duration_is_beats { 128.0 } else { 300.0 };
-                                            if ui.add(egui::Slider::new(&mut val, 0.5..=max)
-                                                .logarithmic(true)
-                                                .suffix(if at.play_duration_is_beats { " beats" } else { " sec" })
-                                            ).changed() {
-                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                    AutoTransitionAction::SetPlayDuration(val as f64)));
+                                            let play_path = format!("ch/{}/deck/{}/at/play_duration", ch_idx, deck_idx);
+                                            let slider_rect;
+                                            if any_learn {
+                                                let inner = ui.scope(|ui| {
+                                                    ui.disable();
+                                                    ui.add(egui::Slider::new(&mut val, 0.5..=max)
+                                                        .logarithmic(true)
+                                                        .suffix(if at.play_duration_is_beats { " beats" } else { " sec" }))
+                                                });
+                                                slider_rect = inner.inner.rect;
+                                            } else {
+                                                let resp = ui.add(egui::Slider::new(&mut val, 0.5..=max)
+                                                    .logarithmic(true)
+                                                    .suffix(if at.play_duration_is_beats { " beats" } else { " sec" }));
+                                                if resp.changed() {
+                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                        AutoTransitionAction::SetPlayDuration(val as f64)));
+                                                }
+                                                slider_rect = resp.rect;
                                             }
-                                            if ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
-                                                .on_hover_text("Toggle beats/seconds").clicked()
-                                            {
-                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                    AutoTransitionAction::TogglePlayDurationUnit));
+                                            if data.midi_learn_active {
+                                                let is_target = data.midi_learn_target.as_deref() == Some(play_path.as_str());
+                                                if is_target { widgets::draw_midi_learn_selected(ui, slider_rect); }
+                                                else { widgets::draw_midi_learn_glow(ui, slider_rect); }
+                                                let click_id = ui.id().with(("midi_learn_at_play", ch_idx, deck_idx));
+                                                if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
+                                                    actions.midi_learn_select = Some(play_path.clone());
+                                                }
+                                            }
+                                            if data.keyboard_learn_active {
+                                                let is_target = data.keyboard_learn_target.as_deref() == Some(play_path.as_str());
+                                                if is_target { widgets::draw_keyboard_learn_selected(ui, slider_rect); }
+                                                else { widgets::draw_keyboard_learn_glow(ui, slider_rect); }
+                                                let click_id = ui.id().with(("kb_learn_at_play", ch_idx, deck_idx));
+                                                if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
+                                                    actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(play_path));
+                                                }
+                                            }
+                                            if !any_learn {
+                                                if ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
+                                                    .on_hover_text("Toggle beats/seconds").clicked()
+                                                {
+                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                        AutoTransitionAction::TogglePlayDurationUnit));
+                                                }
                                             }
                                         });
                                         ui.horizontal(|ui| {
                                             ui.label("Trans:");
                                             let mut val = at.transition_duration_value as f32;
                                             let max = if at.transition_duration_is_beats { 32.0 } else { 30.0 };
-                                            if ui.add(egui::Slider::new(&mut val, 0.1..=max)
-                                                .logarithmic(true)
-                                                .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" })
-                                            ).changed() {
-                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                    AutoTransitionAction::SetTransitionDuration(val as f64)));
+                                            let trans_path = format!("ch/{}/deck/{}/at/trans_duration", ch_idx, deck_idx);
+                                            let slider_rect;
+                                            if any_learn {
+                                                let inner = ui.scope(|ui| {
+                                                    ui.disable();
+                                                    ui.add(egui::Slider::new(&mut val, 0.1..=max)
+                                                        .logarithmic(true)
+                                                        .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" }))
+                                                });
+                                                slider_rect = inner.inner.rect;
+                                            } else {
+                                                let resp = ui.add(egui::Slider::new(&mut val, 0.1..=max)
+                                                    .logarithmic(true)
+                                                    .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" }));
+                                                if resp.changed() {
+                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                        AutoTransitionAction::SetTransitionDuration(val as f64)));
+                                                }
+                                                slider_rect = resp.rect;
                                             }
-                                            if ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
-                                                .on_hover_text("Toggle beats/seconds").clicked()
-                                            {
-                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                    AutoTransitionAction::ToggleTransitionDurationUnit));
+                                            if data.midi_learn_active {
+                                                let is_target = data.midi_learn_target.as_deref() == Some(trans_path.as_str());
+                                                if is_target { widgets::draw_midi_learn_selected(ui, slider_rect); }
+                                                else { widgets::draw_midi_learn_glow(ui, slider_rect); }
+                                                let click_id = ui.id().with(("midi_learn_at_trans", ch_idx, deck_idx));
+                                                if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
+                                                    actions.midi_learn_select = Some(trans_path.clone());
+                                                }
+                                            }
+                                            if data.keyboard_learn_active {
+                                                let is_target = data.keyboard_learn_target.as_deref() == Some(trans_path.as_str());
+                                                if is_target { widgets::draw_keyboard_learn_selected(ui, slider_rect); }
+                                                else { widgets::draw_keyboard_learn_glow(ui, slider_rect); }
+                                                let click_id = ui.id().with(("kb_learn_at_trans", ch_idx, deck_idx));
+                                                if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
+                                                    actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(trans_path));
+                                                }
+                                            }
+                                            if !any_learn {
+                                                if ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
+                                                    .on_hover_text("Toggle beats/seconds").clicked()
+                                                {
+                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
+                                                        AutoTransitionAction::ToggleTransitionDurationUnit));
+                                                }
                                             }
                                         });
                                         ui.horizontal(|ui| {
@@ -478,6 +545,9 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
                                         &format!("ch{}_deck{}", ch_idx, deck_idx),
+                                        data.keyboard_learn_active,
+                                        &mut actions.keyboard_learn_select,
+                                        data.keyboard_learn_target.as_deref(),
                                     );
                                     ui.add_space(4.0);
                                     if ui.button("Reset").clicked() {
@@ -554,6 +624,9 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
                                         &format!("ch{}_deck{}_fx{}", ch_copy, deck_copy, eff_idx_copy),
+                                        data.keyboard_learn_active,
+                                        &mut actions.keyboard_learn_select,
+                                        data.keyboard_learn_target.as_deref(),
                                     );
                                 }
                             });

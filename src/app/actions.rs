@@ -12,11 +12,36 @@ impl VardaApp {
     /// Apply UI-driven engine state changes: MIDI learn, notifications.
     /// Selection and layout state is handled by the UI consumer (UIRunner).
     pub fn apply_ui_actions(&mut self, ui_actions: &ui::UIActions) {
+        // MIDI learn
         if ui_actions.midi_learn_toggle {
             self.midi_mappings.toggle_learn();
+            // Mutually exclusive: exit keyboard learn when entering MIDI learn
+            if self.midi_mappings.learn_mode {
+                self.keymap.cancel_learn();
+            }
         }
         if let Some(ref path) = ui_actions.midi_learn_select {
             self.midi_mappings.select_learn_target(path.clone());
+        }
+
+        // Keyboard learn
+        if ui_actions.keyboard_learn_toggle {
+            self.keymap.toggle_learn();
+            // Mutually exclusive: exit MIDI learn when entering keyboard learn
+            if self.keymap.learn_mode {
+                self.midi_mappings.cancel_learn();
+            }
+        }
+        if let Some(ref target) = ui_actions.keyboard_learn_select {
+            self.keymap.select_learn_target(target.clone());
+        }
+        if let Some(ref combo) = ui_actions.keyboard_learn_bind {
+            self.keymap.process_learn(combo.clone());
+        }
+
+        // Keyboard param toggle
+        if let Some(ref path) = ui_actions.keyboard_param_toggle {
+            crate::keymap::apply_keyboard_toggle_param(&mut self.mixer, path);
         }
 
         let mut dismissals = ui_actions.notifications_to_dismiss.clone();

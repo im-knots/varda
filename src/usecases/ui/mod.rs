@@ -358,6 +358,12 @@ pub struct UIData {
     pub midi_learn_active: bool,
     /// The parameter path currently waiting for MIDI learn
     pub midi_learn_target: Option<String>,
+    /// Whether keyboard learn mode is active
+    pub keyboard_learn_active: bool,
+    /// Display string for current keyboard learn target
+    pub keyboard_learn_target: Option<String>,
+    /// All current keybindings (read-only snapshot for dispatch + settings panel)
+    pub keymap_bindings: std::collections::HashMap<crate::keymap::KeyCombo, crate::keymap::KeyTarget>,
     /// Available transition shader names (from registry)
     pub transition_names: Vec<String>,
     /// Currently active transition name, if any
@@ -685,6 +691,14 @@ pub struct UIActions {
     pub midi_learn_toggle: bool,
     /// MIDI learn: select a parameter as learn target (in learn mode, clicking a param)
     pub midi_learn_select: Option<String>,
+    /// Keyboard learn: toggle learn mode on/off
+    pub keyboard_learn_toggle: bool,
+    /// Keyboard learn: select a target (Action or ParamPath)
+    pub keyboard_learn_select: Option<crate::keymap::KeyTarget>,
+    /// Keyboard learn: bind a key combo to current target
+    pub keyboard_learn_bind: Option<crate::keymap::KeyCombo>,
+    /// Keyboard param toggle: toggle a param via keyboard shortcut
+    pub keyboard_param_toggle: Option<String>,
     /// Set a transition shader by name (None = clear/use opacity crossfade)
     pub set_transition: Option<Option<String>>,
     /// Select a deck for detail view in bottom bar (ch_idx, deck_idx)
@@ -882,6 +896,10 @@ impl UIActions {
             channel_updates: Vec::new(),
             midi_learn_toggle: false,
             midi_learn_select: None,
+            keyboard_learn_toggle: false,
+            keyboard_learn_select: None,
+            keyboard_learn_bind: None,
+            keyboard_param_toggle: None,
             set_transition: None,
             select_deck: None,
             select_channel: None,
@@ -1187,6 +1205,9 @@ impl UIData {
             auto_crossfade_progress: 0.0,
             midi_learn_active: false,
             midi_learn_target: None,
+            keyboard_learn_active: false,
+            keyboard_learn_target: None,
+            keymap_bindings: std::collections::HashMap::new(),
             transition_names: vec!["fade".to_string()],
             active_transition_name: None,
             selected_deck: Some((0, 0)),

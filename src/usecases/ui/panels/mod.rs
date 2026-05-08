@@ -81,18 +81,82 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
         .exact_height(28.0)
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.add_enabled_ui(data.can_undo, |ui| {
-                    if ui.button("↩ Undo").on_hover_text("Undo (⌘Z)").clicked() {
+                let any_learn = data.midi_learn_active || data.keyboard_learn_active;
+                // Undo / Redo / Save — in learn mode: show glow + select target on click.
+                // Outside learn mode: normal action on click.
+                {
+                    let undo_enabled = if any_learn { true } else { data.can_undo };
+                    let undo_resp = ui.add_enabled(undo_enabled, egui::Button::new("↩ Undo")).on_hover_text("Undo (⌘Z)");
+                    if any_learn {
+                        if data.midi_learn_active {
+                            let is_target = data.midi_learn_target.as_deref() == Some("action/undo");
+                            if is_target { super::widgets::draw_midi_learn_selected(ui, undo_resp.rect); }
+                            else { super::widgets::draw_midi_learn_glow(ui, undo_resp.rect); }
+                            if undo_resp.clicked() { actions.midi_learn_select = Some("action/undo".to_string()); }
+                        } else {
+                            let is_target = data.keyboard_learn_target.as_deref() == Some("Undo");
+                            if is_target { super::widgets::draw_keyboard_learn_selected(ui, undo_resp.rect); }
+                            else { super::widgets::draw_keyboard_learn_glow(ui, undo_resp.rect); }
+                            if undo_resp.clicked() { actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Undo)); }
+                        }
+                    } else if undo_resp.clicked() {
                         actions.undo_requested = true;
                     }
-                });
-                ui.add_enabled_ui(data.can_redo, |ui| {
-                    if ui.button("↪ Redo").on_hover_text("Redo (⌘⇧Z)").clicked() {
+                }
+                {
+                    let redo_enabled = if any_learn { true } else { data.can_redo };
+                    let redo_resp = ui.add_enabled(redo_enabled, egui::Button::new("↪ Redo")).on_hover_text("Redo (⌘⇧Z)");
+                    if any_learn {
+                        if data.midi_learn_active {
+                            let is_target = data.midi_learn_target.as_deref() == Some("action/redo");
+                            if is_target { super::widgets::draw_midi_learn_selected(ui, redo_resp.rect); }
+                            else { super::widgets::draw_midi_learn_glow(ui, redo_resp.rect); }
+                            if redo_resp.clicked() { actions.midi_learn_select = Some("action/redo".to_string()); }
+                        } else {
+                            let is_target = data.keyboard_learn_target.as_deref() == Some("Redo");
+                            if is_target { super::widgets::draw_keyboard_learn_selected(ui, redo_resp.rect); }
+                            else { super::widgets::draw_keyboard_learn_glow(ui, redo_resp.rect); }
+                            if redo_resp.clicked() { actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Redo)); }
+                        }
+                    } else if redo_resp.clicked() {
                         actions.redo_requested = true;
                     }
-                });
-                if ui.button("💾 Save").on_hover_text("Save workspace (⌘S)").clicked() {
-                    actions.save_requested = true;
+                }
+                {
+                    let save_resp = ui.button("💾 Save").on_hover_text("Save workspace (⌘S)");
+                    if any_learn {
+                        if data.midi_learn_active {
+                            let is_target = data.midi_learn_target.as_deref() == Some("action/save");
+                            if is_target { super::widgets::draw_midi_learn_selected(ui, save_resp.rect); }
+                            else { super::widgets::draw_midi_learn_glow(ui, save_resp.rect); }
+                            if save_resp.clicked() { actions.midi_learn_select = Some("action/save".to_string()); }
+                        } else {
+                            let is_target = data.keyboard_learn_target.as_deref() == Some("Save");
+                            if is_target { super::widgets::draw_keyboard_learn_selected(ui, save_resp.rect); }
+                            else { super::widgets::draw_keyboard_learn_glow(ui, save_resp.rect); }
+                            if save_resp.clicked() { actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Save)); }
+                        }
+                    } else if save_resp.clicked() {
+                        actions.save_requested = true;
+                    }
+                }
+
+                // Learn mode indicators
+                if data.midi_learn_active {
+                    let text = egui::RichText::new("🎹 MIDI LEARN")
+                        .color(egui::Color32::from_rgb(180, 100, 255))
+                        .strong();
+                    if ui.button(text).on_hover_text("Click to exit MIDI learn mode").clicked() {
+                        actions.midi_learn_toggle = true;
+                    }
+                }
+                if data.keyboard_learn_active {
+                    let text = egui::RichText::new("⌨ KB LEARN")
+                        .color(egui::Color32::from_rgb(255, 165, 0))
+                        .strong();
+                    if ui.button(text).on_hover_text("Click to exit keyboard learn mode").clicked() {
+                        actions.keyboard_learn_toggle = true;
+                    }
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -219,19 +283,48 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
     // === GLOBAL RIGHT-CLICK: Toggle MIDI Learn Mode ===
     handle_midi_learn_popup(ctx, data, &mut actions);
 
-    // === KEYBOARD SHORTCUTS (global) ===
-    if ctx.input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z)) {
-        actions.undo_requested = true;
-    }
-    if ctx.input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Z)) {
-        actions.redo_requested = true;
-    }
-    if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
-        actions.save_requested = true;
-    }
-    if !ctx.wants_keyboard_input() {
-        if ctx.input(|i| i.key_pressed(egui::Key::L)) {
-            actions.toggle_library_panel = true;
+    // === KEYBOARD SHORTCUTS (data-driven via keymap) ===
+    {
+        use crate::keymap::{KeyCombo, KeyTarget, ActionId, collect_pressed_keys};
+        let pressed = collect_pressed_keys(ctx);
+
+        if data.keyboard_learn_active {
+            // In learn mode: intercept key presses for binding, don't dispatch normally
+            if let Some((key, mods)) = pressed.first() {
+                let combo = KeyCombo::from_egui(*key, mods);
+                actions.keyboard_learn_bind = Some(combo);
+            }
+        } else {
+            // Normal dispatch: look up each pressed key in the keymap
+            for (key, mods) in &pressed {
+                let combo = KeyCombo::from_egui(*key, mods);
+                if let Some(target) = data.keymap_bindings.get(&combo) {
+                    match target {
+                        KeyTarget::Action(ActionId::Undo) => actions.undo_requested = true,
+                        KeyTarget::Action(ActionId::Redo) => actions.redo_requested = true,
+                        KeyTarget::Action(ActionId::Save) => actions.save_requested = true,
+                        KeyTarget::Action(ActionId::ToggleLibrary) => {
+                            if !ctx.wants_keyboard_input() {
+                                actions.toggle_library_panel = true;
+                            }
+                        }
+                        KeyTarget::Action(ActionId::ToggleStageEditor) => {
+                            actions.toggle_stage_editor = true;
+                        }
+                        KeyTarget::Action(ActionId::ToggleMidiLearn) => {
+                            actions.midi_learn_toggle = true;
+                        }
+                        KeyTarget::Action(ActionId::ToggleKeyboardLearn) => {
+                            actions.keyboard_learn_toggle = true;
+                        }
+                        KeyTarget::ParamPath(path) => {
+                            actions.keyboard_param_toggle = Some(path.clone());
+                        }
+                        // Stage-context actions are handled in stage.rs
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -518,8 +611,17 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(200.0);
                     if ui.button(label).clicked() {
                         actions.midi_learn_toggle = true;
+                        ctx.memory_mut(|mem| {
+                            mem.data.remove::<egui::Pos2>(popup_id);
+                            mem.data.remove::<bool>(popup_fresh_id);
+                        });
+                    }
+                    let kb_label = if data.keyboard_learn_active { "⌨ Exit Keyboard Learn" } else { "⌨ Enter Keyboard Learn" };
+                    if ui.button(kb_label).clicked() {
+                        actions.keyboard_learn_toggle = true;
                         ctx.memory_mut(|mem| {
                             mem.data.remove::<egui::Pos2>(popup_id);
                             mem.data.remove::<bool>(popup_fresh_id);

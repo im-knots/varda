@@ -140,7 +140,8 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         });
                         // Render slider — disabled in learn mode
                         let slider_rect;
-                        if data.midi_learn_active {
+                        let any_learn = data.midi_learn_active || data.keyboard_learn_active;
+                        if any_learn {
                             let inner = ui.scope(|ui| {
                                 ui.disable();
                                 let slider = egui::Slider::new(&mut opacities[ch_idx], 0.0..=1.0)
@@ -171,6 +172,21 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                 actions.midi_learn_select = Some(path);
                             }
                         }
+                        // Keyboard learn: orange glow + click overlay
+                        if data.keyboard_learn_active {
+                            let path = format!("ch/{}/opacity", ch_idx);
+                            let is_target = data.keyboard_learn_target.as_deref() == Some(path.as_str());
+                            if is_target {
+                                widgets::draw_keyboard_learn_selected(ui, slider_rect);
+                            } else {
+                                widgets::draw_keyboard_learn_glow(ui, slider_rect);
+                            }
+                            let click_id = ui.id().with(("kb_learn_ch_opacity", ch_idx));
+                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            if click_resp.clicked() {
+                                actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
+                            }
+                        }
                     });
                 }
             });
@@ -197,7 +213,8 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                     ui.label(egui::RichText::new(name_a).small().color(color_a));
                     let mut crossfader = data.crossfader;
                     let slider_rect;
-                    if data.midi_learn_active {
+                    let any_learn = data.midi_learn_active || data.keyboard_learn_active;
+                    if any_learn {
                         let inner = ui.scope(|ui| {
                             ui.disable();
                             let slider = egui::Slider::new(&mut crossfader, 0.0..=1.0)
@@ -225,6 +242,19 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
                             actions.midi_learn_select = Some("crossfader".to_string());
+                        }
+                    }
+                    if data.keyboard_learn_active {
+                        let is_target = data.keyboard_learn_target.as_deref() == Some("crossfader");
+                        if is_target {
+                            widgets::draw_keyboard_learn_selected(ui, slider_rect);
+                        } else {
+                            widgets::draw_keyboard_learn_glow(ui, slider_rect);
+                        }
+                        let click_id = ui.id().with("kb_learn_crossfader");
+                        let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                        if click_resp.clicked() {
+                            actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath("crossfader".to_string()));
                         }
                     }
                     ui.label(egui::RichText::new(name_b).small().color(color_b));
@@ -508,6 +538,19 @@ pub(super) fn render_deck_thumbnail(
                 actions.midi_learn_select = Some(trigger_path);
             }
         }
+        // Keyboard learn mode: orange glow on deck card
+        if data.keyboard_learn_active {
+            let trigger_path = format!("ch/{}/deck/{}/trigger", ch_idx, idx);
+            let is_target = data.keyboard_learn_target.as_deref() == Some(trigger_path.as_str());
+            if is_target {
+                widgets::draw_keyboard_learn_selected(ui, card_rect);
+            } else {
+                widgets::draw_keyboard_learn_glow(ui, card_rect);
+            }
+            if card_resp.clicked() {
+                actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(trigger_path));
+            }
+        }
 
         // Start drag: set payload for deck move between channels
         if card_resp.drag_started() {
@@ -608,14 +651,15 @@ pub(super) fn render_deck_thumbnail(
         }
 
         // Click on card to select deck (only when not in learn mode — learn mode click selects trigger)
-        if !data.midi_learn_active && card_resp.clicked() {
+        if !data.midi_learn_active && !data.keyboard_learn_active && card_resp.clicked() {
             actions.select_deck = Some((ch_idx, idx));
         }
 
         // Vertical opacity slider — use a child ui placed at the slider rect
         let mut slider_ui = ui.new_child(egui::UiBuilder::new().max_rect(slider_rect));
         let op_slider_rect;
-        if data.midi_learn_active {
+        let any_learn = data.midi_learn_active || data.keyboard_learn_active;
+        if any_learn {
             let inner = slider_ui.scope(|ui| {
                 ui.disable();
                 let slider = egui::Slider::new(&mut opacity, 0.0..=1.0)
@@ -643,6 +687,20 @@ pub(super) fn render_deck_thumbnail(
             let click_resp = slider_ui.interact(op_slider_rect, click_id, egui::Sense::click());
             if click_resp.clicked() {
                 actions.midi_learn_select = Some(opacity_path);
+            }
+        }
+        if data.keyboard_learn_active {
+            let opacity_path = format!("ch/{}/deck/{}/opacity", ch_idx, idx);
+            let is_target = data.keyboard_learn_target.as_deref() == Some(opacity_path.as_str());
+            if is_target {
+                widgets::draw_keyboard_learn_selected(&slider_ui, op_slider_rect);
+            } else {
+                widgets::draw_keyboard_learn_glow(&slider_ui, op_slider_rect);
+            }
+            let click_id = slider_ui.id().with(("kb_learn_deck_opacity", ch_idx, idx));
+            let click_resp = slider_ui.interact(op_slider_rect, click_id, egui::Sense::click());
+            if click_resp.clicked() {
+                actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(opacity_path));
             }
         }
 
@@ -679,16 +737,49 @@ pub(super) fn render_deck_thumbnail(
             egui::vec2(card_width, button_row_h),
         );
         let mut btn_ui = ui.new_child(egui::UiBuilder::new().max_rect(btn_rect));
+        let any_learn = data.midi_learn_active || data.keyboard_learn_active;
         btn_ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if ui.selectable_label(mute, egui::RichText::new("M").small()).clicked() {
+            let mute_resp = ui.selectable_label(mute, egui::RichText::new("M").small());
+            if any_learn {
+                let mute_path = format!("ch/{}/deck/{}/mute", ch_idx, idx);
+                if data.midi_learn_active {
+                    let is_target = data.midi_learn_target.as_deref() == Some(mute_path.as_str());
+                    if is_target { widgets::draw_midi_learn_selected(ui, mute_resp.rect); }
+                    else { widgets::draw_midi_learn_glow(ui, mute_resp.rect); }
+                    if mute_resp.clicked() { actions.midi_learn_select = Some(mute_path.clone()); }
+                }
+                if data.keyboard_learn_active {
+                    let is_target = data.keyboard_learn_target.as_deref() == Some(mute_path.as_str());
+                    if is_target { widgets::draw_keyboard_learn_selected(ui, mute_resp.rect); }
+                    else { widgets::draw_keyboard_learn_glow(ui, mute_resp.rect); }
+                    if mute_resp.clicked() { actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(mute_path)); }
+                }
+            } else if mute_resp.clicked() {
                 mute = !mute;
             }
-            if ui.selectable_label(solo, egui::RichText::new("S").small()).clicked() {
+            let solo_resp = ui.selectable_label(solo, egui::RichText::new("S").small());
+            if any_learn {
+                let solo_path = format!("ch/{}/deck/{}/solo", ch_idx, idx);
+                if data.midi_learn_active {
+                    let is_target = data.midi_learn_target.as_deref() == Some(solo_path.as_str());
+                    if is_target { widgets::draw_midi_learn_selected(ui, solo_resp.rect); }
+                    else { widgets::draw_midi_learn_glow(ui, solo_resp.rect); }
+                    if solo_resp.clicked() { actions.midi_learn_select = Some(solo_path.clone()); }
+                }
+                if data.keyboard_learn_active {
+                    let is_target = data.keyboard_learn_target.as_deref() == Some(solo_path.as_str());
+                    if is_target { widgets::draw_keyboard_learn_selected(ui, solo_resp.rect); }
+                    else { widgets::draw_keyboard_learn_glow(ui, solo_resp.rect); }
+                    if solo_resp.clicked() { actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(solo_path)); }
+                }
+            } else if solo_resp.clicked() {
                 solo = !solo;
             }
-            if ui.small_button(egui::RichText::new("x").small()).clicked() {
-                actions.deck_to_remove = Some((ch_idx, idx));
+            if !any_learn {
+                if ui.small_button(egui::RichText::new("x").small()).clicked() {
+                    actions.deck_to_remove = Some((ch_idx, idx));
+                }
             }
         });
 

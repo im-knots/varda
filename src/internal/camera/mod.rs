@@ -275,7 +275,7 @@ impl CameraManager {
                 if frame_count % 300 == 0 {
                     let elapsed = start.elapsed().as_secs_f64();
                     let fps = frame_count as f64 / elapsed;
-                    log::info!("Camera {}: {:.1} fps ({} frames in {:.1}s, fmt={:?})",
+                    log::debug!("Camera {}: {:.1} fps ({} frames in {:.1}s, fmt={:?})",
                         cam_id, fps, frame_count, elapsed, fmt);
                 }
             }

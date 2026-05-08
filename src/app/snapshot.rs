@@ -522,6 +522,9 @@ pub(crate) fn build_ui_data(
         auto_crossfade_progress: engine.mixer.auto_crossfade_progress,
         midi_learn_active: engine.midi.learn_active,
         midi_learn_target: engine.midi.learn_target,
+        keyboard_learn_active: app.keymap.learn_mode,
+        keyboard_learn_target: app.keymap.learn_target.as_ref().map(|t| format!("{}", t)),
+        keymap_bindings: app.keymap.bindings.clone(),
         transition_names: engine.mixer.transition_names,
         active_transition_name: engine.mixer.active_transition_name,
         // UI layout/selection state — owned by the UI consumer, not the engine
