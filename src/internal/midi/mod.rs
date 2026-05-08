@@ -233,7 +233,7 @@ impl MidiDeviceManager {
         Ok(mgr)
     }
 
-    /// Load user controller profiles from a directory (e.g. `.varda/controllers/`).
+    /// Load user controller profiles from a directory (e.g. `.varda/controller-profiles/`).
     pub fn load_user_profiles(&mut self, dir: &std::path::Path) {
         self.profile_registry.load_user_profiles(dir);
     }

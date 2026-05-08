@@ -331,6 +331,22 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     log::info!("Library drop (deferred): SRT '{}' ({:?}) -> ch{}", url, mode, ch_idx);
                     actions.srt_to_add = Some((ch_idx, url, mode));
                 }
+
+                // Deck preset dropped on a channel
+                let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
+                let deck_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(deck_preset_key));
+                if let Some(preset_idx) = deck_preset_idx {
+                    log::info!("Library drop (deferred): deck preset {} -> ch{}", preset_idx, ch_idx);
+                    actions.deck_preset_to_add = Some((ch_idx, preset_idx));
+                }
+            }
+
+            // Channel preset dropped anywhere (creates a new channel)
+            let ch_preset_key = egui::Id::new("__lib_dnd_ch_preset_idx");
+            let ch_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(ch_preset_key));
+            if let Some(preset_idx) = ch_preset_idx {
+                log::info!("Library drop (deferred): channel preset {}", preset_idx);
+                actions.channel_preset_to_add = Some(preset_idx);
             }
 
             if let Some((target_type, ch_idx, deck_idx)) = hover_fx {
@@ -365,6 +381,8 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 mem.data.remove::<String>(egui::Id::new("__lib_dnd_ndi_name"));
                 mem.data.remove::<String>(egui::Id::new("__lib_dnd_syph_name"));
                 mem.data.remove::<(String, crate::srt::SrtMode)>(egui::Id::new("__lib_dnd_srt_config"));
+                mem.data.remove::<usize>(egui::Id::new("__lib_dnd_deck_preset_idx"));
+                mem.data.remove::<usize>(egui::Id::new("__lib_dnd_ch_preset_idx"));
             });
         }
     }

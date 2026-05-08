@@ -1,0 +1,169 @@
+{
+  "name": "Ch 0",
+  "opacity": 1.0,
+  "blend_mode": "normal",
+  "decks": [
+    {
+      "name": "turing_patterns",
+      "source": {
+        "type": "Shader",
+        "path": "shaders/turing_patterns.fs",
+        "params": {
+          "kill_rate": 0.062,
+          "sim_speed": 1.1,
+          "perturbation": 0.0,
+          "bg_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "growth_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "seed_size": 0.05,
+          "seed": 0.78,
+          "feed_rate": 0.038
+        }
+      },
+      "effects": [
+        {
+          "path": "shaders/ripple.fs",
+          "enabled": true,
+          "params": {
+            "frequency": 7.0,
+            "decay": 0.0,
+            "anim_speed": 0.4,
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "ripple_amount": 0.02
+          }
+        },
+        {
+          "path": "shaders/edge_glow.fs",
+          "enabled": true,
+          "params": {
+            "show_original": true,
+            "edge_strength": 3.0,
+            "glow_amount": 1.0,
+            "glow_color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        }
+      ],
+      "opacity": 1.0,
+      "blend_mode": "normal",
+      "mute": false,
+      "solo": false,
+      "z_index": 0
+    },
+    {
+      "name": "voronoi",
+      "source": {
+        "type": "Shader",
+        "path": "shaders/voronoi.fs",
+        "params": {
+          "anim_speed": 1.0,
+          "color1": [
+            0.1,
+            0.4,
+            0.9,
+            1.0
+          ],
+          "color2": [
+            0.9,
+            0.2,
+            0.3,
+            1.0
+          ],
+          "edge_width": 0.0,
+          "style": 0.0,
+          "edge_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "cell_count": 9.5
+        }
+      },
+      "effects": [
+        {
+          "path": "shaders/mirror_kaleidoscope.fs",
+          "enabled": true,
+          "params": {
+            "segments": 4.0,
+            "rotation": 0.0,
+            "center_x": 0.5,
+            "zoom": 1.0,
+            "center_y": 0.5
+          }
+        }
+      ],
+      "opacity": 1.0,
+      "blend_mode": "multiply",
+      "mute": false,
+      "solo": false,
+      "z_index": 0
+    },
+    {
+      "name": "📹 FaceTime HD Camera",
+      "source": {
+        "type": "Camera",
+        "name": "FaceTime HD Camera"
+      },
+      "effects": [
+        {
+          "path": "shaders/edge_detect.fs",
+          "enabled": true,
+          "params": {
+            "use_source_color": 0.0,
+            "edge_color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "bg_opacity": 0.0,
+            "sensitivity": 5.0
+          }
+        }
+      ],
+      "opacity": 1.0,
+      "blend_mode": "multiply",
+      "mute": false,
+      "solo": false,
+      "z_index": 0
+    }
+  ],
+  "effects": [
+    {
+      "path": "shaders/kaleidoscope.fs",
+      "enabled": true,
+      "params": {
+        "segments": 2.0,
+        "center_y": 0.5,
+        "zoom": 1.0,
+        "rotation": 0.0,
+        "center_x": 0.5
+      }
+    },
+    {
+      "path": "shaders/hue_shift.fs",
+      "enabled": true,
+      "params": {
+        "hue_shift": 0.55,
+        "auto_cycle": false,
+        "saturation": 1.0,
+        "cycle_speed": 0.5
+      }
+    }
+  ]
+}

@@ -616,6 +616,8 @@ pub(crate) fn build_ui_data(
         can_undo: false,
         can_redo: false,
         pending_deck_loads: 0,
+        deck_presets: app.preset_library.deck_presets.iter().map(|p| p.name.clone()).collect(),
+        channel_presets: app.preset_library.channel_presets.iter().map(|p| p.name.clone()).collect(),
     }
 }
 

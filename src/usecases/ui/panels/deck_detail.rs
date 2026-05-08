@@ -61,8 +61,40 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
     };
 
     let accent = channel_color(ch_idx);
-    ui.label(egui::RichText::new(format!("{} / Deck {} — {}", ch.name, deck_idx + 1, deck.name))
-        .strong().color(accent));
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(format!("{} / Deck {} — {}", ch.name, deck_idx + 1, deck.name))
+            .strong().color(accent));
+
+        // Save as preset — inline name prompt
+        let prompt_id = egui::Id::new("deck_preset_name_prompt");
+        let name_id = egui::Id::new("deck_preset_name_input");
+        let is_prompting: bool = ui.data(|d| d.get_temp(prompt_id)).unwrap_or(false);
+
+        if is_prompting {
+            let cleared_id = egui::Id::new("deck_preset_name_cleared");
+            let was_cleared: bool = ui.data(|d| d.get_temp(cleared_id)).unwrap_or(false);
+            let mut name: String = ui.data(|d| d.get_temp(name_id)).unwrap_or_else(|| deck.name.clone());
+            let response = ui.text_edit_singleline(&mut name);
+            if response.gained_focus() && !was_cleared {
+                name.clear();
+                ui.data_mut(|d| d.insert_temp(cleared_id, true));
+            }
+            if ui.small_button("✓ Save").clicked() && !name.is_empty() {
+                actions.save_deck_preset = Some((ch_idx, deck_idx, name.clone()));
+                ui.data_mut(|d| d.insert_temp(prompt_id, false));
+            }
+            if ui.small_button("✕").clicked() {
+                ui.data_mut(|d| d.insert_temp(prompt_id, false));
+            }
+            ui.data_mut(|d| d.insert_temp(name_id, name));
+        } else if ui.small_button("💾 Save Preset").clicked() {
+            ui.data_mut(|d| {
+                d.insert_temp(prompt_id, true);
+                d.remove_temp::<String>(name_id);
+                d.insert_temp(egui::Id::new("deck_preset_name_cleared"), false);
+            });
+        }
+    });
 
     // Horizontal columns: Preview | Generator | Effect 1 | Effect 2 | ... | Add Effect
     egui::ScrollArea::horizontal().id_salt("selected_deck_hscroll").show(ui, |ui| {

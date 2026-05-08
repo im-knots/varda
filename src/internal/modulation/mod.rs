@@ -600,4 +600,70 @@ mod tests {
         let val = source.calculate(0.0, 0.01, &audio, 0.0);
         assert_eq!(val, 0.0, "Below noise gate should be silent");
     }
+
+    // ── config_eq tests ──────────────────────────────────────────────
+
+    #[test]
+    fn config_eq_lfo_same() {
+        let a = ModulationSource::sine_lfo(2.0);
+        let b = ModulationSource::sine_lfo(2.0);
+        assert!(a.config_eq(&b));
+    }
+
+    #[test]
+    fn config_eq_lfo_different_freq() {
+        let a = ModulationSource::sine_lfo(2.0);
+        let b = ModulationSource::sine_lfo(3.0);
+        assert!(!a.config_eq(&b));
+    }
+
+    #[test]
+    fn config_eq_adsr_ignores_runtime() {
+        let a = ModulationSource::ADSR {
+            attack: 0.1, decay: 0.2, sustain: 0.7, release: 0.3,
+            stage: ADSRStage::Idle, stage_time: 0.0, gate: false, current_level: 0.0,
+        };
+        let b = ModulationSource::ADSR {
+            attack: 0.1, decay: 0.2, sustain: 0.7, release: 0.3,
+            stage: ADSRStage::Attack, stage_time: 1.5, gate: true, current_level: 0.8,
+        };
+        assert!(a.config_eq(&b));
+    }
+
+    #[test]
+    fn config_eq_different_variants() {
+        let a = ModulationSource::sine_lfo(2.0);
+        let b = ModulationSource::adsr(0.1, 0.2, 0.7, 0.3);
+        assert!(!a.config_eq(&b));
+    }
+
+    // ── find_matching_source tests ───────────────────────────────────
+
+    #[test]
+    fn find_matching_source_found() {
+        let mut engine = ModulationEngine::new();
+        engine.add_source(ModulationSource::sine_lfo(2.0));
+        engine.add_source(ModulationSource::sine_lfo(4.0));
+        let needle = ModulationSource::sine_lfo(4.0);
+        assert_eq!(engine.find_matching_source(&needle), Some(1));
+    }
+
+    #[test]
+    fn find_matching_source_not_found() {
+        let mut engine = ModulationEngine::new();
+        engine.add_source(ModulationSource::sine_lfo(2.0));
+        let needle = ModulationSource::sine_lfo(5.0);
+        assert_eq!(engine.find_matching_source(&needle), None);
+    }
+
+    #[test]
+    fn find_matching_source_adsr_ignores_state() {
+        let mut engine = ModulationEngine::new();
+        engine.add_source(ModulationSource::ADSR {
+            attack: 0.1, decay: 0.2, sustain: 0.7, release: 0.3,
+            stage: ADSRStage::Sustain, stage_time: 2.0, gate: true, current_level: 0.7,
+        });
+        let needle = ModulationSource::adsr(0.1, 0.2, 0.7, 0.3);
+        assert_eq!(engine.find_matching_source(&needle), Some(0));
+    }
 }

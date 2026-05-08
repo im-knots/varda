@@ -457,6 +457,10 @@ pub struct UIData {
     pub can_redo: bool,
     /// Number of decks currently loading in background threads
     pub pending_deck_loads: usize,
+    /// Loaded deck preset names (from PresetLibrary)
+    pub deck_presets: Vec<String>,
+    /// Loaded channel preset names (from PresetLibrary)
+    pub channel_presets: Vec<String>,
 }
 
 /// Read-only snapshot of a single transition sequence
@@ -762,6 +766,14 @@ pub struct UIActions {
     pub undo_requested: bool,
     /// Redo last undone action
     pub redo_requested: bool,
+    /// (ch_idx, deck_preset_idx) — load a deck preset into a channel
+    pub deck_preset_to_add: Option<(usize, usize)>,
+    /// (channel_preset_idx) — load a channel preset into the mixer
+    pub channel_preset_to_add: Option<usize>,
+    /// Save current deck as preset (ch_idx, deck_idx, name)
+    pub save_deck_preset: Option<(usize, usize, String)>,
+    /// Save current channel as preset (ch_idx, name)
+    pub save_channel_preset: Option<(usize, String)>,
 }
 
 /// Action for controlling video deck playback
@@ -911,6 +923,10 @@ impl UIActions {
             resolution_change: None,
             undo_requested: false,
             redo_requested: false,
+            deck_preset_to_add: None,
+            channel_preset_to_add: None,
+            save_deck_preset: None,
+            save_channel_preset: None,
         }
     }
 
@@ -948,6 +964,8 @@ impl UIActions {
             || self.srt_to_add.is_some()
             || !self.auto_transition_actions.is_empty()
             || !self.sequence_actions.is_empty()
+            || self.deck_preset_to_add.is_some()
+            || self.channel_preset_to_add.is_some()
     }
 }
 
@@ -966,6 +984,10 @@ pub enum LibraryDrag {
     Syphon(String),
     /// SRT network source (url, mode)
     Srt(String, crate::srt::SrtMode),
+    /// Deck preset from library (index into preset_library.deck_presets)
+    DeckPreset(usize),
+    /// Channel preset from library (index into preset_library.channel_presets)
+    ChannelPreset(usize),
 }
 
 /// Drag payload for effect reordering within a chain
@@ -1218,6 +1240,8 @@ impl UIData {
             can_undo: false,
             can_redo: false,
             pending_deck_loads: 0,
+            deck_presets: vec![],
+            channel_presets: vec![],
         }
     }
 }

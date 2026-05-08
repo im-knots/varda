@@ -102,6 +102,9 @@ pub struct VardaApp {
     /// Configured SRT input sources in the library (url, mode).
     /// These appear in the library panel for drag-and-drop to channels.
     srt_library: Vec<(String, crate::srt::SrtMode)>,
+
+    // ── Presets ─────────────────────────────────────────────────
+    preset_library: crate::persistence::presets::PresetLibrary,
 }
 
 impl VardaApp {
@@ -135,8 +138,8 @@ impl VardaApp {
         let mut controller_led_mgr = midi::ControllerLedManager::new();
         let midi_devices = match midi::MidiDeviceManager::new() {
             Ok(mut mgr) => {
-                mgr.load_user_profiles(&workspace.controllers_dir());
-                if workspace.controllers_dir().is_dir() {
+                mgr.load_user_profiles(&workspace.controller_profiles_dir());
+                if workspace.controller_profiles_dir().is_dir() {
                     let _ = mgr.scan_devices();
                 }
                 log::info!("MIDI initialized: {} device(s)", mgr.devices.len());
@@ -154,6 +157,7 @@ impl VardaApp {
         let calibration_textures =
             crate::renderer::context::create_calibration_textures(&gpu.device, &gpu.queue, 8);
         let mixer = Mixer::new(&gpu, DEFAULT_RENDER_WIDTH, DEFAULT_RENDER_HEIGHT)?;
+        let preset_library = crate::persistence::presets::PresetLibrary::load(&workspace);
 
         Ok(Self {
             mixer,
@@ -189,6 +193,7 @@ impl VardaApp {
             syphon_manager: crate::syphon::SyphonManager::new(),
             srt_manager: crate::srt::SrtManager::new(),
             srt_library: Vec::new(),
+            preset_library,
         })
     }
 

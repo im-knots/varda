@@ -256,6 +256,64 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     }
                 }
             });
+
+            ui.add_space(4.0);
+        }
+
+        // === DECK PRESETS ===
+        if !data.deck_presets.is_empty() {
+            let deck_preset_header = egui::RichText::new(
+                format!("💾 Deck Presets ({})", data.deck_presets.len())
+            ).strong();
+            egui::CollapsingHeader::new(deck_preset_header)
+                .id_salt("lib_deck_presets")
+                .default_open(false)
+                .show(ui, |ui| {
+                    for (idx, name) in data.deck_presets.iter().enumerate() {
+                        let item_id = egui::Id::new(("lib_deck_preset", idx));
+                        let resp = ui.dnd_drag_source(item_id, LibraryDrag::DeckPreset(idx), |ui| {
+                            ui.label(egui::RichText::new(format!("  ◈ {}", name)).size(12.0));
+                        }).response;
+                        if ui.ctx().is_being_dragged(item_id) {
+                            ui.ctx().memory_mut(|mem| {
+                                mem.data.insert_temp(egui::Id::new("__lib_dnd_deck_preset_idx"), idx);
+                            });
+                        }
+                        if resp.double_clicked() {
+                            actions.deck_preset_to_add = Some((0, idx));
+                        }
+                        resp.on_hover_text("Drag to a channel to load this deck preset");
+                    }
+                });
+
+            ui.add_space(4.0);
+        }
+
+        // === CHANNEL PRESETS ===
+        if !data.channel_presets.is_empty() {
+            let ch_preset_header = egui::RichText::new(
+                format!("💾 Channel Presets ({})", data.channel_presets.len())
+            ).strong();
+            egui::CollapsingHeader::new(ch_preset_header)
+                .id_salt("lib_ch_presets")
+                .default_open(false)
+                .show(ui, |ui| {
+                    for (idx, name) in data.channel_presets.iter().enumerate() {
+                        let item_id = egui::Id::new(("lib_ch_preset", idx));
+                        let resp = ui.dnd_drag_source(item_id, LibraryDrag::ChannelPreset(idx), |ui| {
+                            ui.label(egui::RichText::new(format!("  ◈ {}", name)).size(12.0));
+                        }).response;
+                        if ui.ctx().is_being_dragged(item_id) {
+                            ui.ctx().memory_mut(|mem| {
+                                mem.data.insert_temp(egui::Id::new("__lib_dnd_ch_preset_idx"), idx);
+                            });
+                        }
+                        if resp.double_clicked() {
+                            actions.channel_preset_to_add = Some(idx);
+                        }
+                        resp.on_hover_text("Double-click to add this channel to the mixer");
+                    }
+                });
         }
 
     });

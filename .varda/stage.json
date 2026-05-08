@@ -10,17 +10,16 @@
     {
       "name": "Output 1",
       "target": {
-        "type": "display",
-        "name": "Monitor #41041"
+        "type": "windowed"
       },
       "surface_assignments": [],
       "window_position": [
-        6880,
-        404
+        9792,
+        406
       ],
       "window_size": [
-        2992,
-        1868
+        5984,
+        1810
       ]
     }
   ]

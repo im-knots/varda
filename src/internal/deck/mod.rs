@@ -256,6 +256,11 @@ impl Deck {
         &self.source_name
     }
 
+    /// Override the display name (e.g. when loading a preset with a custom name).
+    pub fn set_source_name(&mut self, name: String) {
+        self.source_name = name;
+    }
+
     /// Get the source file path (for persistence). None for solid color / camera.
     pub fn source_path(&self) -> Option<&str> {
         self.source_path.as_deref()

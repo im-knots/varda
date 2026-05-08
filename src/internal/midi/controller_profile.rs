@@ -2,7 +2,7 @@
 //!
 //! Profiles describe a controller's physical layout and LED protocol so the
 //! LED feedback system works with any hardware. Profiles are loaded from TOML
-//! files in `.varda/controllers/` or compiled-in as built-in defaults.
+//! files in `.varda/controller-profiles/` or compiled-in as built-in defaults.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -135,7 +135,7 @@ impl ProfileRegistry {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) => {
-                log::warn!("Failed to read controllers directory {}: {}", dir.display(), e);
+                log::warn!("Failed to read controller-profiles directory {}: {}", dir.display(), e);
                 return;
             }
         };

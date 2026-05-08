@@ -217,7 +217,7 @@ impl VardaApp {
         }
         if ui_actions.midi_rescan {
             if let Some(mgr) = &mut self.midi_devices {
-                mgr.load_user_profiles(&self.workspace.controllers_dir());
+                mgr.load_user_profiles(&self.workspace.controller_profiles_dir());
                 if let Err(e) = mgr.scan_devices() {
                     log::warn!("MIDI rescan failed: {}", e);
                 }

@@ -12,16 +12,15 @@
             "type": "Shader",
             "path": "shaders/turing_patterns.fs",
             "params": {
-              "sim_speed": 1.1,
-              "seed_size": 0.05,
               "seed": 0.78,
-              "perturbation": 0.0,
+              "sim_speed": 1.1,
               "growth_color": [
                 0.0,
                 0.0,
                 0.0,
                 1.0
               ],
+              "perturbation": 0.0,
               "feed_rate": 0.038,
               "kill_rate": 0.062,
               "bg_color": [
@@ -29,7 +28,8 @@
                 1.0,
                 1.0,
                 0.0
-              ]
+              ],
+              "seed_size": 0.05
             }
           },
           "effects": [
@@ -37,27 +37,27 @@
               "path": "shaders/ripple.fs",
               "enabled": true,
               "params": {
+                "center_x": 0.5,
                 "decay": 0.0,
-                "anim_speed": 0.4,
-                "center_y": 0.5,
                 "ripple_amount": 0.02,
                 "frequency": 7.0,
-                "center_x": 0.5
+                "anim_speed": 0.4,
+                "center_y": 0.5
               }
             },
             {
               "path": "shaders/edge_glow.fs",
               "enabled": true,
               "params": {
-                "glow_amount": 1.0,
-                "show_original": true,
                 "glow_color": [
                   1.0,
                   1.0,
                   1.0,
                   1.0
                 ],
-                "edge_strength": 3.0
+                "edge_strength": 3.0,
+                "show_original": true,
+                "glow_amount": 1.0
               }
             }
           ],
@@ -73,28 +73,28 @@
             "type": "Shader",
             "path": "shaders/voronoi.fs",
             "params": {
-              "anim_speed": 1.0,
-              "edge_width": 0.0,
-              "color2": [
-                0.9,
-                0.2,
-                0.3,
-                1.0
-              ],
+              "style": 0.0,
               "edge_color": [
                 1.0,
                 1.0,
                 1.0,
                 1.0
               ],
-              "style": 0.0,
-              "cell_count": 9.5,
+              "color2": [
+                0.9,
+                0.2,
+                0.3,
+                1.0
+              ],
+              "edge_width": 0.0,
+              "anim_speed": 1.0,
               "color1": [
                 0.1,
                 0.4,
                 0.9,
                 1.0
-              ]
+              ],
+              "cell_count": 9.5
             }
           },
           "effects": [
@@ -105,8 +105,8 @@
                 "center_x": 0.5,
                 "segments": 4.0,
                 "rotation": 0.0,
-                "zoom": 1.0,
-                "center_y": 0.5
+                "center_y": 0.5,
+                "zoom": 1.0
               }
             }
           ],
@@ -152,20 +152,20 @@
           "enabled": true,
           "params": {
             "center_x": 0.5,
-            "rotation": 0.0,
-            "segments": 2.0,
+            "zoom": 1.0,
             "center_y": 0.5,
-            "zoom": 1.0
+            "segments": 2.0,
+            "rotation": 0.0
           }
         },
         {
           "path": "shaders/hue_shift.fs",
           "enabled": true,
           "params": {
-            "cycle_speed": 0.5,
-            "hue_shift": 0.55,
             "saturation": 1.0,
-            "auto_cycle": false
+            "cycle_speed": 0.5,
+            "auto_cycle": false,
+            "hue_shift": 0.55
           }
         }
       ]
@@ -174,44 +174,11 @@
       "name": "Ch 2",
       "opacity": 1.0,
       "blend_mode": "normal",
-      "decks": [
-        {
-          "name": "char_cycle",
-          "source": {
-            "type": "Shader",
-            "path": "shaders/char_cycle.fs",
-            "params": {
-              "grid_size": 1.0,
-              "char_set": 6.8,
-              "fg_color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ],
-              "offset_amount": 3.0,
-              "speed": 2.0,
-              "speed_variation": 0.5,
-              "bg_color": [
-                0.0,
-                0.0,
-                0.0,
-                1.0
-              ]
-            }
-          },
-          "effects": [],
-          "opacity": 1.0,
-          "blend_mode": "normal",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
-        }
-      ],
+      "decks": [],
       "effects": []
     }
   ],
-  "crossfader": 1.0,
+  "crossfader": 0.45,
   "active_transition": null,
   "master_effects": [],
   "modulation": {
@@ -258,20 +225,6 @@
       }
     ],
     "assignments": {
-      "ch0_deck1:edge_width": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck0_fx0:melt_amount": [
-        {
-          "source_idx": 0,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
       "ch0_deck0_fx0:decay": [
         {
           "source_idx": 2,
@@ -296,6 +249,20 @@
           "component": null
         }
       ],
+      "ch0_deck0:perturbation": [
+        {
+          "source_idx": 3,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch0_deck1:edge_width": [
+        {
+          "source_idx": 3,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
       "ch1_deck1_fx1:hue_shift": [
         {
           "source_idx": 0,
@@ -304,13 +271,6 @@
         },
         {
           "source_idx": 1,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0:perturbation": [
-        {
-          "source_idx": 3,
           "amount": 0.5,
           "component": null
         }
@@ -325,6 +285,14 @@
       "ch0_deck0:feed_rate": [
         {
           "source_idx": 3,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch1_deck0_fx0:cell_size": [],
+      "ch1_deck0_fx0:melt_amount": [
+        {
+          "source_idx": 0,
           "amount": 0.5,
           "component": null
         }

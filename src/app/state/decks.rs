@@ -281,6 +281,137 @@ impl VardaApp {
             }
         }
 
+        // Load deck preset into a channel
+        if let Some((ch_idx, preset_idx)) = actions.deck_preset_to_add.take() {
+            if preset_idx < self.preset_library.deck_presets.len() {
+                let preset = self.preset_library.deck_presets[preset_idx].clone();
+                match Self::restore_deck_into_channel(
+                    &preset.config, ch_idx, context, &self.registry,
+                    &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager,
+                    self.render_width, self.render_height,
+                    mixer, egui_renderer, deck_preview_textures,
+                ) {
+                    Ok(()) => self.notifications.info(format!("💾 Loaded deck preset '{}'", preset.name)),
+                    Err(e) => {
+                        log::warn!("Failed to load deck preset '{}': {}", preset.name, e);
+                        self.notifications.warn(format!("Failed to load preset '{}': {}", preset.name, e));
+                    }
+                }
+            }
+        }
+
+        // Load channel preset = create a new channel + bulk-load each deck into it
+        if let Some(preset_idx) = actions.channel_preset_to_add.take() {
+            if preset_idx < self.preset_library.channel_presets.len() {
+                let preset = self.preset_library.channel_presets[preset_idx].clone();
+                let ch_name = mixer.take_next_channel_name();
+                match crate::channel::Channel::new(
+                    ch_name, context,
+                    self.render_width, self.render_height,
+                ) {
+                    Ok(mut channel) => {
+                        // Apply channel-level properties
+                        channel.opacity = preset.config.opacity;
+                        channel.blend_mode = preset.config.blend_mode.into();
+
+                        // Restore channel effects
+                        let mut had_errors = false;
+                        for eff_config in &preset.config.effects {
+                            match crate::persistence::restore_effect(eff_config, context, context.texture_format) {
+                                Ok(eff) => channel.add_effect(eff),
+                                Err(e) => {
+                                    log::warn!("Failed to restore channel effect '{}': {}", eff_config.path, e);
+                                    had_errors = true;
+                                }
+                            }
+                        }
+
+                        // Push the empty channel into the mixer, then bulk-load decks
+                        let ch_idx = mixer.channels().len();
+                        mixer.channels_mut().push(channel);
+
+                        for deck_config in &preset.config.decks {
+                            if let Err(e) = Self::restore_deck_into_channel(
+                                deck_config, ch_idx, context, &self.registry,
+                                &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager,
+                                self.render_width, self.render_height,
+                                mixer, egui_renderer, deck_preview_textures,
+                            ) {
+                                log::warn!("Failed to restore deck '{}' in channel preset: {}", deck_config.name, e);
+                                had_errors = true;
+                            }
+                        }
+
+                        let msg = if had_errors {
+                            format!("💾 Loaded channel preset '{}' (with warnings)", preset.name)
+                        } else {
+                            format!("💾 Loaded channel preset '{}'", preset.name)
+                        };
+                        self.notifications.info(msg);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create channel for preset: {}", e);
+                        self.notifications.error(format!("Failed to load channel preset: {}", e));
+                    }
+                }
+            }
+        }
+
+        // Save deck preset
+        if let Some((ch_idx, deck_idx, name)) = actions.save_deck_preset.take() {
+            let scene = crate::persistence::snapshot_scene(mixer, self.render_width, self.render_height);
+            if let Some(ch_config) = scene.channels.get(ch_idx) {
+                if let Some(deck_config) = ch_config.decks.get(deck_idx) {
+                    let mut preset_config = deck_config.clone();
+                    preset_config.name = name.clone();
+                    let prefix = format!("ch{}_deck{}", ch_idx, deck_idx);
+                    preset_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix);
+                    match crate::persistence::presets::PresetLibrary::save_deck_preset(
+                        &self.workspace, &name, &preset_config,
+                    ) {
+                        Ok(()) => {
+                            // Update the deck's display name to match the saved preset name
+                            if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                if let Some(slot) = ch.decks.get_mut(deck_idx) {
+                                    slot.deck.set_source_name(name.clone());
+                                }
+                            }
+                            self.preset_library.refresh(&self.workspace);
+                            self.notifications.info(format!("💾 Saved deck preset '{}'", name));
+                        }
+                        Err(e) => {
+                            log::error!("Failed to save deck preset: {}", e);
+                            self.notifications.error(format!("Failed to save preset: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Save channel preset
+        if let Some((ch_idx, name)) = actions.save_channel_preset.take() {
+            let scene = crate::persistence::snapshot_scene(mixer, self.render_width, self.render_height);
+            if let Some(ch_config) = scene.channels.get(ch_idx) {
+                let mut preset_ch_config = ch_config.clone();
+                for (deck_idx, deck_config) in preset_ch_config.decks.iter_mut().enumerate() {
+                    let prefix = format!("ch{}_deck{}", ch_idx, deck_idx);
+                    deck_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix);
+                }
+                match crate::persistence::presets::PresetLibrary::save_channel_preset(
+                    &self.workspace, &name, &preset_ch_config,
+                ) {
+                    Ok(()) => {
+                        self.preset_library.refresh(&self.workspace);
+                        self.notifications.info(format!("💾 Saved channel preset '{}'", name));
+                    }
+                    Err(e) => {
+                        log::error!("Failed to save channel preset: {}", e);
+                        self.notifications.error(format!("Failed to save preset: {}", e));
+                    }
+                }
+            }
+        }
+
         // Add effect to deck
         if let Some((ch_idx, deck_idx, filter_idx)) = actions.effect_to_add {
             let filters = self.registry.filters();
@@ -564,4 +695,192 @@ impl VardaApp {
             }
         }
     }
+
+    /// Restore a single DeckConfig into an existing channel.
+    /// Shared by both deck preset loading and channel preset bulk-loading.
+    #[allow(clippy::too_many_arguments)]
+    fn restore_deck_into_channel(
+        config: &crate::scene::DeckConfig,
+        ch_idx: usize,
+        context: &crate::renderer::GpuContext,
+        registry: &crate::registry::ShaderRegistry,
+        camera_manager: &mut crate::camera::CameraManager,
+        ndi_manager: &mut crate::ndi::NdiManager,
+        srt_manager: &mut crate::srt::SrtManager,
+        render_width: u32,
+        render_height: u32,
+        mixer: &mut crate::mixer::Mixer,
+        egui_renderer: &mut egui_wgpu::Renderer,
+        deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
+    ) -> anyhow::Result<()> {
+        let mut deck = crate::persistence::restore_deck(
+            config, context, registry,
+            camera_manager, ndi_manager, srt_manager,
+            render_width, render_height,
+        )?;
+        // Apply the preset's display name (overrides the generator/source name)
+        if !config.name.is_empty() {
+            deck.set_source_name(config.name.clone());
+        }
+        let dk_idx = {
+            let ch = mixer.channel_mut(ch_idx)
+                .ok_or_else(|| anyhow::anyhow!("Channel {} not found", ch_idx))?;
+            let mut slot = crate::channel::DeckSlot::new(deck);
+            slot.opacity = config.opacity;
+            slot.blend_mode = config.blend_mode.into();
+            slot.mute = config.mute;
+            slot.solo = config.solo;
+            slot.z_index = config.z_index;
+            let dk_idx = ch.decks.len();
+            ch.add_deck_slot(slot);
+            let texture_id = egui_renderer.register_native_texture(
+                &context.device,
+                &ch.decks[dk_idx].deck.texture_view,
+                wgpu::FilterMode::Linear,
+            );
+            deck_preview_textures.insert((ch_idx, dk_idx), texture_id);
+            dk_idx
+        };
+        // Apply modulation recipes with deduplication
+        if !config.modulation.is_empty() {
+            let new_prefix = format!("ch{}_deck{}", ch_idx, dk_idx);
+            apply_modulation_recipes(&config.modulation, &new_prefix, mixer.modulation_mut());
+        }
+        Ok(())
+    }
 }
+
+/// Extract modulation recipes for a specific deck from the global engine.
+/// Scans all assignments matching the deck's prefix, groups by source,
+/// and strips the prefix from param keys to make them portable.
+fn extract_modulation_recipes(
+    engine: &crate::modulation::ModulationEngine,
+    prefix: &str,
+) -> Vec<crate::scene::ModulationRecipe> {
+    let prefix_colon = format!("{}:", prefix);
+    let prefix_underscore = format!("{}_", prefix);
+    let mut source_map: std::collections::HashMap<usize, Vec<crate::scene::ModulationRecipeAssignment>> =
+        std::collections::HashMap::new();
+
+    for (key, mods) in engine.assignments_iter() {
+        // Match generator params: "ch0_deck0:brightness" → relative "brightness"
+        // Match effect params: "ch0_deck0_fx0:amount" → relative "fx0:amount"
+        let relative_param = if let Some(rel) = key.strip_prefix(&prefix_colon) {
+            Some(rel)
+        } else if let Some(rest) = key.strip_prefix(&prefix_underscore) {
+            if rest.starts_with("fx") { Some(rest) } else { None }
+        } else {
+            None
+        };
+
+        if let Some(relative_param) = relative_param {
+            for m in mods {
+                source_map.entry(m.source_idx)
+                    .or_default()
+                    .push(crate::scene::ModulationRecipeAssignment {
+                        param: relative_param.to_string(),
+                        amount: m.amount,
+                        component: m.component,
+                    });
+            }
+        }
+    }
+
+    source_map.into_iter().map(|(src_idx, assignments)| {
+        crate::scene::ModulationRecipe {
+            source: engine.sources[src_idx].clone(),
+            assignments,
+        }
+    }).collect()
+}
+
+/// Apply modulation recipes to the global engine for a newly loaded deck.
+/// Deduplicates sources: reuses existing matching sources instead of creating new ones.
+fn apply_modulation_recipes(
+    recipes: &[crate::scene::ModulationRecipe],
+    prefix: &str,
+    engine: &mut crate::modulation::ModulationEngine,
+) {
+    for recipe in recipes {
+        let source_idx = engine.find_matching_source(&recipe.source)
+            .unwrap_or_else(|| {
+                let idx = engine.add_source(recipe.source.clone());
+                log::info!("Created new modulation source for preset (idx {})", idx);
+                idx
+            });
+        for assignment in &recipe.assignments {
+            // Effect params stored as "fx0:amount" → key "ch0_deck0_fx0:amount"
+            // Generator params stored as "brightness" → key "ch0_deck0:brightness"
+            let full_key = if assignment.param.starts_with("fx") {
+                format!("{}_{}", prefix, assignment.param)
+            } else {
+                format!("{}:{}", prefix, assignment.param)
+            };
+            engine.assign(&full_key, source_idx, assignment.amount, assignment.component);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modulation::{ModulationEngine, ModulationSource};
+    use crate::scene::{ModulationRecipe, ModulationRecipeAssignment};
+
+    #[test]
+    fn extract_captures_generator_and_effect_params() {
+        let mut engine = ModulationEngine::new();
+        let src_idx = engine.add_source(ModulationSource::sine_lfo(2.0));
+        // Generator param: ch0_deck0:brightness
+        engine.assign("ch0_deck0:brightness", src_idx, 0.5, None);
+        // Effect param: ch0_deck0_fx0:amount
+        engine.assign("ch0_deck0_fx0:amount", src_idx, 0.3, None);
+        // Unrelated key from another deck — should NOT be captured
+        engine.assign("ch0_deck1:brightness", src_idx, 1.0, None);
+
+        let recipes = extract_modulation_recipes(&engine, "ch0_deck0");
+        assert_eq!(recipes.len(), 1, "should group into one recipe (one source)");
+        let recipe = &recipes[0];
+        let mut params: Vec<&str> = recipe.assignments.iter().map(|a| a.param.as_str()).collect();
+        params.sort();
+        assert_eq!(params, vec!["brightness", "fx0:amount"]);
+    }
+
+    #[test]
+    fn apply_restores_generator_and_effect_keys() {
+        let mut engine = ModulationEngine::new();
+        let recipes = vec![ModulationRecipe {
+            source: ModulationSource::sine_lfo(2.0),
+            assignments: vec![
+                ModulationRecipeAssignment { param: "brightness".into(), amount: 0.5, component: None },
+                ModulationRecipeAssignment { param: "fx0:amount".into(), amount: 0.3, component: None },
+            ],
+        }];
+
+        apply_modulation_recipes(&recipes, "ch1_deck0", &mut engine);
+
+        assert_eq!(engine.source_count(), 1);
+        assert!(engine.has_modulation("ch1_deck0:brightness"), "generator key missing");
+        assert!(engine.has_modulation("ch1_deck0_fx0:amount"), "effect key missing");
+    }
+
+    #[test]
+    fn roundtrip_extract_then_apply_preserves_effect_modulation() {
+        // Simulate save: create engine with assignments, extract recipes
+        let mut save_engine = ModulationEngine::new();
+        let src_idx = save_engine.add_source(ModulationSource::sine_lfo(3.0));
+        save_engine.assign("ch0_deck0:contrast", src_idx, 0.7, None);
+        save_engine.assign("ch0_deck0_fx1:mix", src_idx, 0.4, None);
+
+        let recipes = extract_modulation_recipes(&save_engine, "ch0_deck0");
+
+        // Simulate load: fresh engine, apply recipes into a different slot
+        let mut load_engine = ModulationEngine::new();
+        apply_modulation_recipes(&recipes, "ch2_deck0", &mut load_engine);
+
+        assert_eq!(load_engine.source_count(), 1);
+        assert!(load_engine.has_modulation("ch2_deck0:contrast"));
+        assert!(load_engine.has_modulation("ch2_deck0_fx1:mix"));
+    }
+}
+

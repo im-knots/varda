@@ -204,4 +204,14 @@ impl ModulationEngine {
 
     /// Get current computed values for all sources (for UI visualization)
     pub fn current_values(&self) -> &[f32] { &self.current_values }
+
+    /// Find an existing source that matches the given source's config.
+    pub fn find_matching_source(&self, source: &ModulationSource) -> Option<usize> {
+        self.sources.iter().position(|s| s.config_eq(source))
+    }
+
+    /// Iterate over all assignments (key → modulations).
+    pub fn assignments_iter(&self) -> impl Iterator<Item = (&String, &Vec<super::ParamModulation>)> {
+        self.assignments.iter()
+    }
 }

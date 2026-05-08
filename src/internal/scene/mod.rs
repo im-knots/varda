@@ -117,6 +117,32 @@ pub struct DeckConfig {
     /// Auto-transition configuration (None = no auto-transition)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_transition: Option<AutoTransitionConfig>,
+
+    /// Modulation recipes (for preset portability)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modulation: Vec<ModulationRecipe>,
+}
+
+/// A modulation recipe stored in a preset.
+/// Contains a source definition and which params it targets (relative keys).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModulationRecipe {
+    /// The modulation source definition
+    pub source: crate::modulation::ModulationSource,
+    /// Assignments using relative param keys (no ch/deck prefix)
+    pub assignments: Vec<ModulationRecipeAssignment>,
+}
+
+/// A single assignment within a modulation recipe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModulationRecipeAssignment {
+    /// Relative param key: "brightness" for generator, "fx0:amount" for effects
+    pub param: String,
+    /// Modulation amount
+    pub amount: f32,
+    /// Component index for multi-component params (e.g., color channels)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<usize>,
 }
 
 // ── Auto-Transition ────────────────────────────────────────────────
@@ -462,6 +488,7 @@ mod tests {
                             solo: false,
                             z_index: 0,
                             auto_transition: None,
+                            modulation: vec![],
                         },
                     ],
                     effects: vec![],

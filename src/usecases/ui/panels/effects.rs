@@ -137,7 +137,39 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
     };
 
     let accent = channel_color(ch_idx);
-    ui.heading(egui::RichText::new(format!("🔮 {} Effects", ch.name)).color(accent));
+    ui.horizontal(|ui| {
+        ui.heading(egui::RichText::new(format!("🔮 {} Effects", ch.name)).color(accent));
+
+        // Save channel as preset — inline name prompt
+        let prompt_id = egui::Id::new("ch_preset_name_prompt");
+        let name_id = egui::Id::new("ch_preset_name_input");
+        let is_prompting: bool = ui.data(|d| d.get_temp(prompt_id)).unwrap_or(false);
+
+        if is_prompting {
+            let cleared_id = egui::Id::new("ch_preset_name_cleared");
+            let was_cleared: bool = ui.data(|d| d.get_temp(cleared_id)).unwrap_or(false);
+            let mut name: String = ui.data(|d| d.get_temp(name_id)).unwrap_or_else(|| ch.name.clone());
+            let response = ui.text_edit_singleline(&mut name);
+            if response.gained_focus() && !was_cleared {
+                name.clear();
+                ui.data_mut(|d| d.insert_temp(cleared_id, true));
+            }
+            if ui.small_button("✓ Save").clicked() && !name.is_empty() {
+                actions.save_channel_preset = Some((ch_idx, name.clone()));
+                ui.data_mut(|d| d.insert_temp(prompt_id, false));
+            }
+            if ui.small_button("✕").clicked() {
+                ui.data_mut(|d| d.insert_temp(prompt_id, false));
+            }
+            ui.data_mut(|d| d.insert_temp(name_id, name));
+        } else if ui.small_button("💾 Save Channel Preset").clicked() {
+            ui.data_mut(|d| {
+                d.insert_temp(prompt_id, true);
+                d.remove_temp::<String>(name_id);
+                d.insert_temp(egui::Id::new("ch_preset_name_cleared"), false);
+            });
+        }
+    });
 
     egui::ScrollArea::horizontal().id_salt("channel_fx_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {

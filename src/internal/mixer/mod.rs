@@ -291,6 +291,14 @@ impl Mixer {
         self.next_channel_index = idx;
     }
 
+    /// Consume the next channel name and advance the counter.
+    /// Use this when manually constructing a channel outside of `add_channel`.
+    pub fn take_next_channel_name(&mut self) -> String {
+        let name = channel_name(self.next_channel_index);
+        self.next_channel_index += 1;
+        name
+    }
+
 }
 
 /// Generate a channel name from its index: 0→"Ch 0", 1→"Ch 1", 2→"Ch 2", etc.

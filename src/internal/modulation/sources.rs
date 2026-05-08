@@ -53,6 +53,30 @@ pub enum ModulationSource {
 }
 
 impl ModulationSource {
+    /// Compare two sources by configuration fields only.
+    /// Ignores ADSR runtime state (stage, stage_time, gate, current_level).
+    pub fn config_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                ModulationSource::LFO { waveform: w1, frequency: f1, phase: p1, amplitude: a1, bipolar: b1 },
+                ModulationSource::LFO { waveform: w2, frequency: f2, phase: p2, amplitude: a2, bipolar: b2 },
+            ) => w1 == w2 && f1 == f2 && p1 == p2 && a1 == a2 && b1 == b2,
+            (
+                ModulationSource::AudioBand { source_id: s1, freq_low: fl1, freq_high: fh1, gain: g1, smoothing: sm1, mode: m1, noise_gate: ng1 },
+                ModulationSource::AudioBand { source_id: s2, freq_low: fl2, freq_high: fh2, gain: g2, smoothing: sm2, mode: m2, noise_gate: ng2 },
+            ) => s1 == s2 && fl1 == fl2 && fh1 == fh2 && g1 == g2 && sm1 == sm2 && m1 == m2 && ng1 == ng2,
+            (
+                ModulationSource::ADSR { attack: a1, decay: d1, sustain: s1, release: r1, .. },
+                ModulationSource::ADSR { attack: a2, decay: d2, sustain: s2, release: r2, .. },
+            ) => a1 == a2 && d1 == d2 && s1 == s2 && r1 == r2,
+            (
+                ModulationSource::StepSequencer { steps: s1, rate: r1, interpolation: i1, bipolar: b1 },
+                ModulationSource::StepSequencer { steps: s2, rate: r2, interpolation: i2, bipolar: b2 },
+            ) => s1 == s2 && r1 == r2 && i1 == i2 && b1 == b2,
+            _ => false,
+        }
+    }
+
     pub fn sine_lfo(frequency: f32) -> Self {
         ModulationSource::LFO {
             waveform: LFOWaveform::Sine, frequency, phase: 0.0, amplitude: 1.0, bipolar: false,

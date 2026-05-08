@@ -69,4 +69,5 @@ test-fixtures = []
 
 [dev-dependencies]
 egui_kittest = { version = "0.33.3", features = ["wgpu", "snapshot"] }
+tempfile = "3.27.0"
 varda = { path = ".", features = ["test-fixtures"] }

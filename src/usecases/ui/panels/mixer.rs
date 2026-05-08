@@ -361,10 +361,15 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
         let has_library_drag = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ui.ctx());
         let is_hovering = has_library_drag && ui.rect_contains_pointer(ui.max_rect());
 
+        let is_ch_selected = data.selected_channel == Some(ch_idx);
         let frame = if is_hovering {
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.08))
                 .stroke(egui::Stroke::new(2.0, accent.linear_multiply(0.5)))
+                .corner_radius(4.0)
+        } else if is_ch_selected {
+            egui::Frame::default()
+                .stroke(egui::Stroke::new(2.0, accent.linear_multiply(0.6)))
                 .corner_radius(4.0)
         } else {
             egui::Frame::NONE
@@ -373,7 +378,6 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
         frame.show(ui, |ui| {
         ui.vertical(|ui| {
             // Channel header
-            let is_ch_selected = data.selected_channel == Some(ch_idx);
             let header_frame = if is_ch_selected {
                 egui::Frame::default().fill(accent.linear_multiply(0.15)).corner_radius(3.0).inner_margin(2.0)
             } else {

@@ -4,6 +4,9 @@
 //! - `scene.json` — channels, decks, effects, modulation (show-specific, shareable)
 //! - `stage.json` — surfaces, outputs, warp, editor prefs (venue-specific)
 //! - `midi.json`  — MIDI controller mappings (device-name-keyed)
+//! - `presets/`   — saved deck and channel presets
+
+pub mod presets;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -102,9 +105,37 @@ impl Workspace {
         self.varda_dir().join("stage.json")
     }
 
-    /// Path to `controllers/` directory for MIDI controller profiles.
-    pub fn controllers_dir(&self) -> PathBuf {
-        self.varda_dir().join("controllers")
+    /// Path to `controller-profiles/` directory for MIDI controller profiles.
+    pub fn controller_profiles_dir(&self) -> PathBuf {
+        self.varda_dir().join("controller-profiles")
+    }
+
+    /// Path to `presets/` directory.
+    pub fn presets_dir(&self) -> PathBuf {
+        self.varda_dir().join("presets")
+    }
+
+    /// Path to `presets/decks/` directory.
+    pub fn deck_presets_dir(&self) -> PathBuf {
+        self.presets_dir().join("decks")
+    }
+
+    /// Path to `presets/channels/` directory.
+    pub fn channel_presets_dir(&self) -> PathBuf {
+        self.presets_dir().join("channels")
+    }
+
+    /// Ensure preset directories exist.
+    pub fn ensure_preset_dirs(&self) -> Result<()> {
+        self.ensure_dir()?;
+        let dirs = [self.deck_presets_dir(), self.channel_presets_dir()];
+        for dir in &dirs {
+            if !dir.exists() {
+                std::fs::create_dir_all(dir)
+                    .with_context(|| format!("Failed to create preset dir: {}", dir.display()))?;
+            }
+        }
+        Ok(())
     }
 
     /// Whether `.varda/` exists in this workspace.
@@ -252,6 +283,7 @@ pub fn snapshot_scene(
                 solo: slot.solo,
                 z_index: slot.z_index,
                 auto_transition,
+                modulation: vec![],
             })
         }).flatten().collect();
 

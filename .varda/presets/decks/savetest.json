@@ -1,0 +1,29 @@
+{
+  "name": "savetest",
+  "source": {
+    "type": "Camera",
+    "name": "FaceTime HD Camera"
+  },
+  "effects": [
+    {
+      "path": "shaders/edge_detect.fs",
+      "enabled": true,
+      "params": {
+        "edge_color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "sensitivity": 5.0,
+        "use_source_color": 0.0,
+        "bg_opacity": 0.0
+      }
+    }
+  ],
+  "opacity": 1.0,
+  "blend_mode": "multiply",
+  "mute": false,
+  "solo": false,
+  "z_index": 0
+}
