@@ -19,6 +19,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments
 - **Network I/O**: NDI send/receive, SRT stream/receive, source library with drag-to-channel
 - **Recording**: H.264, ProRes 422, HAP Q per-output
+- **Presets**: save/load deck and channel presets with modulation recipes
 - **Persistence**: full scene/venue/MIDI state saved and restored across sessions
 
 ## Build & run
@@ -51,10 +52,14 @@ Varda treats the current working directory as a workspace. All state lives in a 
 ```
 your-show/
   .varda/
-    scene.json       # channels, decks, effects, modulation, crossfader, transition sequences
-    stage.json       # surface layout, outputs, warp calibration
-    midi.json        # MIDI controller mappings
-  shaders/           # ISF shaders (scanned on startup)
+    scene.json          # channels, decks, effects, modulation, crossfader, transition sequences
+    stage.json          # surface layout, outputs, warp calibration
+    midi.json           # MIDI controller mappings
+    presets/
+      decks/            # saved deck presets (JSON)
+      schannels/         # saved channel presets (JSON)
+  shaders/              # ISF shaders 
+  controller-profiles/  # MIDI controller profiles (TOML)
 ```
 
 Run `cargo run` from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
