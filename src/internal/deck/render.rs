@@ -118,7 +118,11 @@ impl Deck {
         let generator_target = if source_to_b { &self.texture_b_view } else { &self.texture_view };
 
         match &mut self.source {
-            DeckSource::Shader { pipeline, pass_buffers, passes, .. } => {
+            DeckSource::Shader { pipeline, pass_buffers, passes, imported_textures, .. } => {
+                let imported_views: Vec<&wgpu::TextureView> = imported_textures
+                    .iter()
+                    .map(|(_, _, v)| v)
+                    .collect();
                 if pipeline.num_pass_buffers > 0 {
                     Self::render_multi_pass_static(
                         context, pipeline, passes, pass_buffers,
@@ -126,6 +130,7 @@ impl Deck {
                         self.texture.width(), self.texture.height(),
                         generator_target, audio_data,
                         &mut self.generator_params, modulation, &param_prefix,
+                        &imported_views,
                         cmd_buffers,
                     )?;
                 } else {
@@ -133,6 +138,7 @@ impl Deck {
                         context, pipeline, &self.texture,
                         time, time_delta, self.frame_count, generator_target, audio_data,
                         &mut self.generator_params, modulation, &param_prefix,
+                        &imported_views,
                         cmd_buffers,
                     )?;
                 }
@@ -329,6 +335,7 @@ impl Deck {
         generator_params: &mut ShaderParams,
         modulation: &ModulationEngine,
         param_prefix: &str,
+        imported_views: &[&wgpu::TextureView],
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         let uniforms = ISFUniforms {
@@ -352,7 +359,9 @@ impl Deck {
         generator_params.update_buffer_with_modulation(&context.queue, modulation, Some(param_prefix));
 
         let user_params_buffer = generator_params.buffer().expect("Buffer should exist after ensure_buffer");
-        let bind_group = pipeline.create_bind_group_with_params(&context.device, user_params_buffer);
+        let bind_group = pipeline.create_bind_group(
+            &context.device, None, &[], imported_views, Some(user_params_buffer),
+        );
 
         let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Deck Source Render Encoder"),
@@ -400,6 +409,7 @@ impl Deck {
         generator_params: &mut ShaderParams,
         modulation: &ModulationEngine,
         param_prefix: &str,
+        imported_views: &[&wgpu::TextureView],
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         generator_params.ensure_buffer(&context.device);
@@ -454,7 +464,7 @@ impl Deck {
                     .map(|pb| pb.read_view())
                     .collect();
 
-                let bind_group = multi_pass.create_bind_group(&context.device, None, &pass_buffer_views, Some(user_params_buffer));
+                let bind_group = multi_pass.create_bind_group(&context.device, None, &pass_buffer_views, imported_views, Some(user_params_buffer));
 
                 let target_view = pass_buffers.get(target_name)
                     .map(|pb| pb.write_view())
@@ -519,7 +529,7 @@ impl Deck {
                 .map(|pb| pb.read_view())
                 .collect();
 
-            let bind_group = multi_pass.create_bind_group(&context.device, None, &pass_buffer_views, Some(user_params_buffer));
+            let bind_group = multi_pass.create_bind_group(&context.device, None, &pass_buffer_views, imported_views, Some(user_params_buffer));
 
             let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Final Pass Encoder"),

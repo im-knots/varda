@@ -6,6 +6,7 @@ use crate::renderer::{GpuContext, UnifiedPipeline, ISFUniforms};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use super::{Effect, Deck, PassBuffer};
+use super::source::load_imported_textures;
 
 impl Effect {
     /// Create a new effect from an ISF filter shader
@@ -22,6 +23,13 @@ impl Effect {
         let num_passes = passes.iter().filter(|p| p.target.is_some()).count();
         let uses_float = passes.iter().any(|p| p.float.unwrap_or(false));
 
+        // Load ISF IMPORTED images
+        let imported_textures = load_imported_textures(
+            &shader.metadata,
+            shader.file_path.as_deref(),
+            context,
+        );
+
         let pipeline = UnifiedPipeline::new(
             &context.device,
             &spirv,
@@ -29,6 +37,7 @@ impl Effect {
             true,  // has_input_image — it's a filter
             num_passes,
             uses_float,
+            imported_textures.len(),
         ).context("Failed to create effect pipeline")?;
 
         // Create pass buffers for multi-pass effects
@@ -108,6 +117,7 @@ impl Effect {
             pass_buffers,
             passes,
             target_format,
+            imported_textures,
         })
     }
 
@@ -148,6 +158,11 @@ impl Effect {
         }
         let user_params_buffer = self.params.buffer().expect("Buffer should exist after ensure_buffer");
 
+        let imported_views: Vec<&wgpu::TextureView> = self.imported_textures
+            .iter()
+            .map(|(_, _, v)| v)
+            .collect();
+
         let has_targeted_passes = self.passes.iter().any(|p| p.target.is_some());
 
         if has_targeted_passes {
@@ -183,6 +198,7 @@ impl Effect {
                         &context.device,
                         Some(input_view),
                         &pass_buffer_views,
+                        &imported_views,
                         Some(user_params_buffer),
                     );
 
@@ -239,6 +255,7 @@ impl Effect {
                 &context.device,
                 Some(input_view),
                 &pass_buffer_views,
+                &imported_views,
                 Some(user_params_buffer),
             );
 
@@ -277,6 +294,7 @@ impl Effect {
                 &context.device,
                 Some(input_view),
                 &[],
+                &imported_views,
                 Some(user_params_buffer),
             );
 

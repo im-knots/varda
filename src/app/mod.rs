@@ -400,6 +400,12 @@ impl VardaApp {
         self.registry.count()
     }
 
+    /// Resolve a generator index to a cloned ISFShader.
+    /// Returns None if the index is out of bounds.
+    pub fn resolve_generator(&self, gen_idx: usize) -> Option<crate::isf::ISFShader> {
+        self.registry.generators().get(gen_idx).map(|s| (*s).clone())
+    }
+
     /// Tick notification expiry timers.
     pub fn update_notifications(&mut self) {
         self.notifications.update();

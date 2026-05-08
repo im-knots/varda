@@ -6,13 +6,5 @@
   "surfaces": {
     "surfaces": []
   },
-  "outputs": [
-    {
-      "name": "Output 1",
-      "target": {
-        "type": "windowed"
-      },
-      "surface_assignments": []
-    }
-  ]
+  "outputs": []
 }

@@ -107,28 +107,8 @@ impl VardaApp {
             }
         }
 
-        // Add new deck if requested
-        if let Some((ch_idx, gen_idx)) = actions.shader_to_add {
-            let generators = self.registry.generators();
-            if gen_idx < generators.len() {
-                let shader = generators[gen_idx].clone();
-                match Deck::new(context, shader.clone(), self.render_width, self.render_height) {
-                    Ok(deck) => {
-                        if let Some(ch) = mixer.channel_mut(ch_idx) {
-                            let idx = ch.add_deck(deck);
-                            log::info!("Added deck {} to channel {} with shader: {}", idx, ch_idx, shader.name());
-                            let texture_id = egui_renderer.register_native_texture(
-                                &context.device,
-                                &ch.decks[idx].deck.texture_view,
-                                wgpu::FilterMode::Linear,
-                            );
-                            deck_preview_textures.insert((ch_idx, idx), texture_id);
-                        }
-                    }
-                    Err(e) => log::error!("Failed to create deck: {}", e),
-                }
-            }
-        }
+        // Shader deck loading is handled asynchronously via spawn_deck_loads in runner.rs.
+        // The shader_to_add action is intercepted before apply_engine_actions.
 
         // Add image decks (synchronous fallback — file dialog path uses background threads)
         for (ch_idx, path) in std::mem::take(&mut actions.images_to_add) {

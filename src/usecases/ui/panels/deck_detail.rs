@@ -358,7 +358,8 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                     ui.painter().rect_filled(header_rect, 2.0, ui.visuals().widgets.hovered.bg_fill.linear_multiply(0.3));
                                 }
                                 ui.separator();
-                            egui::ScrollArea::vertical().id_salt("deck_gen_scroll").show(ui, |ui| {
+                            let max_h = (ui.available_height() - 8.0).max(100.0);
+                            egui::ScrollArea::vertical().id_salt("deck_gen_scroll").max_height(max_h).show(ui, |ui| {
                                 // Blend mode
                                 let blend_modes = ["Norm", "Add", "Mult", "Scrn", "Ovly", "Diff"];
                                 let current_blend = match deck.blend_mode {
@@ -477,7 +478,8 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                             ui.set_min_width(180.0);
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}_{}",ch_idx,deck_idx,eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
+                            let max_h = (ui.available_height() - 8.0).max(100.0);
+                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}_{}",ch_idx,deck_idx,eff_idx)).max_height(max_h).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     render_effect_drag_handle(ui, EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
                                     let mut enabled = *eff_enabled;

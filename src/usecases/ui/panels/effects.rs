@@ -21,7 +21,8 @@ pub(super) fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, acti
                             ui.set_min_width(180.0);
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            egui::ScrollArea::vertical().id_salt(format!("master_fx_scroll_{}", eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
+                            let max_h = (ui.available_height() - 8.0).max(100.0);
+                            egui::ScrollArea::vertical().id_salt(format!("master_fx_scroll_{}", eff_idx)).max_height(max_h).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     // Drag handle
                                     render_effect_drag_handle(ui, EffectDrag::Master(eff_idx));
@@ -152,7 +153,8 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
                             ui.set_min_width(180.0);
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            egui::ScrollArea::vertical().id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx)).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
+                            let max_h = (ui.available_height() - 8.0).max(100.0);
+                            egui::ScrollArea::vertical().id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx)).max_height(max_h).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     render_effect_drag_handle(ui, EffectDrag::Channel(ch_idx, eff_idx));
                                     let mut enabled = *eff_enabled;

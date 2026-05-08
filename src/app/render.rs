@@ -30,7 +30,7 @@ pub struct DeckLoadResult {
 }
 
 impl VardaApp {
-    /// Spawn background threads to create decks from file paths.
+    /// Spawn background threads to create decks from file paths and shaders.
     /// Each thread creates a full Deck (CPU decode + GPU upload) and sends
     /// the result via the channel. The render loop polls for completed decks.
     /// `pending` is incremented per-spawn and decremented when each thread completes.
@@ -42,6 +42,7 @@ impl VardaApp {
         render_height: u32,
         images: Vec<(usize, std::path::PathBuf)>,
         videos: Vec<(usize, std::path::PathBuf)>,
+        shaders: Vec<(usize, crate::isf::ISFShader)>,
     ) {
         use crate::deck::Deck;
         use std::sync::atomic::Ordering;
@@ -77,6 +78,21 @@ impl VardaApp {
                     .unwrap_or("video")
                     .to_string();
                 let deck = Deck::new_from_video(&ctx, &path, w, h);
+                let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
+                counter.fetch_sub(1, Ordering::Relaxed);
+            });
+        }
+
+        for (ch_idx, shader) in shaders {
+            let tx = sender.clone();
+            let ctx = context.clone();
+            let counter = pending.clone();
+            let w = render_width;
+            let h = render_height;
+            counter.fetch_add(1, Ordering::Relaxed);
+            std::thread::spawn(move || {
+                let name = shader.name();
+                let deck = Deck::new(&ctx, shader, w, h);
                 let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
                 counter.fetch_sub(1, Ordering::Relaxed);
             });

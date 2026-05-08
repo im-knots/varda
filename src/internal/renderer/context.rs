@@ -73,7 +73,10 @@ impl GpuContext {
                 &wgpu::DeviceDescriptor {
                     label: Some("Varda Device"),
                     required_features,
-                    required_limits: wgpu::Limits::default(),
+                    required_limits: wgpu::Limits {
+                        max_texture_dimension_2d: 16384,
+                        ..wgpu::Limits::default()
+                    },
                     memory_hints: Default::default(),
                     experimental_features: Default::default(),
                     trace: Default::default(),

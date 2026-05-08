@@ -286,6 +286,23 @@ impl UIRunner {
                 self.history.push(snapshot);
             }
 
+            // Intercept shader_to_add: resolve and route to background loading
+            if let Some((ch_idx, gen_idx)) = ui_actions.shader_to_add.take() {
+                if let Some(shader) = varda.resolve_generator(gen_idx) {
+                    let context = varda.gpu_context();
+                    VardaApp::spawn_deck_loads(
+                        &self.deck_load_tx,
+                        context,
+                        &self.pending_deck_loads,
+                        varda.render_width(),
+                        varda.render_height(),
+                        Vec::new(),
+                        Vec::new(),
+                        vec![(ch_idx, shader)],
+                    );
+                }
+            }
+
             let removed_ch = varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
 
             // ── Undo/redo: diff-apply from history ──
@@ -403,6 +420,7 @@ impl UIRunner {
                         varda.render_height(),
                         images,
                         videos,
+                        Vec::new(),
                     );
                 }
             }

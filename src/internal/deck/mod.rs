@@ -86,6 +86,8 @@ pub enum DeckSource {
         pipeline: UnifiedPipeline,
         pass_buffers: HashMap<String, PassBuffer>,
         passes: Vec<ISFPass>,
+        /// GPU textures loaded from ISF IMPORTED images (sorted by name for deterministic binding)
+        imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
     },
     /// Video file playback (ffmpeg CPU decode → RGBA)
     Video {
@@ -165,6 +167,8 @@ pub struct Effect {
     pub pass_buffers: HashMap<String, PassBuffer>,
     pub passes: Vec<ISFPass>,
     pub target_format: wgpu::TextureFormat,
+    /// GPU textures loaded from ISF IMPORTED images (sorted by name for deterministic binding)
+    pub imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
 }
 
 // Effect impl is in effect.rs

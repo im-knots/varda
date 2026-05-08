@@ -1,6 +1,6 @@
 //! Deck constructors — creating decks from shaders, videos, images, cameras, and solid colors.
 
-use crate::isf::{ISFShader, compile_glsl_to_spirv};
+use crate::isf::{ISFShader, ISFMetadata, compile_glsl_to_spirv};
 use crate::params::ShaderParams;
 use crate::renderer::{GpuContext, UnifiedPipeline, BlitPipeline, HapConvertPipeline};
 use crate::video::{VideoPlayer, HapTextureFormat, hap::HapPlayer};
@@ -9,6 +9,101 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 use super::{Deck, DeckSource, ScalingMode, PassBuffer, Effect};
+
+/// Load ISF IMPORTED images from metadata and create GPU textures.
+/// Returns (name, texture, view) sorted alphabetically by name for deterministic binding order.
+///
+/// PNG decoding runs in parallel across threads; GPU uploads are sequential.
+pub(crate) fn load_imported_textures(
+    metadata: &ISFMetadata,
+    shader_file_path: Option<&str>,
+    context: &GpuContext,
+) -> Vec<(String, wgpu::Texture, wgpu::TextureView)> {
+    let imported = match &metadata.imported {
+        Some(map) if !map.is_empty() => map,
+        _ => return Vec::new(),
+    };
+
+    let shader_dir = shader_file_path
+        .map(|p| std::path::Path::new(p).parent().unwrap_or(std::path::Path::new(".")))
+        .unwrap_or(std::path::Path::new("."));
+
+    let mut entries: Vec<_> = imported.iter().collect();
+    entries.sort_by_key(|(name, _)| (*name).clone());
+
+    // Collect paths for parallel decode
+    let load_list: Vec<_> = entries.iter().filter_map(|(name, import_def)| {
+        let rel_path = import_def.path.as_ref()?;
+        Some(((*name).clone(), shader_dir.join(rel_path)))
+    }).collect();
+
+    if load_list.is_empty() {
+        return Vec::new();
+    }
+
+    let t0 = Instant::now();
+
+    // Parallel PNG decode on threads, sequential GPU upload
+    let decoded: Vec<_> = std::thread::scope(|s| {
+        let handles: Vec<_> = load_list.iter().map(|(name, path)| {
+            let name = name.clone();
+            let path = path.clone();
+            s.spawn(move || {
+                match image::open(&path) {
+                    Ok(img) => Some((name, img.to_rgba8())),
+                    Err(e) => {
+                        log::warn!("IMPORTED '{}': failed to load '{}': {}", name, path.display(), e);
+                        None
+                    }
+                }
+            })
+        }).collect();
+        handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
+    });
+
+    // GPU upload (fast, sequential)
+    let mut result = Vec::with_capacity(decoded.len());
+    for (name, img) in &decoded {
+        let (w, h) = img.dimensions();
+        let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("Imported: {}", name)),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        context.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            img,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * w),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        result.push((name.clone(), texture, view));
+    }
+
+    // Sort by name for deterministic binding order (threads may complete out of order)
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let elapsed = t0.elapsed();
+    log::info!("IMPORTED: loaded {} textures in {:.0?} (parallel decode)", result.len(), elapsed);
+
+    result
+}
 
 impl Deck {
     /// Create a new deck from an ISF shader
@@ -134,6 +229,13 @@ impl Deck {
 
         let uses_float = passes.iter().any(|p| p.float.unwrap_or(false));
 
+        // Load ISF IMPORTED images
+        let imported_textures = load_imported_textures(
+            &shader.metadata,
+            shader.file_path.as_deref(),
+            context,
+        );
+
         let pipeline = UnifiedPipeline::new(
             &context.device,
             &spirv,
@@ -141,6 +243,7 @@ impl Deck {
             false,
             pass_buffers.len(),
             uses_float,
+            imported_textures.len(),
         ).context("Failed to create shader pipeline")?;
 
         let now = Instant::now();
@@ -154,6 +257,7 @@ impl Deck {
             pipeline,
             pass_buffers,
             passes,
+            imported_textures,
         };
 
         let source_path = match &source {
