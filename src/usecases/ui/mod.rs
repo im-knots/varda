@@ -782,8 +782,8 @@ pub struct UIActions {
     pub redo_requested: bool,
     /// (ch_idx, deck_preset_idx) — load a deck preset into a channel
     pub deck_preset_to_add: Option<(usize, usize)>,
-    /// (channel_preset_idx) — load a channel preset into the mixer
-    pub channel_preset_to_add: Option<usize>,
+    /// (target_ch_idx or None, channel_preset_idx) — load a channel preset; if target_ch is Some, fill decks into that existing channel
+    pub channel_preset_to_add: Option<(Option<usize>, usize)>,
     /// Save current deck as preset (ch_idx, deck_idx, name)
     pub save_deck_preset: Option<(usize, usize, String)>,
     /// Save current channel as preset (ch_idx, name)

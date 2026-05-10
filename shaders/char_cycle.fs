@@ -9,6 +9,7 @@
         {"NAME": "grid_size", "LABEL": "Grid", "TYPE": "float", "DEFAULT": 1.0, "MIN": 1.0, "MAX": 16.0},
         {"NAME": "offset_amount", "LABEL": "Cell Offset", "TYPE": "float", "DEFAULT": 3.0, "MIN": 0.0, "MAX": 20.0},
         {"NAME": "speed_variation", "LABEL": "Speed Variation", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 2.0},
+        {"NAME": "table_mode", "LABEL": "Table Mode (0=Free 1=Data 2=Matrix 3=Sheet)", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 3.0},
         {"NAME": "fg_color", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Foreground"},
         {"NAME": "bg_color", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 1.0], "LABEL": "Background"}
     ],
@@ -81,6 +82,7 @@ layout(set = 0, binding = 17) uniform UserParams {
     float grid_size;
     float offset_amount;
     float speed_variation;
+    float table_mode;
     vec4 fg_color;
     vec4 bg_color;
 };
@@ -193,6 +195,7 @@ void main() {
     } else {
         // Grid mode: g x g grid with offset cycling
         float gf = float(g);
+        int tbl = int(floor(table_mode + 0.5));
 
         // Compute grid cell
         vec2 cellCoord = floor(uv * gf);
@@ -204,23 +207,112 @@ void main() {
         // Per-cell offset and speed variation
         float cellId = cellCoord.y * gf + cellCoord.x;
         float cellOffset = cellId * offset_amount;
-
-        // Hash cellId for pseudo-random per-cell speed multiplier
         float h = fract(sin(cellId * 127.1 + 311.7) * 43758.5453);
-        float cellSpeed = speed * (1.0 + (h * 2.0 - 1.0) * speed_variation);
-
         float charIdx = floor(mod(PHASE_TIME_0 * (1.0 + (h * 2.0 - 1.0) * speed_variation) + cellOffset, numChars));
 
-        // Clamp UV to avoid sampling neighboring cells
-        if (cellUV.x < 0.05 || cellUV.x > 0.95 || cellUV.y < 0.05 || cellUV.y > 0.95) {
-            fragColor = bg_color;
+        // Line thickness in cell-UV space
+        float lw = 0.02;
+        vec3 lineCol = fg_color.rgb * 0.35; // dim structural lines
+        vec3 headerCol = fg_color.rgb * 0.7; // dimmer header text
+
+        // ── Mode 0: Free (original behavior) ──
+        if (tbl == 0) {
+            if (cellUV.x < 0.05 || cellUV.x > 0.95 || cellUV.y < 0.05 || cellUV.y > 0.95) {
+                fragColor = bg_color; return;
+            }
+            vec2 glyphUV = (cellUV - 0.05) / 0.9;
+            float glyph = sampleSet(s, charIdx, glyphUV);
+            fragColor = vec4(mix(bg_color.rgb, fg_color.rgb, clamp(glyph, 0.0, 1.0)), 1.0);
             return;
         }
-        // Remap 0.05..0.95 to 0..1
-        vec2 glyphUV = (cellUV - 0.05) / 0.9;
 
+        // ── Mode 1: Data Table ──
+        // Top row = header (different tint), horizontal separator below row 0,
+        // vertical separators between columns
+        if (tbl == 1) {
+            bool isHeader = (cellCoord.y < 1.0);
+            // Horizontal separator below header
+            if (cellCoord.y < 1.0 && cellUV.y > (1.0 - lw * 2.0)) {
+                fragColor = vec4(lineCol, 1.0); return;
+            }
+            // Vertical separators between columns
+            if (cellUV.x < lw || cellUV.x > (1.0 - lw)) {
+                fragColor = vec4(lineCol, 1.0); return;
+            }
+            // Glyph padding
+            float pad = 0.08;
+            if (cellUV.x < pad || cellUV.x > (1.0-pad) || cellUV.y < pad || cellUV.y > (1.0-pad)) {
+                fragColor = bg_color; return;
+            }
+            vec2 glyphUV = (cellUV - pad) / (1.0 - 2.0*pad);
+            float glyph = sampleSet(s, charIdx, glyphUV);
+            vec3 textCol = isHeader ? headerCol : fg_color.rgb;
+            fragColor = vec4(mix(bg_color.rgb, textCol, clamp(glyph, 0.0, 1.0)), 1.0);
+            return;
+        }
+
+        // ── Mode 2: Matrix (brackets + dense grid) ──
+        // Left and right edges get bracket lines, minimal cell padding
+        if (tbl == 2) {
+            float bracketW = 0.12; // fraction of total width for bracket zone
+            float pixUV_x = uv.x; // raw UV x for bracket check
+            // Left bracket: vertical bar + horizontal caps at top/bottom
+            bool inLeftBracket = (pixUV_x < bracketW * (1.0/gf));
+            bool inRightBracket = (pixUV_x > 1.0 - bracketW * (1.0/gf));
+            if (inLeftBracket) {
+                float bx = pixUV_x / (bracketW * (1.0/gf)); // 0..1 within bracket zone
+                bool vert = (bx < 0.3);
+                bool topCap = (uv.y > (1.0 - lw*3.0) && bx < 0.7);
+                bool botCap = (uv.y < lw*3.0 && bx < 0.7);
+                if (vert || topCap || botCap) { fragColor = vec4(lineCol, 1.0); return; }
+            }
+            if (inRightBracket) {
+                float bx = (1.0 - pixUV_x) / (bracketW * (1.0/gf));
+                bool vert = (bx < 0.3);
+                bool topCap = (uv.y > (1.0 - lw*3.0) && bx < 0.7);
+                bool botCap = (uv.y < lw*3.0 && bx < 0.7);
+                if (vert || topCap || botCap) { fragColor = vec4(lineCol, 1.0); return; }
+            }
+            // Dense glyph with minimal padding
+            float pad = 0.03;
+            if (cellUV.x < pad || cellUV.x > (1.0-pad) || cellUV.y < pad || cellUV.y > (1.0-pad)) {
+                fragColor = bg_color; return;
+            }
+            vec2 glyphUV = (cellUV - pad) / (1.0 - 2.0*pad);
+            float glyph = sampleSet(s, charIdx, glyphUV);
+            fragColor = vec4(mix(bg_color.rgb, fg_color.rgb, clamp(glyph, 0.0, 1.0)), 1.0);
+            return;
+        }
+
+        // ── Mode 3: Spreadsheet ──
+        // Grid lines between all cells, first row and first column are "labels" (dimmer)
+        if (tbl == 3) {
+            bool isLabelRow = (cellCoord.y < 1.0);
+            bool isLabelCol = (cellCoord.x < 1.0);
+            bool isLabel = isLabelRow || isLabelCol;
+            // Grid lines on all edges
+            if (cellUV.x < lw || cellUV.x > (1.0-lw) || cellUV.y < lw || cellUV.y > (1.0-lw)) {
+                fragColor = vec4(lineCol, 1.0); return;
+            }
+            float pad = 0.06;
+            if (cellUV.x < pad || cellUV.x > (1.0-pad) || cellUV.y < pad || cellUV.y > (1.0-pad)) {
+                fragColor = bg_color; return;
+            }
+            vec2 glyphUV = (cellUV - pad) / (1.0 - 2.0*pad);
+            float glyph = sampleSet(s, charIdx, glyphUV);
+            vec3 textCol = isLabel ? headerCol : fg_color.rgb;
+            // Label cells get a slightly brighter background
+            vec3 cellBg = isLabel ? mix(bg_color.rgb, fg_color.rgb, 0.06) : bg_color.rgb;
+            fragColor = vec4(mix(cellBg, textCol, clamp(glyph, 0.0, 1.0)), 1.0);
+            return;
+        }
+
+        // Fallback: same as mode 0
+        if (cellUV.x < 0.05 || cellUV.x > 0.95 || cellUV.y < 0.05 || cellUV.y > 0.95) {
+            fragColor = bg_color; return;
+        }
+        vec2 glyphUV = (cellUV - 0.05) / 0.9;
         float glyph = sampleSet(s, charIdx, glyphUV);
-        vec3 result = mix(bg_color.rgb, fg_color.rgb, clamp(glyph, 0.0, 1.0));
-        fragColor = vec4(result, 1.0);
+        fragColor = vec4(mix(bg_color.rgb, fg_color.rgb, clamp(glyph, 0.0, 1.0)), 1.0);
     }
 }

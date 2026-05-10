@@ -1,0 +1,440 @@
+{
+  "name": "Ch 4",
+  "opacity": 1.0,
+  "blend_mode": "normal",
+  "decks": [
+    {
+      "name": "screen-shot-2012-01-10-at-14-53-54.png",
+      "source": {
+        "type": "Image",
+        "path": "/Users/206653756/Downloads/screen-shot-2012-01-10-at-14-53-54.png"
+      },
+      "effects": [
+        {
+          "path": "shaders/chroma_flow.fs",
+          "enabled": true,
+          "params": {
+            "snap_hardness": 0.7,
+            "group_speed_4": 0.2,
+            "palette_2": [
+              0.0,
+              1.0,
+              0.2,
+              1.0
+            ],
+            "group_speed_2": 1.0,
+            "group_angle_4": 180.0,
+            "palette_0": [
+              1.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "palette_mode": false,
+            "group_speed_7": 1.0,
+            "group_angle_1": 45.0,
+            "edge_blend_width": 0.05,
+            "group_speed_0": 1.0,
+            "palette_6": [
+              1.0,
+              0.5,
+              0.0,
+              1.0
+            ],
+            "background_fill": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "palette_5": [
+              0.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "group_speed_3": 0.15,
+            "displacement_falloff": 0.2,
+            "group_angle_3": 135.0,
+            "displacement_amount": 0.1,
+            "flow_scale": 1.0,
+            "group_angle_5": 225.0,
+            "group_angle_0": 0.0,
+            "group_angle_6": 270.0,
+            "palette_7": [
+              0.5,
+              0.0,
+              1.0,
+              1.0
+            ],
+            "color_preservation": 1.0,
+            "palette_1": [
+              0.0,
+              0.5,
+              1.0,
+              1.0
+            ],
+            "palette_4": [
+              1.0,
+              0.0,
+              1.0,
+              1.0
+            ],
+            "group_angle_7": 315.0,
+            "flow_type": 0.0,
+            "group_angle_2": 90.0,
+            "flow_speed": 0.15,
+            "group_speed_6": 1.0,
+            "group_speed_5": 0.2,
+            "palette_size": 4.0,
+            "palette_3": [
+              1.0,
+              1.0,
+              0.0,
+              1.0
+            ],
+            "group_speed_1": 1.0
+          }
+        },
+        {
+          "path": "shaders/melt_drip.fs",
+          "enabled": true,
+          "params": {
+            "horizontal_wobble": 0.0,
+            "melt_amount": 0.0,
+            "drip_speed": 1.0,
+            "wave_frequency": 8.0,
+            "drip_intensity": 0.5
+          }
+        },
+        {
+          "path": "shaders/zoom.fs",
+          "enabled": true,
+          "params": {
+            "center_y": 0.5,
+            "zoom_amount": 1.2,
+            "center_x": 0.38
+          }
+        },
+        {
+          "path": "shaders/levels.fs",
+          "enabled": true,
+          "params": {
+            "out_white": 1.0,
+            "gamma": 0.85,
+            "out_black": 0.0,
+            "in_black": 0.15,
+            "in_white": 1.0
+          }
+        }
+      ],
+      "opacity": 1.0,
+      "blend_mode": "normal",
+      "mute": false,
+      "solo": false,
+      "z_index": 0,
+      "modulation": [
+        {
+          "source": {
+            "AudioBand": {
+              "source_id": 0,
+              "freq_low": 20.0,
+              "freq_high": 110.0,
+              "gain": 1.5,
+              "smoothing": 0.99,
+              "mode": "Direct",
+              "noise_gate": 0.24
+            }
+          },
+          "assignments": [
+            {
+              "param": "fx3:gr",
+              "amount": 0.5
+            },
+            {
+              "param": "fx2:hue_shift",
+              "amount": 0.5
+            },
+            {
+              "param": "fx0:group_speed_5",
+              "amount": 0.5
+            },
+            {
+              "param": "fx1:drip_speed",
+              "amount": 0.5
+            },
+            {
+              "param": "fx0:group_speed_4",
+              "amount": 0.5
+            },
+            {
+              "param": "fx3:rb",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source": {
+            "AudioBand": {
+              "source_id": null,
+              "freq_low": 20.0,
+              "freq_high": 80.0,
+              "gain": 1.0,
+              "smoothing": 0.71,
+              "mode": "Direct",
+              "noise_gate": 0.27
+            }
+          },
+          "assignments": [
+            {
+              "param": "fx3:rg",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source": {
+            "LFO": {
+              "waveform": "Sine",
+              "frequency": 0.4,
+              "phase": 0.0,
+              "amplitude": 0.48,
+              "bipolar": true
+            }
+          },
+          "assignments": [
+            {
+              "param": "fx1:hue_shift",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source": {
+            "AudioBand": {
+              "source_id": 0,
+              "freq_low": 80.0,
+              "freq_high": 1500.0,
+              "gain": 3.9,
+              "smoothing": 0.51,
+              "mode": "Direct",
+              "noise_gate": 0.26
+            }
+          },
+          "assignments": [
+            {
+              "param": "fx0:group_speed_3",
+              "amount": 0.5
+            },
+            {
+              "param": "fx1:hue_shift",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source": {
+            "LFO": {
+              "waveform": "Sine",
+              "frequency": 0.025,
+              "phase": 0.0,
+              "amplitude": 1.0,
+              "bipolar": true
+            }
+          },
+          "assignments": [
+            {
+              "param": "fx2:hue_shift",
+              "amount": 0.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "tas_psychedelic",
+      "source": {
+        "type": "Shader",
+        "path": "shaders/tas_psychedelic.fs",
+        "params": {
+          "snake_thickness": 0.02,
+          "bg_color": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "slither_amp": 1.0,
+          "snake_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "snake_length": 0.6,
+          "snake_density": 8.0,
+          "move_speed": 1.5,
+          "move_range": 1.75,
+          "slither_freq": 0.7,
+          "anim_speed": 0.85
+        }
+      },
+      "effects": [
+        {
+          "path": "shaders/mirror_kaleidoscope.fs",
+          "enabled": true,
+          "params": {
+            "center_y": 0.5,
+            "zoom": 1.0,
+            "segments": 4.0,
+            "rotation": 0.0,
+            "center_x": 0.5
+          }
+        }
+      ],
+      "opacity": 1.0,
+      "blend_mode": "normal",
+      "mute": false,
+      "solo": false,
+      "z_index": 0,
+      "modulation": [
+        {
+          "source": {
+            "AudioBand": {
+              "source_id": 0,
+              "freq_low": 20.0,
+              "freq_high": 110.0,
+              "gain": 1.5,
+              "smoothing": 0.99,
+              "mode": "Direct",
+              "noise_gate": 0.24
+            }
+          },
+          "assignments": [
+            {
+              "param": "anim_speed",
+              "amount": 0.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sacred_geometry",
+      "source": {
+        "type": "Shader",
+        "path": "shaders/sacred_geometry.fs",
+        "params": {
+          "anim_speed": 0.0,
+          "line_width": 0.005,
+          "layers": 1.3,
+          "pattern": 0.0,
+          "glow_amount": 1.1,
+          "rotation": 3.8,
+          "scale": 0.45,
+          "color2": [
+            0.3,
+            0.5,
+            0.9,
+            1.0
+          ],
+          "color1": [
+            0.79349744,
+            0.73129696,
+            0.54469544,
+            1.0
+          ],
+          "bg_color": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "effects": [],
+      "opacity": 1.0,
+      "blend_mode": "add",
+      "mute": false,
+      "solo": false,
+      "z_index": 0,
+      "modulation": [
+        {
+          "source": {
+            "AudioBand": {
+              "source_id": null,
+              "freq_low": 20.0,
+              "freq_high": 80.0,
+              "gain": 1.0,
+              "smoothing": 0.71,
+              "mode": "Direct",
+              "noise_gate": 0.27
+            }
+          },
+          "assignments": [
+            {
+              "param": "pattern",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source": {
+            "AudioBand": {
+              "source_id": 0,
+              "freq_low": 80.0,
+              "freq_high": 1500.0,
+              "gain": 3.9,
+              "smoothing": 0.51,
+              "mode": "Direct",
+              "noise_gate": 0.26
+            }
+          },
+          "assignments": [
+            {
+              "param": "layers",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source": {
+            "AudioBand": {
+              "source_id": 0,
+              "freq_low": 20.0,
+              "freq_high": 110.0,
+              "gain": 1.5,
+              "smoothing": 0.99,
+              "mode": "Direct",
+              "noise_gate": 0.24
+            }
+          },
+          "assignments": [
+            {
+              "param": "glow_amount",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source": {
+            "LFO": {
+              "waveform": "Sine",
+              "frequency": 0.025,
+              "phase": 0.0,
+              "amplitude": 1.0,
+              "bipolar": true
+            }
+          },
+          "assignments": [
+            {
+              "param": "layers",
+              "amount": 0.5
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "effects": []
+}

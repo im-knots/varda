@@ -309,7 +309,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             });
                         }
                         if resp.double_clicked() {
-                            actions.channel_preset_to_add = Some(idx);
+                            actions.channel_preset_to_add = Some((None, idx));
                         }
                         resp.on_hover_text("Double-click to add this channel to the mixer");
                     }

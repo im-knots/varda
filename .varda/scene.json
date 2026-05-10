@@ -7,57 +7,51 @@
       "blend_mode": "normal",
       "decks": [
         {
-          "name": "turing_patterns",
+          "name": "dark_matter",
           "source": {
             "type": "Shader",
-            "path": "shaders/turing_patterns.fs",
+            "path": "/Users/206653756/projects/vj/shaders/dark_matter.fs",
             "params": {
-              "growth_color": [
+              "seed": 36.0,
+              "brightness": 1.2,
+              "warp": 0.25,
+              "speed": 0.7,
+              "web_scale": 8.5,
+              "color_node": [
+                1.0,
+                0.7,
+                0.15,
+                1.0
+              ],
+              "bg_color": [
                 0.0,
                 0.0,
                 0.0,
                 1.0
               ],
-              "seed": 0.78,
-              "seed_size": 0.05,
-              "kill_rate": 0.062,
-              "feed_rate": 0.038,
-              "sim_speed": 1.1,
-              "bg_color": [
-                1.0,
-                1.0,
-                1.0,
-                0.0
-              ],
-              "perturbation": 0.0
+              "zoom": 0.5,
+              "contrast": 3.0,
+              "rotation": 0.07,
+              "scale_mult": 1.2,
+              "node_glow": 0.5,
+              "color_filament": [
+                0.7,
+                0.3,
+                0.9,
+                1.0
+              ]
             }
           },
           "effects": [
             {
-              "path": "shaders/ripple.fs",
-              "enabled": true,
+              "path": "shaders/kaleidoscope.fs",
+              "enabled": false,
               "params": {
-                "ripple_amount": 0.02,
-                "center_y": 0.5,
-                "anim_speed": 0.4,
                 "center_x": 0.5,
-                "frequency": 7.0,
-                "decay": 0.0
-              }
-            },
-            {
-              "path": "shaders/edge_glow.fs",
-              "enabled": true,
-              "params": {
-                "glow_color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "glow_amount": 1.0,
-                "edge_strength": 3.0,
-                "show_original": true
+                "segments": 2.0,
+                "rotation": 0.0,
+                "center_y": 0.5,
+                "zoom": 1.0
               }
             }
           ],
@@ -66,138 +60,80 @@
           "mute": false,
           "solo": false,
           "z_index": 0
-        },
-        {
-          "name": "voronoi",
-          "source": {
-            "type": "Shader",
-            "path": "shaders/voronoi.fs",
-            "params": {
-              "style": 0.0,
-              "color1": [
-                0.1,
-                0.4,
-                0.9,
-                1.0
-              ],
-              "color2": [
-                0.9,
-                0.2,
-                0.3,
-                1.0
-              ],
-              "cell_count": 9.5,
-              "edge_width": 0.0,
-              "anim_speed": 1.0,
-              "edge_color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ]
-            }
-          },
-          "effects": [
-            {
-              "path": "shaders/mirror_kaleidoscope.fs",
-              "enabled": true,
-              "params": {
-                "segments": 4.0,
-                "center_y": 0.5,
-                "center_x": 0.5,
-                "zoom": 1.0,
-                "rotation": 0.0
-              }
-            }
-          ],
-          "opacity": 1.0,
-          "blend_mode": "multiply",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
-        },
-        {
-          "name": "📹 FaceTime HD Camera",
-          "source": {
-            "type": "Camera",
-            "name": "FaceTime HD Camera"
-          },
-          "effects": [
-            {
-              "path": "shaders/edge_detect.fs",
-              "enabled": true,
-              "params": {
-                "sensitivity": 5.0,
-                "bg_opacity": 0.0,
-                "use_source_color": 0.0,
-                "edge_color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ]
-              }
-            }
-          ],
-          "opacity": 1.0,
-          "blend_mode": "multiply",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
         }
       ],
-      "effects": [
-        {
-          "path": "shaders/kaleidoscope.fs",
-          "enabled": true,
-          "params": {
-            "center_x": 0.5,
-            "rotation": 0.0,
-            "center_y": 0.5,
-            "zoom": 1.0,
-            "segments": 2.0
-          }
-        },
-        {
-          "path": "shaders/hue_shift.fs",
-          "enabled": true,
-          "params": {
-            "hue_shift": 0.55,
-            "cycle_speed": 0.5,
-            "saturation": 1.0,
-            "auto_cycle": false
-          }
-        }
-      ]
+      "effects": []
     },
     {
-      "name": "Ch 2",
-      "opacity": 0.0,
+      "name": "Ch 1",
+      "opacity": 1.0,
       "blend_mode": "normal",
       "decks": [
+        {
+          "name": "black_hole",
+          "source": {
+            "type": "Shader",
+            "path": "/Users/206653756/projects/vj/shaders/black_hole.fs",
+            "params": {
+              "crystal_size": 0.3,
+              "equator_bias": 0.6,
+              "color_mode": 0.0,
+              "scatter": 0.43,
+              "camera_speed": 0.55,
+              "jet_height": 12.0,
+              "jet_speed": 1.4,
+              "distortion": 1.5,
+              "contrast": 1.3,
+              "jet_power": 0.7,
+              "spin_speed": 0.6,
+              "shell_radius": 3.5,
+              "density": 3.0,
+              "streak_count": 150.0,
+              "bloom": 0.0,
+              "crystal_dist": 1.0,
+              "crystal_glow": 0.42,
+              "pulse_rate": 1.0,
+              "invert": 0.0,
+              "orbit_radius": 8.2,
+              "orbit_tilt": 3.5,
+              "cloud_density": 0.7,
+              "jet_width": 0.81,
+              "streak_thin": 0.58,
+              "hole_size": 0.21,
+              "hue_shift": 0.0
+            }
+          },
+          "effects": [],
+          "opacity": 1.0,
+          "blend_mode": "normal",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
+        },
         {
           "name": "char_cycle",
           "source": {
             "type": "Shader",
-            "path": "shaders/char_cycle.fs",
+            "path": "/Users/206653756/projects/vj/shaders/char_cycle.fs",
             "params": {
+              "speed": 2.0,
+              "grid_size": 9.5,
+              "char_set": 6.7,
+              "offset_amount": 7.5,
+              "table_mode": 0.65,
               "fg_color": [
                 1.0,
                 1.0,
                 1.0,
                 1.0
               ],
-              "offset_amount": 3.0,
+              "speed_variation": 0.5,
               "bg_color": [
                 0.0,
                 0.0,
                 0.0,
                 0.0
-              ],
-              "grid_size": 1.0,
-              "speed_variation": 0.5,
-              "char_set": 14.0,
-              "speed": 10.0
+              ]
             }
           },
           "effects": [
@@ -205,326 +141,33 @@
               "path": "shaders/chroma_key.fs",
               "enabled": true,
               "params": {
+                "opacity": 0.0,
+                "softness": 0.1,
+                "tolerance": 0.15,
                 "target_color": [
                   0.0,
                   0.0,
                   0.0,
-                  1.0
-                ],
-                "softness": 0.1,
-                "tolerance": 0.15,
-                "opacity": 0.0
-              }
-            }
-          ],
-          "opacity": 1.0,
-          "blend_mode": "normal",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
-        }
-      ],
-      "effects": []
-    },
-    {
-      "name": "Ch 3",
-      "opacity": 0.0,
-      "blend_mode": "normal",
-      "decks": [
-        {
-          "name": "abstract_field",
-          "source": {
-            "type": "Shader",
-            "path": "shaders/abstract_field.fs",
-            "params": {
-              "color1": [
-                0.1,
-                0.3,
-                0.8,
-                1.0
-              ],
-              "color3": [
-                0.0,
-                0.10375144,
-                0.04446491,
-                1.0
-              ],
-              "color2": [
-                0.9,
-                0.2,
-                0.5,
-                1.0
-              ],
-              "contrast": 1.4,
-              "complexity": 5.0,
-              "color_shift": 0.55,
-              "anim_speed": 1.0,
-              "field_scale": 3.0
-            }
-          },
-          "effects": [
-            {
-              "path": "shaders/block_distort.fs",
-              "enabled": true,
-              "params": {
-                "block_size": 8.0,
-                "anim_speed": 1.0,
-                "color_split": 0.0,
-                "shift_amount": 0.28,
-                "scramble": 0.53
-              }
-            },
-            {
-              "path": "shaders/shift_glitch.fs",
-              "enabled": true,
-              "params": {
-                "glitch_rate": 5.0,
-                "glitch_amount": 0.3,
-                "shift_intensity": 0.05,
-                "block_size": 0.05,
-                "color_shift": 0.5
-              }
-            },
-            {
-              "path": "shaders/mirror_kaleidoscope.fs",
-              "enabled": false,
-              "params": {
-                "rotation": 0.0,
-                "segments": 11.3,
-                "center_y": 0.5,
-                "zoom": 1.0,
-                "center_x": 0.5
-              }
-            }
-          ],
-          "opacity": 1.0,
-          "blend_mode": "normal",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
-        }
-      ],
-      "effects": []
-    },
-    {
-      "name": "Ch 4",
-      "opacity": 0.0,
-      "blend_mode": "normal",
-      "decks": [
-        {
-          "name": "screen-shot-2012-01-10-at-14-53-54.png",
-          "source": {
-            "type": "Image",
-            "path": "/Users/206653756/Downloads/screen-shot-2012-01-10-at-14-53-54.png"
-          },
-          "effects": [
-            {
-              "path": "shaders/chroma_flow.fs",
-              "enabled": true,
-              "params": {
-                "group_speed_6": 1.0,
-                "flow_scale": 1.0,
-                "flow_speed": 0.15,
-                "group_angle_2": 90.0,
-                "snap_hardness": 0.7,
-                "displacement_falloff": 0.2,
-                "group_speed_1": 1.0,
-                "displacement_amount": 0.1,
-                "palette_5": [
-                  0.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "palette_1": [
-                  0.0,
-                  0.5,
-                  1.0,
-                  1.0
-                ],
-                "palette_0": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  1.0
-                ],
-                "group_angle_5": 225.0,
-                "palette_7": [
-                  0.5,
-                  0.0,
-                  1.0,
-                  1.0
-                ],
-                "background_fill": [
-                  0.0,
-                  0.0,
-                  0.0,
                   0.0
-                ],
-                "group_angle_7": 315.0,
-                "group_angle_4": 180.0,
-                "group_angle_1": 45.0,
-                "group_angle_6": 270.0,
-                "palette_size": 4.0,
-                "group_speed_0": 1.0,
-                "palette_3": [
-                  1.0,
-                  1.0,
-                  0.0,
-                  1.0
-                ],
-                "flow_type": 0.0,
-                "palette_4": [
-                  1.0,
-                  0.0,
-                  1.0,
-                  1.0
-                ],
-                "group_angle_0": 0.0,
-                "group_speed_3": 0.15,
-                "palette_mode": false,
-                "group_speed_4": 0.2,
-                "group_speed_5": 0.2,
-                "palette_2": [
-                  0.0,
-                  1.0,
-                  0.2,
-                  1.0
-                ],
-                "group_speed_2": 1.0,
-                "edge_blend_width": 0.05,
-                "palette_6": [
-                  1.0,
-                  0.5,
-                  0.0,
-                  1.0
-                ],
-                "group_speed_7": 1.0,
-                "color_preservation": 1.0,
-                "group_angle_3": 135.0
+                ]
               }
             },
             {
-              "path": "shaders/melt_drip.fs",
+              "path": "shaders/scatter_popup.fs",
               "enabled": true,
               "params": {
-                "melt_amount": 0.0,
-                "wave_frequency": 8.0,
-                "drip_intensity": 0.5,
-                "drip_speed": 1.0,
-                "horizontal_wobble": 0.0
-              }
-            },
-            {
-              "path": "shaders/zoom.fs",
-              "enabled": true,
-              "params": {
-                "center_x": 0.38,
-                "zoom_amount": 1.2,
-                "center_y": 0.5
-              }
-            },
-            {
-              "path": "shaders/levels.fs",
-              "enabled": true,
-              "params": {
-                "out_black": 0.0,
-                "in_white": 1.0,
-                "gamma": 0.85,
-                "out_white": 1.0,
-                "in_black": 0.15
+                "bg_mode": 0.3,
+                "popup_count": 8.0,
+                "pop_speed": 1.0,
+                "min_radius": 0.25,
+                "max_radius": 0.71,
+                "popup_scale": 0.21,
+                "opacity": 1.0
               }
             }
           ],
           "opacity": 1.0,
           "blend_mode": "normal",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
-        },
-        {
-          "name": "tas_psychedelic",
-          "source": {
-            "type": "Shader",
-            "path": "shaders/tas_psychedelic.fs",
-            "params": {
-              "slither_amp": 1.0,
-              "move_speed": 1.5,
-              "snake_thickness": 0.02,
-              "snake_color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ],
-              "move_range": 1.75,
-              "snake_density": 8.0,
-              "bg_color": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ],
-              "snake_length": 0.6,
-              "anim_speed": 0.85,
-              "slither_freq": 0.7
-            }
-          },
-          "effects": [
-            {
-              "path": "shaders/mirror_kaleidoscope.fs",
-              "enabled": true,
-              "params": {
-                "segments": 4.0,
-                "rotation": 0.0,
-                "center_y": 0.5,
-                "zoom": 1.0,
-                "center_x": 0.5
-              }
-            }
-          ],
-          "opacity": 1.0,
-          "blend_mode": "normal",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
-        },
-        {
-          "name": "sacred_geometry",
-          "source": {
-            "type": "Shader",
-            "path": "shaders/sacred_geometry.fs",
-            "params": {
-              "layers": 1.3,
-              "color1": [
-                0.79349744,
-                0.73129696,
-                0.54469544,
-                1.0
-              ],
-              "rotation": 3.8,
-              "bg_color": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ],
-              "scale": 0.45,
-              "pattern": 0.0,
-              "anim_speed": 0.0,
-              "line_width": 0.005,
-              "glow_amount": 1.1,
-              "color2": [
-                0.3,
-                0.5,
-                0.9,
-                1.0
-              ]
-            }
-          },
-          "effects": [],
-          "opacity": 1.0,
-          "blend_mode": "add",
           "mute": false,
           "solo": false,
           "z_index": 0
@@ -533,29 +176,11 @@
       "effects": []
     }
   ],
-  "crossfader": 0.20472442,
+  "crossfader": 0.0,
   "active_transition": null,
   "master_effects": [],
   "modulation": {
     "sources": [
-      {
-        "LFO": {
-          "waveform": "Sine",
-          "frequency": 0.4,
-          "phase": 0.0,
-          "amplitude": 0.48,
-          "bipolar": true
-        }
-      },
-      {
-        "LFO": {
-          "waveform": "Sine",
-          "frequency": 0.025,
-          "phase": 0.0,
-          "amplitude": 1.0,
-          "bipolar": true
-        }
-      },
       {
         "AudioBand": {
           "source_id": 0,
@@ -573,7 +198,7 @@
           "freq_low": 20.0,
           "freq_high": 110.0,
           "gain": 1.5,
-          "smoothing": 0.85,
+          "smoothing": 0.99,
           "mode": "Direct",
           "noise_gate": 0.24
         }
@@ -582,205 +207,88 @@
         "AudioBand": {
           "source_id": null,
           "freq_low": 20.0,
-          "freq_high": 250.0,
+          "freq_high": 80.0,
           "gain": 1.0,
-          "smoothing": 0.6,
-          "mode": "Increase",
+          "smoothing": 0.71,
+          "mode": "Direct",
           "noise_gate": 0.27
+        }
+      },
+      {
+        "LFO": {
+          "waveform": "Sine",
+          "frequency": 0.4,
+          "phase": 0.0,
+          "amplitude": 0.48,
+          "bipolar": true
+        }
+      },
+      {
+        "LFO": {
+          "waveform": "Sine",
+          "frequency": 0.025,
+          "phase": 0.0,
+          "amplitude": 1.0,
+          "bipolar": true
         }
       }
     ],
     "assignments": {
-      "ch3_deck0_fx0:group_speed_5": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck0_fx0:melt_amount": [
-        {
-          "source_idx": 0,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch3_deck0_fx1:drip_speed": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch2_deck0_fx0:scramble": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_fx1:hue_shift": [
+      "ch1_deck0:cloud_density": [
         {
           "source_idx": 1,
           "amount": 0.5,
           "component": null
-        },
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
         }
       ],
-      "ch2_deck0_fx0:color_split": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch2_deck0:anim_speed": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch3_deck0_fx0:group_speed_3": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0_fx0:decay": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch3_deck2:glow_amount": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck0:slither_freq": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0:feed_rate": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch2_deck0_fx0:shift_amount": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch3_deck2:pattern": [
+      "ch1_deck1:char_set": [
         {
           "source_idx": 4,
           "amount": 0.5,
           "component": null
-        }
-      ],
-      "ch0_deck0:perturbation": [
+        },
         {
-          "source_idx": 3,
+          "source_idx": 1,
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch0_deck1:edge_width": [
+      "ch1_deck1:speed_variation": [
         {
-          "source_idx": 3,
+          "source_idx": 0,
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch3_deck0_fx3:rb": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck0_fx0:cell_size": [],
-      "ch3_deck2:layers": [
+      "ch1_deck1_fx1:bg_mode": [
         {
           "source_idx": 2,
           "amount": 0.5,
           "component": null
-        },
+        }
+      ],
+      "ch0_deck1:membrane_amp": [
         {
-          "source_idx": 1,
+          "source_idx": 2,
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch3_deck0_fx0:group_speed_4": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch3_deck0_fx3:rg": [
-        {
-          "source_idx": 4,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch3_deck0_fx3:gr": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch3_deck0_fx2:hue_shift": [
-        {
-          "source_idx": 3,
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_idx": 1,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck1_fx1:hue_shift": [
+      "ch1_deck1:grid_size": [
         {
           "source_idx": 0,
           "amount": 0.5,
           "component": null
         },
         {
-          "source_idx": 1,
+          "source_idx": 3,
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch3_deck0_fx1:hue_shift": [
+      "ch1_deck0:crystal_dist": [
         {
-          "source_idx": 0,
+          "source_idx": 1,
           "amount": 0.5,
           "component": null
         },
@@ -790,68 +298,78 @@
           "component": null
         }
       ],
-      "ch3_deck1:anim_speed": [
+      "ch1_deck0:camera_speed": [
         {
-          "source_idx": 3,
+          "source_idx": 2,
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch2_deck0_fx1:glitch_amount": [
+      "ch0_deck1_fx0:shadow_g": [
         {
-          "source_idx": 3,
+          "source_idx": 0,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch0_deck0:node_glow": [
+        {
+          "source_idx": 2,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch0_deck1_fx0:shadow_r": [
+        {
+          "source_idx": 1,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch1_deck0:streak_thin": [
+        {
+          "source_idx": 0,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch0_deck0:grid_density": [
+        {
+          "source_idx": 2,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch1_deck0:spin_speed": [
+        {
+          "source_idx": 2,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch1_deck0:pulse_rate": [
+        {
+          "source_idx": 0,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch0_deck0:speed": [
+        {
+          "source_idx": 2,
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "ch0_deck0:rotation": [
+        {
+          "source_idx": 2,
           "amount": 0.5,
           "component": null
         }
       ]
     }
   },
-  "transition_sequences": [
-    {
-      "name": "Sequence 1",
-      "enabled": true,
-      "steps": [
-        {
-          "kind": "Fade",
-          "from_ch": 0,
-          "to_ch": 1,
-          "duration": {
-            "unit": "beats",
-            "value": 17.0
-          },
-          "easing": "ease_in_out"
-        },
-        {
-          "kind": "Wait",
-          "duration": {
-            "unit": "beats",
-            "value": 10.0
-          }
-        },
-        {
-          "kind": "Fade",
-          "from_ch": 1,
-          "to_ch": 0,
-          "duration": {
-            "unit": "seconds",
-            "value": 2.0
-          },
-          "easing": "ease_in_out"
-        },
-        {
-          "kind": "Wait",
-          "duration": {
-            "unit": "seconds",
-            "value": 9.0
-          }
-        },
-        {
-          "kind": "GoTo",
-          "step_index": 0
-        }
-      ]
-    }
-  ],
   "render_width": 1920,
   "render_height": 1080
 }

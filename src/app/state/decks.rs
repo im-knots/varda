@@ -300,59 +300,87 @@ impl VardaApp {
             }
         }
 
-        // Load channel preset = create a new channel + bulk-load each deck into it
-        if let Some(preset_idx) = actions.channel_preset_to_add.take() {
+        // Load channel preset: fill into existing channel or create a new one
+        if let Some((target_ch, preset_idx)) = actions.channel_preset_to_add.take() {
             if preset_idx < self.preset_library.channel_presets.len() {
                 let preset = self.preset_library.channel_presets[preset_idx].clone();
-                let ch_name = mixer.take_next_channel_name();
-                match crate::channel::Channel::new(
-                    ch_name, context,
-                    self.render_width, self.render_height,
-                ) {
-                    Ok(mut channel) => {
-                        // Apply channel-level properties
+
+                // Only fill into the target channel if it's empty (no decks);
+                // otherwise create a new channel to avoid clobbering existing content.
+                let use_existing = target_ch.and_then(|idx| {
+                    mixer.channel_mut(idx).filter(|ch| ch.decks.is_empty()).map(|_| idx)
+                });
+
+                let resolved = if let Some(ch_idx) = use_existing {
+                    // Fill into existing empty channel
+                    if let Some(channel) = mixer.channel_mut(ch_idx) {
                         channel.opacity = preset.config.opacity;
                         channel.blend_mode = preset.config.blend_mode.into();
+                    }
+                    Some((ch_idx, false))
+                } else {
+                    // Create a new channel
+                    let ch_name = mixer.take_next_channel_name();
+                    match crate::channel::Channel::new(
+                        ch_name, context,
+                        self.render_width, self.render_height,
+                    ) {
+                        Ok(mut channel) => {
+                            channel.opacity = preset.config.opacity;
+                            channel.blend_mode = preset.config.blend_mode.into();
+                            let idx = mixer.channels().len();
+                            mixer.channels_mut().push(channel);
+                            Some((idx, true))
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create channel for preset: {}", e);
+                            self.notifications.error(format!("Failed to load channel preset: {}", e));
+                            None
+                        }
+                    }
+                };
 
-                        // Restore channel effects
-                        let mut had_errors = false;
-                        for eff_config in &preset.config.effects {
-                            match crate::persistence::restore_effect(eff_config, context, context.texture_format) {
-                                Ok(eff) => channel.add_effect(eff),
-                                Err(e) => {
-                                    log::warn!("Failed to restore channel effect '{}': {}", eff_config.path, e);
-                                    had_errors = true;
+                if let Some((ch_idx, created_new)) = resolved {
+
+                let mut had_errors = false;
+
+                // Restore channel effects (only for new channels to avoid duplicating effects)
+                if created_new {
+                    for eff_config in &preset.config.effects {
+                        match crate::persistence::restore_effect(eff_config, context, context.texture_format) {
+                            Ok(eff) => {
+                                if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                    ch.add_effect(eff);
                                 }
                             }
-                        }
-
-                        // Push the empty channel into the mixer, then bulk-load decks
-                        let ch_idx = mixer.channels().len();
-                        mixer.channels_mut().push(channel);
-
-                        for deck_config in &preset.config.decks {
-                            if let Err(e) = Self::restore_deck_into_channel(
-                                deck_config, ch_idx, context, &self.registry,
-                                &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager,
-                                self.render_width, self.render_height,
-                                mixer, egui_renderer, deck_preview_textures,
-                            ) {
-                                log::warn!("Failed to restore deck '{}' in channel preset: {}", deck_config.name, e);
+                            Err(e) => {
+                                log::warn!("Failed to restore channel effect '{}': {}", eff_config.path, e);
                                 had_errors = true;
                             }
                         }
+                    }
+                }
 
-                        let msg = if had_errors {
-                            format!("💾 Loaded channel preset '{}' (with warnings)", preset.name)
-                        } else {
-                            format!("💾 Loaded channel preset '{}'", preset.name)
-                        };
-                        self.notifications.info(msg);
+                // Bulk-load decks into the channel
+                for deck_config in &preset.config.decks {
+                    if let Err(e) = Self::restore_deck_into_channel(
+                        deck_config, ch_idx, context, &self.registry,
+                        &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager,
+                        self.render_width, self.render_height,
+                        mixer, egui_renderer, deck_preview_textures,
+                    ) {
+                        log::warn!("Failed to restore deck '{}' in channel preset: {}", deck_config.name, e);
+                        had_errors = true;
                     }
-                    Err(e) => {
-                        log::error!("Failed to create channel for preset: {}", e);
-                        self.notifications.error(format!("Failed to load channel preset: {}", e));
-                    }
+                }
+
+                let target_desc = if created_new { "new channel".to_string() } else { format!("ch{}", ch_idx) };
+                let msg = if had_errors {
+                    format!("💾 Loaded channel preset '{}' into {} (with warnings)", preset.name, target_desc)
+                } else {
+                    format!("💾 Loaded channel preset '{}' into {}", preset.name, target_desc)
+                };
+                self.notifications.info(msg);
                 }
             }
         }

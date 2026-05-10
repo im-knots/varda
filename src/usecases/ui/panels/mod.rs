@@ -434,12 +434,17 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 }
             }
 
-            // Channel preset dropped anywhere (creates a new channel)
+            // Channel preset: if dropped on a channel, fill into it; otherwise create new
             let ch_preset_key = egui::Id::new("__lib_dnd_ch_preset_idx");
             let ch_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(ch_preset_key));
             if let Some(preset_idx) = ch_preset_idx {
-                log::info!("Library drop (deferred): channel preset {}", preset_idx);
-                actions.channel_preset_to_add = Some(preset_idx);
+                if let Some(ch_idx) = hover_ch {
+                    log::info!("Library drop (deferred): channel preset {} -> existing ch{}", preset_idx, ch_idx);
+                    actions.channel_preset_to_add = Some((Some(ch_idx), preset_idx));
+                } else {
+                    log::info!("Library drop (deferred): channel preset {} -> new channel", preset_idx);
+                    actions.channel_preset_to_add = Some((None, preset_idx));
+                }
             }
 
             if let Some((target_type, ch_idx, deck_idx)) = hover_fx {
