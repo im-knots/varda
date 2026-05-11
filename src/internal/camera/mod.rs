@@ -317,37 +317,56 @@ impl CameraManager {
     /// the background capture threads have produced since the last call.
     /// Call once per frame from the main loop.
     pub fn update(&mut self, queue: &wgpu::Queue) {
-        for (_id, active) in self.active.iter_mut() {
-            // Take the latest frame from the shared buffer (non-blocking)
-            let frame = if let Ok(mut lock) = active.frame_data.try_lock() {
-                lock.take()
-            } else {
-                None
-            };
+        self.update_all(queue);
+    }
 
-            if let Some(data) = frame {
-                let expected = (active.width * active.height * 4) as usize;
-                if data.len() >= expected {
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &active.texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &data[..expected],
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(active.width * 4),
-                            rows_per_image: Some(active.height),
-                        },
-                        wgpu::Extent3d {
-                            width: active.width,
-                            height: active.height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
+    /// Upload frames for all active cameras.
+    fn update_all(&mut self, queue: &wgpu::Queue) {
+        for (_id, active) in self.active.iter_mut() {
+            Self::upload_frame(active, queue);
+        }
+    }
+
+    /// Upload frames only for cameras whose IDs are in the provided set.
+    /// Cameras not in the set skip the GPU upload, saving bandwidth.
+    pub fn update_selective(&mut self, queue: &wgpu::Queue, needed_ids: &std::collections::HashSet<CameraId>) {
+        for (id, active) in self.active.iter_mut() {
+            if needed_ids.contains(id) {
+                Self::upload_frame(active, queue);
+            }
+        }
+    }
+
+    fn upload_frame(active: &mut ActiveCamera, queue: &wgpu::Queue) {
+        // Take the latest frame from the shared buffer (non-blocking)
+        let frame = if let Ok(mut lock) = active.frame_data.try_lock() {
+            lock.take()
+        } else {
+            None
+        };
+
+        if let Some(data) = frame {
+            let expected = (active.width * active.height * 4) as usize;
+            if data.len() >= expected {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &active.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &data[..expected],
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(active.width * 4),
+                        rows_per_image: Some(active.height),
+                    },
+                    wgpu::Extent3d {
+                        width: active.width,
+                        height: active.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
             }
         }
     }

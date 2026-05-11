@@ -93,7 +93,12 @@ impl GpuContext {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
-        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+        // Prefer Immediate to avoid macOS ProMotion throttling the render loop.
+        // The UI event loop drives frame pacing via request_redraw().
+        // Fallback: Mailbox (non-blocking vsync) > Fifo (blocking vsync, last resort).
+        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+            wgpu::PresentMode::Immediate
+        } else if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
             wgpu::PresentMode::Mailbox
         } else {
             wgpu::PresentMode::Fifo
@@ -108,7 +113,7 @@ impl GpuContext {
             present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 3,
+            desired_maximum_frame_latency: 2,
         };
 
         surface.configure(&device, &surface_config);

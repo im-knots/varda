@@ -539,6 +539,9 @@ impl Deck {
                     render_pass.draw(0..3, 0..1);
                 }
 
+                // Multipass intermediate passes MUST submit immediately —
+                // update_uniforms() overwrites the same buffer each iteration,
+                // so batching would cause all passes to see the last pass's data.
                 context.queue.submit(std::iter::once(encoder.finish()));
 
                 if let Some(pb) = pass_buffers.get_mut(target_name) {

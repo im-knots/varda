@@ -48,6 +48,9 @@ pub struct UIRunner {
 
     // ── Undo/redo history ─────────────────────────────────────────────
     history: HistoryManager,
+
+    // ── Performance: gate publish_state to reduce snapshot overhead ──
+    publish_counter: u32,
 }
 
 impl UIRunner {
@@ -72,6 +75,7 @@ impl UIRunner {
             pending_deck_loads: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             varda: None,
             history: HistoryManager::new(),
+            publish_counter: 0,
         }
     }
 
@@ -472,7 +476,10 @@ impl UIRunner {
         {
             let Some(varda) = self.varda.as_mut() else { return; };
             varda.render_outputs();
-            varda.publish_state();
+            self.publish_counter += 1;
+            if self.publish_counter % 10 == 0 {
+                varda.publish_state();
+            }
         }
     }
 

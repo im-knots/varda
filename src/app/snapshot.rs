@@ -566,18 +566,11 @@ pub(crate) fn build_ui_data(
         channel_count: engine.mixer.channels.len(),
         channel_names: engine.mixer.channels.iter().map(|c| c.name.clone()).collect(),
         channel_render_stats: {
+            let frame_fps = app.fps_smoothed;
             let stats: Vec<crate::usecases::ui::ChannelRenderStats> = engine.mixer.channels.iter()
                 .map(|ch| {
-                    // Average FPS from active deck pipeline timing
-                    let active_deck_fps: Vec<f32> = ch.decks.iter()
-                        .filter(|d| d.fps > 0.0 && d.effective_opacity > 0.0)
-                        .map(|d| d.fps)
-                        .collect();
-                    let avg_fps = if active_deck_fps.is_empty() {
-                        0.0
-                    } else {
-                        active_deck_fps.iter().sum::<f32>() / active_deck_fps.len() as f32
-                    };
+                    // Use wall-clock frame rate when channel has active decks
+                    let avg_fps = if ch.active_deck_count > 0 { frame_fps } else { 0.0 };
                     crate::usecases::ui::ChannelRenderStats {
                         name: ch.name.clone(),
                         avg_deck_fps: avg_fps,
@@ -588,20 +581,8 @@ pub(crate) fn build_ui_data(
                 .collect();
             stats
         },
-        fps: {
-            // Top-level FPS = average of channel FPSes (only channels with active decks)
-            let ch_fps: Vec<f32> = engine.mixer.channels.iter()
-                .filter_map(|ch| {
-                    let active: Vec<f32> = ch.decks.iter()
-                        .filter(|d| d.fps > 0.0 && d.effective_opacity > 0.0)
-                        .map(|d| d.fps)
-                        .collect();
-                    if active.is_empty() { None }
-                    else { Some(active.iter().sum::<f32>() / active.len() as f32) }
-                })
-                .collect();
-            if ch_fps.is_empty() { engine.fps } else { ch_fps.iter().sum::<f32>() / ch_fps.len() as f32 }
-        },
+        // Wall-clock frame rate (smoothed over 60 frames)
+        fps: app.fps_smoothed,
         gpu_device_name: {
             let info = app.context.adapter.get_info();
             info.name

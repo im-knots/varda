@@ -523,9 +523,10 @@ impl Channel {
             .chain(transitioning.into_iter())
             .collect();
 
-        // Composite all decks to the composite texture
+        // Composite all decks to the composite texture (batched submission)
         let width = self.composite_texture.width();
         let height = self.composite_texture.height();
+        let mut composite_cmds: Vec<wgpu::CommandBuffer> = Vec::new();
 
         for (i, info) in ordered.iter().enumerate() {
             let slot = &mut self.decks[info.deck_idx];
@@ -542,7 +543,7 @@ impl Channel {
                         self.effect_ping_texture.as_image_copy(),
                         self.composite_texture.size(),
                     );
-                    context.queue.submit(std::iter::once(copy_encoder.finish()));
+                    composite_cmds.push(copy_encoder.finish());
 
                     // Run transition shader: start=deck (outgoing), end=composite-below (incoming)
                     let uniforms = ISFUniforms {
@@ -562,7 +563,7 @@ impl Channel {
                         context.queue.write_buffer(buf, 0, &params_data);
                     }
 
-                    effect.pipeline.render_to(
+                    let cmd = effect.pipeline.render_to_cmd(
                         context,
                         &slot.deck.texture_view,      // startImage: outgoing deck
                         &self.effect_ping_view,         // endImage: composite below
@@ -570,6 +571,7 @@ impl Channel {
                         &uniforms,
                         effect.params.buffer(),
                     );
+                    composite_cmds.push(cmd);
                     continue;
                 }
 
@@ -602,7 +604,7 @@ impl Channel {
                     });
                     pipeline.render(&mut render_pass, &bind_group);
                 }
-                context.queue.submit(std::iter::once(encoder.finish()));
+                composite_cmds.push(encoder.finish());
                 continue;
             }
 
@@ -641,7 +643,7 @@ impl Channel {
                 pipeline.render(&mut render_pass, &bind_group);
             }
 
-            context.queue.submit(std::iter::once(encoder.finish()));
+            composite_cmds.push(encoder.finish());
         }
 
         // If no decks, clear the composite texture to transparent
@@ -666,7 +668,12 @@ impl Channel {
                     occlusion_query_set: None,
                 });
             }
-            context.queue.submit(std::iter::once(encoder.finish()));
+            composite_cmds.push(encoder.finish());
+        }
+
+        // Batch submit all compositing commands
+        if !composite_cmds.is_empty() {
+            context.queue.submit(composite_cmds);
         }
 
         // Apply channel effect chain (if any)

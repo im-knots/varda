@@ -86,6 +86,9 @@ impl Mixer {
 
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
             if effective_opacities[ch_idx] < 0.001 {
+                // Reset stats so culled channels don't show stale render metrics
+                channel.render_time_ms = 0.0;
+                channel.active_deck_count = 0;
                 continue;
             }
             channel.render(context, audio_data, &self.modulation, ch_idx, time, dt)?;
@@ -171,6 +174,7 @@ impl Mixer {
             self.channels.iter().map(|ch| ch.opacity).collect()
         };
 
+        let mut cmd_buffers = Vec::new();
         for (i, (channel, &opacity)) in self.channels.iter().zip(opacities.iter()).enumerate() {
             if opacity <= 0.0 { continue; }
 
@@ -208,7 +212,11 @@ impl Mixer {
                 pipeline.render(&mut render_pass, &bind_group);
             }
 
-            context.queue.submit(std::iter::once(encoder.finish()));
+            cmd_buffers.push(encoder.finish());
+        }
+
+        if !cmd_buffers.is_empty() {
+            context.queue.submit(cmd_buffers);
         }
 
         Ok(())
@@ -250,6 +258,7 @@ impl Mixer {
             self.channels.iter().map(|ch| ch.opacity).collect()
         };
 
+        let mut cmd_buffers = Vec::new();
         let mut is_first = true;
         for &ch_idx in indices {
             if ch_idx >= self.channels.len() { continue; }
@@ -288,7 +297,7 @@ impl Mixer {
                 });
                 pipeline.render(&mut render_pass, &bind_group);
             }
-            context.queue.submit(std::iter::once(encoder.finish()));
+            cmd_buffers.push(encoder.finish());
             is_first = false;
         }
 
@@ -313,7 +322,11 @@ impl Mixer {
                     occlusion_query_set: None,
                 });
             }
-            context.queue.submit(std::iter::once(encoder.finish()));
+            cmd_buffers.push(encoder.finish());
+        }
+
+        if !cmd_buffers.is_empty() {
+            context.queue.submit(cmd_buffers);
         }
     }
 

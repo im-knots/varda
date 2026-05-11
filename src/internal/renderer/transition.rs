@@ -192,8 +192,8 @@ impl TransitionPipeline {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[*uniforms]));
     }
 
-    /// Render the transition to a target view.
-    pub fn render_to(
+    /// Render the transition to a target view, returning a command buffer for batched submission.
+    pub fn render_to_cmd(
         &self,
         context: &super::GpuContext,
         start_view: &wgpu::TextureView,
@@ -201,7 +201,7 @@ impl TransitionPipeline {
         output_view: &wgpu::TextureView,
         uniforms: &ISFUniforms,
         user_params_buffer: Option<&wgpu::Buffer>,
-    ) {
+    ) -> wgpu::CommandBuffer {
         self.update_uniforms(&context.queue, uniforms);
         let bind_group = self.create_bind_group(&context.device, start_view, end_view, user_params_buffer);
 
@@ -231,7 +231,21 @@ impl TransitionPipeline {
             pass.draw(0..3, 0..1);
         }
 
-        context.queue.submit(std::iter::once(encoder.finish()));
+        encoder.finish()
+    }
+
+    /// Render the transition to a target view (submits immediately).
+    pub fn render_to(
+        &self,
+        context: &super::GpuContext,
+        start_view: &wgpu::TextureView,
+        end_view: &wgpu::TextureView,
+        output_view: &wgpu::TextureView,
+        uniforms: &ISFUniforms,
+        user_params_buffer: Option<&wgpu::Buffer>,
+    ) {
+        let cmd = self.render_to_cmd(context, start_view, end_view, output_view, uniforms, user_params_buffer);
+        context.queue.submit(std::iter::once(cmd));
     }
 }
 

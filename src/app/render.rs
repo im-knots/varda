@@ -118,8 +118,34 @@ impl VardaApp {
     /// Render the mixer frame: update cameras, NDI, Syphon, collect audio, render mixer.
     /// This performs all GPU work that doesn't need the surface texture.
     pub fn render_mixer_frame(&mut self) {
-        // Update camera frames
-        self.camera_manager.update(&self.context.queue);
+        // Compute effective channel opacities to determine which cameras are needed
+        let channel_count = self.mixer.channel_count();
+        let crossfader = self.mixer.crossfader();
+        let effective_opacities: Vec<f32> = if channel_count == 2 {
+            let channels = self.mixer.channels();
+            vec![
+                (1.0 - crossfader) * channels[0].opacity,
+                crossfader * channels[1].opacity,
+            ]
+        } else {
+            self.mixer.channels().iter().map(|ch| ch.opacity).collect()
+        };
+
+        // Collect camera IDs needed by visible channels
+        let mut needed_camera_ids = std::collections::HashSet::new();
+        for (ch_idx, channel) in self.mixer.channels().iter().enumerate() {
+            if effective_opacities.get(ch_idx).copied().unwrap_or(0.0) <= 0.0 {
+                continue;
+            }
+            for slot in &channel.decks {
+                if let Some(cam_id) = slot.deck.camera_id() {
+                    needed_camera_ids.insert(cam_id);
+                }
+            }
+        }
+
+        // Update only needed camera frames
+        self.camera_manager.update_selective(&self.context.queue, &needed_camera_ids);
 
         // Update NDI receiver frames
         self.ndi_manager.update(&self.context.device, &self.context.queue);

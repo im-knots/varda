@@ -86,26 +86,22 @@ float dTriangle(vec2 p, vec2 center, float radius, float rot) {
 // Flower of Life: overlapping circles in hexagonal arrangement
 float flowerOfLife(vec2 p, float r, int ringCount) {
     float d = 1e6;
+    // Early-out: skip if pixel is far from pattern
+    float pDist = length(p);
+    if (pDist > r * float(ringCount + 2)) return pDist - r;
+
     // Center circle
     d = min(d, dCircle(p, vec2(0.0), r));
-    // Rings of circles
-    for (int ring = 1; ring <= 6; ring++) {
-        if (ring > ringCount) break;
+    // Rings of circles (capped at 3 for performance)
+    int maxRing = min(ringCount, 3);
+    for (int ring = 1; ring <= 3; ring++) {
+        if (ring > maxRing) break;
         int count = ring * 6;
-        for (int i = 0; i < 36; i++) {
+        for (int i = 0; i < 18; i++) {
             if (i >= count) break;
             float angle = float(i) * TAU / float(count) + PI / 6.0;
             vec2 center = vec2(cos(angle), sin(angle)) * r * float(ring);
             d = min(d, dCircle(p, center, r));
-        }
-        // Add intermediate circles for proper petal overlap
-        if (ring == 1) {
-            for (int i = 0; i < 6; i++) {
-                float a1 = float(i) * TAU / 6.0 + PI / 6.0;
-                float a2 = float(i + 1) * TAU / 6.0 + PI / 6.0;
-                vec2 mid = (vec2(cos(a1), sin(a1)) + vec2(cos(a2), sin(a2))) * r * 0.5;
-                // skip — these are only needed at higher layers
-            }
         }
     }
     return d;
@@ -114,6 +110,10 @@ float flowerOfLife(vec2 p, float r, int ringCount) {
 // Metatron's Cube: 13 circles + connecting lines
 float metatronsCube(vec2 p, float r, int layerCount) {
     float d = 1e6;
+    // Early-out: skip if pixel is far from pattern
+    float pDist = length(p);
+    if (pDist > r * 2.5) return pDist - r;
+
     // 13 node positions: center + 6 inner + 6 outer
     vec2 nodes[13];
     nodes[0] = vec2(0.0);
@@ -130,10 +130,12 @@ float metatronsCube(vec2 p, float r, int layerCount) {
         d = min(d, dCircle(p, nodes[i], r * 0.15));
     }
 
-    // Connecting lines between all nodes
+    // Connecting lines — only between nearby nodes to reduce O(n²) cost
     if (layerCount >= 2) {
         for (int i = 0; i < 13; i++) {
             if (i >= nodeCount) break;
+            // Skip node if pixel is far from it
+            if (length(p - nodes[i]) > r * 2.0) continue;
             for (int j = i + 1; j < 13; j++) {
                 if (j >= nodeCount) break;
                 d = min(d, dSegment(p, nodes[i], nodes[j]));
@@ -334,15 +336,15 @@ float pentagram(vec2 p, float r, int layerCount) {
 float fibonacciSpiral(vec2 p, float r, int layerCount) {
     float d = 1e6;
     float phi = (1.0 + sqrt(5.0)) / 2.0;
-    float goldenAngle = TAU / (phi * phi); // ~137.5°
+    float goldenAngle = TAU / (phi * phi);
 
-    // Spiral: sample many points along a logarithmic spiral
-    int spiralArms = max(1, layerCount);
-    for (int arm = 0; arm < 6; arm++) {
+    // Spiral: reduced from 128 to 48 samples per arm, max 4 arms
+    int spiralArms = min(max(1, layerCount), 4);
+    for (int arm = 0; arm < 4; arm++) {
         if (arm >= spiralArms) break;
         float armOffset = float(arm) * TAU / float(spiralArms);
-        for (int i = 0; i < 128; i++) {
-            float t = float(i) / 128.0;
+        for (int i = 0; i < 48; i++) {
+            float t = float(i) / 48.0;
             float angle = t * TAU * 3.0 + armOffset;
             float radius = r * 0.05 + r * t * t * 1.5;
             vec2 sp = vec2(cos(angle), sin(angle)) * radius;
@@ -350,10 +352,10 @@ float fibonacciSpiral(vec2 p, float r, int layerCount) {
         }
     }
 
-    // Golden-angle dots (sunflower/phyllotaxis pattern)
+    // Golden-angle dots (reduced from 120 to 40 max)
     if (layerCount >= 2) {
-        int seeds = layerCount * 20;
-        for (int i = 0; i < 120; i++) {
+        int seeds = min(layerCount * 20, 40);
+        for (int i = 0; i < 40; i++) {
             if (i >= seeds) break;
             float a = float(i) * goldenAngle;
             float rad = r * sqrt(float(i) / float(seeds)) * 1.2;

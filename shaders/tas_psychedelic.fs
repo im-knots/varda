@@ -91,247 +91,9 @@ float noise(vec2 p) {
 
 
 // ============================================================
-// High-resolution Mayan serpent head - smooth organic curves
+// Mayan serpent head — optimized (removed unused mayanHead,
+// only mayanHeadRotated is called)
 // ============================================================
-vec4 mayanHead(vec2 p, vec2 pivot, float facing, float size, float time, float seed) {
-    vec2 hp = (p - pivot) / size;
-    hp.x *= facing;
-    hp.y *= -1.0; // Flip Y so fangs point down, plumes point up in screen space
-
-    vec3 col = vec3(0.0);
-    float alpha = 0.0;
-    float glow = 0.0;
-
-    // === ORGANIC HEAD SILHOUETTE using smooth ellipses ===
-    // Main skull - ellipse
-    float skull = length(hp * vec2(1.0, 1.3)) - 0.5;
-
-    // Elongated snout - stretched ellipse
-    vec2 snoutP = hp - vec2(0.4, 0.08);
-    float snout = length(snoutP * vec2(0.7, 1.8)) - 0.35;
-
-    // Upper jaw - curved wedge
-    vec2 ujawP = hp - vec2(0.75, 0.12);
-    float ujaw = length(ujawP * vec2(0.6, 2.0)) - 0.25;
-    ujaw = max(ujaw, -hp.y + 0.0); // cut off bottom
-
-    // Lower jaw - separate curved piece
-    vec2 ljawP = hp - vec2(0.55, -0.22);
-    float ljaw = length(ljawP * vec2(0.8, 2.5)) - 0.22;
-    ljaw = max(ljaw, hp.y + 0.1); // cut off top
-
-    // Brow ridge
-    vec2 browP = hp - vec2(0.1, 0.35);
-    float brow = length(browP * vec2(1.2, 3.0)) - 0.3;
-
-    // Combine with smooth union
-    float headSDF = min(skull, snout);
-    headSDF = min(headSDF, ujaw);
-    headSDF = min(headSDF, ljaw);
-    headSDF = min(headSDF, brow);
-
-    float headMask = smoothstep(0.015, -0.015, headSDF);
-    float headEdge = smoothstep(0.03, 0.0, abs(headSDF));
-
-    // === CONTOUR LINES - follow head shape ===
-    float contours = 0.0;
-    for (int i = 1; i < 6; i++) {
-        float offset = float(i) * 0.06;
-        float contour = smoothstep(0.012, 0.0, abs(headSDF + offset));
-        contours += contour * (1.0 - float(i) * 0.15);
-    }
-    contours *= headMask;
-
-    // === SCALES - flowing with head shape ===
-    // Use polar-ish coordinates from head center for organic flow
-    vec2 scaleCenter = hp - vec2(0.1, 0.05);
-    float scaleAngle = atan(scaleCenter.y, scaleCenter.x);
-    float scaleDist = length(scaleCenter);
-
-    // Hex-like scale pattern
-    vec2 scaleUV = vec2(scaleAngle * 3.0 + scaleDist * 8.0, scaleDist * 12.0);
-    vec2 scaleId = floor(scaleUV);
-    vec2 scaleF = fract(scaleUV) - 0.5;
-
-    // Smooth hexagonal scales
-    float hex = max(abs(scaleF.x) * 0.866 + abs(scaleF.y) * 0.5, abs(scaleF.y));
-    float scales = smoothstep(0.45, 0.35, hex) - smoothstep(0.32, 0.22, hex);
-    float scaleInner = smoothstep(0.2, 0.1, hex);
-    scales *= headMask * smoothstep(0.1, 0.2, scaleDist); // fade near center
-    scaleInner *= headMask * smoothstep(0.1, 0.2, scaleDist);
-
-    // === EYE - large ornate Mayan style ===
-    vec2 eyeP = hp - vec2(-0.05, 0.12);
-    float eyeDist = length(eyeP * vec2(1.0, 0.8));
-    float eyeAngle = atan(eyeP.y, eyeP.x);
-
-    // Outer ornamental ring with notches
-    float notches = 0.5 + 0.5 * sin(eyeAngle * 12.0 + time * 0.3);
-    float outerEye = smoothstep(0.22, 0.18, eyeDist) * smoothstep(0.12, 0.16, eyeDist);
-    outerEye *= (0.7 + notches * 0.3);
-
-    // Diamond frame around eye
-    float eyeDiamond = abs(eyeP.x) + abs(eyeP.y * 0.8);
-    float diamondFrame = smoothstep(0.25, 0.22, eyeDiamond) - smoothstep(0.2, 0.17, eyeDiamond);
-
-    // Iris with gradient
-    float iris = smoothstep(0.14, 0.08, eyeDist);
-
-    // Bright pupil core
-    float pupil = smoothstep(0.05, 0.02, eyeDist);
-
-    // Eye highlight
-    vec2 highlightP = eyeP - vec2(-0.03, 0.03);
-    float highlight = smoothstep(0.04, 0.01, length(highlightP));
-
-    // === FANGS - curved and sharp ===
-    float fangs = 0.0;
-    float fangGlow = 0.0;
-
-    // Large front fangs
-    for (int i = 0; i < 2; i++) {
-        float fi = float(i);
-        vec2 fangBase = vec2(0.85 + fi * 0.12, 0.0 - fi * 0.05);
-        vec2 fangP = hp - fangBase;
-
-        // Curved fang using rotation along length
-        float curve = fangP.y * 0.3;
-        fangP.x += curve * curve * 2.0;
-
-        // Tapered triangle
-        float fangWidth = 0.04 * (1.0 - (-fangP.y) * 2.0);
-        fangWidth = max(fangWidth, 0.01);
-        float fang = smoothstep(fangWidth, fangWidth * 0.3, abs(fangP.x));
-        fang *= smoothstep(0.0, -0.02, fangP.y) * smoothstep(-0.18, -0.12, fangP.y);
-
-        fangs = max(fangs, fang * (1.0 - fi * 0.15));
-        fangGlow += fang * 0.5;
-    }
-
-    // Smaller teeth row
-    for (int i = 0; i < 4; i++) {
-        float fi = float(i);
-        vec2 toothP = hp - vec2(0.6 + fi * 0.06, -0.08 - fi * 0.02);
-        float tooth = smoothstep(0.025, 0.01, abs(toothP.x));
-        tooth *= smoothstep(0.0, -0.015, toothP.y) * smoothstep(-0.06, -0.04, toothP.y);
-        fangs = max(fangs, tooth * 0.7);
-    }
-
-    // === FEATHERED CREST - flowing Quetzalcoatl plumes ===
-    float plumes = 0.0;
-    float plumeGlow = 0.0;
-
-    for (int i = 0; i < 8; i++) {
-        float fi = float(i);
-        float baseAngle = 1.8 + fi * 0.18 + sin(time * 0.3 + fi) * 0.05;
-        vec2 plumeStart = vec2(-0.25 - fi * 0.04, 0.3 + fi * 0.08);
-        vec2 plumeP = hp - plumeStart;
-
-        // Direction with gentle wave
-        float wave = sin(fi * 1.5 + time * 0.5) * 0.1;
-        vec2 plumeDir = vec2(cos(baseAngle + wave), sin(baseAngle + wave));
-        vec2 plumePerp = vec2(-plumeDir.y, plumeDir.x);
-
-        float along = dot(plumeP, plumeDir);
-        float across = dot(plumeP, plumePerp);
-
-        // Feather width varies - wider at base, pointed tip
-        float plumeLen = 0.35 + fi * 0.03;
-        float taper = smoothstep(0.0, 0.1, along) * smoothstep(plumeLen, plumeLen * 0.7, along);
-        float width = 0.025 * taper + 0.008;
-
-        // Main feather body
-        float plume = smoothstep(width, width * 0.2, abs(across));
-        plume *= smoothstep(-0.02, 0.02, along) * smoothstep(plumeLen + 0.02, plumeLen - 0.02, along);
-
-        // Feather barbs - fine lines
-        float barbs = sin(along * 60.0 - abs(across) * 30.0) * 0.5 + 0.5;
-        plume *= 0.6 + barbs * 0.4;
-
-        // Central rachis (spine)
-        float rachis = smoothstep(0.008, 0.002, abs(across)) * plume;
-
-        plumes = max(plumes, plume * (1.0 - fi * 0.08));
-        plumeGlow += plume * 0.3;
-    }
-
-    // === NOSTRIL ===
-    vec2 nostrilP = hp - vec2(0.7, 0.18);
-    float nostril = smoothstep(0.04, 0.02, length(nostrilP * vec2(1.0, 1.5)));
-
-    // === BROW DECORATION - stepped pattern ===
-    vec2 browDecP = hp - vec2(0.0, 0.4);
-    float browDec = 0.0;
-    for (int i = 0; i < 3; i++) {
-        float fi = float(i);
-        float stepY = 0.04 + fi * 0.03;
-        float stepW = 0.15 - fi * 0.03;
-        float step = smoothstep(stepW + 0.01, stepW, abs(browDecP.x));
-        step *= smoothstep(stepY + 0.015, stepY, abs(browDecP.y - fi * 0.04));
-        step -= smoothstep(stepW - 0.02, stepW - 0.03, abs(browDecP.x))
-              * smoothstep(stepY - 0.01, stepY - 0.015, abs(browDecP.y - fi * 0.04));
-        browDec += step * (0.9 - fi * 0.2);
-    }
-    browDec *= headMask;
-
-    // === COLOR COMPOSITION ===
-    // Base gradient
-    float headHue = 0.08 + hp.y * 0.08 + hp.x * 0.03;
-    vec3 baseCol = hsv2rgb(vec3(fract(headHue + seed * 0.1), 0.6, 0.85)) * headMask * 0.5;
-
-    // Contour lines - white/gold
-    vec3 contourCol = hsv2rgb(vec3(0.12, 0.3, 1.0)) * contours * 0.8;
-
-    // Scales - teal/cyan
-    float scaleHue = 0.45 + hash(scaleId.x * 7.3 + scaleId.y * 11.1 + seed) * 0.15;
-    vec3 scaleCol = hsv2rgb(vec3(scaleHue, 0.85, 0.95)) * scales;
-    vec3 scaleInnerCol = hsv2rgb(vec3(scaleHue + 0.1, 0.9, 1.0)) * scaleInner * 0.7;
-    glow += (scales + scaleInner) * 0.3;
-
-    // Eye
-    vec3 eyeCol = hsv2rgb(vec3(0.1, 0.7, 1.0)) * outerEye;
-    eyeCol += hsv2rgb(vec3(0.55, 0.8, 1.0)) * diamondFrame;
-    eyeCol += hsv2rgb(vec3(0.15, 0.9, 1.0)) * iris;
-    eyeCol += vec3(1.0, 0.3, 0.1) * pupil * 2.0; // glowing red pupil
-    eyeCol += vec3(1.0) * highlight;
-    glow += (iris + pupil) * 0.6;
-
-    // Fangs - bright white with glow
-    vec3 fangCol = vec3(1.0, 0.98, 0.95) * fangs;
-    glow += fangGlow;
-
-    // Plumes - rainbow gradient along length
-    float plumeHue = 0.3 + hp.y * 0.8 + time * 0.08;
-    vec3 plumeCol = hsv2rgb(vec3(fract(plumeHue + seed * 0.1), 0.95, 1.0)) * plumes;
-    glow += plumeGlow;
-
-    // Nostril - dark
-    vec3 nostrilCol = vec3(-0.3) * nostril;
-
-    // Brow decoration - gold
-    vec3 browCol = hsv2rgb(vec3(0.12, 0.9, 1.0)) * browDec;
-    glow += browDec * 0.4;
-
-    // Edge glow
-    vec3 edgeGlowCol = hsv2rgb(vec3(fract(0.55 + seed * 0.2 + time * 0.03), 0.9, 1.0));
-    glow += headEdge * 0.8;
-
-    // Final composition
-    col = baseCol;
-    col += contourCol;
-    col += scaleCol + scaleInnerCol;
-    col += eyeCol;
-    col += fangCol;
-    col += plumeCol;
-    col += nostrilCol;
-    col += browCol;
-    col += edgeGlowCol * glow * 0.6;
-
-    alpha = max(max(max(headMask, plumes), fangs), glow * 0.5);
-    alpha = clamp(alpha, 0.0, 1.0);
-
-    return vec4(col, alpha);
-}
 
 // ============================================================
 // Rotated Mayan head - handles arbitrary direction angles
@@ -369,11 +131,14 @@ vec4 mayanHeadRotated(vec2 p, vec2 pivot, float angle, float size, float time, f
     float headMask = smoothstep(0.015, -0.015, headSDF);
     float headEdge = smoothstep(0.03, 0.0, abs(headSDF));
 
-    // Contour lines
+    // Early-out: skip detail if pixel is far from head
+    if (headSDF > 0.5) return vec4(0.0);
+
+    // Contour lines (reduced from 5 to 3)
     float contours = 0.0;
-    for (int i = 1; i < 5; i++) {
-        float offset = float(i) * 0.05;
-        contours += smoothstep(0.01, 0.0, abs(headSDF + offset)) * (1.0 - float(i) * 0.18);
+    for (int i = 1; i < 4; i++) {
+        float offset = float(i) * 0.06;
+        contours += smoothstep(0.01, 0.0, abs(headSDF + offset)) * (1.0 - float(i) * 0.22);
     }
     contours *= headMask;
 
@@ -410,9 +175,9 @@ vec4 mayanHeadRotated(vec2 p, vec2 pivot, float angle, float size, float time, f
         fangs = max(fangs, fang * (1.0 - fi * 0.15));
     }
 
-    // Plumes
+    // Plumes (reduced from 6 to 4)
     float plumes = 0.0;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 4; i++) {
         float fi = float(i);
         float baseAngle = 1.8 + fi * 0.18 + sin(time * 0.3 + fi) * 0.05;
         vec2 plumeStart = vec2(-0.25 - fi * 0.04, 0.3 + fi * 0.08);
@@ -518,42 +283,6 @@ vec4 bodyPatterns(vec2 uv, float body, float time, float seed) {
     col += hsv2rgb(vec3(fract(hue3 + 0.1), 0.9, 1.0)) * steps * body * 0.5;
     glow += steps * body * 0.2;
 
-    // === LAYER 4: Eye/sun motifs ===
-    vec2 grid4 = uv * vec2(4.0, 1.5);
-    vec2 id4 = floor(grid4);
-    vec2 f4 = fract(grid4) - 0.5;
-
-    float eyeDist = length(f4 * vec2(1.0, 1.5));
-    float eyeAngle = atan(f4.y, f4.x);
-
-    // Sun rays
-    float rays = abs(sin(eyeAngle * 6.0 + time + id4.x)) * 0.5 + 0.5;
-    float sunRays = smoothstep(0.35, 0.25, eyeDist) * smoothstep(0.15, 0.2, eyeDist) * rays;
-
-    // Central eye
-    float eye = smoothstep(0.15, 0.08, eyeDist);
-    float pupil = smoothstep(0.06, 0.03, eyeDist);
-
-    float hue4 = hash(id4.x * 41.7 + id4.y * 19.3 + seed + 300.0);
-    col += hsv2rgb(vec3(fract(hue4 + time * 0.02), 0.8, 1.0)) * sunRays * body;
-    col += hsv2rgb(vec3(fract(hue4 + 0.5), 0.9, 1.0)) * eye * body;
-    col -= vec3(0.5) * pupil * body;
-    glow += (sunRays + eye) * body * 0.4;
-
-    // === LAYER 5: Fine geometric line work ===
-    vec2 grid5 = uv * vec2(40.0, 10.0);
-    vec2 f5 = fract(grid5);
-
-    // Cross-hatch
-    float lines = smoothstep(0.08, 0.0, abs(f5.x - 0.5));
-    lines += smoothstep(0.08, 0.0, abs(f5.y - 0.5));
-    // Diagonal
-    lines += smoothstep(0.06, 0.0, abs(f5.x - f5.y));
-    lines += smoothstep(0.06, 0.0, abs(f5.x + f5.y - 1.0));
-    lines = min(lines, 1.0);
-
-    col += vec3(0.8, 0.85, 0.9) * lines * body * 0.15;
-
     // === NEON GLOW ===
     vec3 glowCol = hsv2rgb(vec3(fract(uv.x * 0.5 + time * 0.1 + seed * 0.1), 0.9, 1.0));
     col += glowCol * glow * 0.5;
@@ -621,29 +350,29 @@ vec4 drawSnake(vec2 p, float time, int i) {
     // Per-snake randomized params
     float snakeLen = snake_length * (0.7 + hash(seed + 150.0) * 0.6);
     float mr = move_range;
-    // move_speed as additive phase offset — smooth regardless of TIME
     float phaseOff = move_speed * TAU * 2.0;
-    // Per-snake base slither spatial frequency (S-bends per body length)
     float sFreqBase = 2.0 + hash(seed + 160.0) * 1.5;
     float sAmpBase  = 0.03 + hash(seed + 170.0) * 0.02;
 
-    const int SPINE_N = 40;
+    const int SPINE_N = 20; // reduced from 40
 
     float headTime = time;
     vec2 headPos = snakePath(headTime, seed, mr, phaseOff);
+
+    // Bounding-box early-out: skip snake if pixel is far from head
+    float maxExtent = snakeLen + snake_thickness * 4.0;
+    if (length(p - headPos) > maxExtent) return vec4(0.0);
+
     vec2 headVel = snakePathVel(headTime, seed, mr, phaseOff);
     float headAngle = atan(headVel.y, headVel.x);
 
-    // Estimate speed to calibrate trail duration so body ≈ snakeLen
-    float speedEst = (length(snakePathVel(headTime, seed, mr, phaseOff))
-                    + length(snakePathVel(headTime - 1.0, seed, mr, phaseOff))
-                    + length(snakePathVel(headTime - 2.0, seed, mr, phaseOff))) / 3.0;
+    // Estimate speed (reduced from 3 samples to 2)
+    float speedEst = (length(headVel)
+                    + length(snakePathVel(headTime - 1.5, seed, mr, phaseOff))) * 0.5;
     speedEst = max(speedEst, 0.03);
     float stepLen = snakeLen / float(SPINE_N);
     float dt = stepLen / speedEst;
 
-    // Find closest point on any body segment to the pixel
-    // Slither is applied as spatial deformation perpendicular to the base path
     float minDist = 1e6;
     float bestT = 0.0;
     float bestSigned = 0.0;
@@ -651,11 +380,10 @@ vec4 drawSnake(vec2 p, float time, int i) {
 
     vec2 prevBasePt = headPos;
     vec2 prevPt = headPos;
-    for (int s = 1; s <= 40; s++) {
-        float bodyFrac = float(s) / float(SPINE_N); // 0=head, 1=tail
+    for (int s = 1; s <= 20; s++) {
+        float bodyFrac = float(s) / float(SPINE_N);
         vec2 basePt = snakePath(headTime - float(s) * dt, seed, mr, phaseOff);
 
-        // Spatial slither: S-bends along body, perpendicular to path tangent
         vec2 tangent = prevBasePt - basePt;
         float tanLen = length(tangent);
         vec2 tanDir = tangent / max(tanLen, 0.0001);
