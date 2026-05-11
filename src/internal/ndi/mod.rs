@@ -75,6 +75,17 @@ impl NdiManager {
         }
     }
 
+    /// Create a disabled NDI manager (CLI `--no-ndi` flag).
+    pub fn new_disabled() -> Self {
+        Self {
+            sdk: None,
+            sources: Vec::new(),
+            receivers: Vec::new(),
+            textures: Vec::new(),
+            senders: HashMap::new(),
+        }
+    }
+
     pub fn is_available(&self) -> bool { self.sdk.is_some() }
     pub fn sources(&self) -> &[NdiSource] { &self.sources }
 

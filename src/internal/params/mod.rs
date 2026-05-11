@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 /// Parameter value types matching ISF input types
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum ParamValue {
     Float(f32),

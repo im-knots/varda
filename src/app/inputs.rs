@@ -1,12 +1,16 @@
 //! Input processing — shader hot-reload, audio polling, OSC, MIDI.
 //!
 //! Called once per frame before the render pass.
+//! After processing, changed parameters are broadcast via OSC feedback.
 
 use super::VardaApp;
 
 impl VardaApp {
     /// Process all external inputs: shader hot-reload, audio, OSC, MIDI.
+    /// Changed parameter paths are collected and broadcast to OSC feedback targets.
     pub fn process_inputs(&mut self) {
+        // Collect (path, value) pairs changed this frame for OSC feedback
+        let mut changed_params: Vec<(String, f32)> = Vec::new();
         // Poll for shader file changes (hot-reload)
         let shader_events = self.registry.poll_changes();
         for event in &shader_events {
@@ -47,35 +51,31 @@ impl VardaApp {
             self.mixer.update_modulation(&av);
         }
 
-        // Process OSC messages (mapped to channel A for now)
+        // Process OSC messages via shared param router
         if let Some(osc) = &self.osc_receiver {
-            while let Some(ctrl) = osc.try_recv() {
-                match ctrl {
-                    crate::osc::OscControl::SetOpacity(deck_idx, val) => {
-                        if let Some(ch) = self.mixer.channel_mut(0) {
-                            ch.set_deck_opacity(deck_idx, val);
+            while let Some(input) = osc.try_recv() {
+                match input {
+                    crate::osc::OscInput::Param { ref path, value } => {
+                        if path.starts_with("action/") && value > 0.5 {
+                            match path.as_str() {
+                                "action/undo" => self.midi_pending_undo = true,
+                                "action/redo" => self.midi_pending_redo = true,
+                                "action/save" => self.midi_pending_save = true,
+                                _ => { log::debug!("Unknown OSC action: {}", path); }
+                            }
+                        } else if crate::param_router::apply_param_by_path(&mut self.mixer, path, value) {
+                            changed_params.push((path.clone(), value));
                         }
                     }
-                    crate::osc::OscControl::SetSolo(deck_idx, enabled) => {
-                        if let Some(ch) = self.mixer.channel_mut(0) {
-                            ch.set_deck_solo(deck_idx, enabled);
-                        }
-                    }
-                    crate::osc::OscControl::SetMute(deck_idx, enabled) => {
-                        if let Some(ch) = self.mixer.channel_mut(0) {
-                            ch.set_deck_mute(deck_idx, enabled);
-                        }
-                    }
-                    crate::osc::OscControl::ClockBpm(bpm) => {
+                    crate::osc::OscInput::ClockBpm(bpm) => {
                         self.clock_manager.process_osc_bpm(bpm);
                     }
-                    crate::osc::OscControl::ClockBeat(phase) => {
+                    crate::osc::OscInput::ClockBeat(phase) => {
                         self.clock_manager.process_osc_beat(phase);
                     }
-                    crate::osc::OscControl::Unknown(addr, args) => {
-                        log::debug!("Unknown OSC: {} {:?}", addr, args);
+                    crate::osc::OscInput::Unknown(addr) => {
+                        log::debug!("Unknown OSC address: {}", addr);
                     }
-                    _ => {}
                 }
             }
         }
@@ -158,7 +158,9 @@ impl VardaApp {
                             _ => { log::debug!("Unknown action path: {}", path); }
                         }
                     } else {
-                        crate::midi::apply_midi_to_param(&mut self.mixer, &path, value);
+                        if crate::param_router::apply_param_by_path(&mut self.mixer, &path, value) {
+                            changed_params.push((path.clone(), value));
+                        }
                     }
                 } else if !self.midi_mappings.learn_mode {
                     log::debug!("Unmapped MIDI: {} value={:.2}", key, value);
@@ -174,5 +176,16 @@ impl VardaApp {
 
         // Resolve clock priority
         self.clock_manager.update();
+
+        // Broadcast changed parameters to OSC feedback targets
+        if !changed_params.is_empty() {
+            if let Some(ref sender) = self.osc_feedback {
+                if sender.has_targets() {
+                    for (path, value) in &changed_params {
+                        sender.send_param(path, *value);
+                    }
+                }
+            }
+        }
     }
 }

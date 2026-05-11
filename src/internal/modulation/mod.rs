@@ -15,7 +15,7 @@ use crate::deck::generate_short_uuid;
 use serde::{Deserialize, Serialize};
 
 /// LFO waveform types
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum LFOWaveform {
     Sine,
     Square,
@@ -31,7 +31,7 @@ impl Default for LFOWaveform {
 }
 
 /// How audio energy drives the modulation value.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum AudioReactMode {
     /// Direct: output = audio energy (standard envelope follower)
     Direct,
@@ -46,7 +46,7 @@ impl Default for AudioReactMode {
 }
 
 /// Audio frequency band presets (convenience for UI quick-select).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum AudioBandPreset {
     Low,    // 20–250 Hz
     Mid,    // 250–2000 Hz
@@ -89,7 +89,7 @@ impl Default for ADSRStage {
 }
 
 /// Step sequencer interpolation mode
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum StepInterpolation {
     /// Hard steps, no interpolation
     None,

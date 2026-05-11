@@ -63,6 +63,11 @@ futures-util = "0.3.32"
 libloading = "0.9.0"
 futures-lite = "2.6.1"
 uuid = { version = "1.23.1", features = ["v4"] }
+json-patch = "4.2.0"
+utoipa = { version = "5.5.0", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+clap = { version = "4.6.1", features = ["derive"] }
+ctrlc = "3.5.2"
 
 [features]
 test-fixtures = []
@@ -70,4 +75,5 @@ test-fixtures = []
 [dev-dependencies]
 egui_kittest = { version = "0.33.3", features = ["wgpu", "snapshot"] }
 tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }
 varda = { path = ".", features = ["test-fixtures"] }

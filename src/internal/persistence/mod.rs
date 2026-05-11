@@ -149,9 +149,19 @@ impl Workspace {
         self.varda_dir().join("keymap.json")
     }
 
+    /// Path to `osc.json`.
+    pub fn osc_path(&self) -> PathBuf {
+        self.varda_dir().join("osc.json")
+    }
+
     /// Check if a keymap config file exists.
     pub fn has_keymap(&self) -> bool {
         self.keymap_path().is_file()
+    }
+
+    /// Check if an OSC config file exists.
+    pub fn has_osc(&self) -> bool {
+        self.osc_path().is_file()
     }
 
     /// Path to `controller-profiles/` directory for MIDI controller profiles.

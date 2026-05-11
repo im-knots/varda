@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread::JoinHandle;
 
 /// SRT connection mode — listener waits for connections, caller connects out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum SrtMode {
     /// Bind to a port and wait for incoming connections.
     Listener,

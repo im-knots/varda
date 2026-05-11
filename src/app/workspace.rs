@@ -51,6 +51,11 @@ impl VardaApp {
             Ok(()) => log::info!("Saved keymap to {}", self.workspace.keymap_path().display()),
             Err(e) => log::error!("Failed to save keymap: {}", e),
         }
+        // Save OSC config
+        match self.osc_config.save(self.workspace.osc_path()) {
+            Ok(()) => log::info!("Saved OSC config to {}", self.workspace.osc_path().display()),
+            Err(e) => log::error!("Failed to save OSC config: {}", e),
+        }
     }
 
     /// Load workspace from `.varda/` if it exists.
@@ -142,6 +147,26 @@ impl VardaApp {
                     log::info!("Loaded {} keyboard shortcuts", keymap_config.bindings.len());
                 }
                 Err(e) => log::warn!("Failed to load keymap config: {}", e),
+            }
+        }
+        // Load OSC config (already loaded in new(), but refresh feedback targets on workspace load)
+        if self.workspace.has_osc() {
+            match crate::osc::OscConfig::load(self.workspace.osc_path()) {
+                Ok(config) => {
+                    // Update feedback targets
+                    if let Some(ref mut sender) = self.osc_feedback {
+                        for target in &config.feedback_targets {
+                            if let Err(e) = sender.add_target(target) {
+                                log::warn!("Failed to add OSC feedback target '{}': {}", target, e);
+                            }
+                        }
+                    }
+                    self.osc_config = config;
+                    log::info!("Loaded OSC config: port={}, enabled={}, {} feedback target(s)",
+                        self.osc_config.in_port, self.osc_config.enabled,
+                        self.osc_config.feedback_targets.len());
+                }
+                Err(e) => log::warn!("Failed to load OSC config: {}", e),
             }
         }
         loaded_layout

@@ -11,6 +11,9 @@ use anyhow::{Context as _, Result};
 impl MixerCommands for VardaApp {
     fn set_crossfader(&mut self, position: f32) {
         self.mixer.snap_crossfader(position);
+        if let Some(ref sender) = self.osc_feedback {
+            sender.send_param("crossfader", position);
+        }
     }
 
     fn start_auto_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing) {
@@ -295,7 +298,7 @@ impl MixerCommands for VardaApp {
     }
 
     fn set_param(&mut self, path: &str, value: ParamValue) {
-        // Convert ParamValue to f32 for the MIDI param router
+        // Convert ParamValue to f32 for the param router
         let f_value = match value {
             ParamValue::Float(v) => v,
             ParamValue::Bool(b) => if b { 1.0 } else { 0.0 },
@@ -303,7 +306,14 @@ impl MixerCommands for VardaApp {
             ParamValue::Color(c) => c[0],
             ParamValue::Point2D(p) => p[0],
         };
-        crate::midi::apply_midi_to_param(&mut self.mixer, path, f_value);
+        if crate::param_router::apply_param_by_path(&mut self.mixer, path, f_value) {
+            // Broadcast to OSC feedback targets
+            if let Some(ref sender) = self.osc_feedback {
+                if sender.has_targets() {
+                    sender.send_param(path, f_value);
+                }
+            }
+        }
     }
 }
 

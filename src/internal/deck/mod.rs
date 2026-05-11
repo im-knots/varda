@@ -17,7 +17,7 @@ pub fn generate_short_uuid() -> String {
 }
 
 /// Scaling mode for non-shader sources (images, video)
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum ScalingMode {
     /// Scale to fill the entire target, cropping edges if aspect ratio differs
     Fill,

@@ -46,6 +46,11 @@ impl SyphonManager {
         Self { available, sources: Vec::new(), clients: Vec::new(), textures: Vec::new() }
     }
 
+    /// Create a disabled Syphon manager (CLI `--no-syphon` flag).
+    pub fn new_disabled() -> Self {
+        Self { available: false, sources: Vec::new(), clients: Vec::new(), textures: Vec::new() }
+    }
+
     pub fn is_available(&self) -> bool { self.available }
     pub fn sources(&self) -> &[SyphonSource] { &self.sources }
 

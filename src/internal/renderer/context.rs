@@ -124,12 +124,11 @@ impl GpuContext {
         Ok((gpu, win_surface))
     }
 
-    /// Create a headless GPU context (no window surface) for testing.
+    /// Create a headless GPU context (no window surface).
     ///
     /// Uses the default backend and requests a device without any surface
     /// compatibility requirements. Falls back to software adapter if no
-    /// hardware GPU is available.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    /// hardware GPU is available. Used for headless mode and tests.
     pub fn new_headless() -> Result<Self> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -209,7 +208,7 @@ impl WindowSurface {
 }
 
 /// Content source that an output window can display
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum OutputSource {
     /// The master mix (final composited output)
     Master,
@@ -279,7 +278,7 @@ pub struct SurfaceAssignment {
 }
 
 /// Where an output sends its content — unified across windowed and headless outputs.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum OutputTarget {
     /// Floating window (default)
     Windowed,
@@ -757,7 +756,7 @@ pub fn create_calibration_textures(
 // ── Headless Output ─────────────────────────────────────────────────
 
 /// Recording codec for ffmpeg subprocess.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum RecordingCodec {
     /// H264 ultrafast preset (-c:v libx264 -preset ultrafast -crf 18)
     H264,

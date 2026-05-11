@@ -1,192 +1,86 @@
 //! Modulation source and assignment mutations.
 
-use crate::modulation::ModulationSource;
+use crate::engine::EngineCommand;
 use crate::usecases::ui::{ModulationAction, UIActions};
 use super::super::VardaApp;
 
 impl VardaApp {
     /// Apply modulation actions
     pub(crate) fn apply_modulation_actions(&mut self, actions: &UIActions) {
-        let mixer = &mut self.mixer;
         for action in &actions.modulation_actions {
-            match action {
-                ModulationAction::AddLFO { waveform, frequency } => {
-                    let source = ModulationSource::LFO {
-                        waveform: *waveform, frequency: *frequency, phase: 0.0, amplitude: 1.0, bipolar: false,
-                    };
-                    let uuid = mixer.modulation_mut().add_source(source);
-                    log::info!("Added LFO modulation source {}", uuid);
-                }
-                ModulationAction::AddAudioFFT { preset, source_id } => {
-                    let (freq_low, freq_high) = preset.freq_range();
-                    let source = ModulationSource::AudioBand { source_id: *source_id, freq_low, freq_high, gain: 1.0, smoothing: 0.6, mode: crate::modulation::AudioReactMode::Direct, noise_gate: 0.1 };
-                    let uuid = mixer.modulation_mut().add_source(source);
-                    log::info!("Added Audio FFT modulation source {} ({:?}, {}-{}Hz)", uuid, preset, freq_low, freq_high);
-                }
-                ModulationAction::RemoveSource { source_id } => {
-                    mixer.modulation_mut().remove_source(source_id);
-                    log::info!("Removed modulation source {}", source_id);
-                }
-            ModulationAction::UpdateLFOFrequency { source_id, frequency } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::LFO { frequency: ref mut f, .. } = source { *f = *frequency; }
-                }
-            }
-            ModulationAction::UpdateLFOWaveform { source_id, waveform } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::LFO { waveform: ref mut w, .. } = source { *w = *waveform; }
-                }
-            }
-            ModulationAction::UpdateLFOPhase { source_id, phase } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::LFO { phase: ref mut p, .. } = source { *p = *phase; }
-                }
-            }
-            ModulationAction::UpdateLFOAmplitude { source_id, amplitude } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::LFO { amplitude: ref mut a, .. } = source { *a = *amplitude; }
-                }
-            }
-            ModulationAction::UpdateLFOBipolar { source_id, bipolar } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::LFO { bipolar: ref mut b, .. } = source { *b = *bipolar; }
-                }
-            }
-            ModulationAction::UpdateAudioSmoothing { source_id, smoothing } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::AudioBand { smoothing: ref mut s, .. } = source { *s = *smoothing; }
-                }
-            }
-            ModulationAction::UpdateAudioFreqLow { source_id, freq_low } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::AudioBand { freq_low: ref mut fl, .. } = source { *fl = *freq_low; }
-                }
-            }
-            ModulationAction::UpdateAudioFreqHigh { source_id, freq_high } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::AudioBand { freq_high: ref mut fh, .. } = source { *fh = *freq_high; }
-                }
-            }
-            ModulationAction::UpdateAudioGain { source_id, gain } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::AudioBand { gain: ref mut g, .. } = source { *g = *gain; }
-                }
-            }
-            ModulationAction::UpdateAudioPreset { source_id, preset } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::AudioBand { freq_low: ref mut fl, freq_high: ref mut fh, .. } = source {
-                        let (lo, hi) = preset.freq_range();
-                        *fl = lo; *fh = hi;
-                    }
-                }
-            }
-            ModulationAction::UpdateAudioSource { source_id, source_id_audio } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::AudioBand { source_id: ref mut sid, .. } = source { *sid = *source_id_audio; }
-                }
-            }
-            ModulationAction::UpdateAudioMode { source_id, mode } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::AudioBand { mode: ref mut m, .. } = source { *m = *mode; }
-                }
-            }
-            ModulationAction::UpdateAudioNoiseGate { source_id, noise_gate } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::AudioBand { noise_gate: ref mut ng, .. } = source { *ng = *noise_gate; }
-                }
-            }
-            ModulationAction::AddADSR { attack, decay, sustain, release } => {
-                let source = ModulationSource::adsr(*attack, *decay, *sustain, *release);
-                let uuid = mixer.modulation_mut().add_source(source);
-                log::info!("Added ADSR modulation source {}", uuid);
-            }
-            ModulationAction::AddStepSequencer { num_steps, rate } => {
-                let source = ModulationSource::step_sequencer(*num_steps, *rate);
-                let uuid = mixer.modulation_mut().add_source(source);
-                log::info!("Added StepSequencer modulation source {} ({} steps)", uuid, num_steps);
-            }
-            ModulationAction::UpdateADSRAttack { source_id, attack } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::ADSR { attack: ref mut a, .. } = source { *a = *attack; }
-                }
-            }
-            ModulationAction::UpdateADSRDecay { source_id, decay } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::ADSR { decay: ref mut d, .. } = source { *d = *decay; }
-                }
-            }
-            ModulationAction::UpdateADSRSustain { source_id, sustain } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::ADSR { sustain: ref mut s, .. } = source { *s = *sustain; }
-                }
-            }
-            ModulationAction::UpdateADSRRelease { source_id, release } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::ADSR { release: ref mut r, .. } = source { *r = *release; }
-                }
-            }
-            ModulationAction::TriggerADSR { source_id } => {
-                mixer.modulation_mut().trigger_adsr(source_id);
-            }
-            ModulationAction::ReleaseADSR { source_id } => {
-                mixer.modulation_mut().release_adsr(source_id);
-            }
-            ModulationAction::UpdateStepValue { source_id, step_idx, value } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::StepSequencer { steps, .. } = source {
-                        if *step_idx < steps.len() { steps[*step_idx] = *value; }
-                    }
-                }
-            }
-            ModulationAction::UpdateStepRate { source_id, rate } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::StepSequencer { rate: ref mut r, .. } = source { *r = *rate; }
-                }
-            }
-            ModulationAction::UpdateStepInterpolation { source_id, interpolation } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::StepSequencer { interpolation: ref mut interp, .. } = source { *interp = *interpolation; }
-                }
-            }
-            ModulationAction::UpdateStepBipolar { source_id, bipolar } => {
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::StepSequencer { bipolar: ref mut b, .. } = source { *b = *bipolar; }
-                }
-            }
-            ModulationAction::SetStepCount { source_id, count } => {
-                let count = (*count).max(2).min(64);
-                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
-                    if let ModulationSource::StepSequencer { steps, .. } = source {
-                        steps.resize(count, 0.0);
-                    }
-                }
-            }
-            ModulationAction::AssignModOnMod { target_source_id, param_name, modulator_id, amount } => {
-                mixer.modulation_mut().assign_mod_on_mod(target_source_id, param_name, modulator_id, *amount);
-                log::info!("Assigned mod-on-mod: {} modulates {} param {} (amount {})", modulator_id, target_source_id, param_name, amount);
-            }
-            ModulationAction::RemoveModOnMod { target_source_id, param_name } => {
-                mixer.modulation_mut().clear_mod_on_mod(target_source_id, param_name);
-                log::info!("Removed mod-on-mod from source {} param {}", target_source_id, param_name);
-            }
-            ModulationAction::AssignModulation { deck_uuid, param_name, source_id, amount } => {
-                mixer.modulation_mut().assign(&format!("deck_{}:{}", deck_uuid, param_name), source_id, *amount, None);
-                log::info!("Assigned modulation source {} to deck {} param {} with amount {}", source_id, deck_uuid, param_name, amount);
-            }
-            ModulationAction::RemoveAssignment { deck_uuid, param_name, .. } => {
-                mixer.modulation_mut().clear_assignments(&format!("deck_{}:{}", deck_uuid, param_name));
-                log::info!("Removed modulation assignment from deck {} param {}", deck_uuid, param_name);
-            }
-            ModulationAction::AssignEffectModulation { effect_uuid, param_name, source_id, amount } => {
-                let key = format!("fx_{}:{}", effect_uuid, param_name);
-                mixer.modulation_mut().assign(&key, source_id, *amount, None);
-                log::info!("Assigned modulation source {} to effect {} param {}", source_id, effect_uuid, param_name);
-            }
-            ModulationAction::RemoveEffectAssignment { effect_uuid, param_name } => {
-                let key = format!("fx_{}:{}", effect_uuid, param_name);
-                mixer.modulation_mut().clear_assignments(&key);
-            }
-            }
+            let cmd = match action {
+                ModulationAction::AddLFO { waveform, frequency } =>
+                    EngineCommand::AddLfo { waveform: *waveform, frequency: *frequency },
+                ModulationAction::AddAudioFFT { preset, source_id } =>
+                    EngineCommand::AddAudioBand { preset: *preset, source_id: *source_id },
+                ModulationAction::RemoveSource { source_id } =>
+                    EngineCommand::RemoveModulationSource { uuid: source_id.clone() },
+                ModulationAction::UpdateLFOFrequency { source_id, frequency } =>
+                    EngineCommand::UpdateLfoFrequency { uuid: source_id.clone(), frequency: *frequency },
+                ModulationAction::UpdateLFOWaveform { source_id, waveform } =>
+                    EngineCommand::UpdateLfoWaveform { uuid: source_id.clone(), waveform: *waveform },
+                ModulationAction::UpdateLFOPhase { source_id, phase } =>
+                    EngineCommand::UpdateLfoPhase { uuid: source_id.clone(), phase: *phase },
+                ModulationAction::UpdateLFOAmplitude { source_id, amplitude } =>
+                    EngineCommand::UpdateLfoAmplitude { uuid: source_id.clone(), amplitude: *amplitude },
+                ModulationAction::UpdateLFOBipolar { source_id, bipolar } =>
+                    EngineCommand::UpdateLfoBipolar { uuid: source_id.clone(), bipolar: *bipolar },
+                ModulationAction::UpdateAudioSmoothing { source_id, smoothing } =>
+                    EngineCommand::UpdateAudioSmoothing { uuid: source_id.clone(), smoothing: *smoothing },
+                ModulationAction::UpdateAudioFreqLow { source_id, freq_low } =>
+                    EngineCommand::UpdateAudioFreqLow { uuid: source_id.clone(), freq_low: *freq_low },
+                ModulationAction::UpdateAudioFreqHigh { source_id, freq_high } =>
+                    EngineCommand::UpdateAudioFreqHigh { uuid: source_id.clone(), freq_high: *freq_high },
+                ModulationAction::UpdateAudioGain { source_id, gain } =>
+                    EngineCommand::UpdateAudioGain { uuid: source_id.clone(), gain: *gain },
+                ModulationAction::UpdateAudioPreset { source_id, preset } =>
+                    EngineCommand::UpdateAudioPreset { uuid: source_id.clone(), preset: *preset },
+                ModulationAction::UpdateAudioSource { source_id, source_id_audio } =>
+                    EngineCommand::UpdateAudioSource { uuid: source_id.clone(), source_id: *source_id_audio },
+                ModulationAction::UpdateAudioMode { source_id, mode } =>
+                    EngineCommand::UpdateAudioMode { uuid: source_id.clone(), mode: *mode },
+                ModulationAction::UpdateAudioNoiseGate { source_id, noise_gate } =>
+                    EngineCommand::UpdateAudioNoiseGate { uuid: source_id.clone(), noise_gate: *noise_gate },
+                ModulationAction::AddADSR { attack, decay, sustain, release } =>
+                    EngineCommand::AddAdsr { attack: *attack, decay: *decay, sustain: *sustain, release: *release },
+                ModulationAction::AddStepSequencer { num_steps, rate } =>
+                    EngineCommand::AddStepSequencer { num_steps: *num_steps, rate: *rate },
+                ModulationAction::UpdateADSRAttack { source_id, attack } =>
+                    EngineCommand::UpdateAdsrAttack { uuid: source_id.clone(), attack: *attack },
+                ModulationAction::UpdateADSRDecay { source_id, decay } =>
+                    EngineCommand::UpdateAdsrDecay { uuid: source_id.clone(), decay: *decay },
+                ModulationAction::UpdateADSRSustain { source_id, sustain } =>
+                    EngineCommand::UpdateAdsrSustain { uuid: source_id.clone(), sustain: *sustain },
+                ModulationAction::UpdateADSRRelease { source_id, release } =>
+                    EngineCommand::UpdateAdsrRelease { uuid: source_id.clone(), release: *release },
+                ModulationAction::TriggerADSR { source_id } =>
+                    EngineCommand::TriggerAdsr { uuid: source_id.clone() },
+                ModulationAction::ReleaseADSR { source_id } =>
+                    EngineCommand::ReleaseAdsr { uuid: source_id.clone() },
+                ModulationAction::UpdateStepValue { source_id, step_idx, value } =>
+                    EngineCommand::UpdateStepSeqValue { uuid: source_id.clone(), step_idx: *step_idx, value: *value },
+                ModulationAction::UpdateStepRate { source_id, rate } =>
+                    EngineCommand::UpdateStepSeqRate { uuid: source_id.clone(), rate: *rate },
+                ModulationAction::UpdateStepInterpolation { source_id, interpolation } =>
+                    EngineCommand::UpdateStepSeqInterpolation { uuid: source_id.clone(), interpolation: *interpolation },
+                ModulationAction::UpdateStepBipolar { source_id, bipolar } =>
+                    EngineCommand::UpdateStepSeqBipolar { uuid: source_id.clone(), bipolar: *bipolar },
+                ModulationAction::SetStepCount { source_id, count } =>
+                    EngineCommand::SetStepSeqCount { uuid: source_id.clone(), count: *count },
+                ModulationAction::AssignModOnMod { target_source_id, param_name, modulator_id, amount } =>
+                    EngineCommand::AssignModOnMod { target_source_id: target_source_id.clone(), param_name: param_name.clone(), modulator_id: modulator_id.clone(), amount: *amount },
+                ModulationAction::RemoveModOnMod { target_source_id, param_name } =>
+                    EngineCommand::RemoveModOnMod { target_source_id: target_source_id.clone(), param_name: param_name.clone() },
+                ModulationAction::AssignModulation { deck_uuid, param_name, source_id, amount } =>
+                    EngineCommand::AssignModulation { target: format!("deck_{}:{}", deck_uuid, param_name), source_id: source_id.clone(), amount: *amount },
+                ModulationAction::RemoveAssignment { deck_uuid, param_name, .. } =>
+                    EngineCommand::ClearModulation { target: format!("deck_{}:{}", deck_uuid, param_name) },
+                ModulationAction::AssignEffectModulation { effect_uuid, param_name, source_id, amount } =>
+                    EngineCommand::AssignModulation { target: format!("fx_{}:{}", effect_uuid, param_name), source_id: source_id.clone(), amount: *amount },
+                ModulationAction::RemoveEffectAssignment { effect_uuid, param_name } =>
+                    EngineCommand::ClearModulation { target: format!("fx_{}:{}", effect_uuid, param_name) },
+            };
+            self.execute_command(cmd);
         }
     }
 }

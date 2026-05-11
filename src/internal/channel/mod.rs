@@ -8,7 +8,7 @@ use crate::renderer::{GpuContext, BlitPipeline, ISFUniforms, TransitionPipeline}
 use anyhow::{Context as _, Result};
 
 /// Blend modes for compositing decks and channels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum BlendMode {
     #[default]
     Normal,
@@ -64,7 +64,7 @@ impl BlendMode {
 // ── Auto-Transition Types ──────────────────────────────────────────
 
 /// Unit of a duration value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum DurationUnit {
     Seconds,
     Minutes,

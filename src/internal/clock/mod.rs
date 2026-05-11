@@ -34,7 +34,7 @@ pub enum ClockSource {
 }
 
 /// User preference for which clock source to use.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum ClockPreference {
     /// Auto-detect: use priority resolution (MIDI > OSC > Audio).
     Auto,

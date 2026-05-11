@@ -602,148 +602,42 @@ impl VardaApp {
 
     /// Apply transition sequence builder actions
     pub(crate) fn apply_sequence_actions(&mut self, actions: &UIActions) {
+        use crate::engine::EngineCommand;
         use crate::usecases::ui::SequenceAction;
-        use crate::channel::DurationSpec;
-        use crate::mixer::{TransitionSequence, TransitionStep, StepKind, CrossfadeEasing};
-        let mixer = &mut self.mixer;
         for action in &actions.sequence_actions {
-            match action {
-                SequenceAction::Create => {
-                    let n = mixer.transition_sequences().len() + 1;
-                    mixer.transition_sequences_mut().push(TransitionSequence::new(format!("Sequence {}", n)));
-                    log::info!("Created transition sequence {}", n);
-                }
-                SequenceAction::Delete(idx) => {
-                    if *idx < mixer.transition_sequences().len() {
-                        let name = mixer.transition_sequences_mut()[*idx].name.clone();
-                        mixer.transition_sequences_mut().remove(*idx);
-                        log::info!("Deleted transition sequence '{}'", name);
-                    }
-                }
-                SequenceAction::ToggleEnabled(idx) => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*idx) {
-                        seq.enabled = !seq.enabled;
-                        if !seq.enabled { seq.state.reset(); }
-                    }
-                }
-                SequenceAction::Play(idx) => { mixer.start_sequence(*idx); }
-                SequenceAction::Stop(idx) => { mixer.stop_sequence(*idx); }
-                SequenceAction::AddFade { seq_idx, from_ch, to_ch } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        seq.steps.push(TransitionStep { kind: StepKind::Fade {
-                            from_ch: *from_ch, to_ch: *to_ch,
-                            duration: DurationSpec::Seconds(2.0),
-                            easing: CrossfadeEasing::EaseInOut, transition_shader: None,
-                        }});
-                    }
-                }
-                SequenceAction::AddWait(idx) => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*idx) {
-                        seq.steps.push(TransitionStep { kind: StepKind::Wait {
-                            duration: DurationSpec::Seconds(2.0),
-                        }});
-                    }
-                }
-                SequenceAction::AddGoTo { seq_idx, step_index } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        seq.steps.push(TransitionStep { kind: StepKind::GoTo { step_index: *step_index } });
-                    }
-                }
-                SequenceAction::RemoveStep { seq_idx, step_idx } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if *step_idx < seq.steps.len() { seq.steps.remove(*step_idx); }
-                    }
-                }
-                SequenceAction::MoveStep { seq_idx, from, to } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if *from < seq.steps.len() && *to < seq.steps.len() && from != to {
-                            let step = seq.steps.remove(*from);
-                            seq.steps.insert(*to, step);
-                        }
-                    }
-                }
-                SequenceAction::SetStepDuration { seq_idx, step_idx, value } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if let Some(step) = seq.steps.get_mut(*step_idx) {
-                            match &mut step.kind {
-                                StepKind::Fade { duration, .. } | StepKind::Wait { duration } => {
-                                    duration.set_value(*value);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if let Some(step) = seq.steps.get_mut(*step_idx) {
-                            match &mut step.kind {
-                                StepKind::Fade { duration, .. } | StepKind::Wait { duration } => {
-                                    let next_unit = duration.unit().next();
-                                    *duration = DurationSpec::from_value_unit(duration.value(), next_unit);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                SequenceAction::SetStepDurationUnit { seq_idx, step_idx, unit } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if let Some(step) = seq.steps.get_mut(*step_idx) {
-                            match &mut step.kind {
-                                StepKind::Fade { duration, .. } | StepKind::Wait { duration } => {
-                                    *duration = DurationSpec::from_value_unit(duration.value(), *unit);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                SequenceAction::SetStepEasing { seq_idx, step_idx, easing } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if let Some(step) = seq.steps.get_mut(*step_idx) {
-                            if let StepKind::Fade { easing: e, .. } = &mut step.kind {
-                                *e = match easing.as_str() {
-                                    "Linear" => CrossfadeEasing::Linear,
-                                    "EaseIn" => CrossfadeEasing::EaseIn,
-                                    "EaseOut" => CrossfadeEasing::EaseOut,
-                                    _ => CrossfadeEasing::EaseInOut,
-                                };
-                            }
-                        }
-                    }
-                }
-                SequenceAction::SetStepFromCh { seq_idx, step_idx, ch } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if let Some(step) = seq.steps.get_mut(*step_idx) {
-                            if let StepKind::Fade { from_ch, .. } = &mut step.kind { *from_ch = *ch; }
-                        }
-                    }
-                }
-                SequenceAction::SetStepToCh { seq_idx, step_idx, ch } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if let Some(step) = seq.steps.get_mut(*step_idx) {
-                            if let StepKind::Fade { to_ch, .. } = &mut step.kind { *to_ch = *ch; }
-                        }
-                    }
-                }
-                SequenceAction::SetGoToTarget { seq_idx, step_idx, target } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if let Some(step) = seq.steps.get_mut(*step_idx) {
-                            if let StepKind::GoTo { step_index } = &mut step.kind { *step_index = *target; }
-                        }
-                    }
-                }
-                SequenceAction::SetStepTransitionShader { seq_idx, step_idx, shader } => {
-                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
-                        if let Some(step) = seq.steps.get_mut(*step_idx) {
-                            if let StepKind::Fade { transition_shader, .. } = &mut step.kind {
-                                *transition_shader = shader.clone();
-                            }
-                        }
-                    }
-                }
-            }
+            let cmd = match action {
+                SequenceAction::Create => EngineCommand::CreateSequence,
+                SequenceAction::Delete(idx) => EngineCommand::DeleteSequence { idx: *idx },
+                SequenceAction::ToggleEnabled(idx) => EngineCommand::ToggleSequence { idx: *idx },
+                SequenceAction::Play(idx) => EngineCommand::PlaySequence { idx: *idx },
+                SequenceAction::Stop(idx) => EngineCommand::StopSequence { idx: *idx },
+                SequenceAction::AddFade { seq_idx, from_ch, to_ch } =>
+                    EngineCommand::AddFadeStep { seq_idx: *seq_idx, from_ch: *from_ch, to_ch: *to_ch },
+                SequenceAction::AddWait(idx) => EngineCommand::AddWaitStep { seq_idx: *idx },
+                SequenceAction::AddGoTo { seq_idx, step_index } =>
+                    EngineCommand::AddGoToStep { seq_idx: *seq_idx, step_index: *step_index },
+                SequenceAction::RemoveStep { seq_idx, step_idx } =>
+                    EngineCommand::RemoveStep { seq_idx: *seq_idx, step_idx: *step_idx },
+                SequenceAction::MoveStep { seq_idx, from, to } =>
+                    EngineCommand::MoveStep { seq_idx: *seq_idx, from: *from, to: *to },
+                SequenceAction::SetStepDuration { seq_idx, step_idx, value } =>
+                    EngineCommand::SetStepDurationValue { seq_idx: *seq_idx, step_idx: *step_idx, value: *value },
+                SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx } =>
+                    EngineCommand::ToggleStepDurationUnit { seq_idx: *seq_idx, step_idx: *step_idx },
+                SequenceAction::SetStepDurationUnit { seq_idx, step_idx, unit } =>
+                    EngineCommand::SetStepDurationUnit { seq_idx: *seq_idx, step_idx: *step_idx, unit: *unit },
+                SequenceAction::SetStepEasing { seq_idx, step_idx, easing } =>
+                    EngineCommand::SetStepEasing { seq_idx: *seq_idx, step_idx: *step_idx, easing: easing.clone() },
+                SequenceAction::SetStepFromCh { seq_idx, step_idx, ch } =>
+                    EngineCommand::SetStepFromCh { seq_idx: *seq_idx, step_idx: *step_idx, ch: *ch },
+                SequenceAction::SetStepToCh { seq_idx, step_idx, ch } =>
+                    EngineCommand::SetStepToCh { seq_idx: *seq_idx, step_idx: *step_idx, ch: *ch },
+                SequenceAction::SetGoToTarget { seq_idx, step_idx, target } =>
+                    EngineCommand::SetGoToTarget { seq_idx: *seq_idx, step_idx: *step_idx, target: *target },
+                SequenceAction::SetStepTransitionShader { seq_idx, step_idx, shader } =>
+                    EngineCommand::SetStepTransitionShader { seq_idx: *seq_idx, step_idx: *step_idx, shader_name: shader.clone() },
+            };
+            self.execute_command(cmd);
         }
     }
 

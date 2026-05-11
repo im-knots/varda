@@ -18,7 +18,7 @@ pub use crate::renderer::context::OutputSource;
 pub use crate::surface::{ContentMapping, SurfaceOutputType, CircleHint};
 
 /// Identifies where to apply an effect in the signal chain.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum EffectTarget {
     /// Effect on a specific deck: (channel_idx, deck_idx)
     Deck(usize, usize),

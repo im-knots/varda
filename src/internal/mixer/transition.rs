@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result};
 use super::Mixer;
 
 /// Easing curve for crossfade transitions
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum CrossfadeEasing {
     Linear,
     EaseInOut,

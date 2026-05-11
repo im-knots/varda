@@ -1,6 +1,6 @@
 # Varda
 
-Open-source visual performance instrument with broadcast-style routing for VJs and installation artists targeting Linux and unix-like systems.
+Open-source visual performance tool with broadcast-style routing for VJs and installation artists.
 
 ![Varda](img/screenshot.png)
 
@@ -14,10 +14,10 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
 - **Modulation**: LFO, audio-reactive, ADSR, step sequencer, mod-on-mod chaining on any parameter
 - **Audio**: 512-bin FFT, beat detection, bass/mid/treble bands, BPM with beat phase
-- **Control**: MIDI (multi-device, learn mode, controller profiles, LED feedback), OSC in/out
+- **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine (shared parameter router, UUID addressing, bidirectional feedback)
 - **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards
 - **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments
-- **Network I/O**: NDI send/receive, SRT stream/receive, source library with drag-to-channel
+- **Network I/O**: NDI send/receive, SRT stream/receive.
 - **Recording**: H.264, ProRes 422, HAP Q per-output
 - **Presets**: save/load deck and channel presets with modulation recipes
 - **Persistence**: full scene/venue/MIDI state saved and restored across sessions
@@ -89,6 +89,41 @@ your-show/
 
 Run Varda from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
 
+## CLI flags
+
+```
+varda [OPTIONS]
+
+    --headless                Run without main UI window (API-only control)
+    --port <PORT>             HTTP API port [default: 8080]
+    --fps <FPS>               Target render FPS in headless mode [default: 60]
+    --workspace <DIR>         Workspace root directory [default: cwd]
+    --scene <PATH>            Scene file to load
+    --stage <PATH>            Stage file to load
+    --osc-port <PORT>         OSC input port (overrides osc.json)
+    --osc-out <HOST:PORT>     OSC feedback target (repeatable)
+    --no-osc                  Disable OSC
+    --no-ndi                  Disable NDI
+    --no-syphon               Disable Syphon (macOS)
+```
+
+Headless mode runs the full engine without a UI window — controlled entirely via the HTTP API. Outputs defined in `stage.json` auto-start on launch. Graceful shutdown on Ctrl-C or `POST /api/shutdown`.
+
+```bash
+# Headless on custom port with 30fps render
+varda --headless --port 9090 --fps 30
+
+# Separate workspace per venue
+varda --workspace /shows/festival-2026
+
+# Disable subsystems you don't need
+varda --no-ndi --no-syphon --osc-port 7000
+```
+
+## HTTP API
+
+The GUI and HTTP API are co-equal consumers of the same engine. The API runs on port 8080 (configurable with `--port`) alongside the GUI, or standalone in headless mode (`--headless`). Interactive docs at `/api/docs`, OpenAPI spec at `/api/openapi.json`. WebSocket at `/api/ws` streams state via JSON Patch (RFC 6902) deltas.
+
 
 ## Abstractions you should know about
 
@@ -116,6 +151,7 @@ Load your sources into decks across your channels. What makes a deck live is its
 
 This is how broadcast video works. A switcher doesn't start and stop cameras. Every camera is always hot, and the director cuts between them by routing signals onto buses. Varda applies the same idea: your decks are always ready, and you perform by controlling which signals are live in the mix. The result is instant transitions (no clip load latency), full MIDI control over the routing, and a mental model that scales.
 
+
 ## Architecture
 
 Varda is built with domain-driven design and clean architecture principles. The codebase separates concerns into four layers:
@@ -126,7 +162,7 @@ src/
   internal/      # domain modules (audio, camera, channel, deck, mixer, renderer, etc.)
   app/           # application layer (VardaApp: wires domain modules together, implements engine traits)
   usecases/      # delivery layer (UI panels, action handlers)
-  main.rs        # 12 lines: init logger, run UI
+  main.rs        # thin orchestrator: parse CLI, init logger, run UI
 ```
 
 The **engine layer** defines trait contracts (`MixerCommands`, `MixerQueries`, `OutputCommands`, etc.) using only primitives and engine-defined types. No wgpu, egui, or framework types leak through.

@@ -83,7 +83,7 @@ pub struct Surface {
 ///   shows source UVs from (0.2, 0.3) to (0.3, 0.4). Multiple surfaces with the same
 ///   source in Mapped mode implicitly form a group, each showing its slice of one
 ///   continuous image.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum ContentMapping {
     /// Entire source scaled to fill the surface (independent per surface)
     Fill,
@@ -272,7 +272,7 @@ impl Surface {
 }
 
 /// How this surface connects to physical output hardware
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum SurfaceOutputType {
     /// Projection — content is warped to match projector position/surface shape
     Projection,
@@ -374,6 +374,22 @@ impl SurfaceManager {
     /// Find a surface by UUID, returning its index and a mutable reference.
     pub fn find_by_uuid_mut(&mut self, uuid: &str) -> Option<(usize, &mut Surface)> {
         self.surfaces.iter_mut().enumerate().find(|(_, s)| s.uuid == uuid)
+    }
+
+    /// Duplicate a surface by UUID. Returns the new surface's UUID if found.
+    pub fn duplicate_surface(&mut self, uuid: &str) -> Option<String> {
+        let original = self.surfaces.iter().find(|s| s.uuid == uuid)?.clone();
+        let new_uuid = generate_short_uuid();
+        let mut copy = original;
+        copy.uuid = new_uuid.clone();
+        copy.name = format!("{} (copy)", copy.name);
+        // Offset slightly so it's visible
+        for v in &mut copy.vertices {
+            v[0] += 0.02;
+            v[1] += 0.02;
+        }
+        self.surfaces.push(copy);
+        Some(new_uuid)
     }
 
     /// Combine multiple surfaces into one using polygon boolean union.

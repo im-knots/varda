@@ -4,7 +4,7 @@
 //! The engine (`VardaApp`) is owned here and driven each frame.
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
-use crate::app::VardaApp;
+use crate::app::{AppConfig, VardaApp};
 use crate::app::history::HistoryManager;
 use crate::app::render::{DeckLoadResult, FileDialogKind, FileDialogResult};
 use crate::renderer::blit::BlitPipeline;
@@ -19,6 +19,9 @@ use winit::{
 };
 
 pub struct UIRunner {
+    // ── Session config (CLI flags + workspace defaults) ──────────────
+    config: AppConfig,
+
     // ── Window / egui state (delivery layer) ────────────────────────
     window: Option<&'static Window>,
     window_surface: Option<WindowSurface>,
@@ -51,13 +54,23 @@ pub struct UIRunner {
 
     // ── Performance: gate publish_state to reduce snapshot overhead ──
     publish_counter: u32,
+
+    // ── HTTP API server (background thread) ──────────────────────────
+    api_handle: Option<crate::usecases::api::runner::ApiServerHandle>,
+
+    // ── Headless render timing ──────────────────────────────────────
+    last_headless_frame: Option<std::time::Instant>,
+
+    // ── Signal-driven shutdown (SIGINT/SIGTERM) ─────────────────────
+    shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl UIRunner {
-    pub fn new() -> Self {
+    pub fn new(config: AppConfig) -> Self {
         let (file_dialog_tx, file_dialog_rx) = std::sync::mpsc::channel();
         let (deck_load_tx, deck_load_rx) = std::sync::mpsc::channel();
         Self {
+            config,
             window: None,
             window_surface: None,
             blit_pipeline: None,
@@ -76,11 +89,21 @@ impl UIRunner {
             varda: None,
             history: HistoryManager::new(),
             publish_counter: 0,
+            api_handle: None,
+            last_headless_frame: None,
+            shutdown_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
     /// Run the UI event loop. Blocks until the window is closed.
     pub fn run(mut self) -> anyhow::Result<()> {
+        // Install Ctrl-C handler for graceful shutdown (especially useful in headless)
+        let flag = self.shutdown_flag.clone();
+        let _ = ctrlc::set_handler(move || {
+            log::info!("Received interrupt signal, shutting down...");
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
         let event_loop = EventLoop::new()?;
         event_loop.run_app(&mut self)
             .map_err(|e| anyhow::anyhow!("Event loop error: {:?}", e))?;
@@ -90,36 +113,48 @@ impl UIRunner {
 
 impl ApplicationHandler for UIRunner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() { return; }
-        let window_attrs = Window::default_attributes()
-            .with_title("Varda VJ Software")
-            .with_inner_size(winit::dpi::LogicalSize::new(1920, 1080));
+        // Guard re-entry (resumed can be called multiple times on some platforms)
+        if self.varda.is_some() { return; }
 
-        let window_static: &'static Window = match event_loop.create_window(window_attrs) {
-            Ok(w) => { log::info!("Window created"); Box::leak(Box::new(w)) }
-            Err(e) => { log::error!("Failed to create window: {}", e); event_loop.exit(); return; }
+        let gpu = if self.config.headless {
+            // Headless: no main window, no egui — GPU without window surface
+            log::info!("Headless mode: skipping main window creation");
+            match GpuContext::new_headless() {
+                Ok(gpu) => gpu,
+                Err(e) => { log::error!("Failed to create headless GPU context: {}", e); event_loop.exit(); return; }
+            }
+        } else {
+            // Windowed: create main UI window + egui
+            let window_attrs = Window::default_attributes()
+                .with_title("Varda VJ Software")
+                .with_inner_size(winit::dpi::LogicalSize::new(1920, 1080));
+
+            let window_static: &'static Window = match event_loop.create_window(window_attrs) {
+                Ok(w) => { log::info!("Window created"); Box::leak(Box::new(w)) }
+                Err(e) => { log::error!("Failed to create window: {}", e); event_loop.exit(); return; }
+            };
+            self.main_window_id = Some(window_static.id());
+            self.window = Some(window_static);
+
+            let (gpu, win_surface) = match pollster::block_on(GpuContext::new_for_window(window_static)) {
+                Ok(pair) => pair,
+                Err(e) => { log::error!("Failed to create render context: {}", e); event_loop.exit(); return; }
+            };
+
+            self.blit_pipeline = BlitPipeline::new(&gpu.device, win_surface.surface_config.format).ok();
+            self.egui_state = Some(egui_winit::State::new(
+                self.egui_ctx.clone(), egui::ViewportId::ROOT, window_static,
+                Some(window_static.scale_factor() as f32), None, Some(2 * 1024),
+            ));
+            self.egui_renderer = Some(egui_wgpu::Renderer::new(
+                &gpu.device, win_surface.surface_config.format, egui_wgpu::RendererOptions::default(),
+            ));
+            self.window_surface = Some(win_surface);
+            gpu
         };
-        self.main_window_id = Some(window_static.id());
-        self.window = Some(window_static);
 
-        let (gpu, win_surface) = match pollster::block_on(GpuContext::new_for_window(window_static)) {
-            Ok(pair) => pair,
-            Err(e) => { log::error!("Failed to create render context: {}", e); event_loop.exit(); return; }
-        };
-
-        self.blit_pipeline = BlitPipeline::new(&gpu.device, win_surface.surface_config.format).ok();
-        self.egui_state = Some(egui_winit::State::new(
-            self.egui_ctx.clone(), egui::ViewportId::ROOT, window_static,
-            Some(window_static.scale_factor() as f32), None, Some(2 * 1024),
-        ));
-        self.egui_renderer = Some(egui_wgpu::Renderer::new(
-            &gpu.device, win_surface.surface_config.format, egui_wgpu::RendererOptions::default(),
-        ));
-        self.window_surface = Some(win_surface);
-
-        // Create engine now that GPU is ready — mixer, audio textures,
-        // calibration textures all initialized immediately.
-        let mut varda = match VardaApp::new(gpu) {
+        // Create engine now that GPU is ready
+        let mut varda = match VardaApp::new(gpu, &self.config) {
             Ok(v) => v,
             Err(e) => {
                 log::error!("Failed to initialize engine: {}", e);
@@ -135,10 +170,21 @@ impl ApplicationHandler for UIRunner {
         }
         self.history.clear();
 
+        // Start HTTP API server on background thread
+        if self.api_handle.is_none() {
+            self.api_handle = crate::usecases::api::runner::start(
+                self.config.api_port,
+                varda.command_sender(),
+                varda.state_reader(),
+            );
+        }
+
         self.varda = Some(varda);
 
-        // Register GPU textures with egui for previews
-        self.register_preview_textures();
+        // Register GPU textures with egui for previews (windowed only)
+        if !self.config.headless {
+            self.register_preview_textures();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
@@ -151,6 +197,9 @@ impl ApplicationHandler for UIRunner {
                 WindowEvent::CloseRequested => {
                     log::info!("Close requested, saving workspace and exiting...");
                     varda.save_workspace(&self.layout);
+                    if let Some(api) = self.api_handle.take() {
+                        api.shutdown();
+                    }
                     event_loop.exit();
                 }
                 WindowEvent::Resized(new_size) => {
@@ -178,6 +227,23 @@ impl ApplicationHandler for UIRunner {
                 _ => {}
             }
         }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.config.headless { return; }
+
+        // Headless FPS throttle: sleep to maintain target FPS
+        let frame_budget = std::time::Duration::from_secs_f64(1.0 / self.config.target_fps as f64);
+        if let Some(last) = self.last_headless_frame {
+            let elapsed = last.elapsed();
+            if elapsed < frame_budget {
+                std::thread::sleep(frame_budget - elapsed);
+            }
+        }
+        self.last_headless_frame = Some(std::time::Instant::now());
+
+        // Drive the engine (same as windowed render but without UI/egui)
+        self.render_headless(event_loop);
     }
 }
 
@@ -225,6 +291,41 @@ impl UIRunner {
                     self.deck_preview_textures.insert(key, tid);
                 }
             }
+        }
+    }
+
+    /// Headless render loop — engine processing without UI/egui.
+    fn render_headless(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(varda) = self.varda.as_mut() else { return; };
+
+        // Check for shutdown request (from API or SIGINT/SIGTERM)
+        if varda.shutdown_requested || self.shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            log::info!("Shutdown requested, saving workspace and exiting...");
+            varda.save_workspace(&self.layout);
+            if let Some(api) = self.api_handle.take() {
+                api.shutdown();
+            }
+            event_loop.exit();
+            return;
+        }
+
+        varda.update_frame_timing();
+        varda.update_notifications();
+        varda.process_commands();
+        varda.process_inputs();
+
+        // Create pending output windows (API-driven in headless)
+        varda.create_pending_outputs(event_loop);
+        varda.refresh_monitors(event_loop);
+
+        // GPU render (mixer compositing)
+        varda.render_mixer_frame();
+
+        // Render output windows + publish state
+        varda.render_outputs();
+        self.publish_counter += 1;
+        if self.publish_counter % 10 == 0 {
+            varda.publish_state();
         }
     }
 
