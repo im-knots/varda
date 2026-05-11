@@ -1,0 +1,275 @@
+{
+  "uuid": "ae62035d",
+  "name": "Ch 0",
+  "opacity": 1.0,
+  "blend_mode": "normal",
+  "decks": [
+    {
+      "uuid": "40c44853",
+      "name": "turing_patterns",
+      "source": {
+        "type": "Shader",
+        "path": "shaders/turing_patterns.fs",
+        "params": {
+          "seed_size": 0.05,
+          "growth_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "feed_rate": 0.055,
+          "bg_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "perturbation": 0.0,
+          "seed": 0.25,
+          "sim_speed": 0.35,
+          "kill_rate": 0.062
+        }
+      },
+      "effects": [
+        {
+          "uuid": "e1091998",
+          "path": "shaders/edge_detect.fs",
+          "enabled": true,
+          "params": {
+            "edge_color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "use_source_color": 0.0,
+            "sensitivity": 3.5,
+            "bg_opacity": 0.0
+          }
+        },
+        {
+          "uuid": "7b7b006f",
+          "path": "shaders/ripple.fs",
+          "enabled": true,
+          "params": {
+            "frequency": 15.0,
+            "center_y": 0.5,
+            "center_x": 0.5,
+            "ripple_amount": 0.02,
+            "anim_speed": 1.0,
+            "decay": 2.0
+          }
+        },
+        {
+          "uuid": "cca2f279",
+          "path": "shaders/edge_glow.fs",
+          "enabled": true,
+          "params": {
+            "show_original": true,
+            "glow_amount": 0.2,
+            "glow_color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "edge_strength": 1.3
+          }
+        }
+      ],
+      "opacity": 1.0,
+      "blend_mode": "normal",
+      "mute": false,
+      "solo": false,
+      "z_index": 0,
+      "modulation": [
+        {
+          "source_uuid": "4a49268c",
+          "source": {
+            "LFO": {
+              "waveform": "Sine",
+              "frequency": 1.0,
+              "phase": 0.0,
+              "amplitude": 0.38,
+              "bipolar": true
+            }
+          },
+          "assignments": [
+            {
+              "param": "perturbation",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source_uuid": "3a0109d3",
+          "source": {
+            "AudioBand": {
+              "source_id": null,
+              "freq_low": 20.0,
+              "freq_high": 100.0,
+              "gain": 0.7,
+              "smoothing": 0.96,
+              "mode": "Direct",
+              "noise_gate": 0.1
+            }
+          },
+          "assignments": [
+            {
+              "param": "perturbation",
+              "amount": 0.5
+            },
+            {
+              "param": "sim_speed",
+              "amount": 0.5
+            },
+            {
+              "param": "feed_rate",
+              "amount": 0.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "uuid": "275c7eda",
+      "name": "voronoi",
+      "source": {
+        "type": "Shader",
+        "path": "shaders/voronoi.fs",
+        "params": {
+          "edge_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "edge_width": 0.065,
+          "anim_speed": 2.1,
+          "style": 0.0,
+          "color2": [
+            0.9,
+            0.2,
+            0.3,
+            1.0
+          ],
+          "color1": [
+            0.1,
+            0.4,
+            0.9,
+            1.0
+          ],
+          "cell_count": 8.0
+        }
+      },
+      "effects": [
+        {
+          "uuid": "5e20c625",
+          "path": "shaders/hue_shift.fs",
+          "enabled": true,
+          "params": {
+            "saturation": 1.0,
+            "hue_shift": 0.55,
+            "cycle_speed": 0.5,
+            "auto_cycle": false
+          }
+        }
+      ],
+      "opacity": 1.0,
+      "blend_mode": "multiply",
+      "mute": false,
+      "solo": false,
+      "z_index": 0,
+      "modulation": [
+        {
+          "source_uuid": "3a0109d3",
+          "source": {
+            "AudioBand": {
+              "source_id": null,
+              "freq_low": 20.0,
+              "freq_high": 100.0,
+              "gain": 0.7,
+              "smoothing": 0.96,
+              "mode": "Direct",
+              "noise_gate": 0.1
+            }
+          },
+          "assignments": [
+            {
+              "param": "anim_speed",
+              "amount": 0.5
+            },
+            {
+              "param": "edge_width",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "source_uuid": "cd9211c8",
+          "source": {
+            "LFO": {
+              "waveform": "Sine",
+              "frequency": 0.05,
+              "phase": 0.0,
+              "amplitude": 1.0,
+              "bipolar": true
+            }
+          },
+          "assignments": [
+            {
+              "param": "fx_5e20c625:hue_shift",
+              "amount": 0.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "uuid": "873c967f",
+      "name": "📹 FaceTime HD Camera",
+      "source": {
+        "type": "Camera",
+        "name": "FaceTime HD Camera"
+      },
+      "effects": [
+        {
+          "uuid": "a35aebc6",
+          "path": "shaders/edge_detect.fs",
+          "enabled": true,
+          "params": {
+            "bg_opacity": 0.0,
+            "sensitivity": 5.0,
+            "use_source_color": 0.0,
+            "edge_color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        }
+      ],
+      "opacity": 1.0,
+      "blend_mode": "multiply",
+      "mute": false,
+      "solo": false,
+      "z_index": 0
+    }
+  ],
+  "effects": [
+    {
+      "uuid": "0b7f696c",
+      "path": "shaders/kaleidoscope.fs",
+      "enabled": true,
+      "params": {
+        "center_x": 0.5,
+        "zoom": 1.0,
+        "segments": 2.0,
+        "center_y": 0.5,
+        "rotation": 0.0
+      }
+    }
+  ]
+}

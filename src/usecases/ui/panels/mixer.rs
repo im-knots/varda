@@ -477,21 +477,23 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
                         actions.select_channel = Some(ch_idx);
                     }
 
-                    // Blend mode dropdown next to channel name
+                    // Blend mode dropdown — right-aligned in header
                     let blend_mode_names = ["Norm", "Add", "Mult", "Scrn", "Ovly", "Diff"];
                     let current = match ch.blend_mode {
                         BlendMode::Normal => 0, BlendMode::Add => 1, BlendMode::Multiply => 2,
                         BlendMode::Screen => 3, BlendMode::Overlay => 4, BlendMode::Difference => 5,
                     };
                     let mut selected = current;
-                    egui::ComboBox::from_id_salt(format!("ch_blend_{}", ch_idx))
-                        .selected_text(blend_mode_names[selected])
-                        .width(50.0)
-                        .show_ui(ui, |ui| {
-                            for (i, name) in blend_mode_names.iter().enumerate() {
-                                ui.selectable_value(&mut selected, i, *name);
-                            }
-                        });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        egui::ComboBox::from_id_salt(format!("ch_blend_{}", ch_idx))
+                            .selected_text(blend_mode_names[selected])
+                            .width(50.0)
+                            .show_ui(ui, |ui| {
+                                for (i, name) in blend_mode_names.iter().enumerate() {
+                                    ui.selectable_value(&mut selected, i, *name);
+                                }
+                            });
+                    });
                     if selected != current {
                         let new_blend = match selected {
                             1 => BlendMode::Add, 2 => BlendMode::Multiply, 3 => BlendMode::Screen,
