@@ -468,13 +468,15 @@ impl MidiDeviceManager {
 
 /// Persistent mapping from MIDI controls to parameter paths.
 ///
-/// Parameter path format:
-///   crossfader                         → mixer crossfader position
-///   ch/<n>/opacity                     → channel opacity
-///   ch/<n>/deck/<m>/opacity            → deck opacity
-///   ch/<n>/deck/<m>/param/<name>       → generator param (float)
-///   ch/<n>/deck/<m>/effect/<k>/param/<name> → effect param (float)
-///   master/effect/<k>/param/<name>     → master effect param (float)
+/// Parameter path format (UUIDs are stable 8-char hex):
+///   crossfader                              → mixer crossfader position
+///   deck/<uuid>/opacity                     → deck opacity
+///   deck/<uuid>/param/<name>                → generator param (float)
+///   deck/<uuid>/effect/<k>/param/<name>     → deck effect param (float)
+///   ch/<uuid>/opacity                       → channel opacity
+///   ch/<uuid>/effect/<k>/param/<name>       → channel effect param (float)
+///   master/effect/<k>/param/<name>          → master effect param (float)
+///   mod/<idx>/<param_name>                  → modulation source param
 #[derive(Debug, Clone)]
 pub struct MidiMappingStore {
     /// MidiKey → parameter path
