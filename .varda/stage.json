@@ -171,5 +171,32 @@
       }
     ]
   },
-  "outputs": []
+  "outputs": [
+    {
+      "uuid": "49c997f6",
+      "name": "Output 1",
+      "target": {
+        "type": "windowed"
+      },
+      "surface_assignments": [],
+      "window_position": [
+        1080,
+        170
+      ],
+      "window_size": [
+        1280,
+        720
+      ]
+    },
+    {
+      "uuid": "4241e131",
+      "name": "Output 2",
+      "target": {
+        "type": "recording",
+        "path": "output.mp4",
+        "codec": "H.264 (fast)"
+      },
+      "surface_assignments": []
+    }
+  ]
 }
