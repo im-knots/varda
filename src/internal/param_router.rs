@@ -179,6 +179,9 @@ fn apply_mod_param(source: &mut ModulationSource, param_name: &str, value: f32) 
             "decay" => *decay = 0.001 + value * 4.999,
             "sustain" => *sustain = value.clamp(0.0, 1.0),
             "release" => *release = 0.001 + value * 4.999,
+            "gate" => {
+                if value > 0.5 { source.gate_on(); } else { source.gate_off(); }
+            }
             _ => log::warn!("Unknown ADSR param: {}", param_name),
         },
         ModulationSource::StepSequencer { rate, .. } => match param_name {

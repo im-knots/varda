@@ -287,14 +287,70 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 }
                             }
                             ModSourceUI::ADSR { attack, decay, sustain, release, stage: _ } => {
-                                ui.horizontal(|ui| {
-                                    if ui.button(egui::RichText::new("▶ Gate").small()).clicked() {
+                                // Combined gate button: press → trigger, release → gate off
+                                let gate_path = format!("mod/{}/gate", idx);
+                                let any_learn = data.midi_learn_active || data.keyboard_learn_active;
+                                let gate_id = ui.id().with(("adsr_gate", idx));
+                                let was_held = ui.memory(|m| m.data.get_temp::<bool>(gate_id).unwrap_or(false));
+                                let label = if was_held { "⏹ Gate (held)" } else { "▶ Gate" };
+                                let btn_color = if was_held { egui::Color32::from_rgb(80, 200, 80) } else { egui::Color32::from_rgb(180, 180, 180) };
+                                let (gate_rect, gate_resp) = ui.allocate_exact_size(
+                                    egui::vec2(80.0, 18.0),
+                                    egui::Sense::click_and_drag(),
+                                );
+                                // Draw button-like appearance
+                                let visuals = if was_held {
+                                    ui.visuals().widgets.active
+                                } else if gate_resp.hovered() {
+                                    ui.visuals().widgets.hovered
+                                } else {
+                                    ui.visuals().widgets.inactive
+                                };
+                                ui.painter().rect(gate_rect, visuals.corner_radius, visuals.bg_fill, visuals.bg_stroke, egui::StrokeKind::Outside);
+                                ui.painter().text(
+                                    gate_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    label,
+                                    egui::FontId::proportional(11.0),
+                                    btn_color,
+                                );
+                                // Detect pointer press and release on this widget
+                                if !any_learn {
+                                    let pressed_now = gate_resp.is_pointer_button_down_on();
+                                    if pressed_now && !was_held {
+                                        ui.memory_mut(|m| m.data.insert_temp(gate_id, true));
                                         actions.modulation_actions.push(ModulationAction::TriggerADSR { source_id: sid.clone() });
-                                    }
-                                    if ui.button(egui::RichText::new("⏹ Release").small()).clicked() {
+                                    } else if !pressed_now && was_held {
+                                        ui.memory_mut(|m| m.data.insert_temp(gate_id, false));
                                         actions.modulation_actions.push(ModulationAction::ReleaseADSR { source_id: sid.clone() });
                                     }
-                                });
+                                }
+                                // MIDI learn overlay
+                                if data.midi_learn_active {
+                                    let is_target = data.midi_learn_target.as_deref() == Some(gate_path.as_str());
+                                    if is_target {
+                                        widgets::draw_midi_learn_selected(ui, gate_rect);
+                                    } else {
+                                        widgets::draw_midi_learn_glow(ui, gate_rect);
+                                    }
+                                    let click_id = ui.id().with(("midi_learn_gate", idx));
+                                    if ui.interact(gate_rect, click_id, egui::Sense::click()).clicked() {
+                                        actions.midi_learn_select = Some(gate_path.clone());
+                                    }
+                                }
+                                // Keyboard learn overlay
+                                if data.keyboard_learn_active {
+                                    let is_target = data.keyboard_learn_target.as_deref() == Some(gate_path.as_str());
+                                    if is_target {
+                                        widgets::draw_keyboard_learn_selected(ui, gate_rect);
+                                    } else {
+                                        widgets::draw_keyboard_learn_glow(ui, gate_rect);
+                                    }
+                                    let click_id = ui.id().with(("kb_learn_gate", idx));
+                                    if ui.interact(gate_rect, click_id, egui::Sense::click()).clicked() {
+                                        actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(gate_path.clone()));
+                                    }
+                                }
                                 let mut a = *attack;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("A:").small());
