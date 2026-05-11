@@ -1,5 +1,5 @@
 use crate::params::ParamValue;
-use super::{ParamUIInfo, ParamUpdate, ModulationAction, ModSourceUI, ModAssignmentUI, AudioUIData, modulator_color};
+use super::{ParamUIInfo, ParamUpdate, ModulationAction, ModSourceUI, ModSourceUIEntry, ModAssignmentUI, AudioUIData, modulator_color};
 
 /// Build a set of prefixes whose params should be hidden.
 /// Convention: a bool param named `<prefix>_mode` controls visibility of params
@@ -28,9 +28,9 @@ fn is_hidden(name: &str, hidden: &[String]) -> bool {
 pub fn render_params(
     ui: &mut egui::Ui,
     params: &[ParamUIInfo],
-    modulation_sources: &[ModSourceUI],
+    modulation_sources: &[ModSourceUIEntry],
     make_update: &dyn Fn(&str, ParamValue) -> ParamUpdate,
-    make_mod_assign: Option<&dyn Fn(&str, usize) -> ModulationAction>,
+    make_mod_assign: Option<&dyn Fn(&str, &str) -> ModulationAction>,
     make_mod_remove: Option<&dyn Fn(&str) -> ModulationAction>,
     param_updates: &mut Vec<ParamUpdate>,
     modulation_actions: &mut Vec<ModulationAction>,
@@ -40,7 +40,7 @@ pub fn render_params(
     midi_learn_select: &mut Option<String>,
     midi_learn_target: Option<&str>,
     mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>>,
-    mod_current_values: &[f32],
+    mod_current_values: &std::collections::HashMap<String, f32>,
     mod_param_prefix: &str,
     keyboard_learn_active: bool,
     keyboard_learn_select: &mut Option<crate::keymap::KeyTarget>,
@@ -55,7 +55,10 @@ pub fn render_params(
         let assignments = mod_assignments.get(&mod_key);
         let is_modulated = assignments.map_or(false, |a| !a.is_empty());
         // Pick the primary modulator color (first assignment)
-        let mod_label_color = assignments.and_then(|a| a.first()).map(|a| modulator_color(a.source_idx));
+        let mod_label_color = assignments.and_then(|a| a.first()).map(|a| {
+            let color_idx = modulation_sources.iter().position(|e| e.uuid == a.source_id).unwrap_or(0);
+            modulator_color(color_idx)
+        });
         match param.value {
             ParamValue::Float(mut v) => {
                 let min = param.min.unwrap_or(0.0);
@@ -122,9 +125,7 @@ pub fn render_params(
                         if let Some(assigns) = assignments {
                             let mut total_offset = 0.0f32;
                             for a in assigns {
-                                if a.source_idx < mod_current_values.len() {
-                                    total_offset += mod_current_values[a.source_idx] * a.amount;
-                                }
+                                total_offset += mod_current_values.get(&a.source_id).copied().unwrap_or(0.0) * a.amount;
                             }
                             // Scale by param range to match GPU-side modulation
                             let range = max - min;
@@ -148,16 +149,16 @@ pub fn render_params(
                                 .width(30.0)
                                 .show_ui(ui, |ui| {
                                     ui.label(egui::RichText::new("Assign Modulation").small().strong());
-                                    for (src_idx, src) in modulation_sources.iter().enumerate() {
+                                    for (src_idx, entry) in modulation_sources.iter().enumerate() {
                                         let color = modulator_color(src_idx);
-                                        let src_name = match src {
+                                        let src_name = match &entry.source {
                                             ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
                                             ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
                                             ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                                             ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
                                         };
                                         if ui.button(egui::RichText::new(&src_name).color(color)).clicked() {
-                                            modulation_actions.push(assign_fn(&param.name, src_idx));
+                                            modulation_actions.push(assign_fn(&param.name, &entry.uuid));
                                         }
                                     }
                                     ui.separator();
@@ -192,9 +193,9 @@ pub fn render_params(
 pub fn render_effect_params(
     ui: &mut egui::Ui,
     params: &[ParamUIInfo],
-    modulation_sources: &[ModSourceUI],
+    modulation_sources: &[ModSourceUIEntry],
     make_update: &dyn Fn(&str, ParamValue) -> ParamUpdate,
-    make_mod_assign: Option<&dyn Fn(&str, usize) -> ModulationAction>,
+    make_mod_assign: Option<&dyn Fn(&str, &str) -> ModulationAction>,
     make_mod_remove: Option<&dyn Fn(&str) -> ModulationAction>,
     param_updates: &mut Vec<ParamUpdate>,
     modulation_actions: &mut Vec<ModulationAction>,
@@ -204,7 +205,7 @@ pub fn render_effect_params(
     midi_learn_select: &mut Option<String>,
     midi_learn_target: Option<&str>,
     mod_assignments: &std::collections::HashMap<String, Vec<ModAssignmentUI>>,
-    mod_current_values: &[f32],
+    mod_current_values: &std::collections::HashMap<String, f32>,
     mod_param_prefix: &str,
     keyboard_learn_active: bool,
     keyboard_learn_select: &mut Option<crate::keymap::KeyTarget>,
@@ -217,7 +218,10 @@ pub fn render_effect_params(
         let mod_key = format!("{}:{}", mod_param_prefix, param.name);
         let assignments = mod_assignments.get(&mod_key);
         let is_modulated = assignments.map_or(false, |a| !a.is_empty());
-        let mod_label_color = assignments.and_then(|a| a.first()).map(|a| modulator_color(a.source_idx));
+        let mod_label_color = assignments.and_then(|a| a.first()).map(|a| {
+            let color_idx = modulation_sources.iter().position(|e| e.uuid == a.source_id).unwrap_or(0);
+            modulator_color(color_idx)
+        });
         match param.value {
             ParamValue::Float(mut v) => {
                 let min = param.min.unwrap_or(0.0);
@@ -283,9 +287,7 @@ pub fn render_effect_params(
                         if let Some(assigns) = assignments {
                             let mut total_offset = 0.0f32;
                             for a in assigns {
-                                if a.source_idx < mod_current_values.len() {
-                                    total_offset += mod_current_values[a.source_idx] * a.amount;
-                                }
+                                total_offset += mod_current_values.get(&a.source_id).copied().unwrap_or(0.0) * a.amount;
                             }
                             // Scale by param range to match GPU-side modulation
                             let range = max - min;
@@ -308,16 +310,16 @@ pub fn render_effect_params(
                                 .width(30.0)
                                 .show_ui(ui, |ui| {
                                     ui.label(egui::RichText::new("Assign Modulation").small().strong());
-                                    for (src_idx, src) in modulation_sources.iter().enumerate() {
+                                    for (src_idx, entry) in modulation_sources.iter().enumerate() {
                                         let color = modulator_color(src_idx);
-                                        let src_name = match src {
+                                        let src_name = match &entry.source {
                                             ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
                                             ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
                                             ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                                             ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
                                         };
                                         if ui.button(egui::RichText::new(&src_name).color(color)).clicked() {
-                                            modulation_actions.push(assign_fn(&param.name, src_idx));
+                                            modulation_actions.push(assign_fn(&param.name, &entry.uuid));
                                         }
                                     }
                                     ui.separator();

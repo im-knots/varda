@@ -2,56 +2,110 @@
   "version": 2,
   "channels": [
     {
+      "uuid": "46af6706",
       "name": "Ch 0",
       "opacity": 1.0,
       "blend_mode": "normal",
       "decks": [
         {
-          "name": "dark_matter",
+          "uuid": "96cc03a6",
+          "name": "black_hole",
           "source": {
             "type": "Shader",
-            "path": "/Users/206653756/projects/vj/shaders/dark_matter.fs",
+            "path": "/Users/206653756/projects/vj/shaders/black_hole.fs",
             "params": {
-              "seed": 36.0,
-              "brightness": 1.2,
-              "warp": 0.25,
-              "speed": 0.7,
-              "web_scale": 8.5,
-              "color_node": [
-                1.0,
-                0.7,
-                0.15,
-                1.0
-              ],
+              "streak_thin": 0.58,
+              "crystal_glow": 0.42,
+              "hue_shift": 0.0,
+              "camera_speed": 0.55,
+              "orbit_tilt": 3.5,
+              "streak_count": 150.0,
+              "jet_width": 0.81,
+              "bloom": 0.0,
+              "crystal_dist": 1.0,
+              "equator_bias": 0.6,
+              "contrast": 1.3,
+              "cloud_density": 0.7,
+              "orbit_radius": 8.2,
+              "scatter": 0.43,
+              "jet_speed": 1.4,
+              "jet_height": 12.0,
+              "density": 3.0,
+              "crystal_count": 0.0,
+              "hole_size": 0.21,
+              "spin_speed": 0.6,
+              "shell_radius": 3.5,
+              "crystal_size": 0.3,
+              "pulse_rate": 1.0,
+              "distortion": 1.5,
+              "invert": 0.0,
+              "color_mode": 0.0,
+              "jet_power": 0.7
+            }
+          },
+          "effects": [],
+          "opacity": 1.0,
+          "blend_mode": "normal",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
+        },
+        {
+          "uuid": "3ab7634f",
+          "name": "char_cycle",
+          "source": {
+            "type": "Shader",
+            "path": "/Users/206653756/projects/vj/shaders/char_cycle.fs",
+            "params": {
+              "speed_variation": 0.5,
+              "char_set": 6.7,
+              "speed": 2.0,
               "bg_color": [
                 0.0,
                 0.0,
                 0.0,
+                0.0
+              ],
+              "fg_color": [
+                1.0,
+                1.0,
+                1.0,
                 1.0
               ],
-              "zoom": 0.5,
-              "contrast": 3.0,
-              "rotation": 0.07,
-              "scale_mult": 1.2,
-              "node_glow": 0.5,
-              "color_filament": [
-                0.7,
-                0.3,
-                0.9,
-                1.0
-              ]
+              "offset_amount": 7.5,
+              "grid_size": 9.5,
+              "table_mode": 0.65
             }
           },
           "effects": [
             {
-              "path": "shaders/kaleidoscope.fs",
-              "enabled": false,
+              "uuid": "3e44e25a",
+              "path": "shaders/chroma_key.fs",
+              "enabled": true,
               "params": {
-                "center_x": 0.5,
-                "segments": 2.0,
-                "rotation": 0.0,
-                "center_y": 0.5,
-                "zoom": 1.0
+                "tolerance": 0.15,
+                "opacity": 0.0,
+                "target_color": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "softness": 0.1
+              }
+            },
+            {
+              "uuid": "d21fcb97",
+              "path": "shaders/scatter_popup.fs",
+              "enabled": true,
+              "params": {
+                "pop_speed": 1.0,
+                "min_radius": 0.25,
+                "popup_scale": 0.21,
+                "popup_count": 8.0,
+                "opacity": 1.0,
+                "bg_mode": 0.3,
+                "max_radius": 0.71
               }
             }
           ],
@@ -65,104 +119,74 @@
       "effects": []
     },
     {
+      "uuid": "ef68db82",
       "name": "Ch 1",
       "opacity": 1.0,
       "blend_mode": "normal",
+      "decks": [],
+      "effects": []
+    },
+    {
+      "uuid": "3f84abe6",
+      "name": "Ch 2",
+      "opacity": 0.0,
+      "blend_mode": "normal",
       "decks": [
         {
-          "name": "black_hole",
+          "uuid": "4cc57dc4",
+          "name": "turing_patterns",
           "source": {
             "type": "Shader",
-            "path": "/Users/206653756/projects/vj/shaders/black_hole.fs",
+            "path": "shaders/turing_patterns.fs",
             "params": {
-              "crystal_size": 0.3,
-              "equator_bias": 0.6,
-              "color_mode": 0.0,
-              "scatter": 0.43,
-              "camera_speed": 0.55,
-              "jet_height": 12.0,
-              "jet_speed": 1.4,
-              "distortion": 1.5,
-              "contrast": 1.3,
-              "jet_power": 0.7,
-              "spin_speed": 0.6,
-              "shell_radius": 3.5,
-              "density": 3.0,
-              "streak_count": 150.0,
-              "bloom": 0.0,
-              "crystal_dist": 1.0,
-              "crystal_glow": 0.42,
-              "pulse_rate": 1.0,
-              "invert": 0.0,
-              "orbit_radius": 8.2,
-              "orbit_tilt": 3.5,
-              "cloud_density": 0.7,
-              "jet_width": 0.81,
-              "streak_thin": 0.58,
-              "hole_size": 0.21,
-              "hue_shift": 0.0
-            }
-          },
-          "effects": [],
-          "opacity": 1.0,
-          "blend_mode": "normal",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
-        },
-        {
-          "name": "char_cycle",
-          "source": {
-            "type": "Shader",
-            "path": "/Users/206653756/projects/vj/shaders/char_cycle.fs",
-            "params": {
-              "speed": 2.0,
-              "grid_size": 9.5,
-              "char_set": 6.7,
-              "offset_amount": 7.5,
-              "table_mode": 0.65,
-              "fg_color": [
-                1.0,
-                1.0,
-                1.0,
+              "kill_rate": 0.062,
+              "feed_rate": 0.038,
+              "seed_size": 0.05,
+              "growth_color": [
+                0.0,
+                0.0,
+                0.0,
                 1.0
               ],
-              "speed_variation": 0.5,
+              "sim_speed": 1.1,
+              "perturbation": 0.0,
+              "seed": 0.78,
               "bg_color": [
-                0.0,
-                0.0,
-                0.0,
+                1.0,
+                1.0,
+                1.0,
                 0.0
               ]
             }
           },
           "effects": [
             {
-              "path": "shaders/chroma_key.fs",
+              "uuid": "1364943c",
+              "path": "shaders/ripple.fs",
               "enabled": true,
               "params": {
-                "opacity": 0.0,
-                "softness": 0.1,
-                "tolerance": 0.15,
-                "target_color": [
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0
-                ]
+                "ripple_amount": 0.02,
+                "anim_speed": 0.4,
+                "frequency": 7.0,
+                "decay": 0.0,
+                "center_x": 0.5,
+                "center_y": 0.5
               }
             },
             {
-              "path": "shaders/scatter_popup.fs",
+              "uuid": "71536490",
+              "path": "shaders/edge_glow.fs",
               "enabled": true,
               "params": {
-                "bg_mode": 0.3,
-                "popup_count": 8.0,
-                "pop_speed": 1.0,
-                "min_radius": 0.25,
-                "max_radius": 0.71,
-                "popup_scale": 0.21,
-                "opacity": 1.0
+                "glow_color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "glow_amount": 1.0,
+                "edge_strength": 3.0,
+                "show_original": true
               }
             }
           ],
@@ -171,9 +195,115 @@
           "mute": false,
           "solo": false,
           "z_index": 0
+        },
+        {
+          "uuid": "626765c5",
+          "name": "voronoi",
+          "source": {
+            "type": "Shader",
+            "path": "shaders/voronoi.fs",
+            "params": {
+              "style": 0.0,
+              "cell_count": 9.5,
+              "color1": [
+                0.1,
+                0.4,
+                0.9,
+                1.0
+              ],
+              "edge_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "anim_speed": 1.0,
+              "color2": [
+                0.9,
+                0.2,
+                0.3,
+                1.0
+              ],
+              "edge_width": 0.0
+            }
+          },
+          "effects": [
+            {
+              "uuid": "9a8e70ec",
+              "path": "shaders/mirror_kaleidoscope.fs",
+              "enabled": true,
+              "params": {
+                "rotation": 0.0,
+                "center_y": 0.5,
+                "segments": 4.0,
+                "center_x": 0.5,
+                "zoom": 1.0
+              }
+            }
+          ],
+          "opacity": 1.0,
+          "blend_mode": "multiply",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
+        },
+        {
+          "uuid": "85b5e2c9",
+          "name": "📹 FaceTime HD Camera",
+          "source": {
+            "type": "Camera",
+            "name": "FaceTime HD Camera"
+          },
+          "effects": [
+            {
+              "uuid": "05a8dbd1",
+              "path": "shaders/edge_detect.fs",
+              "enabled": true,
+              "params": {
+                "bg_opacity": 0.0,
+                "edge_color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "sensitivity": 5.0,
+                "use_source_color": 0.0
+              }
+            }
+          ],
+          "opacity": 1.0,
+          "blend_mode": "multiply",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
         }
       ],
-      "effects": []
+      "effects": [
+        {
+          "uuid": "9fe009e9",
+          "path": "shaders/kaleidoscope.fs",
+          "enabled": true,
+          "params": {
+            "zoom": 1.0,
+            "center_y": 0.5,
+            "segments": 2.0,
+            "center_x": 0.5,
+            "rotation": 0.0
+          }
+        },
+        {
+          "uuid": "a609ee9e",
+          "path": "shaders/hue_shift.fs",
+          "enabled": true,
+          "params": {
+            "saturation": 1.0,
+            "cycle_speed": 0.5,
+            "hue_shift": 0.55,
+            "auto_cycle": false
+          }
+        }
+      ]
     }
   ],
   "crossfader": 0.0,
@@ -182,188 +312,208 @@
   "modulation": {
     "sources": [
       {
-        "AudioBand": {
-          "source_id": 0,
-          "freq_low": 80.0,
-          "freq_high": 1500.0,
-          "gain": 3.9,
-          "smoothing": 0.51,
-          "mode": "Direct",
-          "noise_gate": 0.26
+        "uuid": "ecb0ea00",
+        "source": {
+          "LFO": {
+            "waveform": "Sine",
+            "frequency": 1.0,
+            "phase": 0.0,
+            "amplitude": 1.0,
+            "bipolar": false
+          }
         }
       },
       {
-        "AudioBand": {
-          "source_id": 0,
-          "freq_low": 20.0,
-          "freq_high": 110.0,
-          "gain": 1.5,
-          "smoothing": 0.99,
-          "mode": "Direct",
-          "noise_gate": 0.24
+        "uuid": "0ae1e85a",
+        "source": {
+          "AudioBand": {
+            "source_id": 0,
+            "freq_low": 80.0,
+            "freq_high": 1500.0,
+            "gain": 3.9,
+            "smoothing": 0.51,
+            "mode": "Direct",
+            "noise_gate": 0.26
+          }
         }
       },
       {
-        "AudioBand": {
-          "source_id": null,
-          "freq_low": 20.0,
-          "freq_high": 80.0,
-          "gain": 1.0,
-          "smoothing": 0.71,
-          "mode": "Direct",
-          "noise_gate": 0.27
+        "uuid": "89644e35",
+        "source": {
+          "AudioBand": {
+            "source_id": 0,
+            "freq_low": 20.0,
+            "freq_high": 110.0,
+            "gain": 1.5,
+            "smoothing": 0.99,
+            "mode": "Direct",
+            "noise_gate": 0.24
+          }
         }
       },
       {
-        "LFO": {
-          "waveform": "Sine",
-          "frequency": 0.4,
-          "phase": 0.0,
-          "amplitude": 0.48,
-          "bipolar": true
+        "uuid": "11475fa7",
+        "source": {
+          "AudioBand": {
+            "source_id": null,
+            "freq_low": 20.0,
+            "freq_high": 80.0,
+            "gain": 1.0,
+            "smoothing": 0.71,
+            "mode": "Direct",
+            "noise_gate": 0.27
+          }
         }
       },
       {
-        "LFO": {
-          "waveform": "Sine",
-          "frequency": 0.025,
-          "phase": 0.0,
-          "amplitude": 1.0,
-          "bipolar": true
+        "uuid": "95260d2d",
+        "source": {
+          "AudioBand": {
+            "source_id": null,
+            "freq_low": 20.0,
+            "freq_high": 80.0,
+            "gain": 1.0,
+            "smoothing": 0.71,
+            "mode": "Direct",
+            "noise_gate": 0.27
+          }
+        }
+      },
+      {
+        "uuid": "8938ee3a",
+        "source": {
+          "AudioBand": {
+            "source_id": 0,
+            "freq_low": 80.0,
+            "freq_high": 1500.0,
+            "gain": 3.9,
+            "smoothing": 0.51,
+            "mode": "Direct",
+            "noise_gate": 0.26
+          }
+        }
+      },
+      {
+        "uuid": "ba8a0b66",
+        "source": {
+          "LFO": {
+            "waveform": "Sine",
+            "frequency": 0.4,
+            "phase": 0.0,
+            "amplitude": 0.48,
+            "bipolar": true
+          }
+        }
+      },
+      {
+        "uuid": "b821b6e2",
+        "source": {
+          "LFO": {
+            "waveform": "Sine",
+            "frequency": 0.025,
+            "phase": 0.0,
+            "amplitude": 1.0,
+            "bipolar": true
+          }
+        }
+      },
+      {
+        "uuid": "df783173",
+        "source": {
+          "AudioBand": {
+            "source_id": 0,
+            "freq_low": 20.0,
+            "freq_high": 110.0,
+            "gain": 1.5,
+            "smoothing": 0.99,
+            "mode": "Direct",
+            "noise_gate": 0.24
+          }
         }
       }
     ],
     "assignments": {
-      "ch1_deck0:cloud_density": [
+      "deck_3ab7634f:fx1:bg_mode": [
         {
-          "source_idx": 1,
+          "source_id": "95260d2d",
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch1_deck1:char_set": [
+      "deck_96cc03a6:cloud_density": [
         {
-          "source_idx": 4,
+          "source_id": "89644e35",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_96cc03a6:camera_speed": [
+        {
+          "source_id": "11475fa7",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_96cc03a6:pulse_rate": [
+        {
+          "source_id": "0ae1e85a",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_3ab7634f:speed_variation": [
+        {
+          "source_id": "8938ee3a",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_3ab7634f:grid_size": [
+        {
+          "source_id": "8938ee3a",
           "amount": 0.5,
           "component": null
         },
         {
-          "source_idx": 1,
+          "source_id": "ba8a0b66",
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch1_deck1:speed_variation": [
+      "deck_96cc03a6:streak_thin": [
         {
-          "source_idx": 0,
+          "source_id": "0ae1e85a",
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch1_deck1_fx1:bg_mode": [
+      "deck_96cc03a6:crystal_dist": [
         {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck1:membrane_amp": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck1:grid_size": [
-        {
-          "source_idx": 0,
+          "source_id": "89644e35",
           "amount": 0.5,
           "component": null
         },
         {
-          "source_idx": 3,
+          "source_id": "11475fa7",
           "amount": 0.5,
           "component": null
         }
       ],
-      "ch1_deck0:crystal_dist": [
+      "deck_96cc03a6:spin_speed": [
         {
-          "source_idx": 1,
+          "source_id": "11475fa7",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_3ab7634f:char_set": [
+        {
+          "source_id": "b821b6e2",
           "amount": 0.5,
           "component": null
         },
         {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck0:camera_speed": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck1_fx0:shadow_g": [
-        {
-          "source_idx": 0,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0:node_glow": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck1_fx0:shadow_r": [
-        {
-          "source_idx": 1,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck0:streak_thin": [
-        {
-          "source_idx": 0,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0:grid_density": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck0:spin_speed": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch1_deck0:pulse_rate": [
-        {
-          "source_idx": 0,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0:speed": [
-        {
-          "source_idx": 2,
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "ch0_deck0:rotation": [
-        {
-          "source_idx": 2,
+          "source_id": "df783173",
           "amount": 0.5,
           "component": null
         }

@@ -10,7 +10,9 @@ pub(super) fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, acti
     egui::ScrollArea::horizontal().id_salt("master_fx_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
             {
-                for (eff_idx, (eff_name, eff_enabled, eff_params)) in data.master_effect_info.iter().enumerate() {
+                for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in data.master_effect_info.iter().enumerate() {
+                    let eff_uuid_master = eff_uuid.clone();
+                    let eff_uuid_master_remove = eff_uuid.clone();
                     render_effect_drop_zone(ui, "master", eff_idx);
 
                     let card_resp = egui::Frame::default()
@@ -46,12 +48,12 @@ pub(super) fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, acti
                                             ParamValue::Color(v) => ParamUpdate::MasterEffectColor { effect_idx: eff_idx_copy, name: name.to_string(), value: v },
                                             _ => unreachable!(),
                                         },
-                                        Some(&|name: &str, src_idx: usize| ModulationAction::AssignMasterEffectModulation {
-                                            effect_idx: eff_idx_copy,
-                                            param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
+                                        Some(&|name: &str, source_uuid: &str| ModulationAction::AssignEffectModulation {
+                                            effect_uuid: eff_uuid_master.clone(),
+                                            param_name: name.to_string(), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
-                                        Some(&|name: &str| ModulationAction::RemoveMasterEffectAssignment {
-                                            effect_idx: eff_idx_copy,
+                                        Some(&|name: &str| ModulationAction::RemoveEffectAssignment {
+                                            effect_uuid: eff_uuid_master_remove.clone(),
                                             param_name: name.to_string(),
                                         }),
                                         &mut actions.param_updates,
@@ -63,7 +65,7 @@ pub(super) fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, acti
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
-                                        &format!("master_fx{}", eff_idx_copy),
+                                        &format!("fx_{}", eff_uuid),
                                         data.keyboard_learn_active,
                                         &mut actions.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
@@ -113,11 +115,9 @@ pub(super) fn render_master_effect_detail(ui: &mut egui::Ui, data: &UIData, acti
                     .stroke(stroke)
                     .show(ui, |ui| {
                         ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
-                        if data.master_effect_info.is_empty() {
-                            ui.centered_and_justified(|ui| {
-                                ui.label(egui::RichText::new("🔮 Drag effects here").weak());
-                            });
-                        }
+                        ui.centered_and_justified(|ui| {
+                            ui.label(egui::RichText::new("🔮 Drag effects here").weak());
+                        });
                     });
             }
 
@@ -177,7 +177,9 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
     egui::ScrollArea::horizontal().id_salt("channel_fx_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
             {
-                for (eff_idx, (eff_name, eff_enabled, eff_params)) in ch.effects.iter().enumerate() {
+                for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in ch.effects.iter().enumerate() {
+                    let eff_uuid_ch_assign = eff_uuid.clone();
+                    let eff_uuid_ch_remove = eff_uuid.clone();
                     render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), eff_idx);
 
                     let card_resp = egui::Frame::default()
@@ -202,7 +204,9 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
                                 if !eff_params.params.is_empty() {
                                     let ch_copy = ch_idx;
                                     let eff_idx_copy = eff_idx;
-                                    let midi_prefix = format!("ch/{}/effect/{}", ch_copy, eff_idx_copy);
+                                    let ch_uuid = ch.uuid.clone();
+                                    let _ch_uuid = ch_uuid.clone();
+                                    let midi_prefix = format!("ch/{}/effect/{}", ch_uuid, eff_idx_copy);
                                     widgets::render_effect_params(
                                         ui,
                                         &eff_params.params,
@@ -213,12 +217,12 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
                                             ParamValue::Color(v) => ParamUpdate::ChannelEffectColor { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
                                             _ => unreachable!(),
                                         },
-                                        Some(&|name: &str, src_idx: usize| ModulationAction::AssignChannelEffectModulation {
-                                            ch_idx: ch_copy, effect_idx: eff_idx_copy,
-                                            param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
+                                        Some(&|name: &str, source_uuid: &str| ModulationAction::AssignEffectModulation {
+                                            effect_uuid: eff_uuid_ch_assign.clone(),
+                                            param_name: name.to_string(), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
-                                        Some(&|name: &str| ModulationAction::RemoveChannelEffectAssignment {
-                                            ch_idx: ch_copy, effect_idx: eff_idx_copy,
+                                        Some(&|name: &str| ModulationAction::RemoveEffectAssignment {
+                                            effect_uuid: eff_uuid_ch_remove.clone(),
                                             param_name: name.to_string(),
                                         }),
                                         &mut actions.param_updates,
@@ -230,7 +234,7 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
-                                        &format!("ch{}_fx{}", ch_copy, eff_idx_copy),
+                                        &format!("fx_{}", eff_uuid),
                                         data.keyboard_learn_active,
                                         &mut actions.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
@@ -280,11 +284,9 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
                     .stroke(stroke)
                     .show(ui, |ui| {
                         ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
-                        if ch.effects.is_empty() {
-                            ui.centered_and_justified(|ui| {
-                                ui.label(egui::RichText::new("🔮 Drag effects here").weak());
-                            });
-                        }
+                        ui.centered_and_justified(|ui| {
+                            ui.label(egui::RichText::new("🔮 Drag effects here").weak());
+                        });
                     });
             }
 

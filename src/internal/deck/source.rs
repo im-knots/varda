@@ -267,6 +267,7 @@ impl Deck {
         };
 
         Ok(Self {
+            uuid: super::generate_short_uuid(),
             source_name,
             source_path,
             source,
@@ -595,6 +596,7 @@ impl Deck {
         let generator_params = ShaderParams::from_inputs(&[]);
 
         Ok(Self {
+            uuid: super::generate_short_uuid(),
             source_name,
             source_path,
             source,

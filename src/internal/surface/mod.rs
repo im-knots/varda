@@ -7,6 +7,7 @@
 //! coordinates [0..1]. Rectangles are just 4-vertex polygons. This supports
 //! triangles, circles (N-gon approximations), and arbitrary shapes.
 
+use crate::deck::generate_short_uuid;
 use crate::renderer::context::OutputSource;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,9 @@ impl CircleHint {
 /// where (0,0) is top-left of the canvas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Surface {
+    /// Stable UUID for this surface (8-char hex, persists across moves/saves)
+    #[serde(default = "generate_short_uuid")]
+    pub uuid: String,
     /// Unique name (e.g., "Main Screen", "Left LED", "DJ Booth")
     pub name: String,
     /// Ordered polygon vertices in normalized canvas coordinates [0..1] (primary contour)
@@ -115,6 +119,7 @@ impl Surface {
     /// Create a rectangular surface (4 vertices: TL, TR, BR, BL).
     pub fn new_rect(name: String, x: f32, y: f32, w: f32, h: f32, source: OutputSource) -> Self {
         Self {
+            uuid: generate_short_uuid(),
             name,
             vertices: vec![
                 [x, y],
@@ -295,8 +300,8 @@ impl SurfaceManager {
         Self { surfaces: Vec::new() }
     }
 
-    /// Add a new rectangular surface with default positioning
-    pub fn add_surface(&mut self, name: String, source: OutputSource) -> usize {
+    /// Add a new rectangular surface with default positioning. Returns the new surface's UUID.
+    pub fn add_surface(&mut self, name: String, source: OutputSource) -> String {
         // Place new surfaces in a grid-like pattern
         let count = self.surfaces.len();
         let col = count % 3;
@@ -304,13 +309,17 @@ impl SurfaceManager {
         let x = 0.05 + col as f32 * 0.32;
         let y = 0.05 + row as f32 * 0.35;
 
-        self.surfaces.push(Surface::new_rect(name, x, y, 0.28, 0.28, source));
-        self.surfaces.len() - 1
+        let surface = Surface::new_rect(name, x, y, 0.28, 0.28, source);
+        let uuid = surface.uuid.clone();
+        self.surfaces.push(surface);
+        uuid
     }
 
-    /// Add a surface with pre-defined vertices
-    pub fn add_polygon_surface(&mut self, name: String, vertices: Vec<[f32; 2]>, source: OutputSource) -> usize {
+    /// Add a surface with pre-defined vertices. Returns the new surface's UUID.
+    pub fn add_polygon_surface(&mut self, name: String, vertices: Vec<[f32; 2]>, source: OutputSource) -> String {
+        let uuid = generate_short_uuid();
         self.surfaces.push(Surface {
+            uuid: uuid.clone(),
             name,
             vertices,
             extra_contours: Vec::new(),
@@ -319,13 +328,15 @@ impl SurfaceManager {
             output_type: SurfaceOutputType::Projection,
             circle_hint: None,
         });
-        self.surfaces.len() - 1
+        uuid
     }
 
-    /// Add a circle surface with a `CircleHint`. Vertices are generated from the hint.
-    pub fn add_circle_surface(&mut self, name: String, hint: CircleHint, source: OutputSource) -> usize {
+    /// Add a circle surface with a `CircleHint`. Vertices are generated from the hint. Returns the new surface's UUID.
+    pub fn add_circle_surface(&mut self, name: String, hint: CircleHint, source: OutputSource) -> String {
+        let uuid = generate_short_uuid();
         let vertices = hint.generate_vertices();
         self.surfaces.push(Surface {
+            uuid: uuid.clone(),
             name,
             vertices,
             extra_contours: Vec::new(),
@@ -334,38 +345,54 @@ impl SurfaceManager {
             output_type: SurfaceOutputType::Projection,
             circle_hint: Some(hint),
         });
-        self.surfaces.len() - 1
+        uuid
     }
 
-    /// Remove a surface by index
-    pub fn remove_surface(&mut self, idx: usize) -> bool {
-        if idx < self.surfaces.len() {
-            self.surfaces.remove(idx);
+    /// Remove a surface by UUID. Returns true if found and removed.
+    pub fn remove_surface(&mut self, uuid: &str) -> bool {
+        if let Some(pos) = self.surfaces.iter().position(|s| s.uuid == uuid) {
+            self.surfaces.remove(pos);
             true
         } else {
             false
         }
     }
 
-    /// Find a surface at a given canvas position (normalized coords)
-    pub fn surface_at(&self, px: f32, py: f32) -> Option<usize> {
+    /// Find a surface at a given canvas position (normalized coords). Returns UUID.
+    pub fn surface_at(&self, px: f32, py: f32) -> Option<String> {
         // Search in reverse so topmost (last added) surfaces are found first
-        self.surfaces.iter().enumerate().rev()
-            .find(|(_, s)| s.contains(px, py))
-            .map(|(i, _)| i)
+        self.surfaces.iter().rev()
+            .find(|s| s.contains(px, py))
+            .map(|s| s.uuid.clone())
+    }
+
+    /// Find a surface by UUID, returning its index and a reference.
+    pub fn find_by_uuid(&self, uuid: &str) -> Option<(usize, &Surface)> {
+        self.surfaces.iter().enumerate().find(|(_, s)| s.uuid == uuid)
+    }
+
+    /// Find a surface by UUID, returning its index and a mutable reference.
+    pub fn find_by_uuid_mut(&mut self, uuid: &str) -> Option<(usize, &mut Surface)> {
+        self.surfaces.iter_mut().enumerate().find(|(_, s)| s.uuid == uuid)
     }
 
     /// Combine multiple surfaces into one using polygon boolean union.
     /// Overlapping regions merge into a single outline. Disjoint regions
-    /// become extra_contours. Returns the index of the combined surface.
-    pub fn combine_surfaces(&mut self, indices: &[usize]) -> Option<usize> {
+    /// become extra_contours. Returns the UUID of the combined surface.
+    pub fn combine_surfaces(&mut self, uuids: &[String]) -> Option<String> {
+        if uuids.len() < 2 { return None; }
+
+        // Resolve UUIDs to indices
+        let indices: Vec<usize> = uuids.iter()
+            .filter_map(|uuid| self.surfaces.iter().position(|s| s.uuid == *uuid))
+            .collect();
         if indices.len() < 2 { return None; }
 
-        let Some(&first_idx) = indices.iter().min() else { return None; };
+        let first_idx = *indices.iter().min().unwrap();
 
         // Collect all contours as geo polygons
         let mut geo_polys: Vec<geo::Polygon<f64>> = Vec::new();
-        for &idx in indices {
+        for &idx in &indices {
             if idx >= self.surfaces.len() { return None; }
             let surface = &self.surfaces[idx];
             if let Some(p) = verts_to_geo(&surface.vertices) {
@@ -416,8 +443,10 @@ impl SurfaceManager {
             }
         }
 
+        let new_uuid = generate_short_uuid();
         let primary = all_contours.remove(0);
         let combined = Surface {
+            uuid: new_uuid.clone(),
             name,
             vertices: primary,
             extra_contours: all_contours,
@@ -429,7 +458,7 @@ impl SurfaceManager {
 
         let insert_at = first_idx.min(self.surfaces.len());
         self.surfaces.insert(insert_at, combined);
-        Some(insert_at)
+        Some(new_uuid)
     }
 }
 
@@ -500,7 +529,7 @@ mod tests {
     #[test]
     fn center_empty_vertices() {
         let s = Surface {
-            name: "E".into(), vertices: vec![], extra_contours: vec![],
+            uuid: generate_short_uuid(), name: "E".into(), vertices: vec![], extra_contours: vec![],
             source: master_source(), content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection, circle_hint: None,
         };
@@ -525,7 +554,7 @@ mod tests {
     #[test]
     fn contains_fewer_than_3_vertices() {
         let s = Surface {
-            name: "Line".into(), vertices: vec![[0.0, 0.0], [1.0, 1.0]],
+            uuid: generate_short_uuid(), name: "Line".into(), vertices: vec![[0.0, 0.0], [1.0, 1.0]],
             extra_contours: vec![], source: master_source(),
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection, circle_hint: None,
@@ -630,7 +659,7 @@ mod tests {
     fn surface_regenerate_circle_vertices() {
         let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 6, aspect_ratio: 1.0 };
         let mut s = Surface {
-            name: "C".into(), vertices: vec![[0.0, 0.0]], // dummy
+            uuid: generate_short_uuid(), name: "C".into(), vertices: vec![[0.0, 0.0]], // dummy
             extra_contours: vec![], source: master_source(),
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
@@ -644,7 +673,7 @@ mod tests {
     fn surface_convert_to_polygon() {
         let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 6, aspect_ratio: 1.0 };
         let mut s = Surface {
-            name: "C".into(), vertices: hint.generate_vertices(),
+            uuid: generate_short_uuid(), name: "C".into(), vertices: hint.generate_vertices(),
             extra_contours: vec![], source: master_source(),
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
@@ -688,36 +717,43 @@ mod tests {
     // ── SurfaceManager tests ─────────────────────────────────────────
 
     #[test]
+    fn new_rect_has_uuid() {
+        let s = Surface::new_rect("Test".into(), 0.1, 0.2, 0.3, 0.4, master_source());
+        assert_eq!(s.uuid.len(), 8);
+    }
+
+    #[test]
     fn manager_add_surface() {
         let mut mgr = SurfaceManager::new();
-        let idx = mgr.add_surface("Main".into(), master_source());
-        assert_eq!(idx, 0);
+        let uuid = mgr.add_surface("Main".into(), master_source());
+        assert_eq!(uuid.len(), 8);
         assert_eq!(mgr.surfaces.len(), 1);
+        assert_eq!(mgr.surfaces[0].uuid, uuid);
     }
 
     #[test]
     fn manager_remove_surface() {
         let mut mgr = SurfaceManager::new();
-        mgr.add_surface("A".into(), master_source());
+        let uuid_a = mgr.add_surface("A".into(), master_source());
         mgr.add_surface("B".into(), master_source());
-        assert!(mgr.remove_surface(0));
+        assert!(mgr.remove_surface(&uuid_a));
         assert_eq!(mgr.surfaces.len(), 1);
         assert_eq!(mgr.surfaces[0].name, "B");
     }
 
     #[test]
-    fn manager_remove_out_of_bounds() {
+    fn manager_remove_not_found() {
         let mut mgr = SurfaceManager::new();
-        assert!(!mgr.remove_surface(0));
+        assert!(!mgr.remove_surface("nonexist"));
     }
 
     #[test]
     fn manager_surface_at() {
         let mut mgr = SurfaceManager::new();
-        mgr.add_surface("A".into(), master_source());
+        let uuid = mgr.add_surface("A".into(), master_source());
         // The first surface is placed at (0.05, 0.05) with size 0.28x0.28
         let found = mgr.surface_at(0.15, 0.15);
-        assert_eq!(found, Some(0));
+        assert_eq!(found, Some(uuid));
         let not_found = mgr.surface_at(0.99, 0.99);
         assert_eq!(not_found, None);
     }
@@ -728,16 +764,17 @@ mod tests {
         // Two overlapping surfaces
         mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.5, 0.5, master_source()));
         mgr.surfaces.push(Surface::new_rect("B".into(), 0.1, 0.1, 0.5, 0.5, master_source()));
-        // At (0.2, 0.2) both contain, but B (index 1) is topmost (last added)
-        assert_eq!(mgr.surface_at(0.2, 0.2), Some(1));
+        let b_uuid = mgr.surfaces[1].uuid.clone();
+        // At (0.2, 0.2) both contain, but B is topmost (last added)
+        assert_eq!(mgr.surface_at(0.2, 0.2), Some(b_uuid));
     }
 
     #[test]
     fn manager_add_polygon_surface() {
         let mut mgr = SurfaceManager::new();
         let verts = vec![[0.0, 0.0], [0.5, 0.0], [0.25, 0.5]];
-        let idx = mgr.add_polygon_surface("Triangle".into(), verts, master_source());
-        assert_eq!(idx, 0);
+        let uuid = mgr.add_polygon_surface("Triangle".into(), verts, master_source());
+        assert_eq!(uuid.len(), 8);
         assert_eq!(mgr.surfaces[0].vertices.len(), 3);
     }
 
@@ -745,10 +782,30 @@ mod tests {
     fn manager_add_circle_surface() {
         let mut mgr = SurfaceManager::new();
         let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 16, aspect_ratio: 1.0 };
-        let idx = mgr.add_circle_surface("Circle".into(), hint, master_source());
-        assert_eq!(idx, 0);
+        let uuid = mgr.add_circle_surface("Circle".into(), hint, master_source());
+        assert_eq!(uuid.len(), 8);
         assert!(mgr.surfaces[0].is_circle());
         assert_eq!(mgr.surfaces[0].vertices.len(), 16);
+    }
+
+    #[test]
+    fn manager_find_by_uuid() {
+        let mut mgr = SurfaceManager::new();
+        let uuid = mgr.add_surface("Test".into(), master_source());
+        let (idx, surface) = mgr.find_by_uuid(&uuid).unwrap();
+        assert_eq!(idx, 0);
+        assert_eq!(surface.name, "Test");
+        assert!(mgr.find_by_uuid("nonexist").is_none());
+    }
+
+    #[test]
+    fn manager_find_by_uuid_mut() {
+        let mut mgr = SurfaceManager::new();
+        let uuid = mgr.add_surface("Test".into(), master_source());
+        let (idx, surface) = mgr.find_by_uuid_mut(&uuid).unwrap();
+        assert_eq!(idx, 0);
+        surface.name = "Changed".into();
+        assert_eq!(mgr.surfaces[0].name, "Changed");
     }
 
     #[test]
@@ -756,9 +813,11 @@ mod tests {
         let mut mgr = SurfaceManager::new();
         mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.3, 0.3, master_source()));
         mgr.surfaces.push(Surface::new_rect("B".into(), 0.2, 0.2, 0.3, 0.3, master_source()));
-        let result = mgr.combine_surfaces(&[0, 1]);
+        let uuid_a = mgr.surfaces[0].uuid.clone();
+        let uuid_b = mgr.surfaces[1].uuid.clone();
+        let result = mgr.combine_surfaces(&[uuid_a, uuid_b]);
         assert!(result.is_some());
-        assert_eq!(mgr.surfaces.len(), 1); // Two removed, one combined added
+        assert_eq!(mgr.surfaces.len(), 1);
         assert!(mgr.surfaces[0].name.contains("A"));
         assert!(mgr.surfaces[0].name.contains("B"));
     }
@@ -767,7 +826,8 @@ mod tests {
     fn manager_combine_fewer_than_2() {
         let mut mgr = SurfaceManager::new();
         mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.3, 0.3, master_source()));
-        assert_eq!(mgr.combine_surfaces(&[0]), None);
+        let uuid = mgr.surfaces[0].uuid.clone();
+        assert_eq!(mgr.combine_surfaces(&[uuid]), None);
         assert_eq!(mgr.combine_surfaces(&[]), None);
     }
 

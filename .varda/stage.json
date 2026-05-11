@@ -2,26 +2,10 @@
   "grid_size": 0.05,
   "snap": true,
   "library_panel_open": true,
+  "right_panel_open": true,
   "stage_editor_open": false,
   "surfaces": {
     "surfaces": []
   },
-  "outputs": [
-    {
-      "name": "Output 1",
-      "target": {
-        "type": "display",
-        "name": "Monitor #41041"
-      },
-      "surface_assignments": [],
-      "window_position": [
-        6880,
-        404
-      ],
-      "window_size": [
-        2992,
-        1868
-      ]
-    }
-  ]
+  "outputs": []
 }

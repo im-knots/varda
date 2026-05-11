@@ -719,12 +719,12 @@ mod tests {
         let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
         let params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
-        let idx = engine.add_source(crate::modulation::ModulationSource::LFO {
+        let uuid = engine.add_source(crate::modulation::ModulationSource::LFO {
             waveform: crate::modulation::LFOWaveform::Sine,
             frequency: 1.0, phase: 0.0, amplitude: 1.0, bipolar: true,
         });
         engine.update(0.25, &crate::modulation::AudioValues::default());
-        engine.assign("brightness", idx, 0.5, None);
+        engine.assign("brightness", &uuid, 0.5, None);
 
         let modulated = params.build_modulated_buffer_data(&engine, None);
         let base = params.build_buffer_data();
@@ -737,10 +737,10 @@ mod tests {
         let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
         let params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
-        let idx = engine.add_source(crate::modulation::ModulationSource::sine_lfo(1.0));
+        let uuid = engine.add_source(crate::modulation::ModulationSource::sine_lfo(1.0));
         engine.update(0.25, &crate::modulation::AudioValues::default());
         // Assign with prefix "deck0:brightness"
-        engine.assign("deck0:brightness", idx, 0.5, None);
+        engine.assign("deck0:brightness", &uuid, 0.5, None);
 
         let modulated = params.build_modulated_buffer_data(&engine, Some("deck0"));
         let base = params.build_buffer_data();

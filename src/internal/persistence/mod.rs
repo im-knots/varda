@@ -23,6 +23,8 @@ pub struct StagePrefs {
     pub snap: bool,
     #[serde(default)]
     pub library_panel_open: bool,
+    #[serde(default = "default_true")]
+    pub right_panel_open: bool,
     #[serde(default)]
     pub stage_editor_open: bool,
     /// 2D stage surface layout
@@ -42,6 +44,7 @@ impl Default for StagePrefs {
             grid_size: 0.05,
             snap: true,
             library_panel_open: false,
+            right_panel_open: true,
             stage_editor_open: false,
             surfaces: crate::surface::SurfaceManager::default(),
             outputs: Vec::new(),
@@ -290,6 +293,7 @@ pub fn snapshot_scene(
 
             let effects = slot.deck.effects.iter().map(|eff| {
                 EffectConfig {
+                    uuid: eff.uuid.clone(),
                     path: eff.shader.file_path.clone().unwrap_or_default(),
                     enabled: eff.enabled,
                     params: eff.params.values.clone(),
@@ -320,6 +324,7 @@ pub fn snapshot_scene(
                 });
 
             Some(DeckConfig {
+                uuid: slot.deck.uuid().to_string(),
                 name: slot.deck.source_name().to_string(),
                 source,
                 effects,
@@ -335,6 +340,7 @@ pub fn snapshot_scene(
 
         let effects = ch.effects.iter().map(|eff| {
             EffectConfig {
+                    uuid: eff.uuid.clone(),
                 path: eff.shader.file_path.clone().unwrap_or_default(),
                 enabled: eff.enabled,
                 params: eff.params.values.clone(),
@@ -342,6 +348,7 @@ pub fn snapshot_scene(
         }).collect();
 
         ChannelConfig {
+            uuid: ch.uuid().to_string(),
             name: ch.name.clone(),
             opacity: ch.opacity,
             blend_mode: ch.blend_mode.into(),
@@ -352,6 +359,7 @@ pub fn snapshot_scene(
 
     let master_effects = mixer.master_effects().iter().map(|eff| {
         EffectConfig {
+                    uuid: eff.uuid.clone(),
             path: eff.shader.file_path.clone().unwrap_or_default(),
             enabled: eff.enabled,
             params: eff.params.values.clone(),
@@ -458,6 +466,7 @@ pub fn snapshot_stage(
     grid_size: f32,
     snap: bool,
     library_panel_open: bool,
+    right_panel_open: bool,
     stage_editor_open: bool,
 ) -> StagePrefs {
     let outputs = outputs_list.iter().map(|unified| {
@@ -478,7 +487,7 @@ pub fn snapshot_stage(
                     target_to_config(&w.target),
                     w.surface_assignments.iter().map(|a| {
                         SurfaceAssignmentConfig {
-                            surface_idx: a.surface_idx,
+                            surface_uuid: a.surface_uuid.clone(),
                             warp_corners: a.warp_corners,
                             enabled: a.enabled,
                         }
@@ -492,7 +501,7 @@ pub fn snapshot_stage(
                 target_to_config(&h.target),
                 h.surface_assignments.iter().map(|a| {
                     SurfaceAssignmentConfig {
-                        surface_idx: a.surface_idx,
+                        surface_uuid: a.surface_uuid.clone(),
                         warp_corners: a.warp_corners,
                         enabled: a.enabled,
                     }
@@ -502,6 +511,7 @@ pub fn snapshot_stage(
             ),
         };
         OutputConfig {
+            uuid: unified.uuid().to_string(),
             name,
             target,
             target_display: None,
@@ -515,6 +525,7 @@ pub fn snapshot_stage(
         grid_size,
         snap,
         library_panel_open,
+        right_panel_open,
         stage_editor_open,
         surfaces: surface_manager.clone(),
         outputs,
@@ -558,6 +569,9 @@ pub fn restore_scene(
             render_width,
             render_height,
         )?;
+        if !ch_config.uuid.is_empty() {
+            channel.set_uuid(ch_config.uuid.clone());
+        }
         channel.opacity = ch_config.opacity;
         channel.blend_mode = ch_config.blend_mode.into();
 
@@ -797,6 +811,11 @@ pub(crate) fn restore_deck(
         }
     };
 
+    // Restore UUID from config
+    if !config.uuid.is_empty() {
+        deck.set_uuid(config.uuid.clone());
+    }
+
     // Restore effects
     for eff_config in &config.effects {
         match restore_effect(eff_config, context, wgpu::TextureFormat::Rgba8Unorm) {
@@ -815,6 +834,7 @@ pub(crate) fn restore_effect(config: &EffectConfig, context: &GpuContext, target
     let shader = ISFShader::from_file(&config.path)
         .with_context(|| format!("Failed to load effect shader: {}", config.path))?;
     let mut effect = Effect::new_with_format(context, shader, target_format)?;
+    effect.uuid = config.uuid.clone();
     effect.enabled = config.enabled;
     // Restore parameter values
     for (name, value) in &config.params {
@@ -900,6 +920,7 @@ mod tests {
         // Just verify the function signature is accessible at pub(crate) level
         let gpu = headless_gpu();
         let cfg = EffectConfig {
+            uuid: "test0001".to_string(),
             path: "nonexistent.fs".into(),
             enabled: true,
             params: HashMap::new(),
@@ -937,11 +958,12 @@ mod tests {
     fn validate_stage_prefs_warp_corners_non_finite() {
         let mut prefs = StagePrefs::default();
         prefs.outputs.push(crate::scene::OutputConfig {
+            uuid: "test0001".into(),
             name: "test".into(),
             target: crate::scene::OutputTargetConfig::Windowed,
             target_display: None,
             surface_assignments: vec![crate::scene::SurfaceAssignmentConfig {
-                surface_idx: 0,
+                surface_uuid: "abcd1234".into(),
                 warp_corners: [[0.0, 0.0], [1.0, 0.0], [f32::INFINITY, 1.0], [0.0, 1.0]],
                 enabled: true,
             }],

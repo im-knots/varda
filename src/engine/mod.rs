@@ -56,12 +56,24 @@ pub enum EngineCommand {
     AddAudioBand { preset: AudioBandPreset, source_id: Option<AudioSourceId> },
     AddAdsr { attack: f32, decay: f32, sustain: f32, release: f32 },
     AddStepSequencer { num_steps: usize, rate: f32 },
-    RemoveModulationSource { idx: usize },
-    AssignModulation { target: String, source_idx: usize, amount: f32 },
+    RemoveModulationSource { uuid: String },
+    AssignModulation { target: String, source_id: String, amount: f32 },
     ClearModulation { target: String },
 
     // ── Output ─────────────────────────────────────────────────
     CreateOutput,
     CloseOutput { idx: usize },
     SetOutputDisplay { idx: usize, monitor_name: String },
+
+    // ── Surfaces ────────────────────────────────────────────────
+    AddSurface { name: String, source: OutputSource },
+    AddPolygonSurface { name: String, vertices: Vec<[f32; 2]>, source: OutputSource },
+    AddCircleSurface { name: String, center: [f32; 2], radius: f32, sides: u32, aspect_ratio: f32, source: OutputSource },
+    RemoveSurface { uuid: String },
+    SetSurfaceSource { uuid: String, source: OutputSource },
+    SetSurfaceOutputType { uuid: String, output_type: SurfaceOutputType },
+    SetSurfaceContentMapping { uuid: String, mapping: ContentMapping },
+    RenameSurface { uuid: String, name: String },
+    AssignSurfaceToOutput { output_uuid: String, surface_uuid: String },
+    UnassignSurfaceFromOutput { output_uuid: String, assignment_idx: usize },
 }

@@ -111,6 +111,7 @@ impl Effect {
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
 
         Ok(Self {
+            uuid: crate::deck::generate_short_uuid(),
             shader,
             pipeline,
             enabled: true,

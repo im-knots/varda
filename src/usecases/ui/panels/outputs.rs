@@ -129,12 +129,12 @@ fn render_windowed_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
             .selected_text("+ Assign Surface")
             .width(140.0)
             .show_ui(ui, |ui| {
-                for (si, surface) in data.surfaces.iter().enumerate() {
-                    let already_assigned = output.surface_assignments.iter().any(|a| a.surface_idx == si);
+                for surface in data.surfaces.iter() {
+                    let already_assigned = output.surface_assignments.iter().any(|a| a.surface_uuid == surface.uuid);
                     if !already_assigned {
                         if ui.selectable_label(false, &surface.name).clicked() {
                             actions.output_actions.push(OutputAction::AssignSurface {
-                                output_idx: idx, surface_idx: si,
+                                output_idx: idx, surface_uuid: surface.uuid.clone(),
                             });
                         }
                     }
@@ -268,12 +268,12 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
             .selected_text("+ Assign Surface")
             .width(140.0)
             .show_ui(ui, |ui| {
-                for (si, surface) in data.surfaces.iter().enumerate() {
-                    let already_assigned = output.surface_assignments.iter().any(|a| a.surface_idx == si);
+                for surface in data.surfaces.iter() {
+                    let already_assigned = output.surface_assignments.iter().any(|a| a.surface_uuid == surface.uuid);
                     if !already_assigned {
                         if ui.selectable_label(false, &surface.name).clicked() {
                             actions.output_actions.push(OutputAction::AssignSurface {
-                                output_idx: idx, surface_idx: si,
+                                output_idx: idx, surface_uuid: surface.uuid.clone(),
                             });
                         }
                     }
@@ -464,6 +464,7 @@ mod tests {
     fn render_output_section_smoke_with_outputs() {
         let mut data = UIData::test_fixture();
         data.outputs.push(crate::usecases::ui::OutputUI {
+            uuid: "out00001".to_string(),
             name: "Main".to_string(),
             target: OutputTarget::Windowed,
             target_label: "Windowed".to_string(),

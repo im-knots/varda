@@ -155,6 +155,7 @@ mod tests {
 
     fn sample_deck_config() -> DeckConfig {
         DeckConfig {
+            uuid: crate::deck::generate_short_uuid(),
             name: "test_deck".to_string(),
             source: SourceConfig::SolidColor { color: [1.0, 0.0, 0.0, 1.0] },
             effects: vec![],
@@ -170,6 +171,7 @@ mod tests {
 
     fn sample_channel_config() -> ChannelConfig {
         ChannelConfig {
+            uuid: crate::deck::generate_short_uuid(),
             name: "test_channel".to_string(),
             opacity: 1.0,
             blend_mode: BlendModeConfig::Normal,
@@ -250,6 +252,7 @@ mod tests {
         let mut config = sample_deck_config();
         config.modulation = vec![
             ModulationRecipe {
+                source_uuid: "test0001".to_string(),
                 source: ModulationSource::sine_lfo(2.0),
                 assignments: vec![
                     ModulationRecipeAssignment { param: "brightness".into(), amount: 0.5, component: None },
@@ -275,6 +278,7 @@ mod tests {
         let mut config = sample_deck_config();
         config.modulation = vec![
             ModulationRecipe {
+                source_uuid: "test0002".to_string(),
                 source: ModulationSource::adsr(0.1, 0.2, 0.7, 0.3),
                 assignments: vec![
                     ModulationRecipeAssignment { param: "scale".into(), amount: -0.8, component: Some(1) },

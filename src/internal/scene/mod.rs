@@ -54,13 +54,17 @@ pub struct SceneConfig {
     pub render_height: Option<u32>,
 }
 
-fn default_version() -> u32 { 2 }
+fn default_version() -> u32 { 3 }
 
 // ── Channel ────────────────────────────────────────────────────────
 
 /// Serializable channel state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelConfig {
+    /// Stable UUID (8-char hex)
+    #[serde(default = "generate_default_uuid")]
+    pub uuid: String,
+
     pub name: String,
 
     #[serde(default = "default_opacity")]
@@ -80,9 +84,17 @@ fn default_opacity() -> f32 { 1.0 }
 
 // ── Deck ───────────────────────────────────────────────────────────
 
+fn generate_default_uuid() -> String {
+    crate::deck::generate_short_uuid()
+}
+
 /// Serializable deck state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeckConfig {
+    /// Stable UUID (8-char hex)
+    #[serde(default = "generate_default_uuid")]
+    pub uuid: String,
+
     /// Display name
     #[serde(default)]
     pub name: String,
@@ -127,6 +139,9 @@ pub struct DeckConfig {
 /// Contains a source definition and which params it targets (relative keys).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModulationRecipe {
+    /// UUID of the modulation source
+    #[serde(default = "crate::deck::generate_short_uuid")]
+    pub source_uuid: String,
     /// The modulation source definition
     pub source: crate::modulation::ModulationSource,
     /// Assignments using relative param keys (no ch/deck prefix)
@@ -301,6 +316,9 @@ pub enum SourceConfig {
 /// Serializable effect (ISF filter) state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EffectConfig {
+    /// Stable UUID (8-char hex)
+    #[serde(default = "generate_default_uuid")]
+    pub uuid: String,
     /// Path to the ISF shader file
     pub path: String,
     /// Whether effect is enabled
@@ -334,6 +352,9 @@ impl Default for OutputTargetConfig {
 /// Serializable output configuration (unified model).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputConfig {
+    /// Stable UUID (8-char hex)
+    #[serde(default = "generate_default_uuid")]
+    pub uuid: String,
     pub name: String,
     /// The output target type and config.
     #[serde(default)]
@@ -357,6 +378,7 @@ impl OutputConfig {
     /// Create a default windowed output config with an auto-generated name.
     pub fn default_windowed() -> Self {
         Self {
+            uuid: crate::deck::generate_short_uuid(),
             name: String::new(),
             target: OutputTargetConfig::Windowed,
             target_display: None,
@@ -371,7 +393,7 @@ impl OutputConfig {
 /// Per-surface warp calibration in an output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurfaceAssignmentConfig {
-    pub surface_idx: usize,
+    pub surface_uuid: String,
     pub warp_corners: [[f32; 2]; 4],
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -602,11 +624,13 @@ mod tests {
             version: 2,
             channels: vec![
                 ChannelConfig {
+                    uuid: crate::deck::generate_short_uuid(),
                     name: "Ch 0".into(),
                     opacity: 1.0,
                     blend_mode: BlendModeConfig::Normal,
                     decks: vec![
                         DeckConfig {
+                            uuid: crate::deck::generate_short_uuid(),
                             name: "Color Burn".into(),
                             source: SourceConfig::Shader {
                                 path: "shaders/color_burn.fs".into(),
@@ -651,6 +675,7 @@ mod tests {
             crossfader: 0.0,
             active_transition: None,
             master_effects: vec![EffectConfig {
+                uuid: "fxtest01".to_string(),
                 path: "shaders/blur.fs".into(),
                 enabled: true,
                 params: {
@@ -832,6 +857,7 @@ mod tests {
         let scene = SceneConfig {
             version: 2,
             channels: vec![ChannelConfig {
+                uuid: crate::deck::generate_short_uuid(),
                 name: "Test Ch".into(),
                 opacity: 0.9,
                 blend_mode: BlendModeConfig::Add,
@@ -864,10 +890,12 @@ mod tests {
         let scene = SceneConfig {
             version: 2,
             channels: vec![ChannelConfig {
+                uuid: crate::deck::generate_short_uuid(),
                 name: "Ch 0".into(),
                 opacity: 1.0,
                 blend_mode: BlendModeConfig::Normal,
                 decks: vec![DeckConfig {
+                    uuid: crate::deck::generate_short_uuid(),
                     name: "Deck".into(),
                     source: SourceConfig::Shader { path: "test.fs".into(), params: HashMap::new() },
                     effects: vec![],
@@ -919,6 +947,7 @@ mod tests {
     #[test]
     fn validate_channel_opacity_out_of_range() {
         let ch = ChannelConfig {
+            uuid: crate::deck::generate_short_uuid(),
             name: "Bad".into(), opacity: 2.0,
             blend_mode: BlendModeConfig::Normal, decks: vec![], effects: vec![],
         };
@@ -929,6 +958,7 @@ mod tests {
     #[test]
     fn validate_deck_opacity_out_of_range() {
         let deck = DeckConfig {
+            uuid: crate::deck::generate_short_uuid(),
             name: "D".into(),
             source: SourceConfig::Shader { path: "ok.fs".into(), params: HashMap::new() },
             effects: vec![], opacity: -0.5,
@@ -959,7 +989,7 @@ mod tests {
 
     #[test]
     fn validate_effect_empty_path() {
-        let fx = EffectConfig { path: "".into(), enabled: true, params: HashMap::new() };
+        let fx = EffectConfig { uuid: "test0001".into(), path: "".into(), enabled: true, params: HashMap::new() };
         let errors = fx.validate("fx[0]");
         assert!(!errors.is_empty());
     }

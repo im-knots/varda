@@ -2,7 +2,7 @@
 
 use crate::mixer::CrossfadeEasing;
 use crate::BlendMode;
-use super::super::{UIData, UIActions, CrossfaderAction, LibraryDrag, ChannelUIInfo, DeckUIInfo, widgets};
+use super::super::{UIData, UIActions, CrossfaderAction, LibraryDrag, ChannelUIInfo, DeckUIInfo, SequenceAction, widgets};
 use super::utils::channel_color;
 use super::stage::render_stage_editor;
 use super::sequence::render_sequence_builder;
@@ -14,80 +14,175 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
     }
 
     let available = ui.available_width();
+    let panel_height = ui.available_height();
     let has_sequences = !data.sequences.is_empty();
-    // Widen the center column when sequences are present so steps don't wrap
-    let center_width = if has_sequences { 400.0_f32.min(available * 0.45) } else { 160.0 };
     let num_channels = data.channels.len();
     let left_count = (num_channels + 1) / 2; // ceil(N/2)
     let right_count = num_channels / 2;       // floor(N/2)
-    let side_width = ((available - center_width) / 2.0) - 8.0;
 
-    ui.horizontal_top(|ui| {
-        // Left side channels
-        if left_count > 0 {
-            ui.vertical(|ui| {
-                ui.set_width(side_width);
-                let per_ch_width = side_width / left_count as f32 - 4.0;
+    // Fixed widths — channels and mixer never scale with window resize
+    let ch_card_width = 150.0_f32;
+    let center_width = 160.0_f32;
+    let preset_hint_threshold = 80.0;
+
+    // Channels always take priority — compute how much space they need
+    let left_channels_total = left_count as f32 * ch_card_width;
+    let right_channels_total = right_count as f32 * ch_card_width;
+    let max_channels_side = left_channels_total.max(right_channels_total);
+    let all_channels_and_center = max_channels_side * 2.0 + center_width;
+
+    // Does the wider channel side overflow the available space?
+    let channels_overflow = all_channels_and_center > available;
+
+    if channels_overflow {
+        // Too many channels — horizontal scroll across full width
+        egui::ScrollArea::horizontal()
+            .id_salt("central_channel_scroll")
+            .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     for i in 0..left_count {
                         if let Some(ch) = data.channels.get(i) {
                             ui.vertical(|ui| {
-                                ui.set_width(per_ch_width);
+                                ui.set_width(ch_card_width);
                                 render_channel_column(ui, ch, data, actions);
                             });
-                            if i < left_count - 1 { ui.separator(); }
+                        }
+                    }
+                    ui.separator();
+                    ui.vertical(|ui| {
+                        ui.set_width(center_width);
+                        let mixer_width = 160.0;
+                        let mixer_pad = ((center_width - mixer_width) / 2.0).max(0.0);
+                        // Mixer box — centered at 160px
+                        ui.horizontal(|ui| {
+                            ui.add_space(mixer_pad);
+                            ui.vertical(|ui| {
+                                ui.set_width(mixer_width);
+                                render_mixer_box(ui, data, actions);
+                            });
+                        });
+                        // Sequence builder — hard-bounded to center_width, centered
+                        if has_sequences {
+                            ui.add_space(4.0);
+                            ui.allocate_ui(egui::vec2(center_width, ui.available_height()), |ui| {
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                    render_sequence_builder(ui, data, actions);
+                                });
+                            });
+                        }
+                        // + Sequence button — centered below mixer
+                        if data.channel_count >= 2 {
+                            ui.add_space(4.0);
+                            ui.allocate_ui(egui::vec2(center_width, 20.0), |ui| {
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                    if ui.small_button("+ Sequence").on_hover_text("Create a new transition sequence").clicked() {
+                                        actions.sequence_actions.push(SequenceAction::Create);
+                                    }
+                                });
+                            });
+                        }
+                    });
+                    ui.separator();
+                    for i in 0..right_count {
+                        let ch_idx = left_count + i;
+                        if let Some(ch) = data.channels.get(ch_idx) {
+                            ui.vertical(|ui| {
+                                ui.set_width(ch_card_width);
+                                render_channel_column(ui, ch, data, actions);
+                            });
                         }
                     }
                 });
             });
-        }
+    } else {
+        // Channels fit — compute equal empty hint space on each side.
+        // Use the LARGER channel side to determine side_width so both sides are equal.
+        // Empty space = side_width - that side's channels. Both sides get the same side_width.
+        let side_width = ((available - center_width) / 2.0).max(0.0);
+        // Empty space is limited by the side with MORE channels (so it doesn't overflow)
+        let empty_each = (side_width - max_channels_side).max(0.0);
 
-        ui.separator();
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
 
-        // Center column: mixer box (centered) + sequence builder below
-        ui.vertical(|ui| {
-            ui.set_width(center_width);
-
-            // Center the mixer box within the wider column
-            let mixer_width = 160.0;
-            let mixer_pad = ((center_width - mixer_width) / 2.0).max(0.0);
-            ui.horizontal(|ui| {
-                ui.add_space(mixer_pad);
-                ui.vertical(|ui| {
-                    ui.set_width(mixer_width);
-                    render_mixer_box(ui, data, actions);
+            // Left side: hint on far left, channels adjacent to mixer
+            ui.allocate_ui(egui::vec2(side_width, panel_height), |ui| {
+                ui.horizontal_top(|ui| {
+                    if empty_each > preset_hint_threshold {
+                        render_channel_preset_hint(ui, empty_each);
+                    } else if empty_each > 1.0 {
+                        ui.add_space(empty_each);
+                    }
+                    for i in 0..left_count {
+                        if let Some(ch) = data.channels.get(i) {
+                            ui.vertical(|ui| {
+                                ui.set_width(ch_card_width);
+                                render_channel_column(ui, ch, data, actions);
+                            });
+                        }
+                    }
                 });
             });
 
-            // Sequence builder below mixer, uses full center_width
-            if has_sequences || data.channel_count >= 2 {
-                ui.add_space(4.0);
-                render_sequence_builder(ui, data, actions);
-            }
-        });
+            // Center column — force vertical layout (parent is horizontal_top)
+            ui.allocate_ui_with_layout(
+                egui::vec2(center_width, panel_height),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.separator();
+                    let mixer_width = 160.0;
+                    let mixer_pad = ((center_width - mixer_width) / 2.0).max(0.0);
+                    // Mixer box — centered at 160px
+                    ui.horizontal(|ui| {
+                        ui.add_space(mixer_pad);
+                        ui.vertical(|ui| {
+                            ui.set_width(mixer_width);
+                            render_mixer_box(ui, data, actions);
+                        });
+                    });
+                    // Sequence builder — hard-bounded to center_width, centered
+                    if has_sequences {
+                        ui.add_space(4.0);
+                        ui.allocate_ui(egui::vec2(center_width, ui.available_height()), |ui| {
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                render_sequence_builder(ui, data, actions);
+                            });
+                        });
+                    }
+                    // + Sequence button — centered below mixer
+                    if data.channel_count >= 2 {
+                        ui.add_space(4.0);
+                        ui.allocate_ui(egui::vec2(center_width, 20.0), |ui| {
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                if ui.small_button("+ Sequence").on_hover_text("Create a new transition sequence").clicked() {
+                                    actions.sequence_actions.push(SequenceAction::Create);
+                                }
+                            });
+                        });
+                    }
+                },
+            );
 
-        ui.separator();
-
-        // Right side channels
-        if right_count > 0 {
-            ui.vertical(|ui| {
-                ui.set_width(side_width);
-                let per_ch_width = side_width / right_count as f32 - 4.0;
+            // Right side: channels adjacent to mixer, hint on far right
+            ui.allocate_ui(egui::vec2(side_width, panel_height), |ui| {
+                ui.separator();
                 ui.horizontal_top(|ui| {
                     for i in 0..right_count {
                         let ch_idx = left_count + i;
                         if let Some(ch) = data.channels.get(ch_idx) {
                             ui.vertical(|ui| {
-                                ui.set_width(per_ch_width);
+                                ui.set_width(ch_card_width);
                                 render_channel_column(ui, ch, data, actions);
                             });
-                            if i < right_count - 1 { ui.separator(); }
                         }
+                    }
+                    if empty_each > preset_hint_threshold {
+                        render_channel_preset_hint(ui, empty_each);
                     }
                 });
             });
-        }
-    });
+        });
+    }
 }
 
 /// Render the center mixer box (DJ console style)
@@ -159,7 +254,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         }
                         // MIDI learn: glow + click overlay
                         if data.midi_learn_active {
-                            let path = format!("ch/{}/opacity", ch_idx);
+                            let path = format!("ch/{}/opacity", ch.uuid);
                             let is_target = data.midi_learn_target.as_deref() == Some(path.as_str());
                             if is_target {
                                 widgets::draw_midi_learn_selected(ui, slider_rect);
@@ -174,7 +269,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         }
                         // Keyboard learn: orange glow + click overlay
                         if data.keyboard_learn_active {
-                            let path = format!("ch/{}/opacity", ch_idx);
+                            let path = format!("ch/{}/opacity", ch.uuid);
                             let is_target = data.keyboard_learn_target.as_deref() == Some(path.as_str());
                             if is_target {
                                 widgets::draw_keyboard_learn_selected(ui, slider_rect);
@@ -340,117 +435,118 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                     });
             }
 
-            // Blend mode selectors for each channel
-            ui.add_space(2.0);
-            ui.separator();
-            ui.label(egui::RichText::new("Blend").small());
-            let blend_mode_names = ["Norm", "Add", "Mult", "Scrn", "Ovly", "Diff"];
-            for (ch_idx, ch) in data.channels.iter().enumerate() {
-                let color = channel_color(ch_idx);
-                let current = match ch.blend_mode {
-                    BlendMode::Normal => 0, BlendMode::Add => 1, BlendMode::Multiply => 2,
-                    BlendMode::Screen => 3, BlendMode::Overlay => 4, BlendMode::Difference => 5,
-                };
-                let mut selected = current;
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&ch.name).small().color(color));
-                    egui::ComboBox::from_id_salt(format!("mix_blend_{}", ch_idx))
-                        .selected_text(blend_mode_names[selected])
-                        .width(55.0)
-                        .show_ui(ui, |ui| {
-                            for (i, name) in blend_mode_names.iter().enumerate() {
-                                ui.selectable_value(&mut selected, i, *name);
-                            }
-                        });
-                });
-                if selected != current {
-                    let new_blend = match selected {
-                        1 => BlendMode::Add, 2 => BlendMode::Multiply, 3 => BlendMode::Screen,
-                        4 => BlendMode::Overlay, 5 => BlendMode::Difference, _ => BlendMode::Normal,
-                    };
-                    // Either update an existing entry (if opacity also changed this frame)
-                    // or push a new one for blend-mode-only changes
-                    if let Some(entry) = actions.channel_updates.iter_mut().find(|e| e.0 == ch_idx) {
-                        entry.2 = new_blend;
-                    } else {
-                        actions.channel_updates.push((ch_idx, ch.opacity, new_blend));
-                    }
-                }
-            }
-
         });
 }
 
-/// Render a channel column with header and its decks
+/// Render a channel column with header and its decks.
+/// Always shown in a bordered box. Clicking anywhere (except deck thumbnails) selects the channel.
 pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data: &UIData, actions: &mut UIActions) {
     let accent = channel_color(ch.ch_idx);
     let ch_idx = ch.ch_idx;
 
     ui.push_id(format!("ch_{}", ch_idx), |ui| {
-        // Visual feedback: highlight when a library drag hovers over this channel
         let has_library_drag = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ui.ctx());
         let is_hovering = has_library_drag && ui.rect_contains_pointer(ui.max_rect());
-
         let is_ch_selected = data.selected_channel == Some(ch_idx);
+
+        // Always show a bordered box — highlight when selected or drag-hovering
         let frame = if is_hovering {
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.08))
                 .stroke(egui::Stroke::new(2.0, accent.linear_multiply(0.5)))
                 .corner_radius(4.0)
+                .inner_margin(2.0)
         } else if is_ch_selected {
             egui::Frame::default()
                 .stroke(egui::Stroke::new(2.0, accent.linear_multiply(0.6)))
                 .corner_radius(4.0)
+                .inner_margin(2.0)
         } else {
-            egui::Frame::NONE
+            egui::Frame::default()
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 60)))
+                .corner_radius(4.0)
+                .inner_margin(2.0)
         };
 
         frame.show(ui, |ui| {
         ui.vertical(|ui| {
-            // Channel header
+            // Channel header — clickable to select channel
             let header_frame = if is_ch_selected {
                 egui::Frame::default().fill(accent.linear_multiply(0.15)).corner_radius(3.0).inner_margin(2.0)
             } else {
                 egui::Frame::default().inner_margin(2.0)
             };
             header_frame.show(ui, |ui| {
-                let header_resp = ui.label(egui::RichText::new(format!("▌ {}", ch.name)).strong().color(accent).size(16.0));
-                let header_resp = header_resp.interact(egui::Sense::click());
-                if header_resp.clicked() {
-                    actions.select_channel = Some(ch_idx);
-                }
+                ui.horizontal(|ui| {
+                    let header_resp = ui.add(
+                        egui::Label::new(egui::RichText::new(format!("▌ {}", ch.name)).strong().color(accent).size(16.0))
+                            .sense(egui::Sense::click()),
+                    );
+                    if header_resp.clicked() {
+                        actions.select_channel = Some(ch_idx);
+                    }
+
+                    // Blend mode dropdown next to channel name
+                    let blend_mode_names = ["Norm", "Add", "Mult", "Scrn", "Ovly", "Diff"];
+                    let current = match ch.blend_mode {
+                        BlendMode::Normal => 0, BlendMode::Add => 1, BlendMode::Multiply => 2,
+                        BlendMode::Screen => 3, BlendMode::Overlay => 4, BlendMode::Difference => 5,
+                    };
+                    let mut selected = current;
+                    egui::ComboBox::from_id_salt(format!("ch_blend_{}", ch_idx))
+                        .selected_text(blend_mode_names[selected])
+                        .width(50.0)
+                        .show_ui(ui, |ui| {
+                            for (i, name) in blend_mode_names.iter().enumerate() {
+                                ui.selectable_value(&mut selected, i, *name);
+                            }
+                        });
+                    if selected != current {
+                        let new_blend = match selected {
+                            1 => BlendMode::Add, 2 => BlendMode::Multiply, 3 => BlendMode::Screen,
+                            4 => BlendMode::Overlay, 5 => BlendMode::Difference, _ => BlendMode::Normal,
+                        };
+                        if let Some(entry) = actions.channel_updates.iter_mut().find(|e| e.0 == ch_idx) {
+                            entry.2 = new_blend;
+                        } else {
+                            actions.channel_updates.push((ch_idx, ch.opacity, new_blend));
+                        }
+                    }
+                });
             });
 
-            ui.separator();
+            let sep_resp = ui.separator();
+            if sep_resp.interact(egui::Sense::click()).clicked() {
+                actions.select_channel = Some(ch_idx);
+            }
 
-            // Deck grid
+            // Deck stack (single column, vertical)
             egui::ScrollArea::vertical()
                 .id_salt(format!("ch_scroll_{}", ch_idx))
                 .scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true })
                 .show(ui, |ui| {
                 if ch.decks.is_empty() {
-                    ui.label(egui::RichText::new("No decks — drag generator here").weak().small());
+                    let empty_resp = ui.add(
+                        egui::Label::new(egui::RichText::new("No decks — drag generator here").weak().small())
+                            .sense(egui::Sense::click()),
+                    );
+                    if empty_resp.clicked() {
+                        actions.select_channel = Some(ch_idx);
+                    }
                 }
-                let card_width = 134.0;
-                let available_w = ui.available_width();
-                let cols = ((available_w / card_width).floor() as usize).max(1);
-                let mut deck_iter = ch.decks.iter().peekable();
-                while deck_iter.peek().is_some() {
-                    ui.horizontal(|ui| {
-                        for _ in 0..cols {
-                            if let Some(deck) = deck_iter.next() {
-                                render_deck_thumbnail(ui, ch_idx, deck, accent, data, actions);
-                            }
-                        }
-                    });
+                for deck in &ch.decks {
+                    render_deck_thumbnail(ui, ch_idx, deck, accent, data, actions);
                     ui.add_space(2.0);
                 }
 
-                // Remaining space for deck-to-deck moves
+                // Remaining space — clickable to select channel + drop zone for deck moves
                 let drop_resp = ui.allocate_response(
                     egui::vec2(ui.available_width(), 20.0_f32.max(ui.available_height())),
-                    egui::Sense::hover(),
+                    egui::Sense::click() | egui::Sense::hover(),
                 );
+                if drop_resp.clicked() {
+                    actions.select_channel = Some(ch_idx);
+                }
                 if let Some(payload) = drop_resp.dnd_release_payload::<(usize, usize)>() {
                     let (src_ch, src_deck) = *payload;
                     if src_ch != ch_idx {
@@ -458,18 +554,29 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
                     }
                 }
 
-                // Channel FX chain (compact)
+                // Channel FX chain (compact) — clickable to select channel
                 if !ch.effects.is_empty() {
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("🔮 Ch FX").small().color(accent));
-                    for (_i, (name, enabled, _)) in ch.effects.iter().enumerate() {
+                    let fx_resp = ui.add(
+                        egui::Label::new(egui::RichText::new("🔮 Ch FX").small().color(accent))
+                            .sense(egui::Sense::click()),
+                    );
+                    if fx_resp.clicked() {
+                        actions.select_channel = Some(ch_idx);
+                    }
+                    for (_i, (_uuid, name, enabled, _)) in ch.effects.iter().enumerate() {
                         ui.horizontal(|ui| {
                             let label = if *enabled {
                                 egui::RichText::new(name).small()
                             } else {
                                 egui::RichText::new(name).small().strikethrough().weak()
                             };
-                            ui.label(label);
+                            let fx_item = ui.add(
+                                egui::Label::new(label).sense(egui::Sense::click()),
+                            );
+                            if fx_item.clicked() {
+                                actions.select_channel = Some(ch_idx);
+                            }
                         });
                     }
                 }
@@ -484,6 +591,45 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
         });
     });
 }
+
+/// Render a placeholder hint in empty side space suggesting to drag channel presets.
+/// `max_width` is the total available space — the hint fills it exactly.
+fn render_channel_preset_hint(ui: &mut egui::Ui, max_width: f32) {
+    let has_preset_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+        .map(|p| matches!(&*p, LibraryDrag::ChannelPreset(_)))
+        .unwrap_or(false);
+    let stroke = if has_preset_drag {
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 200, 255))
+    } else {
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 80))
+    };
+    let fill = if has_preset_drag {
+        egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    // Use allocate_ui to hard-cap the hint width, preventing overflow
+    let hint_height = ui.available_height().max(60.0);
+    ui.allocate_ui(egui::vec2(max_width, hint_height), |ui| {
+        egui::Frame::default()
+            .inner_margin(8.0)
+            .corner_radius(6.0)
+            .fill(fill)
+            .stroke(stroke)
+            .show(ui, |ui| {
+                ui.set_min_height(hint_height - 16.0);
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        egui::RichText::new("📂 Drag channel presets here")
+                            .weak()
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(100, 100, 120)),
+                    );
+                });
+            });
+    });
+}
+
 
 /// Render a compact deck thumbnail (clickable cell in the deck grid)
 /// Layout: [ preview | opacity slider (vertical) ]
@@ -527,7 +673,7 @@ pub(super) fn render_deck_thumbnail(
 
         // MIDI learn mode: glow on deck card, click to select trigger
         if data.midi_learn_active {
-            let trigger_path = format!("ch/{}/deck/{}/trigger", ch_idx, idx);
+            let trigger_path = format!("deck/{}/trigger", deck.uuid);
             let is_target = data.midi_learn_target.as_deref() == Some(trigger_path.as_str());
             if is_target {
                 widgets::draw_midi_learn_selected(ui, card_rect);
@@ -540,7 +686,7 @@ pub(super) fn render_deck_thumbnail(
         }
         // Keyboard learn mode: orange glow on deck card
         if data.keyboard_learn_active {
-            let trigger_path = format!("ch/{}/deck/{}/trigger", ch_idx, idx);
+            let trigger_path = format!("deck/{}/trigger", deck.uuid);
             let is_target = data.keyboard_learn_target.as_deref() == Some(trigger_path.as_str());
             if is_target {
                 widgets::draw_keyboard_learn_selected(ui, card_rect);
@@ -676,7 +822,7 @@ pub(super) fn render_deck_thumbnail(
             op_slider_rect = resp.rect;
         }
         if data.midi_learn_active {
-            let opacity_path = format!("ch/{}/deck/{}/opacity", ch_idx, idx);
+            let opacity_path = format!("deck/{}/opacity", deck.uuid);
             let is_target = data.midi_learn_target.as_deref() == Some(opacity_path.as_str());
             if is_target {
                 widgets::draw_midi_learn_selected(&slider_ui, op_slider_rect);
@@ -690,7 +836,7 @@ pub(super) fn render_deck_thumbnail(
             }
         }
         if data.keyboard_learn_active {
-            let opacity_path = format!("ch/{}/deck/{}/opacity", ch_idx, idx);
+            let opacity_path = format!("deck/{}/opacity", deck.uuid);
             let is_target = data.keyboard_learn_target.as_deref() == Some(opacity_path.as_str());
             if is_target {
                 widgets::draw_keyboard_learn_selected(&slider_ui, op_slider_rect);
@@ -742,7 +888,7 @@ pub(super) fn render_deck_thumbnail(
             ui.spacing_mut().item_spacing.x = 2.0;
             let mute_resp = ui.selectable_label(mute, egui::RichText::new("M").small());
             if any_learn {
-                let mute_path = format!("ch/{}/deck/{}/mute", ch_idx, idx);
+                let mute_path = format!("deck/{}/mute", deck.uuid);
                 if data.midi_learn_active {
                     let is_target = data.midi_learn_target.as_deref() == Some(mute_path.as_str());
                     if is_target { widgets::draw_midi_learn_selected(ui, mute_resp.rect); }
@@ -760,7 +906,7 @@ pub(super) fn render_deck_thumbnail(
             }
             let solo_resp = ui.selectable_label(solo, egui::RichText::new("S").small());
             if any_learn {
-                let solo_path = format!("ch/{}/deck/{}/solo", ch_idx, idx);
+                let solo_path = format!("deck/{}/solo", deck.uuid);
                 if data.midi_learn_active {
                     let is_target = data.midi_learn_target.as_deref() == Some(solo_path.as_str());
                     if is_target { widgets::draw_midi_learn_selected(ui, solo_resp.rect); }

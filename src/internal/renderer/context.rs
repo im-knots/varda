@@ -263,8 +263,8 @@ pub struct SurfaceRenderInfo<'a> {
 /// Assignment of a surface to an output, with per-surface warp calibration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SurfaceAssignment {
-    /// Index into SurfaceManager.surfaces
-    pub surface_idx: usize,
+    /// UUID of the assigned surface
+    pub surface_uuid: String,
     /// Warp corners in output-normalized coords [0..1] — TL, TR, BR, BL.
     /// These define where the surface's bounding box corners map to in the output frame.
     /// Default = the surface's bounding box corners (identity/no warp).
@@ -325,6 +325,7 @@ impl std::fmt::Display for OutputTarget {
 /// Each output window has its own OS window and wgpu surface, but shares
 /// the device and queue from the GpuContext.
 pub struct OutputWindow {
+    pub uuid: String,
     pub name: String,
     pub window: &'static Window,
     pub surface: wgpu::Surface<'static>,
@@ -386,6 +387,7 @@ impl OutputWindow {
         let polygon_pipeline = PolygonBlitPipeline::new(&context.device, surface_config.format)?;
 
         Ok(Self {
+            uuid: crate::deck::generate_short_uuid(),
             name,
             window,
             surface,
@@ -778,6 +780,8 @@ impl std::fmt::Display for RecordingCodec {
 /// Unlike OutputWindow, this has no OS window or surface — it renders
 /// offscreen via ReadbackBuffer.
 pub struct HeadlessOutput {
+    /// Stable UUID (8-char hex)
+    pub uuid: String,
     /// Human-readable name for this output
     pub name: String,
     /// What content to render (Master, Channel, Deck, etc.)
@@ -840,6 +844,7 @@ impl HeadlessOutput {
             .expect("Failed to create headless polygon pipeline");
 
         Self {
+            uuid: crate::deck::generate_short_uuid(),
             name,
             source,
             readback,
@@ -866,6 +871,14 @@ pub enum UnifiedOutput {
 }
 
 impl UnifiedOutput {
+    /// Stable UUID of this output.
+    pub fn uuid(&self) -> &str {
+        match self {
+            UnifiedOutput::Window(w) => &w.uuid,
+            UnifiedOutput::Headless(h) => &h.uuid,
+        }
+    }
+
     /// Human-readable name of this output.
     pub fn name(&self) -> &str {
         match self {

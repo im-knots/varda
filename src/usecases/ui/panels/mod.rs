@@ -56,13 +56,28 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
             });
     }
 
-    // === RIGHT PANEL: Main Output + Master Effects ===
-    egui::SidePanel::right("master_panel")
-        .min_width(280.0)
-        .default_width(320.0)
-        .show(ctx, |ui| {
-            render_right_panel(ui, data, &mut actions);
-        });
+    // === RIGHT PANEL: Main Output + Master Effects (collapsible) ===
+    if data.right_panel_open {
+        egui::SidePanel::right("master_panel")
+            .min_width(280.0)
+            .default_width(320.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                render_right_panel(ui, data, &mut actions);
+            });
+    } else {
+        egui::SidePanel::right("master_collapsed")
+            .exact_width(36.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.add_space(6.0);
+                    if ui.small_button("«").on_hover_text("Open master panel").clicked() {
+                        actions.toggle_right_panel = true;
+                    }
+                });
+            });
+    }
 
     // === BOTTOM PANEL: Audio, Modulation, Shader Browser ===
     egui::TopBottomPanel::bottom("bottom_panel")

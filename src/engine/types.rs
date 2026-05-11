@@ -132,6 +132,7 @@ pub struct MixerSnapshot {
 #[derive(Clone, Serialize)]
 pub struct ChannelSnapshot {
     pub idx: usize,
+    pub uuid: String,
     pub name: String,
     pub opacity: f32,
     pub blend_mode: BlendMode,
@@ -146,6 +147,7 @@ pub struct ChannelSnapshot {
 #[derive(Clone, Serialize)]
 pub struct DeckSnapshot {
     pub idx: usize,
+    pub uuid: String,
     pub name: String,
     pub opacity: f32,
     pub effective_opacity: f32,
@@ -163,6 +165,7 @@ pub struct DeckSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct EffectSnapshot {
+    pub uuid: String,
     pub name: String,
     pub enabled: bool,
     pub params: ShaderParamsSnapshot,
@@ -234,9 +237,15 @@ pub struct AudioDeviceSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct ModulationSnapshot {
-    pub sources: Vec<ModulationSourceSnapshot>,
-    pub current_values: Vec<f32>,
+    pub sources: Vec<ModulationSourceSnapshotEntry>,
+    pub current_values: std::collections::HashMap<String, f32>,
     pub assignments: std::collections::HashMap<String, Vec<ModulationAssignmentSnapshot>>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ModulationSourceSnapshotEntry {
+    pub uuid: String,
+    pub source: ModulationSourceSnapshot,
 }
 
 #[derive(Clone, Serialize)]
@@ -249,7 +258,7 @@ pub enum ModulationSourceSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct ModulationAssignmentSnapshot {
-    pub source_idx: usize,
+    pub source_id: String,
     pub amount: f32,
 }
 
@@ -288,6 +297,7 @@ pub struct OutputSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct OutputWindowSnapshot {
+    pub uuid: String,
     pub name: String,
     pub target_label: String,
     pub is_on_display: bool,
@@ -297,7 +307,7 @@ pub struct OutputWindowSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct SurfaceAssignmentSnapshot {
-    pub surface_idx: usize,
+    pub surface_uuid: String,
     pub surface_name: String,
     pub warp_corners: [[f32; 2]; 4],
     pub enabled: bool,
@@ -305,6 +315,7 @@ pub struct SurfaceAssignmentSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct SurfaceSnapshot {
+    pub uuid: String,
     pub name: String,
     pub vertices: Vec<[f32; 2]>,
     pub extra_contours: Vec<Vec<[f32; 2]>>,
@@ -422,7 +433,7 @@ mod tests {
             },
             modulation: ModulationSnapshot {
                 sources: vec![],
-                current_values: vec![],
+                current_values: Default::default(),
                 assignments: Default::default(),
             },
             outputs: OutputSnapshot {
@@ -470,7 +481,7 @@ mod tests {
                 devices: vec![], fft: vec![], sample_rate: 48000.0,
             },
             modulation: ModulationSnapshot {
-                sources: vec![], current_values: vec![],
+                sources: vec![], current_values: Default::default(),
                 assignments: Default::default(),
             },
             outputs: OutputSnapshot {
@@ -553,6 +564,7 @@ mod tests {
     fn channel_snapshot_fields() {
         let ch = ChannelSnapshot {
             idx: 0,
+            uuid: "test0001".into(),
             name: "Ch 0".into(),
             opacity: 0.75,
             blend_mode: BlendMode::Add,
@@ -572,6 +584,7 @@ mod tests {
     fn deck_snapshot_fields() {
         let d = DeckSnapshot {
             idx: 0,
+            uuid: "test0002".into(),
             name: "Sine Wave".into(),
             opacity: 1.0,
             effective_opacity: 0.5,

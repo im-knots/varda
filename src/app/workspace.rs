@@ -28,7 +28,7 @@ impl VardaApp {
         let stage = crate::persistence::snapshot_stage(
             &self.surface_manager, &self.outputs,
             layout.stage_editor_grid_size, layout.stage_editor_snap,
-            layout.library_panel_open, layout.stage_editor_open,
+            layout.library_panel_open, layout.right_panel_open, layout.stage_editor_open,
         );
         match stage.save(self.workspace.stage_path()) {
             Ok(()) => log::info!("Saved stage to {}", self.workspace.stage_path().display()),
@@ -58,6 +58,7 @@ impl VardaApp {
                         stage_editor_grid_size: prefs.grid_size,
                         stage_editor_snap: prefs.snap,
                         library_panel_open: prefs.library_panel_open,
+                        right_panel_open: prefs.right_panel_open,
                         stage_editor_open: prefs.stage_editor_open,
                         ..UILayoutState::default()
                     });

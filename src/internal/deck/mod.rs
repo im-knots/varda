@@ -11,6 +11,11 @@ use crate::video::{VideoPlayer, HapTextureFormat, hap::HapPlayer};
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// Generate a short 8-character hex UUID for entity identity.
+pub fn generate_short_uuid() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
+}
+
 /// Scaling mode for non-shader sources (images, video)
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ScalingMode {
@@ -160,6 +165,8 @@ pub enum DeckSource {
 
 /// An effect in the deck's effect chain (ISF filter)
 pub struct Effect {
+    /// Stable UUID for this effect (8-char hex)
+    pub uuid: String,
     pub shader: ISFShader,
     pub pipeline: UnifiedPipeline,
     pub enabled: bool,
@@ -198,6 +205,9 @@ pub struct PassBuffer {
 
 /// A Deck is an independent render unit that outputs a texture
 pub struct Deck {
+    /// Stable UUID for this deck (8-char hex, persists across moves/saves)
+    uuid: String,
+
     /// Name of this deck's source
     source_name: String,
 
@@ -261,6 +271,16 @@ pub struct Deck {
 /// Accessors for Deck properties.
 /// Constructors are in source.rs, rendering in render.rs.
 impl Deck {
+    /// Get the stable UUID for this deck
+    pub fn uuid(&self) -> &str {
+        &self.uuid
+    }
+
+    /// Set the UUID (used during scene restore to preserve identity)
+    pub fn set_uuid(&mut self, uuid: String) {
+        self.uuid = uuid;
+    }
+
     /// Get the source name (shader name, video filename, etc.)
     pub fn source_name(&self) -> &str {
         &self.source_name

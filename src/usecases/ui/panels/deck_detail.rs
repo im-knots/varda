@@ -302,7 +302,7 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                             ui.label("Play:");
                                             let mut val = at.play_duration_value as f32;
                                             let max = if at.play_duration_is_beats { 128.0 } else { 300.0 };
-                                            let play_path = format!("ch/{}/deck/{}/at/play_duration", ch_idx, deck_idx);
+                                            let play_path = format!("deck/{}/at/play_duration", deck.uuid);
                                             let slider_rect;
                                             if any_learn {
                                                 let inner = ui.scope(|ui| {
@@ -353,7 +353,7 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                             ui.label("Trans:");
                                             let mut val = at.transition_duration_value as f32;
                                             let max = if at.transition_duration_is_beats { 32.0 } else { 30.0 };
-                                            let trans_path = format!("ch/{}/deck/{}/at/trans_duration", ch_idx, deck_idx);
+                                            let trans_path = format!("deck/{}/at/trans_duration", deck.uuid);
                                             let slider_rect;
                                             if any_learn {
                                                 let inner = ui.scope(|ui| {
@@ -518,7 +518,10 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                 if !gen_params.params.is_empty() {
                                     ui.add_space(4.0);
                                     ui.label(egui::RichText::new(&gen_params.shader_name).strong());
-                                    let midi_path_prefix = format!("ch/{}/deck/{}", ch_idx, deck_idx);
+                                    let deck_uuid = deck.uuid.clone();
+                                    let midi_path_prefix = format!("deck/{}", deck_uuid);
+                                    let deck_uuid_assign = deck_uuid.clone();
+                                    let deck_uuid_remove = deck_uuid.clone();
                                     widgets::render_params(
                                         ui,
                                         &gen_params.params,
@@ -529,11 +532,11 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                             ParamValue::Color(v) => ParamUpdate::GeneratorColor { ch_idx, deck_idx, name: name.to_string(), value: v },
                                             _ => unreachable!(),
                                         },
-                                        Some(&|name: &str, src_idx: usize| ModulationAction::AssignModulation {
-                                            ch_idx, deck_idx, param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
+                                        Some(&|name: &str, source_uuid: &str| ModulationAction::AssignModulation {
+                                            deck_uuid: deck_uuid_assign.clone(), param_name: name.to_string(), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
                                         Some(&|name: &str| ModulationAction::RemoveAssignment {
-                                            ch_idx, deck_idx, param_name: name.to_string(), source_idx: 0,
+                                            deck_uuid: deck_uuid_remove.clone(), param_name: name.to_string(), source_id: String::new(),
                                         }),
                                         &mut actions.param_updates,
                                         &mut actions.modulation_actions,
@@ -544,7 +547,7 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
-                                        &format!("ch{}_deck{}", ch_idx, deck_idx),
+                                        &format!("deck_{}", deck_uuid),
                                         data.keyboard_learn_active,
                                         &mut actions.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
@@ -567,7 +570,7 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
 
             // Effect chain: drag-and-drop reordering + library drops
             {
-                for (eff_idx, (eff_name, eff_enabled, eff_params)) in deck.effects.iter().enumerate() {
+                for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in deck.effects.iter().enumerate() {
                     // Drop zone before this effect (for reordering)
                     render_effect_drop_zone(ui, &format!("deck_{}_{}", ch_idx, deck_idx), eff_idx);
 
@@ -595,7 +598,10 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                     let ch_copy = ch_idx;
                                     let deck_copy = deck_idx;
                                     let eff_idx_copy = eff_idx;
-                                    let eff_midi_prefix = format!("ch/{}/deck/{}/effect/{}", ch_copy, deck_copy, eff_idx_copy);
+                                    let deck_uuid_eff = deck.uuid.clone();
+                                    let eff_uuid_assign = eff_uuid.clone();
+                                    let eff_uuid_remove = eff_uuid.clone();
+                                    let eff_midi_prefix = format!("deck/{}/effect/{}", deck_uuid_eff, eff_idx_copy);
                                     widgets::render_effect_params(
                                         ui,
                                         &eff_params.params,
@@ -606,12 +612,12 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                             ParamValue::Color(v) => ParamUpdate::EffectColor { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
                                             _ => unreachable!(),
                                         },
-                                        Some(&|name: &str, src_idx: usize| ModulationAction::AssignEffectModulation {
-                                            ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy,
-                                            param_name: name.to_string(), source_idx: src_idx, amount: 0.5,
+                                        Some(&|name: &str, source_uuid: &str| ModulationAction::AssignEffectModulation {
+                                            effect_uuid: eff_uuid_assign.clone(),
+                                            param_name: name.to_string(), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
                                         Some(&|name: &str| ModulationAction::RemoveEffectAssignment {
-                                            ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy,
+                                            effect_uuid: eff_uuid_remove.clone(),
                                             param_name: name.to_string(),
                                         }),
                                         &mut actions.param_updates,
@@ -623,7 +629,7 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
-                                        &format!("ch{}_deck{}_fx{}", ch_copy, deck_copy, eff_idx_copy),
+                                        &format!("fx_{}", eff_uuid),
                                         data.keyboard_learn_active,
                                         &mut actions.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
@@ -674,11 +680,9 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                     .stroke(stroke)
                     .show(ui, |ui| {
                         ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
-                        if deck.effects.is_empty() {
-                            ui.centered_and_justified(|ui| {
-                                ui.label(egui::RichText::new("🔮 Drag effects here").weak());
-                            });
-                        }
+                        ui.centered_and_justified(|ui| {
+                            ui.label(egui::RichText::new("🔮 Drag effects here").weak());
+                        });
                     });
             }
 

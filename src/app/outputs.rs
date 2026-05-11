@@ -140,15 +140,15 @@ impl VardaApp {
                         }
                     }
                 }
-                ui::OutputAction::AssignSurface { output_idx, surface_idx } => {
+                ui::OutputAction::AssignSurface { output_idx, surface_uuid } => {
                     if let Some(output) = self.outputs.get_mut(*output_idx) {
                         let name = output.name().to_string();
                         let assignments = output.surface_assignments_mut();
-                        if !assignments.iter().any(|a| a.surface_idx == *surface_idx) {
-                            if let Some(surface) = self.surface_manager.surfaces.get(*surface_idx) {
+                        if !assignments.iter().any(|a| a.surface_uuid == *surface_uuid) {
+                            if let Some((_, surface)) = self.surface_manager.find_by_uuid(surface_uuid) {
                                 let bb = surface.bounding_box();
                                 let assignment = SurfaceAssignment {
-                                    surface_idx: *surface_idx,
+                                    surface_uuid: surface_uuid.clone(),
                                     warp_corners: [
                                         [bb.x, bb.y],
                                         [bb.x + bb.width, bb.y],
@@ -192,7 +192,7 @@ impl VardaApp {
                         let name = output.name().to_string();
                         let assignments = output.surface_assignments_mut();
                         if let Some(assignment) = assignments.get_mut(*assignment_idx) {
-                            if let Some(surface) = self.surface_manager.surfaces.get(assignment.surface_idx) {
+                            if let Some((_, surface)) = self.surface_manager.find_by_uuid(&assignment.surface_uuid) {
                                 let bb = surface.bounding_box();
                                 assignment.warp_corners = [
                                     [bb.x, bb.y],
@@ -242,6 +242,7 @@ impl VardaApp {
                         let window_static: &'static Window = Box::leak(Box::new(window));
                         match OutputWindow::new(&self.context, window_static, name.clone()) {
                             Ok(mut output) => {
+                                output.uuid = config.uuid.clone();
                                 // Force position after full initialization — macOS
                                 // ignores with_position() in attrs and surface.configure()
                                 // can reset position, so we set it last.
@@ -254,7 +255,7 @@ impl VardaApp {
                                 // Restore surface assignments from config
                                 output.surface_assignments = config.surface_assignments.iter().map(|a| {
                                     SurfaceAssignment {
-                                        surface_idx: a.surface_idx,
+                                        surface_uuid: a.surface_uuid.clone(),
                                         warp_corners: a.warp_corners,
                                         enabled: a.enabled,
                                     }
@@ -302,10 +303,11 @@ impl VardaApp {
                     self.render_width,
                     self.render_height,
                 );
+                headless.uuid = config.uuid.clone();
                 // Restore surface assignments from config
                 headless.surface_assignments = config.surface_assignments.iter().map(|a| {
                     SurfaceAssignment {
-                        surface_idx: a.surface_idx,
+                        surface_uuid: a.surface_uuid.clone(),
                         warp_corners: a.warp_corners,
                         enabled: a.enabled,
                     }

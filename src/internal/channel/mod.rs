@@ -232,6 +232,9 @@ impl DeckSlot {
 
 /// Channel - Groups multiple decks into a composited layer
 pub struct Channel {
+    /// Stable UUID for this channel (8-char hex, persists across saves)
+    uuid: String,
+
     /// Channel name (A, B, C, ...)
     pub name: String,
 
@@ -269,6 +272,16 @@ pub struct Channel {
 
 impl Channel {
     /// Create a new channel
+    /// Get the stable UUID for this channel
+    pub fn uuid(&self) -> &str {
+        &self.uuid
+    }
+
+    /// Set the UUID (used during scene restore to preserve identity)
+    pub fn set_uuid(&mut self, uuid: String) {
+        self.uuid = uuid;
+    }
+
     pub fn new(name: String, context: &GpuContext, width: u32, height: u32) -> Result<Self> {
         let composite_texture = context.create_render_texture(width, height);
         let composite_view = composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -289,6 +302,7 @@ impl Channel {
         }
 
         Ok(Self {
+            uuid: crate::deck::generate_short_uuid(),
             name,
             decks: Vec::new(),
             effects: Vec::new(),
@@ -361,7 +375,7 @@ impl Channel {
         context: &GpuContext,
         audio_data: &crate::audio::AudioData,
         modulation: &ModulationEngine,
-        channel_idx: usize,
+        _channel_idx: usize,
         time: f32,
         dt: f32,
     ) -> Result<()> {
@@ -386,10 +400,10 @@ impl Channel {
         // Done decks still render — they serve as visible background for transitioning decks above.
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
         let mut active_count: u32 = 0;
-        for (deck_idx, slot) in self.decks.iter_mut().enumerate() {
+        for (_deck_idx, slot) in self.decks.iter_mut().enumerate() {
             if !slot.mute && (!any_solo || slot.solo) && slot.opacity > 0.0 {
                 active_count += 1;
-                let param_prefix = format!("ch{}_deck{}", channel_idx, deck_idx);
+                let param_prefix = format!("deck_{}", slot.deck.uuid());
                 slot.deck.render_with_prefix(context, audio_data, modulation, &param_prefix, &mut cmd_buffers)?;
             }
         }
@@ -622,7 +636,7 @@ impl Channel {
             let mut read_from_composite = true;
             let mut fx_cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
 
-            for (eff_idx, effect) in self.effects.iter_mut().enumerate() {
+            for (_eff_idx, effect) in self.effects.iter_mut().enumerate() {
                 if !effect.enabled {
                     continue;
                 }
@@ -633,7 +647,7 @@ impl Channel {
                     (&self.effect_ping_view, &self.composite_view)
                 };
 
-                let fx_prefix = format!("ch{}_fx{}", channel_idx, eff_idx);
+                let fx_prefix = format!("fx_{}", effect.uuid);
                 effect.apply_with_modulation(context, input_view, output_view, &uniforms, Some(modulation), Some(&fx_prefix), &mut fx_cmd_buffers)?;
                 read_from_composite = !read_from_composite;
             }

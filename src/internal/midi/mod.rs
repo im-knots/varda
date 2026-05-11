@@ -721,128 +721,103 @@ pub fn apply_midi_to_param(mixer: &mut Mixer, path: &str, value: f32) -> bool {
             mixer.snap_crossfader(value);
             true
         }
-        // ch/<n>/opacity
-        ["ch", ch_s, "opacity"] => {
-            if let Ok(ch) = ch_s.parse::<usize>() {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    channel.opacity = value.clamp(0.0, 1.0);
+        // deck/<uuid>/opacity
+        ["deck", uuid, "opacity"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                mixer.channels_mut()[ch].decks[dk].opacity = value.clamp(0.0, 1.0);
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/mute — toggle on any note-on (value > 0.5)
+        ["deck", uuid, "mute"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                if value > 0.5 {
+                    let m = mixer.channels_mut()[ch].decks[dk].mute;
+                    mixer.channels_mut()[ch].decks[dk].mute = !m;
+                }
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/solo — toggle on any note-on (value > 0.5)
+        ["deck", uuid, "solo"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                if value > 0.5 {
+                    let s = mixer.channels_mut()[ch].decks[dk].solo;
+                    mixer.channels_mut()[ch].decks[dk].solo = !s;
+                }
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/trigger — activate deck (set opacity to 1.0 on note-on)
+        ["deck", uuid, "trigger"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                if value > 0.5 {
+                    mixer.channels_mut()[ch].decks[dk].opacity = 1.0;
+                }
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/at/play_duration — auto-transition play duration
+        ["deck", uuid, "at", "play_duration"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                if let Some(ref mut at) = mixer.channels_mut()[ch].decks[dk].auto_transition {
+                    let max = if at.play_duration.is_beats() { 128.0 } else { 300.0 };
+                    at.play_duration.set_value(0.5 + value as f64 * (max - 0.5));
                     return true;
                 }
             }
             false
         }
-        // ch/<n>/deck/<m>/opacity
-        ["ch", ch_s, "deck", dk_s, "opacity"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if dk < channel.decks.len() {
-                        channel.decks[dk].opacity = value.clamp(0.0, 1.0);
+        // deck/<uuid>/at/trans_duration — auto-transition transition duration
+        ["deck", uuid, "at", "trans_duration"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                if let Some(ref mut at) = mixer.channels_mut()[ch].decks[dk].auto_transition {
+                    let max = if at.transition_duration.is_beats() { 32.0 } else { 30.0 };
+                    at.transition_duration.set_value(0.1 + value as f64 * (max - 0.1));
+                    return true;
+                }
+            }
+            false
+        }
+        // deck/<uuid>/param/<name>
+        ["deck", uuid, "param", name] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                apply_float_param_scaled(&mut mixer.channels_mut()[ch].decks[dk].deck.generator_params, name, value);
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/effect/<k>/param/<name>
+        ["deck", uuid, "effect", ek_s, "param", name] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                if let Ok(ek) = ek_s.parse::<usize>() {
+                    let decks = &mut mixer.channels_mut()[ch].decks;
+                    if ek < decks[dk].deck.effects.len() {
+                        apply_float_param_scaled(&mut decks[dk].deck.effects[ek].params, name, value);
                         return true;
                     }
                 }
             }
             false
         }
-        // ch/<n>/deck/<m>/mute — toggle on any note-on (value > 0.5)
-        ["ch", ch_s, "deck", dk_s, "mute"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if dk < channel.decks.len() {
-                        if value > 0.5 {
-                            channel.decks[dk].mute = !channel.decks[dk].mute;
-                        }
-                        return true;
-                    }
-                }
+        // ch/<uuid>/opacity
+        ["ch", ch_uuid, "opacity"] => {
+            if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
+                mixer.channels_mut()[ch].opacity = value.clamp(0.0, 1.0);
+                return true;
             }
             false
         }
-        // ch/<n>/deck/<m>/solo — toggle on any note-on (value > 0.5)
-        ["ch", ch_s, "deck", dk_s, "solo"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if dk < channel.decks.len() {
-                        if value > 0.5 {
-                            channel.decks[dk].solo = !channel.decks[dk].solo;
-                        }
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/trigger — activate deck (set opacity to 1.0 on note-on)
-        ["ch", ch_s, "deck", dk_s, "trigger"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if dk < channel.decks.len() && value > 0.5 {
-                        channel.decks[dk].opacity = 1.0;
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/at/play_duration — auto-transition play duration
-        ["ch", ch_s, "deck", dk_s, "at", "play_duration"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if dk < channel.decks.len() {
-                        if let Some(ref mut at) = channel.decks[dk].auto_transition {
-                            let max = if at.play_duration.is_beats() { 128.0 } else { 300.0 };
-                            at.play_duration.set_value(0.5 + value as f64 * (max - 0.5));
-                            return true;
-                        }
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/at/trans_duration — auto-transition transition duration
-        ["ch", ch_s, "deck", dk_s, "at", "trans_duration"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if dk < channel.decks.len() {
-                        if let Some(ref mut at) = channel.decks[dk].auto_transition {
-                            let max = if at.transition_duration.is_beats() { 32.0 } else { 30.0 };
-                            at.transition_duration.set_value(0.1 + value as f64 * (max - 0.1));
-                            return true;
-                        }
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/param/<name>
-        ["ch", ch_s, "deck", dk_s, "param", name] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if dk < channel.decks.len() {
-                        apply_float_param_scaled(&mut channel.decks[dk].deck.generator_params, name, value);
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/effect/<k>/param/<name>
-        ["ch", ch_s, "deck", dk_s, "effect", ek_s, "param", name] => {
-            if let (Ok(ch), Ok(dk), Ok(ek)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>(), ek_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if dk < channel.decks.len() && ek < channel.decks[dk].deck.effects.len() {
-                        apply_float_param_scaled(&mut channel.decks[dk].deck.effects[ek].params, name, value);
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/effect/<k>/param/<name>
-        ["ch", ch_s, "effect", ek_s, "param", name] => {
-            if let (Ok(ch), Ok(ek)) = (ch_s.parse::<usize>(), ek_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if ek < channel.effects.len() {
-                        apply_float_param_scaled(&mut channel.effects[ek].params, name, value);
+        // ch/<uuid>/effect/<k>/param/<name>
+        ["ch", ch_uuid, "effect", ek_s, "param", name] => {
+            if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
+                if let Ok(ek) = ek_s.parse::<usize>() {
+                    if ek < mixer.channels_mut()[ch].effects.len() {
+                        apply_float_param_scaled(&mut mixer.channels_mut()[ch].effects[ek].params, name, value);
                         return true;
                     }
                 }
@@ -859,11 +834,11 @@ pub fn apply_midi_to_param(mixer: &mut Mixer, path: &str, value: f32) -> bool {
             }
             false
         }
-        // mod/<idx>/<param_name> — modulation source params
+        // mod/<idx>/<param_name> — modulation source params (idx = position in sources Vec)
         ["mod", idx_s, param_name] => {
             if let Ok(idx) = idx_s.parse::<usize>() {
                 if idx < mixer.modulation_mut().sources.len() {
-                    apply_mod_param(&mut mixer.modulation_mut().sources[idx], param_name, value);
+                    apply_mod_param(&mut mixer.modulation_mut().sources[idx].source, param_name, value);
                     return true;
                 }
             }
@@ -873,7 +848,7 @@ pub fn apply_midi_to_param(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         ["mod", idx_s, "step", step_s] => {
             if let (Ok(idx), Ok(step_idx)) = (idx_s.parse::<usize>(), step_s.parse::<usize>()) {
                 if idx < mixer.modulation_mut().sources.len() {
-                    if let ModulationSource::StepSequencer { steps, .. } = &mut mixer.modulation_mut().sources[idx] {
+                    if let ModulationSource::StepSequencer { steps, .. } = &mut mixer.modulation_mut().sources[idx].source {
                         if step_idx < steps.len() {
                             steps[step_idx] = value.clamp(0.0, 1.0);
                             return true;

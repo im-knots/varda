@@ -248,7 +248,7 @@ impl VardaApp {
                 .enumerate()
                 .filter(|(_, a)| a.enabled)
                 .filter_map(|(ai, assignment)| {
-                    let surface = surface_manager.surfaces.get(assignment.surface_idx)?;
+                    let (_, surface) = surface_manager.find_by_uuid(&assignment.surface_uuid)?;
                     let bb = surface.bounding_box();
                     let content_view = if output.calibration_mode && !calibration_textures.is_empty() {
                         &calibration_textures[ai % calibration_textures.len()].1
@@ -359,7 +359,7 @@ impl VardaApp {
                 let prepared: Vec<_> = h.surface_assignments.iter()
                     .filter(|a| a.enabled)
                     .filter_map(|assignment| {
-                        let surface = surface_manager.surfaces.get(assignment.surface_idx)?;
+                        let (_, surface) = surface_manager.find_by_uuid(&assignment.surface_uuid)?;
                         let bb = surface.bounding_box();
                         let content_view = Self::resolve_source(mixer, &surface.source)?;
                         let (uv_scale, uv_offset) = Self::compute_uv(surface.content_mapping, &bb);

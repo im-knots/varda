@@ -35,6 +35,8 @@ pub struct UILayoutState {
     pub stage_editor_snap: bool,
     /// Whether the library panel (left sidebar) is open
     pub library_panel_open: bool,
+    /// Whether the right panel (master output sidebar) is open
+    pub right_panel_open: bool,
 }
 
 impl Default for UILayoutState {
@@ -47,6 +49,7 @@ impl Default for UILayoutState {
             stage_editor_grid_size: 0.05,
             stage_editor_snap: true,
             library_panel_open: true,
+            right_panel_open: true,
         }
     }
 }
@@ -80,6 +83,9 @@ impl UILayoutState {
         }
         if ui_actions.toggle_library_panel {
             self.library_panel_open = !self.library_panel_open;
+        }
+        if ui_actions.toggle_right_panel {
+            self.right_panel_open = !self.right_panel_open;
         }
     }
 
@@ -145,43 +151,46 @@ pub enum ModulationAction {
     AddAudioFFT { preset: AudioBandPreset, source_id: Option<AudioSourceId> },
     AddADSR { attack: f32, decay: f32, sustain: f32, release: f32 },
     AddStepSequencer { num_steps: usize, rate: f32 },
-    RemoveSource { idx: usize },
-    UpdateLFOFrequency { idx: usize, frequency: f32 },
-    UpdateLFOWaveform { idx: usize, waveform: LFOWaveform },
-    UpdateLFOPhase { idx: usize, phase: f32 },
-    UpdateLFOAmplitude { idx: usize, amplitude: f32 },
-    UpdateLFOBipolar { idx: usize, bipolar: bool },
-    UpdateAudioSmoothing { idx: usize, smoothing: f32 },
-    UpdateAudioFreqLow { idx: usize, freq_low: f32 },
-    UpdateAudioFreqHigh { idx: usize, freq_high: f32 },
-    UpdateAudioGain { idx: usize, gain: f32 },
-    UpdateAudioPreset { idx: usize, preset: AudioBandPreset },
-    UpdateAudioSource { idx: usize, source_id: Option<AudioSourceId> },
-    UpdateAudioMode { idx: usize, mode: AudioReactMode },
-    UpdateAudioNoiseGate { idx: usize, noise_gate: f32 },
+    RemoveSource { source_id: String },
+    UpdateLFOFrequency { source_id: String, frequency: f32 },
+    UpdateLFOWaveform { source_id: String, waveform: LFOWaveform },
+    UpdateLFOPhase { source_id: String, phase: f32 },
+    UpdateLFOAmplitude { source_id: String, amplitude: f32 },
+    UpdateLFOBipolar { source_id: String, bipolar: bool },
+    UpdateAudioSmoothing { source_id: String, smoothing: f32 },
+    UpdateAudioFreqLow { source_id: String, freq_low: f32 },
+    UpdateAudioFreqHigh { source_id: String, freq_high: f32 },
+    UpdateAudioGain { source_id: String, gain: f32 },
+    UpdateAudioPreset { source_id: String, preset: AudioBandPreset },
+    UpdateAudioSource { source_id: String, source_id_audio: Option<AudioSourceId> },
+    UpdateAudioMode { source_id: String, mode: AudioReactMode },
+    UpdateAudioNoiseGate { source_id: String, noise_gate: f32 },
     // ADSR updates
-    UpdateADSRAttack { idx: usize, attack: f32 },
-    UpdateADSRDecay { idx: usize, decay: f32 },
-    UpdateADSRSustain { idx: usize, sustain: f32 },
-    UpdateADSRRelease { idx: usize, release: f32 },
-    TriggerADSR { idx: usize },
-    ReleaseADSR { idx: usize },
+    UpdateADSRAttack { source_id: String, attack: f32 },
+    UpdateADSRDecay { source_id: String, decay: f32 },
+    UpdateADSRSustain { source_id: String, sustain: f32 },
+    UpdateADSRRelease { source_id: String, release: f32 },
+    TriggerADSR { source_id: String },
+    ReleaseADSR { source_id: String },
     // Step sequencer updates
-    UpdateStepValue { idx: usize, step_idx: usize, value: f32 },
-    UpdateStepRate { idx: usize, rate: f32 },
-    UpdateStepInterpolation { idx: usize, interpolation: StepInterpolation },
-    UpdateStepBipolar { idx: usize, bipolar: bool },
+    UpdateStepValue { source_id: String, step_idx: usize, value: f32 },
+    UpdateStepRate { source_id: String, rate: f32 },
+    UpdateStepInterpolation { source_id: String, interpolation: StepInterpolation },
+    UpdateStepBipolar { source_id: String, bipolar: bool },
     // Mod-on-mod: assign a modulator to another modulator's parameter
-    AssignModOnMod { target_source_idx: usize, param_name: String, modulator_idx: usize, amount: f32 },
-    RemoveModOnMod { target_source_idx: usize, param_name: String },
-    AssignModulation { ch_idx: usize, deck_idx: usize, param_name: String, source_idx: usize, amount: f32 },
-    RemoveAssignment { ch_idx: usize, deck_idx: usize, param_name: String, source_idx: usize },
-    AssignEffectModulation { ch_idx: usize, deck_idx: usize, effect_idx: usize, param_name: String, source_idx: usize, amount: f32 },
-    RemoveEffectAssignment { ch_idx: usize, deck_idx: usize, effect_idx: usize, param_name: String },
-    AssignChannelEffectModulation { ch_idx: usize, effect_idx: usize, param_name: String, source_idx: usize, amount: f32 },
-    RemoveChannelEffectAssignment { ch_idx: usize, effect_idx: usize, param_name: String },
-    AssignMasterEffectModulation { effect_idx: usize, param_name: String, source_idx: usize, amount: f32 },
-    RemoveMasterEffectAssignment { effect_idx: usize, param_name: String },
+    AssignModOnMod { target_source_id: String, param_name: String, modulator_id: String, amount: f32 },
+    RemoveModOnMod { target_source_id: String, param_name: String },
+    AssignModulation { deck_uuid: String, param_name: String, source_id: String, amount: f32 },
+    RemoveAssignment { deck_uuid: String, param_name: String, source_id: String },
+    AssignEffectModulation { effect_uuid: String, param_name: String, source_id: String, amount: f32 },
+    RemoveEffectAssignment { effect_uuid: String, param_name: String },
+}
+
+/// Modulation source data snapshot for UI display (paired with UUID)
+#[derive(Clone)]
+pub struct ModSourceUIEntry {
+    pub uuid: String,
+    pub source: ModSourceUI,
 }
 
 /// Modulation source data snapshot for UI display
@@ -205,7 +214,7 @@ pub const MODULATOR_COLORS: [egui::Color32; 8] = [
     egui::Color32::from_rgb(240, 120, 80),    // Coral
 ];
 
-/// Get the color for a modulation source by index
+/// Get the color for a modulation source by index (position in sources list)
 pub fn modulator_color(idx: usize) -> egui::Color32 {
     MODULATOR_COLORS[idx % MODULATOR_COLORS.len()]
 }
@@ -213,12 +222,13 @@ pub fn modulator_color(idx: usize) -> egui::Color32 {
 /// Modulation assignment snapshot for UI display
 #[derive(Clone)]
 pub struct ModAssignmentUI {
-    pub source_idx: usize,
+    pub source_id: String,
     pub amount: f32,
 }
 
 /// Effect info tuple for UI: (name, enabled, params)
-pub type EffectInfo = (String, bool, ShaderParamsUI);
+/// Effect info for UI: (uuid, name, enabled, params)
+pub type EffectInfo = (String, String, bool, ShaderParamsUI);
 
 /// Video playback state snapshot for UI display
 #[derive(Clone)]
@@ -250,6 +260,7 @@ pub struct AutoTransitionUI {
 #[derive(Clone)]
 pub struct DeckUIInfo {
     pub deck_idx: usize,
+    pub uuid: String,
     pub name: String,
     pub opacity: f32,
     /// Effective opacity accounting for auto-transition state (for visual feedback only)
@@ -270,6 +281,7 @@ pub struct DeckUIInfo {
 #[derive(Clone)]
 pub struct ChannelUIInfo {
     pub ch_idx: usize,
+    pub uuid: String,
     pub name: String,
     pub opacity: f32,
     pub blend_mode: BlendMode,
@@ -338,10 +350,10 @@ pub struct UIData {
     pub shader_count: usize,
     pub channels: Vec<ChannelUIInfo>,
     pub master_effect_info: Vec<EffectInfo>,
-    pub modulation_sources: Vec<ModSourceUI>,
-    /// Current computed values for each modulation source (for visualization)
-    pub modulation_current_values: Vec<f32>,
-    /// Modulation assignments: param_key -> list of (source_idx, amount)
+    pub modulation_sources: Vec<ModSourceUIEntry>,
+    /// Current computed values for each modulation source by UUID
+    pub modulation_current_values: std::collections::HashMap<String, f32>,
+    /// Modulation assignments: param_key -> list of (source_id, amount)
     pub modulation_assignments: std::collections::HashMap<String, Vec<ModAssignmentUI>>,
     pub audio: AudioUIData,
     /// Deck preview textures keyed by (ch_idx, deck_idx)
@@ -382,6 +394,8 @@ pub struct UIData {
     pub stage_editor_open: bool,
     /// Whether the library panel (left sidebar) is open
     pub library_panel_open: bool,
+    /// Whether the right panel (master output sidebar) is open
+    pub right_panel_open: bool,
     /// Stage editor grid size (normalized, e.g. 0.05 = 20 divisions)
     pub stage_editor_grid_size: f32,
     /// Whether snap-to-grid is enabled in the stage editor
@@ -542,7 +556,7 @@ pub enum OutputAction {
     /// Stop a headless output (end recording/streaming)
     Stop { idx: usize },
     /// Assign a surface to this output (adds a SurfaceAssignment)
-    AssignSurface { output_idx: usize, surface_idx: usize },
+    AssignSurface { output_idx: usize, surface_uuid: String },
     /// Remove a surface assignment from this output
     UnassignSurface { output_idx: usize, assignment_idx: usize },
     /// Toggle calibration mode on an output (windowed only)
@@ -556,7 +570,7 @@ pub enum OutputAction {
 /// Snapshot of a surface assignment for UI display
 #[derive(Clone)]
 pub struct SurfaceAssignmentUI {
-    pub surface_idx: usize,
+    pub surface_uuid: String,
     pub surface_name: String,
     pub warp_corners: [[f32; 2]; 4],
     pub enabled: bool,
@@ -565,6 +579,7 @@ pub struct SurfaceAssignmentUI {
 /// Snapshot of an output's state for UI display (unified — windowed or headless)
 #[derive(Clone)]
 pub struct OutputUI {
+    pub uuid: String,
     pub name: String,
     /// The output target (unified enum)
     pub target: crate::renderer::context::OutputTarget,
@@ -586,43 +601,44 @@ pub enum SurfaceAction {
     Add { name: String, source: OutputSource },
     /// Add a polygon surface with specific vertices
     AddPolygon { name: String, vertices: Vec<[f32; 2]>, source: OutputSource },
-    /// Remove a surface by index
-    Remove { idx: usize },
+    /// Remove a surface by UUID
+    Remove { uuid: String },
     /// Update the vertices of a surface (specific contour: 0=primary, 1+=extra)
-    UpdateVertices { idx: usize, contour: usize, vertices: Vec<[f32; 2]> },
+    UpdateVertices { uuid: String, contour: usize, vertices: Vec<[f32; 2]> },
     /// Move a surface by a delta (moves all contours)
-    MoveDelta { idx: usize, dx: f32, dy: f32 },
+    MoveDelta { uuid: String, dx: f32, dy: f32 },
     /// Change the content source for a surface
-    SetSource { idx: usize, source: OutputSource },
+    SetSource { uuid: String, source: OutputSource },
     /// Change the output type for a surface
-    SetOutputType { idx: usize, output_type: SurfaceOutputType },
+    SetOutputType { uuid: String, output_type: SurfaceOutputType },
     /// Change the content mapping mode for a surface
-    SetContentMapping { idx: usize, mapping: ContentMapping },
+    SetContentMapping { uuid: String, mapping: ContentMapping },
     /// Rename a surface
-    Rename { idx: usize, name: String },
+    Rename { uuid: String, name: String },
     /// Duplicate a surface (offset slightly so it's visible)
-    Duplicate { idx: usize },
+    Duplicate { uuid: String },
     /// Flip a surface horizontally (mirror around its bounding box center X)
-    FlipHorizontal { idx: usize },
+    FlipHorizontal { uuid: String },
     /// Flip a surface vertically (mirror around its bounding box center Y)
-    FlipVertical { idx: usize },
+    FlipVertical { uuid: String },
     /// Insert a vertex on an edge (after vertex at `after_vert_idx`)
-    InsertVertex { idx: usize, after_vert_idx: usize, position: [f32; 2] },
+    InsertVertex { uuid: String, after_vert_idx: usize, position: [f32; 2] },
     /// Add a circle surface with a CircleHint (vertices generated from hint)
     AddCircle { name: String, hint: CircleHint, source: OutputSource },
     /// Update a circle's radius and regenerate vertices
-    SetCircleRadius { idx: usize, radius: f32 },
+    SetCircleRadius { uuid: String, radius: f32 },
     /// Update a circle's side count and regenerate vertices
-    SetCircleSides { idx: usize, sides: u32 },
+    SetCircleSides { uuid: String, sides: u32 },
     /// Convert a circle surface to a plain polygon (drop circle hint)
-    ConvertToPolygon { idx: usize },
+    ConvertToPolygon { uuid: String },
     /// Combine multiple surfaces into one (overlapping → merge, non-overlapping → multi-contour)
-    Combine { indices: Vec<usize> },
+    Combine { uuids: Vec<String> },
 }
 
 /// Snapshot of a surface for UI display
 #[derive(Clone)]
 pub struct SurfaceUI {
+    pub uuid: String,
     pub name: String,
     pub vertices: Vec<[f32; 2]>,
     pub extra_contours: Vec<Vec<[f32; 2]>>,
@@ -733,6 +749,8 @@ pub struct UIActions {
     pub midi_remove_mapping: Vec<crate::midi::MidiKey>,
     /// Toggle library panel open/closed
     pub toggle_library_panel: bool,
+    /// Toggle right panel open/closed
+    pub toggle_right_panel: bool,
     /// Move an effect within a deck's chain: (ch_idx, deck_idx, from_idx, to_idx)
     pub effect_to_move: Option<(usize, usize, usize, usize)>,
     /// Move a channel effect within its chain: (ch_idx, from_idx, to_idx)
@@ -917,6 +935,7 @@ impl UIActions {
             midi_clear_mappings: false,
             midi_remove_mapping: Vec::new(),
             toggle_library_panel: false,
+            toggle_right_panel: false,
             effect_to_move: None,
             ch_effect_to_move: None,
             master_effect_to_move: None,
@@ -1048,6 +1067,7 @@ impl UIData {
 
         let deck_a0 = DeckUIInfo {
             deck_idx: 0,
+            uuid: "a0000001".to_string(),
             name: "test_generator_a".to_string(),
             opacity: 1.0,
             effective_opacity: 1.0,
@@ -1062,7 +1082,7 @@ impl UIData {
                 ],
             },
             effects: vec![
-                ("test_effect".to_string(), true, ShaderParamsUI {
+                ("dfx00001".to_string(), "test_effect".to_string(), true, ShaderParamsUI {
                     shader_name: "test_effect".to_string(),
                     params: vec![
                         ParamUIInfo { name: "amount".to_string(), label: Some("Amount".to_string()), value: crate::params::ParamValue::Float(0.5), min: Some(0.0), max: Some(1.0) },
@@ -1075,6 +1095,7 @@ impl UIData {
 
         let deck_a1 = DeckUIInfo {
             deck_idx: 1,
+            uuid: "a0000002".to_string(),
             name: "test_generator_b".to_string(),
             opacity: 0.8,
             effective_opacity: 0.8,
@@ -1093,12 +1114,13 @@ impl UIData {
 
         let channel_a = ChannelUIInfo {
             ch_idx: 0,
+            uuid: "ca000001".to_string(),
             name: "Ch A".to_string(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             decks: vec![deck_a0, deck_a1],
             effects: vec![
-                ("ch_effect".to_string(), true, ShaderParamsUI {
+                ("cfx00001".to_string(), "ch_effect".to_string(), true, ShaderParamsUI {
                     shader_name: "ch_effect".to_string(),
                     params: vec![],
                 }),
@@ -1107,6 +1129,7 @@ impl UIData {
 
         let deck_b0 = DeckUIInfo {
             deck_idx: 0,
+            uuid: "b0000001".to_string(),
             name: "test_generator_c".to_string(),
             opacity: 1.0,
             effective_opacity: 1.0,
@@ -1125,6 +1148,7 @@ impl UIData {
 
         let deck_b1 = DeckUIInfo {
             deck_idx: 1,
+            uuid: "b0000002".to_string(),
             name: "test_generator_d".to_string(),
             opacity: 1.0,
             effective_opacity: 1.0,
@@ -1143,6 +1167,7 @@ impl UIData {
 
         let channel_b = ChannelUIInfo {
             ch_idx: 1,
+            uuid: "cb000001".to_string(),
             name: "Ch B".to_string(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
@@ -1165,24 +1190,31 @@ impl UIData {
             shader_count: 7,
             channels: vec![channel_a, channel_b],
             master_effect_info: vec![
-                ("master_effect".to_string(), true, ShaderParamsUI {
+                ("mfx00001".to_string(), "master_effect".to_string(), true, ShaderParamsUI {
                     shader_name: "master_effect".to_string(),
                     params: vec![],
                 }),
             ],
             modulation_sources: vec![
-                ModSourceUI::LFO {
-                    waveform: LFOWaveform::Sine,
-                    frequency: 1.0,
-                    phase: 0.0,
-                    amplitude: 1.0,
-                    bipolar: false,
+                ModSourceUIEntry {
+                    uuid: "mod00001".to_string(),
+                    source: ModSourceUI::LFO {
+                        waveform: LFOWaveform::Sine,
+                        frequency: 1.0,
+                        phase: 0.0,
+                        amplitude: 1.0,
+                        bipolar: false,
+                    },
                 },
             ],
-            modulation_current_values: vec![0.5],
+            modulation_current_values: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("mod00001".to_string(), 0.5);
+                m
+            },
             modulation_assignments: {
                 let mut m = std::collections::HashMap::new();
-                m.insert("ch0_deck0:speed".to_string(), vec![ModAssignmentUI { source_idx: 0, amount: 0.5 }]);
+                m.insert("deck_a0000001:speed".to_string(), vec![ModAssignmentUI { source_id: "mod00001".to_string(), amount: 0.5 }]);
                 m
             },
             audio: AudioUIData {
@@ -1217,6 +1249,7 @@ impl UIData {
             surfaces: vec![],
             stage_editor_open: false,
             library_panel_open: true,
+            right_panel_open: true,
             stage_editor_grid_size: 0.05,
             stage_editor_snap: true,
             available_monitors: vec![],

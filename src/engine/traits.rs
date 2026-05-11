@@ -63,12 +63,12 @@ pub trait AudioQueries {
 
 /// Commands for controlling the modulation engine.
 pub trait ModulationCommands {
-    fn add_lfo(&mut self, waveform: LFOWaveform, frequency: f32) -> usize;
-    fn add_audio_band(&mut self, preset: AudioBandPreset, source_id: Option<AudioSourceId>) -> usize;
-    fn add_adsr(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) -> usize;
-    fn add_step_sequencer(&mut self, num_steps: usize, rate: f32) -> usize;
-    fn remove_modulation_source(&mut self, idx: usize);
-    fn assign_modulation(&mut self, target: &str, source_idx: usize, amount: f32);
+    fn add_lfo(&mut self, waveform: LFOWaveform, frequency: f32) -> String;
+    fn add_audio_band(&mut self, preset: AudioBandPreset, source_id: Option<AudioSourceId>) -> String;
+    fn add_adsr(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) -> String;
+    fn add_step_sequencer(&mut self, num_steps: usize, rate: f32) -> String;
+    fn remove_modulation_source(&mut self, uuid: &str);
+    fn assign_modulation(&mut self, target: &str, source_id: &str, amount: f32);
     fn clear_modulation(&mut self, target: &str);
 }
 
@@ -89,4 +89,25 @@ pub trait OutputCommands {
 /// Read-only queries for output state.
 pub trait OutputQueries {
     fn output_snapshot(&self) -> OutputSnapshot;
+}
+
+// ── Surfaces ────────────────────────────────────────────────────────
+
+/// Commands for controlling surfaces.
+pub trait SurfaceCommands {
+    fn add_surface(&mut self, name: &str, source: OutputSource) -> String;
+    fn add_polygon_surface(&mut self, name: &str, vertices: &[[f32; 2]], source: OutputSource) -> String;
+    fn add_circle_surface(&mut self, name: &str, center: [f32; 2], radius: f32, sides: u32, aspect_ratio: f32, source: OutputSource) -> String;
+    fn remove_surface(&mut self, uuid: &str);
+    fn set_surface_source(&mut self, uuid: &str, source: OutputSource);
+    fn set_surface_output_type(&mut self, uuid: &str, output_type: SurfaceOutputType);
+    fn set_surface_content_mapping(&mut self, uuid: &str, mapping: ContentMapping);
+    fn rename_surface(&mut self, uuid: &str, name: &str);
+    fn assign_surface_to_output(&mut self, output_uuid: &str, surface_uuid: &str);
+    fn unassign_surface_from_output(&mut self, output_uuid: &str, assignment_idx: usize);
+}
+
+/// Read-only queries for surface state.
+pub trait SurfaceQueries {
+    fn surface_snapshot(&self) -> Vec<SurfaceSnapshot>;
 }

@@ -113,10 +113,6 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
         });
     }
 
-    // Add sequence button
-    if ui.small_button("+ Sequence").on_hover_text("Create a new transition sequence").clicked() {
-        actions.sequence_actions.push(SequenceAction::Create);
-    }
 }
 
 /// Render inline editor for a single sequence step
@@ -135,100 +131,104 @@ pub(super) fn render_sequence_step_editor(
 
     match &step.kind {
         super::super::SequenceStepKindUI::Fade { from_ch, to_ch, duration_val, is_beats, easing, transition_shader } => {
-            // From channel selector
-            let from_label = channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?");
-            egui::ComboBox::from_id_salt(format!("seq{}_from_{}", seq_idx, step_idx))
-                .selected_text(egui::RichText::new(from_label).small())
-                .width(45.0)
-                .show_ui(ui, |ui| {
-                    for i in 0..channel_count {
-                        let name = channel_names.get(i).map(|s| s.as_str()).unwrap_or("?");
-                        if ui.selectable_label(i == *from_ch, name).clicked() {
-                            actions.sequence_actions.push(SequenceAction::SetStepFromCh { seq_idx, step_idx, ch: i });
-                        }
-                    }
-                });
-            ui.label(egui::RichText::new("->").small());
-            // To channel selector
-            let to_label = channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?");
-            egui::ComboBox::from_id_salt(format!("seq{}_to_{}", seq_idx, step_idx))
-                .selected_text(egui::RichText::new(to_label).small())
-                .width(45.0)
-                .show_ui(ui, |ui| {
-                    for i in 0..channel_count {
-                        let name = channel_names.get(i).map(|s| s.as_str()).unwrap_or("?");
-                        if ui.selectable_label(i == *to_ch, name).clicked() {
-                            actions.sequence_actions.push(SequenceAction::SetStepToCh { seq_idx, step_idx, ch: i });
-                        }
-                    }
-                });
-
-            // Duration
-            let mut dur = *duration_val;
-            let unit_label = if *is_beats { "b" } else { "s" };
-            let slider = egui::Slider::new(&mut dur, 0.1..=60.0)
-                .logarithmic(true)
-                .suffix(unit_label)
-                .max_decimals(1);
-            if ui.add_sized([70.0, 16.0], slider).changed() {
-                actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
-            }
-            if ui.small_button(unit_label).on_hover_text("Toggle beats/seconds").clicked() {
-                actions.sequence_actions.push(SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx });
-            }
-
-            // Easing
-            egui::ComboBox::from_id_salt(format!("seq{}_ease_{}", seq_idx, step_idx))
-                .selected_text(egui::RichText::new(easing.as_str()).small())
-                .width(55.0)
-                .show_ui(ui, |ui| {
-                    for e in &["Linear", "EaseInOut", "EaseIn", "EaseOut"] {
-                        if ui.selectable_label(*e == easing.as_str(), *e).clicked() {
-                            actions.sequence_actions.push(SequenceAction::SetStepEasing {
-                                seq_idx, step_idx, easing: e.to_string(),
-                            });
-                        }
-                    }
-                });
-
-            // Transition shader selector (truncated label + tooltip)
-            let shader_full = transition_shader.as_deref().unwrap_or("Opacity");
-            let max_chars = 8;
-            let shader_short = if shader_full.len() > max_chars {
-                format!("{}...", &shader_full[..max_chars])
-            } else {
-                shader_full.to_string()
-            };
-            let combo = egui::ComboBox::from_id_salt(format!("seq{}_shader_{}", seq_idx, step_idx))
-                .selected_text(egui::RichText::new(&shader_short).small())
-                .width(60.0)
-                .show_ui(ui, |ui| {
-                    let is_opacity = transition_shader.is_none();
-                    if ui.selectable_label(is_opacity, "Opacity").clicked() {
-                        actions.sequence_actions.push(SequenceAction::SetStepTransitionShader {
-                            seq_idx, step_idx, shader: None,
+            ui.vertical(|ui| {
+                // Row 1: From -> To, duration
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let from_label = channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?");
+                    egui::ComboBox::from_id_salt(format!("seq{}_from_{}", seq_idx, step_idx))
+                        .selected_text(egui::RichText::new(from_label).small())
+                        .width(35.0)
+                        .show_ui(ui, |ui| {
+                            for i in 0..channel_count {
+                                let name = channel_names.get(i).map(|s| s.as_str()).unwrap_or("?");
+                                if ui.selectable_label(i == *from_ch, name).clicked() {
+                                    actions.sequence_actions.push(SequenceAction::SetStepFromCh { seq_idx, step_idx, ch: i });
+                                }
+                            }
                         });
+                    ui.label(egui::RichText::new("→").small());
+                    let to_label = channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?");
+                    egui::ComboBox::from_id_salt(format!("seq{}_to_{}", seq_idx, step_idx))
+                        .selected_text(egui::RichText::new(to_label).small())
+                        .width(35.0)
+                        .show_ui(ui, |ui| {
+                            for i in 0..channel_count {
+                                let name = channel_names.get(i).map(|s| s.as_str()).unwrap_or("?");
+                                if ui.selectable_label(i == *to_ch, name).clicked() {
+                                    actions.sequence_actions.push(SequenceAction::SetStepToCh { seq_idx, step_idx, ch: i });
+                                }
+                            }
+                        });
+                    let mut dur = *duration_val;
+                    let unit_label = if *is_beats { "b" } else { "s" };
+                    let drag = egui::DragValue::new(&mut dur)
+                        .range(0.1..=60.0)
+                        .speed(0.1)
+                        .max_decimals(1)
+                        .suffix(unit_label);
+                    if ui.add(drag).changed() {
+                        actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
                     }
-                    for name in &data.transition_names {
-                        let selected = transition_shader.as_ref() == Some(name);
-                        if ui.selectable_label(selected, name).clicked() {
-                            actions.sequence_actions.push(SequenceAction::SetStepTransitionShader {
-                                seq_idx, step_idx, shader: Some(name.clone()),
-                            });
-                        }
+                    if ui.small_button(unit_label).on_hover_text("Toggle beats/seconds").clicked() {
+                        actions.sequence_actions.push(SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx });
                     }
                 });
-            combo.response.on_hover_text(shader_full);
+                // Row 2: Easing, shader
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    egui::ComboBox::from_id_salt(format!("seq{}_ease_{}", seq_idx, step_idx))
+                        .selected_text(egui::RichText::new(easing.as_str()).small())
+                        .width(50.0)
+                        .show_ui(ui, |ui| {
+                            for e in &["Linear", "EaseInOut", "EaseIn", "EaseOut"] {
+                                if ui.selectable_label(*e == easing.as_str(), *e).clicked() {
+                                    actions.sequence_actions.push(SequenceAction::SetStepEasing {
+                                        seq_idx, step_idx, easing: e.to_string(),
+                                    });
+                                }
+                            }
+                        });
+                    let shader_full = transition_shader.as_deref().unwrap_or("Opacity");
+                    let max_chars = 6;
+                    let shader_short = if shader_full.len() > max_chars {
+                        format!("{}…", &shader_full[..max_chars])
+                    } else {
+                        shader_full.to_string()
+                    };
+                    let combo = egui::ComboBox::from_id_salt(format!("seq{}_shader_{}", seq_idx, step_idx))
+                        .selected_text(egui::RichText::new(&shader_short).small())
+                        .width(50.0)
+                        .show_ui(ui, |ui| {
+                            let is_opacity = transition_shader.is_none();
+                            if ui.selectable_label(is_opacity, "Opacity").clicked() {
+                                actions.sequence_actions.push(SequenceAction::SetStepTransitionShader {
+                                    seq_idx, step_idx, shader: None,
+                                });
+                            }
+                            for name in &data.transition_names {
+                                let selected = transition_shader.as_ref() == Some(name);
+                                if ui.selectable_label(selected, name).clicked() {
+                                    actions.sequence_actions.push(SequenceAction::SetStepTransitionShader {
+                                        seq_idx, step_idx, shader: Some(name.clone()),
+                                    });
+                                }
+                            }
+                        });
+                    combo.response.on_hover_text(shader_full);
+                });
+            });
         }
         super::super::SequenceStepKindUI::Wait { duration_val, is_beats } => {
             ui.label(egui::RichText::new("Wait").small());
             let mut dur = *duration_val;
             let unit_label = if *is_beats { "b" } else { "s" };
-            let slider = egui::Slider::new(&mut dur, 0.1..=60.0)
-                .logarithmic(true)
-                .suffix(unit_label)
-                .max_decimals(1);
-            if ui.add_sized([90.0, 16.0], slider).changed() {
+            let drag = egui::DragValue::new(&mut dur)
+                .range(0.1..=60.0)
+                .speed(0.1)
+                .max_decimals(1)
+                .suffix(unit_label);
+            if ui.add(drag).changed() {
                 actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
             }
             if ui.small_button(unit_label).on_hover_text("Toggle beats/seconds").clicked() {

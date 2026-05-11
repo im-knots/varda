@@ -351,11 +351,11 @@ impl VardaApp {
                 EngineCommand::AddStepSequencer { num_steps, rate } => {
                     self.add_step_sequencer(num_steps, rate);
                 }
-                EngineCommand::RemoveModulationSource { idx } => {
-                    self.remove_modulation_source(idx);
+                EngineCommand::RemoveModulationSource { uuid } => {
+                    self.remove_modulation_source(&uuid);
                 }
-                EngineCommand::AssignModulation { target, source_idx, amount } => {
-                    self.assign_modulation(&target, source_idx, amount);
+                EngineCommand::AssignModulation { target, source_id, amount } => {
+                    self.assign_modulation(&target, &source_id, amount);
                 }
                 EngineCommand::ClearModulation { target } => {
                     self.clear_modulation(&target);
@@ -370,6 +370,38 @@ impl VardaApp {
                 }
                 EngineCommand::SetOutputDisplay { idx, monitor_name } => {
                     self.set_output_display(idx, &monitor_name);
+                }
+
+                // ── Surfaces ────────────────────────────────────
+                EngineCommand::AddSurface { name, source } => {
+                    self.add_surface(&name, source);
+                }
+                EngineCommand::AddPolygonSurface { name, vertices, source } => {
+                    self.add_polygon_surface(&name, &vertices, source);
+                }
+                EngineCommand::AddCircleSurface { name, center, radius, sides, aspect_ratio, source } => {
+                    self.add_circle_surface(&name, center, radius, sides, aspect_ratio, source);
+                }
+                EngineCommand::RemoveSurface { uuid } => {
+                    self.remove_surface(&uuid);
+                }
+                EngineCommand::SetSurfaceSource { uuid, source } => {
+                    self.set_surface_source(&uuid, source);
+                }
+                EngineCommand::SetSurfaceOutputType { uuid, output_type } => {
+                    self.set_surface_output_type(&uuid, output_type);
+                }
+                EngineCommand::SetSurfaceContentMapping { uuid, mapping } => {
+                    self.set_surface_content_mapping(&uuid, mapping);
+                }
+                EngineCommand::RenameSurface { uuid, name } => {
+                    self.rename_surface(&uuid, &name);
+                }
+                EngineCommand::AssignSurfaceToOutput { output_uuid, surface_uuid } => {
+                    self.assign_surface_to_output(&output_uuid, &surface_uuid);
+                }
+                EngineCommand::UnassignSurfaceFromOutput { output_uuid, assignment_idx } => {
+                    self.unassign_surface_from_output(&output_uuid, assignment_idx);
                 }
             }
         }

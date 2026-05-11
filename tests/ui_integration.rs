@@ -26,6 +26,7 @@ struct AccActions {
     // Simple booleans
     add_channel: bool,
     toggle_library_panel: bool,
+    toggle_right_panel: bool,
     select_master: bool,
     save_requested: bool,
     toggle_stage_editor: bool,
@@ -74,6 +75,7 @@ impl AccActions {
         // Booleans — OR-accumulate
         self.add_channel |= a.add_channel;
         self.toggle_library_panel |= a.toggle_library_panel;
+        self.toggle_right_panel |= a.toggle_right_panel;
         self.select_master |= a.select_master;
         self.save_requested |= a.save_requested;
         self.toggle_stage_editor |= a.toggle_stage_editor;
@@ -441,6 +443,7 @@ fn click_remove_channel_with_three_channels() {
     let mut data = UIData::test_fixture();
     // Add a third channel so the "x" remove button appears
     data.channels.push(ChannelUIInfo {
+        uuid: "cc000003".to_string(),
         ch_idx: 2,
         name: "Ch C".to_string(),
         opacity: 1.0,

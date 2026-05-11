@@ -10,6 +10,8 @@ pub use sources::ModulationSource;
 pub use audio::{AudioSourceValues, AudioValues};
 pub use engine::ModulationEngine;
 
+use crate::deck::generate_short_uuid;
+
 use serde::{Deserialize, Serialize};
 
 /// LFO waveform types
@@ -106,12 +108,29 @@ impl Default for StepInterpolation {
 /// Modulation assignment linking a source to a parameter
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamModulation {
-    /// Index into ModulationEngine.sources
-    pub source_idx: usize,
+    /// UUID of the modulation source
+    pub source_id: String,
     /// Modulation depth/amount (-1.0 to 1.0, negative inverts)
     pub amount: f32,
     /// For color params: which component (0=R, 1=G, 2=B, 3=A), None for scalar
     pub component: Option<usize>,
+}
+
+/// A modulation source paired with a stable UUID identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModulationSourceEntry {
+    pub uuid: String,
+    pub source: ModulationSource,
+}
+
+impl ModulationSourceEntry {
+    pub fn new(source: ModulationSource) -> Self {
+        Self { uuid: generate_short_uuid(), source }
+    }
+
+    pub fn with_uuid(uuid: String, source: ModulationSource) -> Self {
+        Self { uuid, source }
+    }
 }
 
 
@@ -401,24 +420,23 @@ mod tests {
     // ── ModulationEngine tests ───────────────────────────────────────
 
     #[test]
-    fn engine_add_source_returns_index() {
+    fn engine_add_source_returns_uuid() {
         let mut engine = ModulationEngine::new();
-        let idx0 = engine.add_source(ModulationSource::sine_lfo(1.0));
-        let idx1 = engine.add_source(ModulationSource::sine_lfo(2.0));
-        assert_eq!(idx0, 0);
-        assert_eq!(idx1, 1);
+        let uuid0 = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let uuid1 = engine.add_source(ModulationSource::sine_lfo(2.0));
+        assert_ne!(uuid0, uuid1);
         assert_eq!(engine.source_count(), 2);
     }
 
     #[test]
-    fn engine_remove_source_reindexes_assignments() {
+    fn engine_remove_source_cleans_assignments() {
         let mut engine = ModulationEngine::new();
-        engine.add_source(ModulationSource::sine_lfo(1.0));
+        let uuid0 = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.add_source(ModulationSource::sine_lfo(2.0));
-        engine.add_source(ModulationSource::sine_lfo(3.0));
-        engine.assign("param_a", 0, 1.0, None);
-        engine.assign("param_b", 2, 0.5, None);
-        engine.remove_source(0);
+        let uuid2 = engine.add_source(ModulationSource::sine_lfo(3.0));
+        engine.assign("param_a", &uuid0, 1.0, None);
+        engine.assign("param_b", &uuid2, 0.5, None);
+        engine.remove_source(&uuid0);
         assert!(!engine.has_modulation("param_a"));
         assert!(engine.has_modulation("param_b"));
         assert_eq!(engine.source_count(), 2);
@@ -427,17 +445,17 @@ mod tests {
     #[test]
     fn engine_assign_and_get_modulation() {
         let mut engine = ModulationEngine::new();
-        let idx = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.update(0.25, &empty_audio());
-        engine.assign("brightness", idx, 1.0, None);
+        engine.assign("brightness", &uuid, 1.0, None);
         let _mod_val = engine.get_modulation("brightness");
     }
 
     #[test]
     fn engine_clear_assignments() {
         let mut engine = ModulationEngine::new();
-        let idx = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.assign("brightness", idx, 1.0, None);
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
+        engine.assign("brightness", &uuid, 1.0, None);
         assert!(engine.has_modulation("brightness"));
         engine.clear_assignments("brightness");
         assert!(!engine.has_modulation("brightness"));
@@ -457,7 +475,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let lfo0 = engine.add_source(ModulationSource::sine_lfo(1.0));
         let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
-        engine.assign_mod_on_mod(lfo0, "frequency", lfo1, 0.5);
+        engine.assign_mod_on_mod(&lfo0, "frequency", &lfo1, 0.5);
         engine.update(1.0, &empty_audio());
         assert!(engine.current_values().len() == 2);
     }
@@ -467,38 +485,38 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let lfo0 = engine.add_source(ModulationSource::sine_lfo(1.0));
         let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
-        engine.assign_mod_on_mod(lfo0, "frequency", lfo1, 0.5);
-        assert!(engine.has_modulation("mod:0:frequency"));
-        engine.clear_mod_on_mod(lfo0, "frequency");
-        assert!(!engine.has_modulation("mod:0:frequency"));
+        engine.assign_mod_on_mod(&lfo0, "frequency", &lfo1, 0.5);
+        assert!(engine.has_modulation(&format!("mod:{}:frequency", lfo0)));
+        engine.clear_mod_on_mod(&lfo0, "frequency");
+        assert!(!engine.has_modulation(&format!("mod:{}:frequency", lfo0)));
     }
 
     #[test]
     fn engine_trigger_adsr() {
         let mut engine = ModulationEngine::new();
-        let idx = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
-        engine.trigger_adsr(idx);
+        let uuid = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
+        engine.trigger_adsr(&uuid);
         for i in 0..20 {
             engine.update(i as f32 * 0.01, &empty_audio());
         }
-        let vals = engine.current_values();
-        assert!(vals[idx] > 0.0, "ADSR should produce non-zero after trigger");
+        let val = engine.current_value_for(&uuid);
+        assert!(val > 0.0, "ADSR should produce non-zero after trigger");
     }
 
     #[test]
     fn engine_release_adsr() {
         let mut engine = ModulationEngine::new();
-        let idx = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
-        engine.trigger_adsr(idx);
+        let uuid = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
+        engine.trigger_adsr(&uuid);
         for i in 0..30 {
             engine.update(i as f32 * 0.01, &empty_audio());
         }
-        engine.release_adsr(idx);
+        engine.release_adsr(&uuid);
         for i in 30..80 {
             engine.update(i as f32 * 0.01, &empty_audio());
         }
-        let vals = engine.current_values();
-        assert!(vals[idx] < 0.1, "ADSR should be near zero after release: {}", vals[idx]);
+        let val = engine.current_value_for(&uuid);
+        assert!(val < 0.1, "ADSR should be near zero after release: {}", val);
     }
 
     #[test]
@@ -519,10 +537,10 @@ mod tests {
     #[test]
     fn engine_component_modulation() {
         let mut engine = ModulationEngine::new();
-        let idx = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
         engine.update(0.25, &empty_audio());
-        engine.assign("color", idx, 1.0, Some(0));
-        engine.assign("color", idx, 0.5, Some(1));
+        engine.assign("color", &uuid, 1.0, Some(0));
+        engine.assign("color", &uuid, 0.5, Some(1));
         let r_mod = engine.get_modulation_for_component("color", Some(0));
         let _g_mod = engine.get_modulation_for_component("color", Some(1));
         let no_mod = engine.get_modulation_for_component("color", Some(2));
@@ -568,8 +586,8 @@ mod tests {
 
     #[test]
     fn parse_mod_target_valid() {
-        assert_eq!(ModulationEngine::parse_mod_target("mod:3:frequency"), Some(3));
-        assert_eq!(ModulationEngine::parse_mod_target("mod:0:phase"), Some(0));
+        assert_eq!(ModulationEngine::parse_mod_target("mod:abc123:frequency"), Some("abc123"));
+        assert_eq!(ModulationEngine::parse_mod_target("mod:def456:phase"), Some("def456"));
     }
 
     #[test]
@@ -637,33 +655,26 @@ mod tests {
         assert!(!a.config_eq(&b));
     }
 
-    // ── find_matching_source tests ───────────────────────────────────
+    // ── find_source_by_uuid tests ───────────────────────────────────
 
     #[test]
-    fn find_matching_source_found() {
+    fn find_source_by_uuid_found() {
         let mut engine = ModulationEngine::new();
-        engine.add_source(ModulationSource::sine_lfo(2.0));
-        engine.add_source(ModulationSource::sine_lfo(4.0));
-        let needle = ModulationSource::sine_lfo(4.0);
-        assert_eq!(engine.find_matching_source(&needle), Some(1));
+        let uuid = engine.add_source(ModulationSource::sine_lfo(2.0));
+        assert!(engine.find_source_by_uuid(&uuid).is_some());
     }
 
     #[test]
-    fn find_matching_source_not_found() {
-        let mut engine = ModulationEngine::new();
-        engine.add_source(ModulationSource::sine_lfo(2.0));
-        let needle = ModulationSource::sine_lfo(5.0);
-        assert_eq!(engine.find_matching_source(&needle), None);
+    fn find_source_by_uuid_not_found() {
+        let engine = ModulationEngine::new();
+        assert!(engine.find_source_by_uuid("nonexistent").is_none());
     }
 
     #[test]
-    fn find_matching_source_adsr_ignores_state() {
+    fn add_source_with_uuid_preserves_uuid() {
         let mut engine = ModulationEngine::new();
-        engine.add_source(ModulationSource::ADSR {
-            attack: 0.1, decay: 0.2, sustain: 0.7, release: 0.3,
-            stage: ADSRStage::Sustain, stage_time: 2.0, gate: true, current_level: 0.7,
-        });
-        let needle = ModulationSource::adsr(0.1, 0.2, 0.7, 0.3);
-        assert_eq!(engine.find_matching_source(&needle), Some(0));
+        let uuid = engine.add_source_with_uuid("custom01".to_string(), ModulationSource::sine_lfo(2.0));
+        assert_eq!(uuid, "custom01");
+        assert!(engine.has_source("custom01"));
     }
 }

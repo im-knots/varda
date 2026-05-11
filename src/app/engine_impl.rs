@@ -351,14 +351,14 @@ impl AudioQueries for VardaApp {
 // ── Modulation trait implementations ────────────────────────────────
 
 impl ModulationCommands for VardaApp {
-    fn add_lfo(&mut self, waveform: LFOWaveform, frequency: f32) -> usize {
+    fn add_lfo(&mut self, waveform: LFOWaveform, frequency: f32) -> String {
         let source = ModulationSource::LFO {
             waveform, frequency, phase: 0.0, amplitude: 1.0, bipolar: false,
         };
         self.mixer.modulation_mut().add_source(source)
     }
 
-    fn add_audio_band(&mut self, preset: AudioBandPreset, source_id: Option<AudioSourceId>) -> usize {
+    fn add_audio_band(&mut self, preset: AudioBandPreset, source_id: Option<AudioSourceId>) -> String {
         let (freq_low, freq_high) = preset.freq_range();
         let source = ModulationSource::AudioBand {
             source_id, freq_low, freq_high, gain: 1.0, smoothing: 0.6,
@@ -367,22 +367,22 @@ impl ModulationCommands for VardaApp {
         self.mixer.modulation_mut().add_source(source)
     }
 
-    fn add_adsr(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) -> usize {
+    fn add_adsr(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) -> String {
         let source = ModulationSource::adsr(attack, decay, sustain, release);
         self.mixer.modulation_mut().add_source(source)
     }
 
-    fn add_step_sequencer(&mut self, num_steps: usize, rate: f32) -> usize {
+    fn add_step_sequencer(&mut self, num_steps: usize, rate: f32) -> String {
         let source = ModulationSource::step_sequencer(num_steps, rate);
         self.mixer.modulation_mut().add_source(source)
     }
 
-    fn remove_modulation_source(&mut self, idx: usize) {
-        self.mixer.modulation_mut().remove_source(idx);
+    fn remove_modulation_source(&mut self, uuid: &str) {
+        self.mixer.modulation_mut().remove_source(uuid);
     }
 
-    fn assign_modulation(&mut self, target: &str, source_idx: usize, amount: f32) {
-        self.mixer.modulation_mut().assign(target, source_idx, amount, None);
+    fn assign_modulation(&mut self, target: &str, source_id: &str, amount: f32) {
+        self.mixer.modulation_mut().assign(target, source_id, amount, None);
     }
 
     fn clear_modulation(&mut self, target: &str) {
@@ -393,8 +393,8 @@ impl ModulationCommands for VardaApp {
 impl ModulationQueries for VardaApp {
     fn modulation_snapshot(&self) -> ModulationSnapshot {
         let m = &self.mixer;
-        let sources = m.modulation().sources.iter().map(|src| {
-            match src {
+        let sources = m.modulation().sources.iter().map(|entry| {
+            let snapshot = match &entry.source {
                 ModulationSource::LFO { waveform, frequency, phase, amplitude, bipolar } => {
                     ModulationSourceSnapshot::LFO {
                         waveform: *waveform, frequency: *frequency, phase: *phase,
@@ -419,12 +419,15 @@ impl ModulationQueries for VardaApp {
                         interpolation: *interpolation, bipolar: *bipolar,
                     }
                 }
-            }
+            };
+            ModulationSourceSnapshotEntry { uuid: entry.uuid.clone(), source: snapshot }
         }).collect();
-        let current_values = m.modulation().current_values().to_vec();
+        let current_values: std::collections::HashMap<String, f32> = m.modulation().sources.iter().enumerate().map(|(i, entry)| {
+            (entry.uuid.clone(), m.modulation().current_values().get(i).copied().unwrap_or(0.0))
+        }).collect();
         let assignments = m.modulation().assignments.iter().map(|(k, v)| {
             (k.clone(), v.iter().map(|pm| ModulationAssignmentSnapshot {
-                source_idx: pm.source_idx,
+                source_id: pm.source_id.clone(),
                 amount: pm.amount,
             }).collect())
         }).collect();
@@ -477,15 +480,16 @@ impl OutputQueries for VardaApp {
             windows: self.outputs.iter().filter_map(|o| {
                 if let crate::renderer::context::UnifiedOutput::Window(w) = o {
                     Some(OutputWindowSnapshot {
+                        uuid: w.uuid.clone(),
                         name: w.name.clone(),
                         target_label: format!("{}", w.target),
                         is_on_display: matches!(w.target, crate::renderer::context::OutputTarget::Display { .. }),
                         surface_assignments: w.surface_assignments.iter().map(|a| {
-                            let surface_name = self.surface_manager.surfaces.get(a.surface_idx)
-                                .map(|s| s.name.clone())
-                                .unwrap_or_else(|| format!("Surface {}", a.surface_idx));
+                            let surface_name = self.surface_manager.find_by_uuid(&a.surface_uuid)
+                                .map(|(_, s)| s.name.clone())
+                                .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
                             SurfaceAssignmentSnapshot {
-                                surface_idx: a.surface_idx,
+                                surface_uuid: a.surface_uuid.clone(),
                                 surface_name,
                                 warp_corners: a.warp_corners,
                                 enabled: a.enabled,
@@ -498,6 +502,7 @@ impl OutputQueries for VardaApp {
                 }
             }).collect(),
             surfaces: self.surface_manager.surfaces.iter().map(|s| SurfaceSnapshot {
+                uuid: s.uuid.clone(),
                 name: s.name.clone(),
                 vertices: s.vertices.clone(),
                 extra_contours: s.extra_contours.clone(),
@@ -524,5 +529,101 @@ impl OutputQueries for VardaApp {
 impl MixerQueries for VardaApp {
     fn mixer_snapshot(&self) -> MixerSnapshot {
         crate::app::snapshot::build_mixer_snapshot(self)
+    }
+}
+
+// ── SurfaceCommands / SurfaceQueries ────────────────────────────────
+
+impl SurfaceCommands for VardaApp {
+    fn add_surface(&mut self, name: &str, source: OutputSource) -> String {
+        let uuid = self.surface_manager.add_surface(name.to_string(), source);
+        log::info!("Added surface '{}' (uuid {})", name, uuid);
+        uuid
+    }
+
+    fn add_polygon_surface(&mut self, name: &str, vertices: &[[f32; 2]], source: OutputSource) -> String {
+        let uuid = self.surface_manager.add_polygon_surface(name.to_string(), vertices.to_vec(), source);
+        log::info!("Added polygon surface '{}' with {} vertices (uuid {})", name, vertices.len(), uuid);
+        uuid
+    }
+
+    fn add_circle_surface(&mut self, name: &str, center: [f32; 2], radius: f32, sides: u32, aspect_ratio: f32, source: OutputSource) -> String {
+        let hint = crate::surface::CircleHint { center, radius, sides, aspect_ratio };
+        let uuid = self.surface_manager.add_circle_surface(name.to_string(), hint, source);
+        log::info!("Added circle surface '{}' (uuid {})", name, uuid);
+        uuid
+    }
+
+    fn remove_surface(&mut self, uuid: &str) {
+        self.surface_manager.remove_surface(uuid);
+    }
+
+    fn set_surface_source(&mut self, uuid: &str, source: OutputSource) {
+        if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
+            surface.source = source;
+        }
+    }
+
+    fn set_surface_output_type(&mut self, uuid: &str, output_type: SurfaceOutputType) {
+        if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
+            surface.output_type = output_type;
+        }
+    }
+
+    fn set_surface_content_mapping(&mut self, uuid: &str, mapping: ContentMapping) {
+        if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
+            surface.content_mapping = mapping;
+        }
+    }
+
+    fn rename_surface(&mut self, uuid: &str, name: &str) {
+        if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
+            surface.name = name.to_string();
+        }
+    }
+
+    fn assign_surface_to_output(&mut self, output_uuid: &str, surface_uuid: &str) {
+        if let Some(output) = self.outputs.iter_mut().find(|o| o.uuid() == output_uuid) {
+            let assignments = output.surface_assignments_mut();
+            if !assignments.iter().any(|a| a.surface_uuid == surface_uuid) {
+                if let Some((_, surface)) = self.surface_manager.find_by_uuid(surface_uuid) {
+                    let bb = surface.bounding_box();
+                    assignments.push(crate::renderer::context::SurfaceAssignment {
+                        surface_uuid: surface_uuid.to_string(),
+                        warp_corners: [
+                            [bb.x, bb.y],
+                            [bb.x + bb.width, bb.y],
+                            [bb.x + bb.width, bb.y + bb.height],
+                            [bb.x, bb.y + bb.height],
+                        ],
+                        enabled: true,
+                    });
+                }
+            }
+        }
+    }
+
+    fn unassign_surface_from_output(&mut self, output_uuid: &str, assignment_idx: usize) {
+        if let Some(output) = self.outputs.iter_mut().find(|o| o.uuid() == output_uuid) {
+            let assignments = output.surface_assignments_mut();
+            if assignment_idx < assignments.len() {
+                assignments.remove(assignment_idx);
+            }
+        }
+    }
+}
+
+impl SurfaceQueries for VardaApp {
+    fn surface_snapshot(&self) -> Vec<SurfaceSnapshot> {
+        self.surface_manager.surfaces.iter().map(|s| SurfaceSnapshot {
+            uuid: s.uuid.clone(),
+            name: s.name.clone(),
+            vertices: s.vertices.clone(),
+            extra_contours: s.extra_contours.clone(),
+            source: s.source.clone(),
+            content_mapping: s.content_mapping,
+            output_type: s.output_type,
+            circle_hint: s.circle_hint,
+        }).collect()
     }
 }

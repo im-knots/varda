@@ -385,70 +385,67 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
             mixer.snap_crossfader(if current > 0.5 { 0.0 } else { 1.0 });
             true
         }
-        // ch/<n>/opacity
-        ["ch", ch_s, "opacity"] => {
-            if let Ok(ch) = ch_s.parse::<usize>() {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    channel.opacity = if channel.opacity > 0.01 { 0.0 } else { 1.0 };
+        // ch/<uuid>/opacity
+        ["ch", ch_uuid, "opacity"] => {
+            if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
+                let channel = &mut mixer.channels_mut()[ch];
+                channel.opacity = if channel.opacity > 0.01 { 0.0 } else { 1.0 };
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/opacity
+        ["deck", uuid, "opacity"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                let slot = &mut mixer.channels_mut()[ch].decks[dk];
+                slot.opacity = if slot.opacity > 0.01 { 0.0 } else { 1.0 };
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/mute — toggle mute
+        ["deck", uuid, "mute"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                let m = mixer.channels_mut()[ch].decks[dk].mute;
+                mixer.channels_mut()[ch].decks[dk].mute = !m;
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/solo — toggle solo
+        ["deck", uuid, "solo"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                let s = mixer.channels_mut()[ch].decks[dk].solo;
+                mixer.channels_mut()[ch].decks[dk].solo = !s;
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/trigger — set deck opacity to 1.0
+        ["deck", uuid, "trigger"] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                mixer.channels_mut()[ch].decks[dk].opacity = 1.0;
+                return true;
+            }
+            false
+        }
+        // deck/<uuid>/param/<name>
+        ["deck", uuid, "param", name] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                if let Some(val) = mixer.channels_mut()[ch].decks[dk].deck.generator_params.values.get_mut(*name) {
+                    toggle_param_value(val);
                     return true;
                 }
             }
             false
         }
-        // ch/<n>/deck/<m>/opacity
-        ["ch", ch_s, "deck", dk_s, "opacity"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if let Some(slot) = channel.decks.get_mut(dk) {
-                        slot.opacity = if slot.opacity > 0.01 { 0.0 } else { 1.0 };
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/mute — toggle mute
-        ["ch", ch_s, "deck", dk_s, "mute"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if let Some(slot) = channel.decks.get_mut(dk) {
-                        slot.mute = !slot.mute;
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/solo — toggle solo
-        ["ch", ch_s, "deck", dk_s, "solo"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if let Some(slot) = channel.decks.get_mut(dk) {
-                        slot.solo = !slot.solo;
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/trigger — set deck opacity to 1.0
-        ["ch", ch_s, "deck", dk_s, "trigger"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if let Some(slot) = channel.decks.get_mut(dk) {
-                        slot.opacity = 1.0;
-                        return true;
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/deck/<m>/param/<name>
-        ["ch", ch_s, "deck", dk_s, "param", name] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if let Some(slot) = channel.decks.get_mut(dk) {
-                        if let Some(val) = slot.deck.generator_params.values.get_mut(*name) {
+        // deck/<uuid>/effect/<k>/param/<name>
+        ["deck", uuid, "effect", ek_s, "param", name] => {
+            if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
+                if let Ok(ek) = ek_s.parse::<usize>() {
+                    let slot = &mut mixer.channels_mut()[ch].decks[dk];
+                    if ek < slot.deck.effects.len() {
+                        if let Some(val) = slot.deck.effects[ek].params.values.get_mut(*name) {
                             toggle_param_value(val);
                             return true;
                         }
@@ -457,28 +454,12 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
             }
             false
         }
-        // ch/<n>/deck/<m>/effect/<k>/param/<name>
-        ["ch", ch_s, "deck", dk_s, "effect", ek_s, "param", name] => {
-            if let (Ok(ch), Ok(dk), Ok(ek)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>(), ek_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if let Some(slot) = channel.decks.get_mut(dk) {
-                        if ek < slot.deck.effects.len() {
-                            if let Some(val) = slot.deck.effects[ek].params.values.get_mut(*name) {
-                                toggle_param_value(val);
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            false
-        }
-        // ch/<n>/effect/<k>/param/<name>
-        ["ch", ch_s, "effect", ek_s, "param", name] => {
-            if let (Ok(ch), Ok(ek)) = (ch_s.parse::<usize>(), ek_s.parse::<usize>()) {
-                if let Some(channel) = mixer.channel_mut(ch) {
-                    if ek < channel.effects.len() {
-                        if let Some(val) = channel.effects[ek].params.values.get_mut(*name) {
+        // ch/<uuid>/effect/<k>/param/<name>
+        ["ch", ch_uuid, "effect", ek_s, "param", name] => {
+            if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
+                if let Ok(ek) = ek_s.parse::<usize>() {
+                    if ek < mixer.channels_mut()[ch].effects.len() {
+                        if let Some(val) = mixer.channels_mut()[ch].effects[ek].params.values.get_mut(*name) {
                             toggle_param_value(val);
                             return true;
                         }

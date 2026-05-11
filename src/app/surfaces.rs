@@ -10,22 +10,22 @@ impl VardaApp {
         for action in &ui_actions.surface_actions {
             match action {
                 ui::SurfaceAction::Add { name, source } => {
-                    let idx = self.surface_manager.add_surface(name.clone(), source.clone());
-                    log::info!("Added surface '{}' (index {})", name, idx);
+                    let uuid = self.surface_manager.add_surface(name.clone(), source.clone());
+                    log::info!("Added surface '{}' (uuid {})", name, uuid);
                 }
                 ui::SurfaceAction::AddPolygon { name, vertices, source } => {
-                    let idx = self.surface_manager.add_polygon_surface(name.clone(), vertices.clone(), source.clone());
-                    log::info!("Added polygon surface '{}' with {} vertices (index {})", name, vertices.len(), idx);
+                    let uuid = self.surface_manager.add_polygon_surface(name.clone(), vertices.clone(), source.clone());
+                    log::info!("Added polygon surface '{}' with {} vertices (uuid {})", name, vertices.len(), uuid);
                 }
-                ui::SurfaceAction::Remove { idx } => {
-                    if *idx < self.surface_manager.surfaces.len() {
-                        let name = self.surface_manager.surfaces[*idx].name.clone();
-                        self.surface_manager.remove_surface(*idx);
+                ui::SurfaceAction::Remove { uuid } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid(uuid) {
+                        let name = surface.name.clone();
+                        self.surface_manager.remove_surface(uuid);
                         log::info!("Removed surface '{}'", name);
                     }
                 }
-                ui::SurfaceAction::UpdateVertices { idx, contour, vertices } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                ui::SurfaceAction::UpdateVertices { uuid, contour, vertices } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                         if *contour == 0 {
                             if let Some(ref mut hint) = surface.circle_hint {
                                 let n = vertices.len().max(1) as f32;
@@ -40,8 +40,8 @@ impl VardaApp {
                         }
                     }
                 }
-                ui::SurfaceAction::MoveDelta { idx, dx, dy } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                ui::SurfaceAction::MoveDelta { uuid, dx, dy } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                         surface.translate(*dx, *dy);
                         let n = surface.vertices.len().max(1) as f32;
                         let sum = surface.vertices.iter().fold([0.0f32, 0.0], |acc, v| {
@@ -53,33 +53,34 @@ impl VardaApp {
                         }
                     }
                 }
-                ui::SurfaceAction::SetSource { idx, source } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                ui::SurfaceAction::SetSource { uuid, source } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                         surface.source = source.clone();
                         log::info!("Surface '{}' source changed to: {}", surface.name, source);
                     }
                 }
-                ui::SurfaceAction::SetOutputType { idx, output_type } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                ui::SurfaceAction::SetOutputType { uuid, output_type } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                         surface.output_type = *output_type;
                         log::info!("Surface '{}' output type changed to: {}", surface.name, output_type);
                     }
                 }
-                ui::SurfaceAction::SetContentMapping { idx, mapping } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                ui::SurfaceAction::SetContentMapping { uuid, mapping } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                         surface.content_mapping = *mapping;
                         log::info!("Surface '{}' content mapping changed to: {}", surface.name, mapping);
                     }
                 }
-                ui::SurfaceAction::Rename { idx, name } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                ui::SurfaceAction::Rename { uuid, name } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                         log::info!("Surface '{}' renamed to '{}'", surface.name, name);
                         surface.name = name.clone();
                     }
                 }
-                ui::SurfaceAction::Duplicate { idx } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get(*idx).cloned() {
-                        let mut dup = surface;
+                ui::SurfaceAction::Duplicate { uuid } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid(uuid) {
+                        let mut dup = surface.clone();
+                        dup.uuid = crate::deck::generate_short_uuid();
                         dup.name = format!("{} (copy)", dup.name);
                         let offset = grid_size;
                         for v in &mut dup.vertices {
@@ -96,13 +97,14 @@ impl VardaApp {
                             hint.center[0] = (hint.center[0] + offset).min(1.0);
                             hint.center[1] = (hint.center[1] + offset).min(1.0);
                         }
-                        let name = dup.name.clone();
+                        let orig_name = surface.name.clone();
+                        let new_name = dup.name.clone();
                         self.surface_manager.surfaces.push(dup);
-                        log::info!("Duplicated surface '{}' → '{}'", self.surface_manager.surfaces[*idx].name, name);
+                        log::info!("Duplicated surface '{}' → '{}'", orig_name, new_name);
                     }
                 }
-                ui::SurfaceAction::FlipHorizontal { idx } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                ui::SurfaceAction::FlipHorizontal { uuid } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                         let bb = surface.bounding_box();
                         let cx = bb.x + bb.width / 2.0;
                         for v in &mut surface.vertices {
@@ -119,8 +121,8 @@ impl VardaApp {
                         log::info!("Flipped surface '{}' horizontally", surface.name);
                     }
                 }
-                ui::SurfaceAction::FlipVertical { idx } => {
-                    if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+                ui::SurfaceAction::FlipVertical { uuid } => {
+                    if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                         let bb = surface.bounding_box();
                         let cy = bb.y + bb.height / 2.0;
                         for v in &mut surface.vertices {
@@ -145,8 +147,8 @@ impl VardaApp {
 
     fn apply_surface_action_extended(&mut self, action: &ui::SurfaceAction) {
         match action {
-            ui::SurfaceAction::InsertVertex { idx, after_vert_idx, position } => {
-                if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+            ui::SurfaceAction::InsertVertex { uuid, after_vert_idx, position } => {
+                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                     surface.convert_to_polygon();
                     if *after_vert_idx < surface.vertices.len() {
                         surface.vertices.insert(after_vert_idx + 1, *position);
@@ -155,11 +157,11 @@ impl VardaApp {
                 }
             }
             ui::SurfaceAction::AddCircle { name, hint, source } => {
-                let idx = self.surface_manager.add_circle_surface(name.clone(), *hint, source.clone());
-                log::info!("Added circle surface '{}' (index {}, radius={:.3}, sides={})", name, idx, hint.radius, hint.sides);
+                let uuid = self.surface_manager.add_circle_surface(name.clone(), *hint, source.clone());
+                log::info!("Added circle surface '{}' (uuid {}, radius={:.3}, sides={})", name, uuid, hint.radius, hint.sides);
             }
-            ui::SurfaceAction::SetCircleRadius { idx, radius } => {
-                if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+            ui::SurfaceAction::SetCircleRadius { uuid, radius } => {
+                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                     if let Some(ref mut hint) = surface.circle_hint {
                         hint.radius = *radius;
                         surface.vertices = hint.generate_vertices();
@@ -167,8 +169,8 @@ impl VardaApp {
                     }
                 }
             }
-            ui::SurfaceAction::SetCircleSides { idx, sides } => {
-                if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+            ui::SurfaceAction::SetCircleSides { uuid, sides } => {
+                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                     if let Some(ref mut hint) = surface.circle_hint {
                         hint.sides = *sides;
                         surface.vertices = hint.generate_vertices();
@@ -176,18 +178,20 @@ impl VardaApp {
                     }
                 }
             }
-            ui::SurfaceAction::ConvertToPolygon { idx } => {
-                if let Some(surface) = self.surface_manager.surfaces.get_mut(*idx) {
+            ui::SurfaceAction::ConvertToPolygon { uuid } => {
+                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(uuid) {
                     surface.convert_to_polygon();
                     log::info!("Converted surface '{}' to polygon", surface.name);
                 }
             }
-            ui::SurfaceAction::Combine { indices } => {
-                if let Some(new_idx) = self.surface_manager.combine_surfaces(indices) {
-                    let name = self.surface_manager.surfaces[new_idx].name.clone();
-                    let contour_count = 1 + self.surface_manager.surfaces[new_idx].extra_contours.len();
-                    log::info!("Combined {} surfaces into '{}' ({} contours)", indices.len(), name, contour_count);
-                    self.notifications.info(format!("🔗 Combined {} surfaces → '{}'", indices.len(), name));
+            ui::SurfaceAction::Combine { uuids } => {
+                if let Some(new_uuid) = self.surface_manager.combine_surfaces(uuids) {
+                    if let Some((_, combined)) = self.surface_manager.find_by_uuid(&new_uuid) {
+                        let name = combined.name.clone();
+                        let contour_count = 1 + combined.extra_contours.len();
+                        log::info!("Combined {} surfaces into '{}' ({} contours)", uuids.len(), name, contour_count);
+                        self.notifications.info(format!("🔗 Combined {} surfaces → '{}'", uuids.len(), name));
+                    }
                 }
             }
             _ => {} // Already handled in main match

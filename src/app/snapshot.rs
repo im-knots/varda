@@ -21,6 +21,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
             let gen_params = build_shader_params(&slot.deck.source_name(), &slot.deck.generator_params);
             let effects = slot.deck.effects.iter().map(|e| {
                 EffectSnapshot {
+                    uuid: e.uuid.clone(),
                     name: e.shader.name(),
                     enabled: e.enabled,
                     params: build_shader_params(&e.shader.name(), &e.params),
@@ -62,6 +63,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
 
             DeckSnapshot {
                 idx: deck_idx,
+                uuid: slot.deck.uuid().to_string(),
                 name: slot.deck.source_name().to_string(),
                 opacity: slot.opacity,
                 effective_opacity,
@@ -79,6 +81,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
 
         let ch_effects = ch.effects.iter().map(|e| {
             EffectSnapshot {
+                uuid: e.uuid.clone(),
                 name: e.shader.name(),
                 enabled: e.enabled,
                 params: build_shader_params(&e.shader.name(), &e.params),
@@ -87,6 +90,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
 
         ChannelSnapshot {
             idx: ch_idx,
+            uuid: ch.uuid().to_string(),
             name: ch.name.clone(),
             opacity: ch.opacity,
             blend_mode: ch.blend_mode,
@@ -99,6 +103,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
 
     let master_effects = mixer.master_effects().iter().map(|e| {
         EffectSnapshot {
+            uuid: e.uuid.clone(),
             name: e.shader.name(),
             enabled: e.enabled,
             params: build_shader_params(&e.shader.name(), &e.params),
@@ -389,7 +394,7 @@ pub(crate) fn build_ui_data(
                 phase: at.phase,
             });
             DeckUIInfo {
-                deck_idx: d.idx, name: d.name.clone(),
+                deck_idx: d.idx, uuid: d.uuid.clone(), name: d.name.clone(),
                 opacity: d.opacity, effective_opacity: d.effective_opacity,
                 blend_mode: d.blend_mode, solo: d.solo, mute: d.mute,
                 scaling_mode: d.scaling_mode,
@@ -398,7 +403,7 @@ pub(crate) fn build_ui_data(
         }).collect();
         let effects = ch.effects.iter().map(effect_snapshot_to_ui).collect();
         ChannelUIInfo {
-            ch_idx: ch.idx, name: ch.name.clone(),
+            ch_idx: ch.idx, uuid: ch.uuid.clone(), name: ch.name.clone(),
             opacity: ch.opacity, blend_mode: ch.blend_mode,
             decks, effects,
         }
@@ -408,19 +413,22 @@ pub(crate) fn build_ui_data(
         .map(effect_snapshot_to_ui).collect();
 
     // Modulation: map snapshots → UI types
-    let modulation_sources = engine.modulation.sources.iter().map(|src| match src {
-        ModulationSourceSnapshot::LFO { waveform, frequency, phase, amplitude, bipolar } =>
-            ModSourceUI::LFO { waveform: *waveform, frequency: *frequency, phase: *phase, amplitude: *amplitude, bipolar: *bipolar },
-        ModulationSourceSnapshot::Audio { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } =>
-            ModSourceUI::Audio { source_id: *source_id, freq_low: *freq_low, freq_high: *freq_high, gain: *gain, smoothing: *smoothing, mode: *mode, noise_gate: *noise_gate },
-        ModulationSourceSnapshot::ADSR { attack, decay, sustain, release, stage } =>
-            ModSourceUI::ADSR { attack: *attack, decay: *decay, sustain: *sustain, release: *release, stage: *stage },
-        ModulationSourceSnapshot::StepSequencer { steps, rate, interpolation, bipolar } =>
-            ModSourceUI::StepSequencer { steps: steps.clone(), rate: *rate, interpolation: *interpolation, bipolar: *bipolar },
+    let modulation_sources = engine.modulation.sources.iter().map(|entry| {
+        let source = match &entry.source {
+            ModulationSourceSnapshot::LFO { waveform, frequency, phase, amplitude, bipolar } =>
+                ModSourceUI::LFO { waveform: *waveform, frequency: *frequency, phase: *phase, amplitude: *amplitude, bipolar: *bipolar },
+            ModulationSourceSnapshot::Audio { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } =>
+                ModSourceUI::Audio { source_id: *source_id, freq_low: *freq_low, freq_high: *freq_high, gain: *gain, smoothing: *smoothing, mode: *mode, noise_gate: *noise_gate },
+            ModulationSourceSnapshot::ADSR { attack, decay, sustain, release, stage } =>
+                ModSourceUI::ADSR { attack: *attack, decay: *decay, sustain: *sustain, release: *release, stage: *stage },
+            ModulationSourceSnapshot::StepSequencer { steps, rate, interpolation, bipolar } =>
+                ModSourceUI::StepSequencer { steps: steps.clone(), rate: *rate, interpolation: *interpolation, bipolar: *bipolar },
+        };
+        ModSourceUIEntry { uuid: entry.uuid.clone(), source }
     }).collect();
     let modulation_current_values = engine.modulation.current_values.clone();
     let modulation_assignments = engine.modulation.assignments.iter().map(|(k, v)| {
-        (k.clone(), v.iter().map(|a| ModAssignmentUI { source_idx: a.source_idx, amount: a.amount }).collect())
+        (k.clone(), v.iter().map(|a| ModAssignmentUI { source_id: a.source_id.clone(), amount: a.amount }).collect())
     }).collect();
 
     // Audio: map AudioSnapshot → AudioUIData
@@ -439,11 +447,11 @@ pub(crate) fn build_ui_data(
         let (target, target_label, is_windowed, is_active, active_duration, surface_assignments, calibration_mode) = match o {
             crate::renderer::context::UnifiedOutput::Window(w) => {
                 let sa = w.surface_assignments.iter().map(|a| {
-                    let surface_name = app.surface_manager.surfaces.get(a.surface_idx)
-                        .map(|s| s.name.clone())
-                        .unwrap_or_else(|| format!("Surface {}", a.surface_idx));
+                    let surface_name = app.surface_manager.find_by_uuid(&a.surface_uuid)
+                        .map(|(_, s)| s.name.clone())
+                        .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
                     SurfaceAssignmentUI {
-                        surface_idx: a.surface_idx, surface_name,
+                        surface_uuid: a.surface_uuid.clone(), surface_name,
                         warp_corners: a.warp_corners, enabled: a.enabled,
                     }
                 }).collect();
@@ -452,9 +460,9 @@ pub(crate) fn build_ui_data(
             crate::renderer::context::UnifiedOutput::Headless(h) => {
                 let sa = h.surface_assignments.iter().map(|a| {
                     SurfaceAssignmentUI {
-                        surface_idx: a.surface_idx,
-                        surface_name: app.surface_manager.surfaces.get(a.surface_idx)
-                            .map(|s| s.name.clone()).unwrap_or_else(|| format!("Surface {}", a.surface_idx)),
+                        surface_uuid: a.surface_uuid.clone(),
+                        surface_name: app.surface_manager.find_by_uuid(&a.surface_uuid)
+                            .map(|(_, s)| s.name.clone()).unwrap_or_else(|| format!("Surface {}", a.surface_uuid)),
                         warp_corners: a.warp_corners, enabled: a.enabled,
                     }
                 }).collect();
@@ -462,6 +470,7 @@ pub(crate) fn build_ui_data(
             }
         };
         OutputUI {
+            uuid: o.uuid().to_string(),
             name: o.name().to_string(), target, target_label,
             is_windowed, is_active, active_duration,
             surface_assignments, calibration_mode,
@@ -469,7 +478,7 @@ pub(crate) fn build_ui_data(
     }).collect();
 
     let surfaces = engine.outputs.surfaces.iter().map(|s| SurfaceUI {
-        name: s.name.clone(), vertices: s.vertices.clone(),
+        uuid: s.uuid.clone(), name: s.name.clone(), vertices: s.vertices.clone(),
         extra_contours: s.extra_contours.clone(),
         source: s.source.clone(), content_mapping: s.content_mapping,
         output_type: s.output_type, circle_hint: s.circle_hint,
@@ -531,7 +540,7 @@ pub(crate) fn build_ui_data(
         selected_deck: layout.selected_deck, selected_channel: layout.selected_channel,
         selected_master: layout.selected_master,
         outputs, surfaces,
-        stage_editor_open: layout.stage_editor_open, library_panel_open: layout.library_panel_open,
+        stage_editor_open: layout.stage_editor_open, library_panel_open: layout.library_panel_open, right_panel_open: layout.right_panel_open,
         stage_editor_grid_size: layout.stage_editor_grid_size, stage_editor_snap: layout.stage_editor_snap,
         available_monitors, midi_devices, midi_mappings,
         cameras: engine.cameras.devices,
@@ -637,5 +646,5 @@ fn params_snapshot_to_ui(snap: &ShaderParamsSnapshot) -> ShaderParamsUI {
 }
 
 fn effect_snapshot_to_ui(snap: &EffectSnapshot) -> EffectInfo {
-    (snap.name.clone(), snap.enabled, params_snapshot_to_ui(&snap.params))
+    (snap.uuid.clone(), snap.name.clone(), snap.enabled, params_snapshot_to_ui(&snap.params))
 }

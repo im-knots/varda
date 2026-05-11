@@ -392,8 +392,16 @@ impl VardaApp {
                 if let Some(deck_config) = ch_config.decks.get(deck_idx) {
                     let mut preset_config = deck_config.clone();
                     preset_config.name = name.clone();
-                    let prefix = format!("ch{}_deck{}", ch_idx, deck_idx);
-                    preset_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix);
+                    let deck_uuid = mixer.channel(ch_idx)
+                        .and_then(|ch| ch.decks.get(deck_idx))
+                        .map(|slot| slot.deck.uuid().to_string())
+                        .unwrap_or_default();
+                    let effect_uuids: Vec<String> = mixer.channel(ch_idx)
+                        .and_then(|ch| ch.decks.get(deck_idx))
+                        .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
+                        .unwrap_or_default();
+                    let prefix = format!("deck_{}", deck_uuid);
+                    preset_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
                     match crate::persistence::presets::PresetLibrary::save_deck_preset(
                         &self.workspace, &name, &preset_config,
                     ) {
@@ -422,8 +430,16 @@ impl VardaApp {
             if let Some(ch_config) = scene.channels.get(ch_idx) {
                 let mut preset_ch_config = ch_config.clone();
                 for (deck_idx, deck_config) in preset_ch_config.decks.iter_mut().enumerate() {
-                    let prefix = format!("ch{}_deck{}", ch_idx, deck_idx);
-                    deck_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix);
+                    let deck_uuid = mixer.channel(ch_idx)
+                        .and_then(|ch| ch.decks.get(deck_idx))
+                        .map(|slot| slot.deck.uuid().to_string())
+                        .unwrap_or_default();
+                    let effect_uuids: Vec<String> = mixer.channel(ch_idx)
+                        .and_then(|ch| ch.decks.get(deck_idx))
+                        .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
+                        .unwrap_or_default();
+                    let prefix = format!("deck_{}", deck_uuid);
+                    deck_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
                 }
                 match crate::persistence::presets::PresetLibrary::save_channel_preset(
                     &self.workspace, &name, &preset_ch_config,
@@ -771,7 +787,11 @@ impl VardaApp {
         };
         // Apply modulation recipes with deduplication
         if !config.modulation.is_empty() {
-            let new_prefix = format!("ch{}_deck{}", ch_idx, dk_idx);
+            let deck_uuid = mixer.channel(ch_idx)
+                .and_then(|ch| ch.decks.get(dk_idx))
+                .map(|slot| slot.deck.uuid().to_string())
+                .unwrap_or_default();
+            let new_prefix = format!("deck_{}", deck_uuid);
             apply_modulation_recipes(&config.modulation, &new_prefix, mixer.modulation_mut());
         }
         Ok(())
@@ -779,34 +799,36 @@ impl VardaApp {
 }
 
 /// Extract modulation recipes for a specific deck from the global engine.
-/// Scans all assignments matching the deck's prefix, groups by source,
-/// and strips the prefix from param keys to make them portable.
+/// Scans all assignments matching the deck's prefix and effect UUIDs,
+/// groups by source, and strips prefixes to make them portable.
 fn extract_modulation_recipes(
     engine: &crate::modulation::ModulationEngine,
     prefix: &str,
+    effect_uuids: &[String],
 ) -> Vec<crate::scene::ModulationRecipe> {
     let prefix_colon = format!("{}:", prefix);
-    let prefix_underscore = format!("{}_", prefix);
-    let mut source_map: std::collections::HashMap<usize, Vec<crate::scene::ModulationRecipeAssignment>> =
+    let mut source_map: std::collections::HashMap<String, Vec<crate::scene::ModulationRecipeAssignment>> =
         std::collections::HashMap::new();
 
+    // Build a set of effect key prefixes for this deck's effects
+    let fx_prefixes: Vec<String> = effect_uuids.iter().map(|u| format!("fx_{}:", u)).collect();
+
     for (key, mods) in engine.assignments_iter() {
-        // Match generator params: "ch0_deck0:brightness" → relative "brightness"
-        // Match effect params: "ch0_deck0_fx0:amount" → relative "fx0:amount"
+        // Match generator params: "deck_{uuid}:brightness" → relative "brightness"
         let relative_param = if let Some(rel) = key.strip_prefix(&prefix_colon) {
-            Some(rel)
-        } else if let Some(rest) = key.strip_prefix(&prefix_underscore) {
-            if rest.starts_with("fx") { Some(rest) } else { None }
+            Some(rel.to_string())
         } else {
-            None
+            // Match effect params: "fx_{fx_uuid}:param" → relative "fx_{fx_uuid}:param"
+            // We store the full effect key as-is so it can be re-applied with the same UUID
+            fx_prefixes.iter().find(|p| key.starts_with(p.as_str())).map(|_| key.clone())
         };
 
         if let Some(relative_param) = relative_param {
             for m in mods {
-                source_map.entry(m.source_idx)
+                source_map.entry(m.source_id.clone())
                     .or_default()
                     .push(crate::scene::ModulationRecipeAssignment {
-                        param: relative_param.to_string(),
+                        param: relative_param.clone(),
                         amount: m.amount,
                         component: m.component,
                     });
@@ -814,37 +836,42 @@ fn extract_modulation_recipes(
         }
     }
 
-    source_map.into_iter().map(|(src_idx, assignments)| {
-        crate::scene::ModulationRecipe {
-            source: engine.sources[src_idx].clone(),
-            assignments,
-        }
+    source_map.into_iter().filter_map(|(source_uuid, assignments)| {
+        engine.find_source_by_uuid(&source_uuid).map(|entry| {
+            crate::scene::ModulationRecipe {
+                source_uuid: entry.uuid.clone(),
+                source: entry.source.clone(),
+                assignments,
+            }
+        })
     }).collect()
 }
 
 /// Apply modulation recipes to the global engine for a newly loaded deck.
-/// Deduplicates sources: reuses existing matching sources instead of creating new ones.
+/// UUID-is-identity: if a source with the recipe's UUID exists, wire up to it.
+/// Otherwise create a new source with that UUID.
 fn apply_modulation_recipes(
     recipes: &[crate::scene::ModulationRecipe],
     prefix: &str,
     engine: &mut crate::modulation::ModulationEngine,
 ) {
     for recipe in recipes {
-        let source_idx = engine.find_matching_source(&recipe.source)
-            .unwrap_or_else(|| {
-                let idx = engine.add_source(recipe.source.clone());
-                log::info!("Created new modulation source for preset (idx {})", idx);
-                idx
-            });
+        let source_uuid = if engine.has_source(&recipe.source_uuid) {
+            recipe.source_uuid.clone()
+        } else {
+            let uuid = engine.add_source_with_uuid(recipe.source_uuid.clone(), recipe.source.clone());
+            log::info!("Created new modulation source {} for preset", uuid);
+            uuid
+        };
         for assignment in &recipe.assignments {
-            // Effect params stored as "fx0:amount" → key "ch0_deck0_fx0:amount"
-            // Generator params stored as "brightness" → key "ch0_deck0:brightness"
-            let full_key = if assignment.param.starts_with("fx") {
-                format!("{}_{}", prefix, assignment.param)
+            // Effect params stored as "fx_{uuid}:param" (already fully qualified)
+            // Generator params stored as "brightness" → key "deck_{uuid}:brightness"
+            let full_key = if assignment.param.starts_with("fx_") {
+                assignment.param.clone()
             } else {
                 format!("{}:{}", prefix, assignment.param)
             };
-            engine.assign(&full_key, source_idx, assignment.amount, assignment.component);
+            engine.assign(&full_key, &source_uuid, assignment.amount, assignment.component);
         }
     }
 }
@@ -858,57 +885,60 @@ mod tests {
     #[test]
     fn extract_captures_generator_and_effect_params() {
         let mut engine = ModulationEngine::new();
-        let src_idx = engine.add_source(ModulationSource::sine_lfo(2.0));
-        // Generator param: ch0_deck0:brightness
-        engine.assign("ch0_deck0:brightness", src_idx, 0.5, None);
-        // Effect param: ch0_deck0_fx0:amount
-        engine.assign("ch0_deck0_fx0:amount", src_idx, 0.3, None);
+        let src_uuid = engine.add_source(ModulationSource::sine_lfo(2.0));
+        // Generator param: deck_abc12345:brightness
+        engine.assign("deck_abc12345:brightness", &src_uuid, 0.5, None);
+        // Effect param: fx_effuuid1:amount (new format uses effect UUID)
+        engine.assign("fx_effuuid1:amount", &src_uuid, 0.3, None);
         // Unrelated key from another deck — should NOT be captured
-        engine.assign("ch0_deck1:brightness", src_idx, 1.0, None);
+        engine.assign("deck_def67890:brightness", &src_uuid, 1.0, None);
 
-        let recipes = extract_modulation_recipes(&engine, "ch0_deck0");
+        let effect_uuids = vec!["effuuid1".to_string()];
+        let recipes = extract_modulation_recipes(&engine, "deck_abc12345", &effect_uuids);
         assert_eq!(recipes.len(), 1, "should group into one recipe (one source)");
         let recipe = &recipes[0];
         let mut params: Vec<&str> = recipe.assignments.iter().map(|a| a.param.as_str()).collect();
         params.sort();
-        assert_eq!(params, vec!["brightness", "fx0:amount"]);
+        assert_eq!(params, vec!["brightness", "fx_effuuid1:amount"]);
     }
 
     #[test]
     fn apply_restores_generator_and_effect_keys() {
         let mut engine = ModulationEngine::new();
         let recipes = vec![ModulationRecipe {
+            source_uuid: "test0001".to_string(),
             source: ModulationSource::sine_lfo(2.0),
             assignments: vec![
                 ModulationRecipeAssignment { param: "brightness".into(), amount: 0.5, component: None },
-                ModulationRecipeAssignment { param: "fx0:amount".into(), amount: 0.3, component: None },
+                ModulationRecipeAssignment { param: "fx_effuuid1:amount".into(), amount: 0.3, component: None },
             ],
         }];
 
-        apply_modulation_recipes(&recipes, "ch1_deck0", &mut engine);
+        apply_modulation_recipes(&recipes, "deck_newuuid1", &mut engine);
 
         assert_eq!(engine.source_count(), 1);
-        assert!(engine.has_modulation("ch1_deck0:brightness"), "generator key missing");
-        assert!(engine.has_modulation("ch1_deck0_fx0:amount"), "effect key missing");
+        assert!(engine.has_modulation("deck_newuuid1:brightness"), "generator key missing");
+        assert!(engine.has_modulation("fx_effuuid1:amount"), "effect key missing");
     }
 
     #[test]
     fn roundtrip_extract_then_apply_preserves_effect_modulation() {
         // Simulate save: create engine with assignments, extract recipes
         let mut save_engine = ModulationEngine::new();
-        let src_idx = save_engine.add_source(ModulationSource::sine_lfo(3.0));
-        save_engine.assign("ch0_deck0:contrast", src_idx, 0.7, None);
-        save_engine.assign("ch0_deck0_fx1:mix", src_idx, 0.4, None);
+        let src_uuid = save_engine.add_source(ModulationSource::sine_lfo(3.0));
+        save_engine.assign("deck_saveuuid:contrast", &src_uuid, 0.7, None);
+        save_engine.assign("fx_fxuuid01:mix", &src_uuid, 0.4, None);
 
-        let recipes = extract_modulation_recipes(&save_engine, "ch0_deck0");
+        let effect_uuids = vec!["fxuuid01".to_string()];
+        let recipes = extract_modulation_recipes(&save_engine, "deck_saveuuid", &effect_uuids);
 
         // Simulate load: fresh engine, apply recipes into a different slot
         let mut load_engine = ModulationEngine::new();
-        apply_modulation_recipes(&recipes, "ch2_deck0", &mut load_engine);
+        apply_modulation_recipes(&recipes, "deck_loaduuid", &mut load_engine);
 
         assert_eq!(load_engine.source_count(), 1);
-        assert!(load_engine.has_modulation("ch2_deck0:contrast"));
-        assert!(load_engine.has_modulation("ch2_deck0_fx1:mix"));
+        assert!(load_engine.has_modulation("deck_loaduuid:contrast"));
+        assert!(load_engine.has_modulation("fx_fxuuid01:mix"));
     }
 }
 

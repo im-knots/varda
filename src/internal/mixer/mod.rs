@@ -257,6 +257,25 @@ impl Mixer {
         &self.composite_view
     }
 
+    // ── UUID lookup helpers ────────────────────────────────────────────
+
+    /// Find a mutable deck slot by deck UUID. Returns (channel_index, deck_index) if found.
+    pub fn find_deck_by_uuid(&self, uuid: &str) -> Option<(usize, usize)> {
+        for (ch_idx, ch) in self.channels.iter().enumerate() {
+            for (dk_idx, slot) in ch.decks.iter().enumerate() {
+                if slot.deck.uuid() == uuid {
+                    return Some((ch_idx, dk_idx));
+                }
+            }
+        }
+        None
+    }
+
+    /// Find a channel index by channel UUID.
+    pub fn find_channel_by_uuid(&self, uuid: &str) -> Option<usize> {
+        self.channels.iter().position(|ch| ch.uuid() == uuid)
+    }
+
     // ── Persistence restore helpers ──────────────────────────────────
 
     /// Replace all channels (used by persistence restore).

@@ -8,14 +8,21 @@ use super::outputs::render_output_section;
 
 pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     egui::ScrollArea::vertical().show(ui, |ui| {
-        // Clickable heading — selects master for bottom bar
-        let heading_response = ui.add(
-            egui::Label::new(egui::RichText::new("🎬 Main Output").heading())
-                .sense(egui::Sense::click()),
-        );
-        if heading_response.clicked() {
-            actions.select_master = true;
-        }
+        // Header row: collapse button on left, heading on right (mirror of library panel)
+        ui.horizontal(|ui| {
+            if ui.small_button("»").on_hover_text("Collapse panel").clicked() {
+                actions.toggle_right_panel = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let heading_response = ui.add(
+                    egui::Label::new(egui::RichText::new("🎬 Main Output").heading())
+                        .sense(egui::Sense::click()),
+                );
+                if heading_response.clicked() {
+                    actions.select_master = true;
+                }
+            });
+        });
 
         // Main output preview (clickable to select master)
         let preview_width = ui.available_width() - 10.0;

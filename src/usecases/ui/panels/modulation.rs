@@ -34,12 +34,13 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
         ui.label(egui::RichText::new("No modulation sources").small().weak());
     } else {
         egui::ScrollArea::vertical().id_salt("mod_sources_vscroll").show(ui, |ui| {
-            for (idx, src) in data.modulation_sources.iter().enumerate() {
+            for (idx, entry) in data.modulation_sources.iter().enumerate() {
                 let mod_color = modulator_color(idx);
                 let dim_color = egui::Color32::from_rgba_premultiplied(
                     mod_color.r() / 4, mod_color.g() / 4, mod_color.b() / 4, 40
                 );
-                let header_label = match src {
+                let sid = &entry.uuid;
+                let header_label = match &entry.source {
                     ModSourceUI::LFO { .. } => format!("LFO {}", idx + 1),
                     ModSourceUI::Audio { .. } => format!("Audio {}", idx + 1),
                     ModSourceUI::ADSR { stage, .. } => {
@@ -55,7 +56,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                     ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", idx + 1),
                 };
                 // Show current value in header if available
-                let value_text = data.modulation_current_values.get(idx)
+                let value_text = data.modulation_current_values.get(sid)
                     .map(|v| format!(" ({:.2})", v))
                     .unwrap_or_default();
 
@@ -71,10 +72,10 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(format!("{}{}", header_label, value_text)).strong().color(mod_color));
                             if ui.small_button("x").clicked() {
-                                actions.modulation_actions.push(ModulationAction::RemoveSource { idx });
+                                actions.modulation_actions.push(ModulationAction::RemoveSource { source_id: sid.clone() });
                             }
                         });
-                        match src {
+                        match &entry.source {
                             ModSourceUI::LFO { waveform, frequency, phase, amplitude, bipolar } => {
                                 let waveforms = ["Sine", "Square", "Triangle", "Saw", "Random"];
                                 let current_wf = match waveform {
@@ -100,7 +101,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                                         3 => LFOWaveform::Sawtooth,
                                                         _ => LFOWaveform::Random,
                                                     };
-                                                    actions.modulation_actions.push(ModulationAction::UpdateLFOWaveform { idx, waveform: new_wf });
+                                                    actions.modulation_actions.push(ModulationAction::UpdateLFOWaveform { source_id: sid.clone(), waveform: new_wf });
                                                 }
                                             }
                                         });
@@ -110,31 +111,31 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(egui::RichText::new("Freq:").small());
                                     let path = format!("mod/{}/frequency", idx);
                                     if render_mod_learn_slider(ui, &mut freq, 0.01..=10.0, |s| s.logarithmic(true).show_value(true).suffix("Hz"), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateLFOFrequency { idx, frequency: freq });
+                                        actions.modulation_actions.push(ModulationAction::UpdateLFOFrequency { source_id: sid.clone(), frequency: freq });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "frequency");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "frequency");
                                 });
                                 let mut amp = *amplitude;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Amp:").small());
                                     let path = format!("mod/{}/amplitude", idx);
                                     if render_mod_learn_slider(ui, &mut amp, 0.0..=1.0, |s| s.show_value(true), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateLFOAmplitude { idx, amplitude: amp });
+                                        actions.modulation_actions.push(ModulationAction::UpdateLFOAmplitude { source_id: sid.clone(), amplitude: amp });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "amplitude");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "amplitude");
                                 });
                                 let mut ph = *phase;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Phase:").small());
                                     let path = format!("mod/{}/phase", idx);
                                     if render_mod_learn_slider(ui, &mut ph, 0.0..=1.0, |s| s.show_value(false), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateLFOPhase { idx, phase: ph });
+                                        actions.modulation_actions.push(ModulationAction::UpdateLFOPhase { source_id: sid.clone(), phase: ph });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "phase");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "phase");
                                 });
                                 let mut bp = *bipolar;
                                 if ui.checkbox(&mut bp, egui::RichText::new("Bipolar (-1 to 1)").small()).changed() {
-                                    actions.modulation_actions.push(ModulationAction::UpdateLFOBipolar { idx, bipolar: bp });
+                                    actions.modulation_actions.push(ModulationAction::UpdateLFOBipolar { source_id: sid.clone(), bipolar: bp });
                                 }
                                 // LFO waveform visualization
                                 let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width().min(180.0), 30.0), egui::Sense::hover());
@@ -160,7 +161,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 }).collect();
                                 painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, mod_color)));
                                 // Current value indicator
-                                if let Some(&cur_val) = data.modulation_current_values.get(idx) {
+                                if let Some(&cur_val) = data.modulation_current_values.get(sid) {
                                     let y = rect.center().y - cur_val * rect.height() * 0.4;
                                     painter.circle_filled(egui::pos2(rect.center().x, y), 3.0, mod_color);
                                 }
@@ -181,7 +182,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         .show_ui(ui, |ui| {
                                             for (name, m) in [("Direct", AudioReactMode::Direct), ("Increase", AudioReactMode::Increase), ("Decrease", AudioReactMode::Decrease)] {
                                                 if ui.selectable_label(*mode == m, name).clicked() {
-                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioMode { idx, mode: m });
+                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioMode { source_id: sid.clone(), mode: m });
                                                 }
                                             }
                                         });
@@ -207,7 +208,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             use crate::modulation::AudioBandPreset;
                                             for (name, preset) in [("Low", AudioBandPreset::Low), ("Mid", AudioBandPreset::Mid), ("High", AudioBandPreset::High), ("Full", AudioBandPreset::Full)] {
                                                 if ui.selectable_label(preset_label == name, name).clicked() {
-                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioPreset { idx, preset });
+                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioPreset { source_id: sid.clone(), preset });
                                                 }
                                             }
                                         });
@@ -218,7 +219,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(egui::RichText::new("Lo:").small());
                                     let path = format!("mod/{}/freq_low", idx);
                                     if render_mod_learn_slider(ui, &mut fl, 20.0..=20000.0, |s| s.logarithmic(true).suffix("Hz"), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateAudioFreqLow { idx, freq_low: fl });
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioFreqLow { source_id: sid.clone(), freq_low: fl });
                                     }
                                 });
                                 let mut fh = *freq_high;
@@ -226,7 +227,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(egui::RichText::new("Hi:").small());
                                     let path = format!("mod/{}/freq_high", idx);
                                     if render_mod_learn_slider(ui, &mut fh, 20.0..=20000.0, |s| s.logarithmic(true).suffix("Hz"), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateAudioFreqHigh { idx, freq_high: fh });
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioFreqHigh { source_id: sid.clone(), freq_high: fh });
                                     }
                                 });
                                 // Gain slider
@@ -235,9 +236,9 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(egui::RichText::new("Gain:").small());
                                     let path = format!("mod/{}/gain", idx);
                                     if render_mod_learn_slider(ui, &mut g, 0.0..=4.0, |s| s.show_value(true), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateAudioGain { idx, gain: g });
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioGain { source_id: sid.clone(), gain: g });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "gain");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "gain");
                                 });
                                 // Smoothing slider
                                 let mut sm = *smoothing;
@@ -245,16 +246,16 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(egui::RichText::new("Smooth:").small());
                                     let path = format!("mod/{}/smoothing", idx);
                                     if render_mod_learn_slider(ui, &mut sm, 0.0..=0.99, |s| s.show_value(false), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateAudioSmoothing { idx, smoothing: sm });
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioSmoothing { source_id: sid.clone(), smoothing: sm });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "smoothing");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "smoothing");
                                 });
                                 // Noise gate slider
                                 let mut ng = *noise_gate;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Gate:").small());
                                     if ui.add(egui::Slider::new(&mut ng, 0.0..=0.5).show_value(true)).changed() {
-                                        actions.modulation_actions.push(ModulationAction::UpdateAudioNoiseGate { idx, noise_gate: ng });
+                                        actions.modulation_actions.push(ModulationAction::UpdateAudioNoiseGate { source_id: sid.clone(), noise_gate: ng });
                                     }
                                 });
                                 // Source selector (if multiple audio devices)
@@ -270,28 +271,28 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             .width(80.0)
                                             .show_ui(ui, |ui| {
                                                 if ui.selectable_label(source_id.is_none(), "Default").clicked() {
-                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioSource { idx, source_id: None });
+                                                    actions.modulation_actions.push(ModulationAction::UpdateAudioSource { source_id: sid.clone(), source_id_audio: None });
                                                 }
                                                 for dev in &data.audio.devices {
                                                     if ui.selectable_label(*source_id == Some(dev.id), &dev.name).clicked() {
-                                                        actions.modulation_actions.push(ModulationAction::UpdateAudioSource { idx, source_id: Some(dev.id) });
+                                                        actions.modulation_actions.push(ModulationAction::UpdateAudioSource { source_id: sid.clone(), source_id_audio: Some(dev.id) });
                                                     }
                                                 }
                                             });
                                     });
                                 }
                                 // Audio level bar
-                                if let Some(&cur_val) = data.modulation_current_values.get(idx) {
+                                if let Some(&cur_val) = data.modulation_current_values.get(sid) {
                                     ui.add(egui::ProgressBar::new(cur_val).desired_width(140.0).fill(mod_color));
                                 }
                             }
                             ModSourceUI::ADSR { attack, decay, sustain, release, stage: _ } => {
                                 ui.horizontal(|ui| {
                                     if ui.button(egui::RichText::new("▶ Gate").small()).clicked() {
-                                        actions.modulation_actions.push(ModulationAction::TriggerADSR { idx });
+                                        actions.modulation_actions.push(ModulationAction::TriggerADSR { source_id: sid.clone() });
                                     }
                                     if ui.button(egui::RichText::new("⏹ Release").small()).clicked() {
-                                        actions.modulation_actions.push(ModulationAction::ReleaseADSR { idx });
+                                        actions.modulation_actions.push(ModulationAction::ReleaseADSR { source_id: sid.clone() });
                                     }
                                 });
                                 let mut a = *attack;
@@ -299,36 +300,36 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(egui::RichText::new("A:").small());
                                     let path = format!("mod/{}/attack", idx);
                                     if render_mod_learn_slider(ui, &mut a, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateADSRAttack { idx, attack: a });
+                                        actions.modulation_actions.push(ModulationAction::UpdateADSRAttack { source_id: sid.clone(), attack: a });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "attack");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "attack");
                                 });
                                 let mut d = *decay;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("D:").small());
                                     let path = format!("mod/{}/decay", idx);
                                     if render_mod_learn_slider(ui, &mut d, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateADSRDecay { idx, decay: d });
+                                        actions.modulation_actions.push(ModulationAction::UpdateADSRDecay { source_id: sid.clone(), decay: d });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "decay");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "decay");
                                 });
                                 let mut s = *sustain;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("S:").small());
                                     let path = format!("mod/{}/sustain", idx);
                                     if render_mod_learn_slider(ui, &mut s, 0.0..=1.0, |s| s.show_value(true), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateADSRSustain { idx, sustain: s });
+                                        actions.modulation_actions.push(ModulationAction::UpdateADSRSustain { source_id: sid.clone(), sustain: s });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "sustain");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "sustain");
                                 });
                                 let mut r = *release;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("R:").small());
                                     let path = format!("mod/{}/release", idx);
                                     if render_mod_learn_slider(ui, &mut r, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateADSRRelease { idx, release: r });
+                                        actions.modulation_actions.push(ModulationAction::UpdateADSRRelease { source_id: sid.clone(), release: r });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "release");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "release");
                                 });
                                 // ADSR envelope visualization
                                 let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width().min(180.0), 30.0), egui::Sense::hover());
@@ -351,7 +352,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 ];
                                 painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, mod_color)));
                                 // Current value indicator
-                                if let Some(&cur_val) = data.modulation_current_values.get(idx) {
+                                if let Some(&cur_val) = data.modulation_current_values.get(sid) {
                                     let y = bot - cur_val * (bot - top);
                                     painter.circle_filled(egui::pos2(rect.center().x, y), 3.0, mod_color);
                                 }
@@ -362,9 +363,9 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     ui.label(egui::RichText::new("Rate:").small());
                                     let path = format!("mod/{}/rate", idx);
                                     if render_mod_learn_slider(ui, &mut r, 0.1..=20.0, |s| s.logarithmic(true).suffix("Hz").show_value(true), &path, data, actions) {
-                                        actions.modulation_actions.push(ModulationAction::UpdateStepRate { idx, rate: r });
+                                        actions.modulation_actions.push(ModulationAction::UpdateStepRate { source_id: sid.clone(), rate: r });
                                     }
-                                    render_mod_on_mod_dropdown(ui, data, actions, idx, "rate");
+                                    render_mod_on_mod_dropdown(ui, data, actions, sid, "rate");
                                 });
                                 // Interpolation mode
                                 let interp_names = ["None", "Linear", "Smooth"];
@@ -387,14 +388,14 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                                         1 => StepInterpolation::Linear,
                                                         _ => StepInterpolation::Smooth,
                                                     };
-                                                    actions.modulation_actions.push(ModulationAction::UpdateStepInterpolation { idx, interpolation: new_interp });
+                                                    actions.modulation_actions.push(ModulationAction::UpdateStepInterpolation { source_id: sid.clone(), interpolation: new_interp });
                                                 }
                                             }
                                         });
                                 });
                                 let mut bp = *bipolar;
                                 if ui.checkbox(&mut bp, egui::RichText::new("Bipolar").small()).changed() {
-                                    actions.modulation_actions.push(ModulationAction::UpdateStepBipolar { idx, bipolar: bp });
+                                    actions.modulation_actions.push(ModulationAction::UpdateStepBipolar { source_id: sid.clone(), bipolar: bp });
                                 }
                                 // Step value sliders (compact)
                                 ui.horizontal_wrapped(|ui| {
@@ -436,7 +437,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             }
                                         } else {
                                             if ui.add_sized([12.0, 30.0], slider).on_hover_text(format!("Step {}", step_idx + 1)).changed() {
-                                                actions.modulation_actions.push(ModulationAction::UpdateStepValue { idx, step_idx, value: val });
+                                                actions.modulation_actions.push(ModulationAction::UpdateStepValue { source_id: sid.clone(), step_idx, value: val });
                                             }
                                         }
                                     }
@@ -511,30 +512,31 @@ pub(super) fn render_mod_on_mod_dropdown(
     ui: &mut egui::Ui,
     data: &UIData,
     actions: &mut UIActions,
-    target_idx: usize,
+    target_uuid: &str,
     param_name: &str,
 ) {
-    let key = format!("mod:{}:{}", target_idx, param_name);
+    let key = format!("mod:{}:{}", target_uuid, param_name);
     let has_assignment = data.modulation_assignments.get(&key).map_or(false, |v| !v.is_empty());
     let btn_text = if has_assignment { "🎛" } else { "🎛" };
     let btn_color = if has_assignment {
-        modulator_color(data.modulation_assignments.get(&key)
+        let source_id = data.modulation_assignments.get(&key)
             .and_then(|v| v.first())
-            .map(|a| a.source_idx)
-            .unwrap_or(0))
+            .map(|a| &a.source_id);
+        let color_idx = source_id.and_then(|sid| data.modulation_sources.iter().position(|e| &e.uuid == sid)).unwrap_or(0);
+        modulator_color(color_idx)
     } else {
         egui::Color32::GRAY
     };
 
-    egui::ComboBox::from_id_salt(format!("mom_{}_{}", target_idx, param_name))
+    egui::ComboBox::from_id_salt(format!("mom_{}_{}", target_uuid, param_name))
         .selected_text(egui::RichText::new(btn_text).color(btn_color).small())
         .width(30.0)
         .show_ui(ui, |ui| {
             ui.label(egui::RichText::new(format!("Modulate {}", param_name)).small().strong());
-            for (src_idx, src) in data.modulation_sources.iter().enumerate() {
-                if src_idx == target_idx { continue; } // can't modulate yourself
+            for (src_idx, entry) in data.modulation_sources.iter().enumerate() {
+                if entry.uuid == target_uuid { continue; } // can't modulate yourself
                 let color = modulator_color(src_idx);
-                let src_name = match src {
+                let src_name = match &entry.source {
                     ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
                     ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
                     ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
@@ -542,9 +544,9 @@ pub(super) fn render_mod_on_mod_dropdown(
                 };
                 if ui.button(egui::RichText::new(format!("+ {}", src_name)).color(color).small()).clicked() {
                     actions.modulation_actions.push(ModulationAction::AssignModOnMod {
-                        target_source_idx: target_idx,
+                        target_source_id: target_uuid.to_string(),
                         param_name: param_name.to_string(),
-                        modulator_idx: src_idx,
+                        modulator_id: entry.uuid.clone(),
                         amount: 1.0,
                     });
                 }
@@ -553,7 +555,7 @@ pub(super) fn render_mod_on_mod_dropdown(
                 ui.separator();
                 if ui.button(egui::RichText::new("x Remove").small().color(egui::Color32::from_rgb(255, 100, 100))).clicked() {
                     actions.modulation_actions.push(ModulationAction::RemoveModOnMod {
-                        target_source_idx: target_idx,
+                        target_source_id: target_uuid.to_string(),
                         param_name: param_name.to_string(),
                     });
                 }
