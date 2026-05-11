@@ -3,6 +3,17 @@
 use super::VardaApp;
 use crate::usecases::ui::UILayoutState;
 
+fn duration_config_to_spec(config: &crate::scene::DurationSpecConfig) -> crate::channel::DurationSpec {
+    use crate::channel::DurationSpec;
+    use crate::scene::DurationSpecConfig;
+    match config {
+        DurationSpecConfig::Beats(v) => DurationSpec::Beats(*v),
+        DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(*v),
+        DurationSpecConfig::Minutes(v) => DurationSpec::Minutes(*v),
+        DurationSpecConfig::Hours(v) => DurationSpec::Hours(*v),
+    }
+}
+
 impl VardaApp {
     /// Save the entire workspace to `.varda/`.
     /// `layout` is UI-consumer-owned state persisted in stage.json.
@@ -311,27 +322,20 @@ impl VardaApp {
         // (f) Transition sequences — cheap clone
         self.mixer.transition_sequences_mut().clear();
         for seq_config in &target.transition_sequences {
-            use crate::channel::DurationSpec;
             use crate::mixer::{TransitionSequence, TransitionStep, StepKind, SequencerState};
-            use crate::scene::{TransitionStepConfig, DurationSpecConfig};
+            use crate::scene::TransitionStepConfig;
             let steps = seq_config.steps.iter().map(|step| {
                 let kind = match step {
                     TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
                         StepKind::Fade {
                             from_ch: *from_ch, to_ch: *to_ch,
-                            duration: match duration {
-                                DurationSpecConfig::Beats(v) => DurationSpec::Beats(*v),
-                                DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(*v),
-                            },
+                            duration: duration_config_to_spec(duration),
                             easing: (*easing).into(),
                             transition_shader: transition_shader.clone(),
                         }
                     }
                     TransitionStepConfig::Wait { duration } => StepKind::Wait {
-                        duration: match duration {
-                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(*v),
-                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(*v),
-                        },
+                        duration: duration_config_to_spec(duration),
                     },
                     TransitionStepConfig::GoTo { step_index } => StepKind::GoTo { step_index: *step_index },
                 };
@@ -375,21 +379,15 @@ impl VardaApp {
 
         // Patch auto-transition config
         if let Some(at_config) = &config.auto_transition {
-            use crate::channel::{DeckAutoTransition, DurationSpec, TransitionTrigger};
+            use crate::channel::{DeckAutoTransition, TransitionTrigger};
             let mut at = slot.auto_transition.take().unwrap_or_else(DeckAutoTransition::new);
             at.enabled = at_config.enabled;
             at.trigger = match at_config.trigger {
                 crate::scene::TriggerConfig::Timer => TransitionTrigger::Timer,
                 crate::scene::TriggerConfig::ClipEnd => TransitionTrigger::ClipEnd,
             };
-            at.play_duration = match at_config.play_duration {
-                crate::scene::DurationSpecConfig::Beats(v) => DurationSpec::Beats(v),
-                crate::scene::DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(v),
-            };
-            at.transition_duration = match at_config.transition_duration {
-                crate::scene::DurationSpecConfig::Beats(v) => DurationSpec::Beats(v),
-                crate::scene::DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(v),
-            };
+            at.play_duration = duration_config_to_spec(&at_config.play_duration);
+            at.transition_duration = duration_config_to_spec(&at_config.transition_duration);
             at.transition_shader_name = at_config.transition_shader.clone();
             slot.auto_transition = Some(at);
 

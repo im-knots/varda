@@ -230,6 +230,31 @@ use crate::mixer::Mixer;
 use crate::renderer::context::{OutputTarget, UnifiedOutput, RecordingCodec};
 use crate::scene::*;
 
+// ── DurationSpec ↔ DurationSpecConfig helpers ───────────────────────
+
+fn duration_spec_to_config(spec: &crate::channel::DurationSpec) -> crate::scene::DurationSpecConfig {
+    use crate::channel::DurationSpec;
+    use crate::scene::DurationSpecConfig;
+    match spec {
+        DurationSpec::Beats(v) => DurationSpecConfig::Beats(*v),
+        DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(*v),
+        DurationSpec::Minutes(v) => DurationSpecConfig::Minutes(*v),
+        DurationSpec::Hours(v) => DurationSpecConfig::Hours(*v),
+    }
+}
+
+fn duration_config_to_spec(config: &crate::scene::DurationSpecConfig) -> crate::channel::DurationSpec {
+    use crate::channel::DurationSpec;
+    use crate::scene::DurationSpecConfig;
+    match config {
+        DurationSpecConfig::Beats(v) => DurationSpec::Beats(*v),
+        DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(*v),
+        DurationSpecConfig::Minutes(v) => DurationSpec::Minutes(*v),
+        DurationSpecConfig::Hours(v) => DurationSpec::Hours(*v),
+    }
+}
+
+
 /// Build a SceneConfig snapshot from live app state (show-specific: channels, effects, modulation).
 pub fn snapshot_scene(
     mixer: &Mixer,
@@ -304,21 +329,15 @@ pub fn snapshot_scene(
             let auto_transition = slot.auto_transition.as_ref()
                 .filter(|at| at.enabled)
                 .map(|at| {
-                    use crate::channel::{DurationSpec, TransitionTrigger};
+                    use crate::channel::TransitionTrigger;
                     AutoTransitionConfig {
                         enabled: at.enabled,
                         trigger: match at.trigger {
                             TransitionTrigger::Timer => TriggerConfig::Timer,
                             TransitionTrigger::ClipEnd => TriggerConfig::ClipEnd,
                         },
-                        play_duration: match at.play_duration {
-                            DurationSpec::Beats(v) => DurationSpecConfig::Beats(v),
-                            DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(v),
-                        },
-                        transition_duration: match at.transition_duration {
-                            DurationSpec::Beats(v) => DurationSpecConfig::Beats(v),
-                            DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(v),
-                        },
+                        play_duration: duration_spec_to_config(&at.play_duration),
+                        transition_duration: duration_spec_to_config(&at.transition_duration),
                         transition_shader: at.transition_shader_name.clone(),
                     }
                 });
@@ -370,8 +389,7 @@ pub fn snapshot_scene(
 
     // Snapshot transition sequences
     let transition_sequences = mixer.transition_sequences().iter().map(|seq| {
-        use crate::channel::DurationSpec;
-        use crate::scene::{TransitionSequenceConfig, TransitionStepConfig, DurationSpecConfig};
+        use crate::scene::{TransitionSequenceConfig, TransitionStepConfig};
         TransitionSequenceConfig {
             name: seq.name.clone(),
             enabled: seq.enabled,
@@ -380,20 +398,14 @@ pub fn snapshot_scene(
                     TransitionStepConfig::Fade {
                         from_ch: *from_ch,
                         to_ch: *to_ch,
-                        duration: match duration {
-                            DurationSpec::Beats(v) => DurationSpecConfig::Beats(*v),
-                            DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(*v),
-                        },
+                        duration: duration_spec_to_config(duration),
                         easing: (*easing).into(),
                         transition_shader: transition_shader.clone(),
                     }
                 }
                 crate::mixer::StepKind::Wait { duration } => {
                     TransitionStepConfig::Wait {
-                        duration: match duration {
-                            DurationSpec::Beats(v) => DurationSpecConfig::Beats(*v),
-                            DurationSpec::Seconds(v) => DurationSpecConfig::Seconds(*v),
-                        },
+                        duration: duration_spec_to_config(duration),
                     }
                 }
                 crate::mixer::StepKind::GoTo { step_index } => {
@@ -587,21 +599,15 @@ pub fn restore_scene(
 
                     // Restore auto-transition config
                     if let Some(at_config) = &deck_config.auto_transition {
-                        use crate::channel::{DeckAutoTransition, DurationSpec, TransitionTrigger};
+                        use crate::channel::{DeckAutoTransition, TransitionTrigger};
                         let mut at = DeckAutoTransition::new();
                         at.enabled = at_config.enabled;
                         at.trigger = match at_config.trigger {
                             TriggerConfig::Timer => TransitionTrigger::Timer,
                             TriggerConfig::ClipEnd => TransitionTrigger::ClipEnd,
                         };
-                        at.play_duration = match at_config.play_duration {
-                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(v),
-                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(v),
-                        };
-                        at.transition_duration = match at_config.transition_duration {
-                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(v),
-                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(v),
-                        };
+                        at.play_duration = duration_config_to_spec(&at_config.play_duration);
+                        at.transition_duration = duration_config_to_spec(&at_config.transition_duration);
                         at.transition_shader_name = at_config.transition_shader.clone();
                         slot.auto_transition = Some(at);
 
@@ -689,29 +695,22 @@ pub fn restore_scene(
 
     // Restore transition sequences
     for seq_config in &config.transition_sequences {
-        use crate::channel::DurationSpec;
         use crate::mixer::{TransitionSequence, TransitionStep, StepKind, SequencerState};
-        use crate::scene::{TransitionStepConfig, DurationSpecConfig};
+        use crate::scene::TransitionStepConfig;
         let steps = seq_config.steps.iter().map(|step| {
             let kind = match step {
                 TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
                     StepKind::Fade {
                         from_ch: *from_ch,
                         to_ch: *to_ch,
-                        duration: match duration {
-                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(*v),
-                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(*v),
-                        },
+                        duration: duration_config_to_spec(duration),
                         easing: (*easing).into(),
                         transition_shader: transition_shader.clone(),
                     }
                 }
                 TransitionStepConfig::Wait { duration } => {
                     StepKind::Wait {
-                        duration: match duration {
-                            DurationSpecConfig::Beats(v) => DurationSpec::Beats(*v),
-                            DurationSpecConfig::Seconds(v) => DurationSpec::Seconds(*v),
-                        },
+                        duration: duration_config_to_spec(duration),
                     }
                 }
                 TransitionStepConfig::GoTo { step_index } => {

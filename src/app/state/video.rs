@@ -77,27 +77,25 @@ impl VardaApp {
                             at.trigger = if *clip_end { TransitionTrigger::ClipEnd } else { TransitionTrigger::Timer };
                         }
                         AutoTransitionAction::SetPlayDuration(val) => {
-                            at.play_duration = match at.play_duration {
-                                DurationSpec::Beats(_) => DurationSpec::Beats(*val),
-                                DurationSpec::Seconds(_) => DurationSpec::Seconds(*val),
-                            };
+                            at.play_duration.set_value(*val);
                         }
                         AutoTransitionAction::TogglePlayDurationUnit => {
                             at.play_duration = match at.play_duration {
                                 DurationSpec::Beats(v) => DurationSpec::Seconds(v),
                                 DurationSpec::Seconds(v) => DurationSpec::Beats(v),
+                                DurationSpec::Minutes(v) => DurationSpec::Beats(v),
+                                DurationSpec::Hours(v) => DurationSpec::Beats(v),
                             };
                         }
                         AutoTransitionAction::SetTransitionDuration(val) => {
-                            at.transition_duration = match at.transition_duration {
-                                DurationSpec::Beats(_) => DurationSpec::Beats(*val),
-                                DurationSpec::Seconds(_) => DurationSpec::Seconds(*val),
-                            };
+                            at.transition_duration.set_value(*val);
                         }
                         AutoTransitionAction::ToggleTransitionDurationUnit => {
                             at.transition_duration = match at.transition_duration {
                                 DurationSpec::Beats(v) => DurationSpec::Seconds(v),
                                 DurationSpec::Seconds(v) => DurationSpec::Beats(v),
+                                DurationSpec::Minutes(v) => DurationSpec::Beats(v),
+                                DurationSpec::Hours(v) => DurationSpec::Beats(v),
                             };
                         }
                         AutoTransitionAction::SetTransitionShader(name_opt) => {

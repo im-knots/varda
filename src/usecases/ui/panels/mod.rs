@@ -4,7 +4,7 @@
 //! The `render_ui` function orchestrates the top-level layout.
 
 mod geometry;
-mod utils;
+pub(crate) mod utils;
 mod library;
 mod notifications_overlay;
 mod right_panel;
@@ -292,6 +292,9 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
     // === EFFECT REORDER DnD: deferred drop handler ===
     handle_effect_dnd(ctx, data, &mut actions);
 
+    // === SEQUENCE STEP REORDER DnD: deferred drop handler ===
+    handle_sequence_step_dnd(ctx, data, &mut actions);
+
     // === NOTIFICATION OVERLAY ===
     render_notifications(ctx, &data.notifications, &mut actions);
 
@@ -353,6 +356,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
     let had_payload_id = egui::Id::new("__lib_dnd_had_payload");
     let hover_ch_id = egui::Id::new("__lib_dnd_hover_ch");
     let hover_fx_target_id = egui::Id::new("__lib_dnd_hover_fx_target");
+    let on_new_ch_id = egui::Id::new("__lib_dnd_on_new_ch_zone");
     let has_payload = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ctx);
 
     if has_payload {
@@ -364,6 +368,20 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     if rect.contains(pos) {
                         found_ch = Some(ch_idx);
                         break;
+                    }
+                }
+            }
+
+            // Check if hovering over either new-channel drop zone (left=0, right=1)
+            let mut on_new_ch = false;
+            if found_ch.is_none() {
+                for side in 0..2 {
+                    let key = egui::Id::new("new_ch_drop_rect").with(side);
+                    if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
+                        if rect.contains(pos) {
+                            on_new_ch = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -395,6 +413,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
             ctx.memory_mut(|mem| {
                 mem.data.insert_temp(hover_ch_id, found_ch);
                 mem.data.insert_temp(hover_fx_target_id, found_fx);
+                mem.data.insert_temp::<bool>(on_new_ch_id, on_new_ch);
                 mem.data.insert_temp::<bool>(had_payload_id, true);
             });
         }
@@ -403,6 +422,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
         if had_payload {
             let hover_ch: Option<usize> = ctx.memory(|mem| mem.data.get_temp(hover_ch_id).unwrap_or(None));
             let hover_fx: Option<(String, usize, usize)> = ctx.memory(|mem| mem.data.get_temp(hover_fx_target_id).unwrap_or(None));
+            let on_new_ch_zone: bool = ctx.memory(|mem| mem.data.get_temp(on_new_ch_id).unwrap_or(false));
 
             if let Some(ch_idx) = hover_ch {
                 let gen_key = egui::Id::new("__lib_dnd_gen_idx");
@@ -447,6 +467,46 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     log::info!("Library drop (deferred): deck preset {} -> ch{}", preset_idx, ch_idx);
                     actions.deck_preset_to_add = Some((ch_idx, preset_idx));
                 }
+            } else if on_new_ch_zone {
+                // Dropped on empty space — create a new channel and add the source to it
+                let new_ch_idx = data.channels.len();
+                actions.add_channel = true;
+
+                let gen_key = egui::Id::new("__lib_dnd_gen_idx");
+                if let Some(gen_idx) = ctx.memory(|mem| mem.data.get_temp::<usize>(gen_key)) {
+                    log::info!("Library drop (deferred): generator {} -> new ch{}", gen_idx, new_ch_idx);
+                    actions.shader_to_add = Some((new_ch_idx, gen_idx));
+                }
+
+                let cam_key = egui::Id::new("__lib_dnd_cam_id");
+                if let Some(cam_id) = ctx.memory(|mem| mem.data.get_temp::<crate::camera::CameraId>(cam_key)) {
+                    log::info!("Library drop (deferred): camera {} -> new ch{}", cam_id, new_ch_idx);
+                    actions.camera_to_add = Some((new_ch_idx, cam_id));
+                }
+
+                let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
+                if let Some(ndi_name) = ctx.memory(|mem| mem.data.get_temp::<String>(ndi_key)) {
+                    log::info!("Library drop (deferred): NDI '{}' -> new ch{}", ndi_name, new_ch_idx);
+                    actions.ndi_to_add = Some((new_ch_idx, ndi_name));
+                }
+
+                let syph_key = egui::Id::new("__lib_dnd_syph_name");
+                if let Some(syph_name) = ctx.memory(|mem| mem.data.get_temp::<String>(syph_key)) {
+                    log::info!("Library drop (deferred): Syphon '{}' -> new ch{}", syph_name, new_ch_idx);
+                    actions.syphon_to_add = Some((new_ch_idx, syph_name));
+                }
+
+                let srt_key = egui::Id::new("__lib_dnd_srt_config");
+                if let Some((url, mode)) = ctx.memory(|mem| mem.data.get_temp::<(String, crate::srt::SrtMode)>(srt_key)) {
+                    log::info!("Library drop (deferred): SRT '{}' ({:?}) -> new ch{}", url, mode, new_ch_idx);
+                    actions.srt_to_add = Some((new_ch_idx, url, mode));
+                }
+
+                let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
+                if let Some(preset_idx) = ctx.memory(|mem| mem.data.get_temp::<usize>(deck_preset_key)) {
+                    log::info!("Library drop (deferred): deck preset {} -> new ch{}", preset_idx, new_ch_idx);
+                    actions.deck_preset_to_add = Some((new_ch_idx, preset_idx));
+                }
             }
 
             // Channel preset: if dropped on a channel, fill into it; otherwise create new
@@ -488,6 +548,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 mem.data.remove::<bool>(had_payload_id);
                 mem.data.remove::<Option<usize>>(hover_ch_id);
                 mem.data.remove::<Option<(String, usize, usize)>>(hover_fx_target_id);
+                mem.data.remove::<bool>(on_new_ch_id);
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_gen_idx"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
                 mem.data.remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));
@@ -593,6 +654,48 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                 mem.data.remove::<bool>(had_eff_id);
                 mem.data.remove::<Option<(String, usize)>>(hover_dz_id);
                 mem.data.remove::<EffectDrag>(src_key);
+            });
+        }
+    }
+}
+
+/// Deferred DnD handler for reordering steps within a sequence.
+/// Follows the same pattern as effect DnD: source is stored in egui memory
+/// during drag (since DragAndDrop::payload() is None after mouse release).
+fn handle_sequence_step_dnd(ctx: &egui::Context, _data: &UIData, actions: &mut UIActions) {
+    use super::SequenceStepDrag;
+    let had_id = egui::Id::new("__seq_step_dnd_had");
+    let target_id = egui::Id::new("__seq_step_dnd_target");
+    let src_id = egui::Id::new("__seq_step_dnd_src");
+    let has_payload = egui::DragAndDrop::has_payload_of_type::<SequenceStepDrag>(ctx);
+
+    if has_payload {
+        ctx.memory_mut(|mem| {
+            mem.data.insert_temp::<bool>(had_id, true);
+        });
+    } else {
+        let had: bool = ctx.memory(|mem| mem.data.get_temp(had_id).unwrap_or(false));
+        if had {
+            // Payload was just released — read source from memory (not DragAndDrop)
+            let src: Option<SequenceStepDrag> = ctx.memory(|mem| mem.data.get_temp(src_id));
+            let target: Option<usize> = ctx.memory(|mem| mem.data.get_temp(target_id));
+
+            if let (Some(payload), Some(to)) = (src, target) {
+                // `to` is the gap position in the original list.
+                // After remove(from), indices shift: adjust for insert.
+                let insert_idx = if to > payload.step_idx { to - 1 } else { to };
+                if insert_idx != payload.step_idx {
+                    actions.sequence_actions.push(super::SequenceAction::MoveStep {
+                        seq_idx: payload.seq_idx,
+                        from: payload.step_idx,
+                        to: insert_idx,
+                    });
+                }
+            }
+            ctx.memory_mut(|mem| {
+                mem.data.remove::<bool>(had_id);
+                mem.data.remove::<usize>(target_id);
+                mem.data.remove::<SequenceStepDrag>(src_id);
             });
         }
     }

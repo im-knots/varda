@@ -122,13 +122,77 @@ pub(super) fn render_effect_drag_ghost(ui: &mut egui::Ui, ghost_id: egui::Id, pa
 }
 
 
-/// Channel accent colors
+/// Channel accent colors — infinite non-colliding colors via binary hue subdivision.
+///
+/// Hues are placed by halving the hue wheel: ch0 gets one hue, ch1 the opposite,
+/// ch2–3 fill the quarter-points, ch4–7 the eighth-points, etc. This guarantees
+/// maximum hue separation for any channel count. Each subdivision "ring" gets a
+/// distinct saturation/lightness style so nearby hues in later rings still look
+/// clearly different (vivid-dark vs pastel vs saturated, etc.).
 pub(super) fn channel_color(ch_idx: usize) -> egui::Color32 {
-    match ch_idx {
-        0 => egui::Color32::from_rgb(160, 100, 255), // Purple — Ch 0
-        1 => egui::Color32::from_rgb(100, 160, 255), // Blue — Ch 1
-        2 => egui::Color32::from_rgb(255, 160, 60),  // Orange
-        3 => egui::Color32::from_rgb(80, 200, 120),   // Green
-        _ => egui::Color32::from_rgb(180, 180, 180),  // Gray for extras
+    const HUE_OFFSET: f32 = 0.76; // start at purple to match original Ch 0
+
+    // Saturation/lightness per ring — strongly varied so same-region hues differ
+    const RING_STYLES: [(f32, f32); 6] = [
+        (0.75, 0.58), // ring 0: vivid mid
+        (0.70, 0.65), // ring 1: vivid light
+        (0.80, 0.50), // ring 2: saturated dark
+        (0.55, 0.72), // ring 3: soft light
+        (0.85, 0.45), // ring 4: very saturated dark
+        (0.50, 0.75), // ring 5+: pastel
+    ];
+
+    let (ring, hue_frac) = hue_subdivision(ch_idx);
+    let hue = (HUE_OFFSET + hue_frac) % 1.0;
+    let (sat, lit) = RING_STYLES[ring.min(RING_STYLES.len() - 1)];
+
+    let (r, g, b) = hsl_to_rgb(hue, sat, lit);
+    egui::Color32::from_rgb(
+        (r * 255.0) as u8,
+        (g * 255.0) as u8,
+        (b * 255.0) as u8,
+    )
+}
+
+/// Binary subdivision of the hue wheel. Returns (ring, hue_fraction).
+/// Ring 0 → 1 slot (0/1), ring 1 → 1 slot (1/2), ring k≥2 → 2^(k-1) slots
+/// at odd multiples of 1/2^k. Guarantees optimal minimum hue distance.
+pub(crate) fn hue_subdivision(idx: usize) -> (usize, f32) {
+    if idx == 0 {
+        return (0, 0.0);
     }
+    let mut remaining = idx - 1;
+    let mut ring: usize = 1;
+    let mut ring_size: usize = 1;
+    while remaining >= ring_size {
+        remaining -= ring_size;
+        ring += 1;
+        ring_size = 1 << (ring - 1); // 1, 2, 4, 8, …
+    }
+    let denom = 1u32 << ring as u32;            // 2, 4, 8, 16, …
+    let numerator = (2 * remaining + 1) as u32; // odd: 1, 3, 5, 7, …
+    (ring, numerator as f32 / denom as f32)
+}
+
+/// Convert HSL (all 0.0–1.0) to RGB (all 0.0–1.0).
+pub(crate) fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+    if s == 0.0 {
+        return (l, l, l);
+    }
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    (
+        hue_to_channel(p, q, h + 1.0 / 3.0),
+        hue_to_channel(p, q, h),
+        hue_to_channel(p, q, h - 1.0 / 3.0),
+    )
+}
+
+fn hue_to_channel(p: f32, q: f32, mut t: f32) -> f32 {
+    if t < 0.0 { t += 1.0; }
+    if t > 1.0 { t -= 1.0; }
+    if t < 1.0 / 6.0 { return p + (q - p) * 6.0 * t; }
+    if t < 1.0 / 2.0 { return q; }
+    if t < 2.0 / 3.0 { return p + (q - p) * (2.0 / 3.0 - t) * 6.0; }
+    p
 }

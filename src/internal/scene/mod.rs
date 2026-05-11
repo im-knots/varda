@@ -186,6 +186,10 @@ pub enum DurationSpecConfig {
     Beats(f64),
     #[serde(rename = "seconds")]
     Seconds(f64),
+    #[serde(rename = "minutes")]
+    Minutes(f64),
+    #[serde(rename = "hours")]
+    Hours(f64),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

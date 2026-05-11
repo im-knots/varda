@@ -153,6 +153,14 @@ impl VardaApp {
                     if let ModulationSource::StepSequencer { bipolar: ref mut b, .. } = source { *b = *bipolar; }
                 }
             }
+            ModulationAction::SetStepCount { source_id, count } => {
+                let count = (*count).max(2).min(64);
+                if let Some(source) = mixer.modulation_mut().source_mut(source_id) {
+                    if let ModulationSource::StepSequencer { steps, .. } = source {
+                        steps.resize(count, 0.0);
+                    }
+                }
+            }
             ModulationAction::AssignModOnMod { target_source_id, param_name, modulator_id, amount } => {
                 mixer.modulation_mut().assign_mod_on_mod(target_source_id, param_name, modulator_id, *amount);
                 log::info!("Assigned mod-on-mod: {} modulates {} param {} (amount {})", modulator_id, target_source_id, param_name, amount);

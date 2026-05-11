@@ -145,7 +145,7 @@ pub fn render_params(
                     if !modulation_sources.is_empty() {
                         if let (Some(assign_fn), Some(remove_fn)) = (make_mod_assign, make_mod_remove) {
                             egui::ComboBox::from_id_salt(format!("mod_{}_{}", id_prefix, param.name))
-                                .selected_text("🎛")
+                                .selected_text("〰")
                                 .width(30.0)
                                 .show_ui(ui, |ui| {
                                     ui.label(egui::RichText::new("Assign Modulation").small().strong());
@@ -306,7 +306,7 @@ pub fn render_effect_params(
                     if !modulation_sources.is_empty() {
                         if let (Some(assign_fn), Some(remove_fn)) = (make_mod_assign, make_mod_remove) {
                             egui::ComboBox::from_id_salt(format!("mod_{}_{}", id_prefix, param.name))
-                                .selected_text("🎛")
+                                .selected_text("〰")
                                 .width(30.0)
                                 .show_ui(ui, |ui| {
                                     ui.label(egui::RichText::new("Assign Modulation").small().strong());

@@ -53,17 +53,21 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
             });
         }
 
-        ui.add_space(10.0);
+        // Hint: click preview to see master effect chain
+        let hint_resp = ui.add(
+            egui::Label::new(
+                egui::RichText::new("Click preview to edit master effects")
+                    .small()
+                    .weak()
+            ).sense(egui::Sense::click()),
+        );
+        if hint_resp.clicked() {
+            actions.select_master = true;
+        }
 
-        // === Collapsible sections (like the library panel) ===
+        ui.add_space(6.0);
 
-        egui::CollapsingHeader::new(egui::RichText::new("🔮 Master Effects").strong())
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("(Apply to final composite)").small().weak());
-            });
-
-        ui.add_space(4.0);
+        // === Collapsible sections ===
 
         egui::CollapsingHeader::new(egui::RichText::new("〰 Modulation").strong())
             .default_open(false)

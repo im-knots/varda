@@ -667,10 +667,7 @@ impl VardaApp {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             match &mut step.kind {
                                 StepKind::Fade { duration, .. } | StepKind::Wait { duration } => {
-                                    *duration = match *duration {
-                                        DurationSpec::Beats(_) => DurationSpec::Beats(*value),
-                                        DurationSpec::Seconds(_) => DurationSpec::Seconds(*value),
-                                    };
+                                    duration.set_value(*value);
                                 }
                                 _ => {}
                             }
@@ -682,10 +679,20 @@ impl VardaApp {
                         if let Some(step) = seq.steps.get_mut(*step_idx) {
                             match &mut step.kind {
                                 StepKind::Fade { duration, .. } | StepKind::Wait { duration } => {
-                                    *duration = match *duration {
-                                        DurationSpec::Beats(v) => DurationSpec::Seconds(v),
-                                        DurationSpec::Seconds(v) => DurationSpec::Beats(v),
-                                    };
+                                    let next_unit = duration.unit().next();
+                                    *duration = DurationSpec::from_value_unit(duration.value(), next_unit);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                SequenceAction::SetStepDurationUnit { seq_idx, step_idx, unit } => {
+                    if let Some(seq) = mixer.transition_sequences_mut().get_mut(*seq_idx) {
+                        if let Some(step) = seq.steps.get_mut(*step_idx) {
+                            match &mut step.kind {
+                                StepKind::Fade { duration, .. } | StepKind::Wait { duration } => {
+                                    *duration = DurationSpec::from_value_unit(duration.value(), *unit);
                                 }
                                 _ => {}
                             }

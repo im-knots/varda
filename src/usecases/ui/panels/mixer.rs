@@ -22,7 +22,15 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 
     // Fixed widths — channels and mixer never scale with window resize
     let ch_card_width = 150.0_f32;
-    let center_width = 160.0_f32;
+    // Mixer width scales with channel count (30px per fader + 4px spacing + frame padding)
+    let per_fader = 30.0_f32;
+    let fader_spacing = 4.0_f32;
+    let frame_pad = 6.0 * 2.0; // inner_margin on each side
+    let mixer_width = (num_channels as f32 * per_fader
+        + (num_channels.saturating_sub(1)) as f32 * fader_spacing
+        + frame_pad)
+        .max(160.0); // minimum 160px for header/crossfader controls
+    let center_width = mixer_width;
     let preset_hint_threshold = 80.0;
 
     // Channels always take priority — compute how much space they need
@@ -51,34 +59,19 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     ui.separator();
                     ui.vertical(|ui| {
                         ui.set_width(center_width);
-                        let mixer_width = 160.0;
-                        let mixer_pad = ((center_width - mixer_width) / 2.0).max(0.0);
-                        // Mixer box — centered at 160px
-                        ui.horizontal(|ui| {
-                            ui.add_space(mixer_pad);
-                            ui.vertical(|ui| {
-                                ui.set_width(mixer_width);
-                                render_mixer_box(ui, data, actions);
-                            });
-                        });
-                        // Sequence builder — hard-bounded to center_width, centered
+                        render_mixer_box(ui, data, actions);
+                        // Sequence builder — same width as mixer
                         if has_sequences {
                             ui.add_space(4.0);
-                            ui.allocate_ui(egui::vec2(center_width, ui.available_height()), |ui| {
-                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                    render_sequence_builder(ui, data, actions);
-                                });
-                            });
+                            render_sequence_builder(ui, data, actions);
                         }
                         // + Sequence button — centered below mixer
                         if data.channel_count >= 2 {
                             ui.add_space(4.0);
-                            ui.allocate_ui(egui::vec2(center_width, 20.0), |ui| {
-                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                    if ui.small_button("+ Sequence").on_hover_text("Create a new transition sequence").clicked() {
-                                        actions.sequence_actions.push(SequenceAction::Create);
-                                    }
-                                });
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                if ui.small_button("+ Sequence").on_hover_text("Create a new transition sequence").clicked() {
+                                    actions.sequence_actions.push(SequenceAction::Create);
+                                }
                             });
                         }
                     });
@@ -109,7 +102,7 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             ui.allocate_ui(egui::vec2(side_width, panel_height), |ui| {
                 ui.horizontal_top(|ui| {
                     if empty_each > preset_hint_threshold {
-                        render_channel_preset_hint(ui, empty_each);
+                        render_new_channel_drop_zone(ui, empty_each, data, actions, 0);
                     } else if empty_each > 1.0 {
                         ui.add_space(empty_each);
                     }
@@ -130,34 +123,19 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
                     ui.separator();
-                    let mixer_width = 160.0;
-                    let mixer_pad = ((center_width - mixer_width) / 2.0).max(0.0);
-                    // Mixer box — centered at 160px
-                    ui.horizontal(|ui| {
-                        ui.add_space(mixer_pad);
-                        ui.vertical(|ui| {
-                            ui.set_width(mixer_width);
-                            render_mixer_box(ui, data, actions);
-                        });
-                    });
-                    // Sequence builder — hard-bounded to center_width, centered
+                    render_mixer_box(ui, data, actions);
+                    // Sequence builder — same width as mixer
                     if has_sequences {
                         ui.add_space(4.0);
-                        ui.allocate_ui(egui::vec2(center_width, ui.available_height()), |ui| {
-                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                render_sequence_builder(ui, data, actions);
-                            });
-                        });
+                        render_sequence_builder(ui, data, actions);
                     }
                     // + Sequence button — centered below mixer
                     if data.channel_count >= 2 {
                         ui.add_space(4.0);
-                        ui.allocate_ui(egui::vec2(center_width, 20.0), |ui| {
-                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                if ui.small_button("+ Sequence").on_hover_text("Create a new transition sequence").clicked() {
-                                    actions.sequence_actions.push(SequenceAction::Create);
-                                }
-                            });
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                            if ui.small_button("+ Sequence").on_hover_text("Create a new transition sequence").clicked() {
+                                actions.sequence_actions.push(SequenceAction::Create);
+                            }
                         });
                     }
                 },
@@ -177,7 +155,7 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                         }
                     }
                     if empty_each > preset_hint_threshold {
-                        render_channel_preset_hint(ui, empty_each);
+                        render_new_channel_drop_zone(ui, empty_each, data, actions, 1);
                     }
                 });
             });
@@ -445,15 +423,28 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
     let ch_idx = ch.ch_idx;
 
     ui.push_id(format!("ch_{}", ch_idx), |ui| {
-        let has_library_drag = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ui.ctx());
-        let is_hovering = has_library_drag && ui.rect_contains_pointer(ui.max_rect());
+        // Detect relevant drags: library sources (not Effect) or deck moves
+        let has_source_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+            .map(|p| !matches!(&*p, LibraryDrag::Effect(_)))
+            .unwrap_or(false);
+        let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx());
+        let has_relevant_drag = has_source_drag || has_deck_drag;
+        let is_hovering = has_relevant_drag && ui.rect_contains_pointer(ui.max_rect());
         let is_ch_selected = data.selected_channel == Some(ch_idx);
 
-        // Always show a bordered box — highlight when selected or drag-hovering
+        // Always show a bordered box — glow when a relevant drag is active, intensify on hover
         let frame = if is_hovering {
+            // Direct hover — strong highlight
+            egui::Frame::default()
+                .fill(accent.linear_multiply(0.15))
+                .stroke(egui::Stroke::new(2.0, accent))
+                .corner_radius(4.0)
+                .inner_margin(2.0)
+        } else if has_relevant_drag {
+            // Drag active but not hovering this channel — subtle glow
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.08))
-                .stroke(egui::Stroke::new(2.0, accent.linear_multiply(0.5)))
+                .stroke(egui::Stroke::new(1.5, accent.linear_multiply(0.5)))
                 .corner_radius(4.0)
                 .inner_margin(2.0)
         } else if is_ch_selected {
@@ -526,8 +517,14 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
                 .scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true })
                 .show(ui, |ui| {
                 if ch.decks.is_empty() {
+                    let hint = if is_hovering {
+                        "➕ Drop here"
+                    } else {
+                        "No decks — drag source here"
+                    };
+                    let hint_color = if is_hovering { accent } else { egui::Color32::from_rgb(120, 120, 130) };
                     let empty_resp = ui.add(
-                        egui::Label::new(egui::RichText::new("No decks — drag generator here").weak().small())
+                        egui::Label::new(egui::RichText::new(hint).weak().small().color(hint_color))
                             .sense(egui::Sense::click()),
                     );
                     if empty_resp.clicked() {
@@ -537,6 +534,15 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
                 for deck in &ch.decks {
                     render_deck_thumbnail(ui, ch_idx, deck, accent, data, actions);
                     ui.add_space(2.0);
+                }
+
+                // Drop hint when dragging over a channel with existing decks
+                if is_hovering && !ch.decks.is_empty() {
+                    ui.label(
+                        egui::RichText::new("➕ Drop to add deck")
+                            .small()
+                            .color(accent),
+                    );
                 }
 
                 // Remaining space — clickable to select channel + drop zone for deck moves
@@ -592,26 +598,51 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
     });
 }
 
-/// Render a placeholder hint in empty side space suggesting to drag channel presets.
-/// `max_width` is the total available space — the hint fills it exactly.
-fn render_channel_preset_hint(ui: &mut egui::Ui, max_width: f32) {
-    let has_preset_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
-        .map(|p| matches!(&*p, LibraryDrag::ChannelPreset(_)))
+/// Render a drop zone in empty mixer side space that creates a new channel on drop.
+/// Accepts library drags (except Effect) and deck drags from existing channels.
+/// `side` distinguishes left (0) vs right (1) so both zones can coexist.
+fn render_new_channel_drop_zone(ui: &mut egui::Ui, max_width: f32, data: &UIData, actions: &mut UIActions, side: usize) {
+    let has_library_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+        .map(|p| !matches!(&*p, LibraryDrag::Effect(_)))
         .unwrap_or(false);
-    let stroke = if has_preset_drag {
-        egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 200, 255))
-    } else {
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 80))
-    };
-    let fill = if has_preset_drag {
-        egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20)
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    // Use allocate_ui to hard-cap the hint width, preventing overflow
+    let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx());
+    let relevant_drag = has_library_drag || has_deck_drag;
+    // Pre-compute the zone rect from the cursor — ui.max_rect() is too broad
+    // (it spans the full remaining horizontal space including adjacent channels)
     let hint_height = ui.available_height().max(60.0);
-    ui.allocate_ui(egui::vec2(max_width, hint_height), |ui| {
-        egui::Frame::default()
+    let zone_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(max_width, hint_height));
+    let is_hovering = relevant_drag && ui.ctx().input(|i| {
+        i.pointer.hover_pos().map_or(false, |p| zone_rect.contains(p))
+    });
+
+    let accent = egui::Color32::from_rgb(100, 200, 255);
+    let (stroke, fill, label_text, label_color) = if is_hovering {
+        // Direct hover — strong highlight (matches channel hover intensity)
+        (
+            egui::Stroke::new(2.0, accent),
+            accent.linear_multiply(0.15),
+            "➕ Drop to create channel",
+            accent,
+        )
+    } else if relevant_drag {
+        // Drag active, not hovering — subtle glow (matches channel ambient glow)
+        (
+            egui::Stroke::new(1.5, accent.linear_multiply(0.5)),
+            accent.linear_multiply(0.08),
+            "➕ Drop to create channel",
+            accent.linear_multiply(0.5),
+        )
+    } else {
+        // Idle
+        (
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 80)),
+            egui::Color32::TRANSPARENT,
+            "➕ Drop here to add channel",
+            egui::Color32::from_rgb(100, 100, 120),
+        )
+    };
+    let resp = ui.allocate_ui(egui::vec2(max_width, hint_height), |ui| {
+        let frame_resp = egui::Frame::default()
             .inner_margin(8.0)
             .corner_radius(6.0)
             .fill(fill)
@@ -620,14 +651,30 @@ fn render_channel_preset_hint(ui: &mut egui::Ui, max_width: f32) {
                 ui.set_min_height(hint_height - 16.0);
                 ui.centered_and_justified(|ui| {
                     ui.label(
-                        egui::RichText::new("📂 Drag channel presets here")
+                        egui::RichText::new(label_text)
                             .weak()
                             .size(12.0)
-                            .color(egui::Color32::from_rgb(100, 100, 120)),
+                            .color(label_color),
                     );
                 });
             });
+        frame_resp.response
     });
+
+    // Store rect for the deferred library DnD handler (indexed by side)
+    let zone_rect = resp.response.rect;
+    ui.ctx().memory_mut(|mem| {
+        mem.data.insert_temp(egui::Id::new("new_ch_drop_rect").with(side), zone_rect);
+    });
+
+    // Handle immediate deck drag (not deferred — egui native DnD)
+    if let Some(payload) = resp.response.dnd_release_payload::<(usize, usize)>() {
+        let (src_ch, src_deck) = *payload;
+        let new_ch_idx = data.channels.len();
+        actions.add_channel = true;
+        actions.deck_to_move = Some((src_ch, src_deck, new_ch_idx));
+        log::info!("Deck drag -> new channel: ch{} deck{} -> new ch{}", src_ch, src_deck, new_ch_idx);
+    }
 }
 
 

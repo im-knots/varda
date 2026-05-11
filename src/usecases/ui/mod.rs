@@ -27,6 +27,10 @@ pub struct UILayoutState {
     pub selected_channel: Option<usize>,
     /// Whether the master output is selected for detail view in bottom bar
     pub selected_master: bool,
+    /// Currently selected sequence for detail view in bottom bar (seq_idx)
+    pub selected_sequence: Option<usize>,
+    /// Currently selected step within the selected sequence (seq_idx, step_idx)
+    pub selected_sequence_step: Option<(usize, usize)>,
     /// Whether the full-screen stage editor is open (replaces deck view)
     pub stage_editor_open: bool,
     /// Stage editor grid size (normalized, e.g. 0.05 = 20 divisions)
@@ -45,6 +49,8 @@ impl Default for UILayoutState {
             selected_deck: None,
             selected_channel: None,
             selected_master: false,
+            selected_sequence: None,
+            selected_sequence_step: None,
             stage_editor_open: false,
             stage_editor_grid_size: 0.05,
             stage_editor_snap: true,
@@ -61,16 +67,34 @@ impl UILayoutState {
             self.selected_deck = Some(sel);
             self.selected_channel = None;
             self.selected_master = false;
+            self.selected_sequence = None;
+            self.selected_sequence_step = None;
         }
         if let Some(ch) = ui_actions.select_channel {
             self.selected_channel = Some(ch);
             self.selected_deck = None;
             self.selected_master = false;
+            self.selected_sequence = None;
+            self.selected_sequence_step = None;
         }
         if ui_actions.select_master {
             self.selected_master = true;
             self.selected_deck = None;
             self.selected_channel = None;
+            self.selected_sequence = None;
+            self.selected_sequence_step = None;
+        }
+        if let Some(seq) = ui_actions.select_sequence {
+            self.selected_sequence = Some(seq);
+            self.selected_sequence_step = None;
+            self.selected_deck = None;
+            self.selected_channel = None;
+            self.selected_master = false;
+        }
+        if let Some(step) = ui_actions.select_sequence_step {
+            self.selected_sequence_step = Some(step);
+            // Ensure sequence is also selected
+            self.selected_sequence = Some(step.0);
         }
         if ui_actions.toggle_stage_editor {
             self.stage_editor_open = !self.stage_editor_open;
@@ -177,6 +201,7 @@ pub enum ModulationAction {
     UpdateStepRate { source_id: String, rate: f32 },
     UpdateStepInterpolation { source_id: String, interpolation: StepInterpolation },
     UpdateStepBipolar { source_id: String, bipolar: bool },
+    SetStepCount { source_id: String, count: usize },
     // Mod-on-mod: assign a modulator to another modulator's parameter
     AssignModOnMod { target_source_id: String, param_name: String, modulator_id: String, amount: f32 },
     RemoveModOnMod { target_source_id: String, param_name: String },
@@ -202,21 +227,35 @@ pub enum ModSourceUI {
     StepSequencer { steps: Vec<f32>, rate: f32, interpolation: StepInterpolation, bipolar: bool },
 }
 
-/// Fixed color palette for modulation sources — each modulator gets a unique, consistent color
-pub const MODULATOR_COLORS: [egui::Color32; 8] = [
-    egui::Color32::from_rgb(0, 220, 220),    // Cyan
-    egui::Color32::from_rgb(220, 60, 220),    // Magenta
-    egui::Color32::from_rgb(220, 200, 40),    // Yellow
-    egui::Color32::from_rgb(100, 220, 60),    // Lime
-    egui::Color32::from_rgb(240, 140, 40),    // Orange
-    egui::Color32::from_rgb(240, 100, 140),   // Pink
-    egui::Color32::from_rgb(80, 160, 240),    // Sky Blue
-    egui::Color32::from_rgb(240, 120, 80),    // Coral
-];
-
-/// Get the color for a modulation source by index (position in sources list)
+/// Infinite non-colliding modulation source colors via binary hue subdivision.
+///
+/// Uses the same subdivision algorithm as channel colors but offset by half the
+/// hue wheel (0.26 vs 0.76) and with higher saturation / different lightness
+/// bands, so modulator colors are always visually distinct from channel colors.
 pub fn modulator_color(idx: usize) -> egui::Color32 {
-    MODULATOR_COLORS[idx % MODULATOR_COLORS.len()]
+    // Opposite side of the hue wheel from channel colors (0.76 + 0.5 = 0.26)
+    const HUE_OFFSET: f32 = 0.26;
+
+    // Brighter / more saturated styles than channels to stand out on dark UI
+    const RING_STYLES: [(f32, f32); 6] = [
+        (0.90, 0.55), // ring 0: vivid
+        (0.85, 0.62), // ring 1: vivid light
+        (0.95, 0.48), // ring 2: saturated deep
+        (0.70, 0.70), // ring 3: soft bright
+        (0.95, 0.42), // ring 4: very saturated dark
+        (0.65, 0.75), // ring 5+: pastel
+    ];
+
+    let (ring, hue_frac) = panels::utils::hue_subdivision(idx);
+    let hue = (HUE_OFFSET + hue_frac) % 1.0;
+    let (sat, lit) = RING_STYLES[ring.min(RING_STYLES.len() - 1)];
+
+    let (r, g, b) = panels::utils::hsl_to_rgb(hue, sat, lit);
+    egui::Color32::from_rgb(
+        (r * 255.0) as u8,
+        (g * 255.0) as u8,
+        (b * 255.0) as u8,
+    )
 }
 
 /// Modulation assignment snapshot for UI display
@@ -386,6 +425,10 @@ pub struct UIData {
     pub selected_channel: Option<usize>,
     /// Whether the master output is selected for detail view in bottom bar
     pub selected_master: bool,
+    /// Currently selected sequence for detail view in bottom bar (seq_idx)
+    pub selected_sequence: Option<usize>,
+    /// Currently selected step within the selected sequence (seq_idx, step_idx)
+    pub selected_sequence_step: Option<(usize, usize)>,
     /// Unified outputs (windowed + headless) for UI display
     pub outputs: Vec<OutputUI>,
     /// Surfaces in the stage layout
@@ -494,6 +537,8 @@ pub struct SequenceUIData {
     pub playing: bool,
     /// Current step index (while playing)
     pub current_step: usize,
+    /// Elapsed time within the current step (seconds)
+    pub step_elapsed: f64,
     /// Step descriptions for display
     pub steps: Vec<SequenceStepUI>,
 }
@@ -508,8 +553,8 @@ pub struct SequenceStepUI {
 /// UI-friendly step kind representation
 #[derive(Clone)]
 pub enum SequenceStepKindUI {
-    Fade { from_ch: usize, to_ch: usize, duration_val: f64, is_beats: bool, easing: String, transition_shader: Option<String> },
-    Wait { duration_val: f64, is_beats: bool },
+    Fade { from_ch: usize, to_ch: usize, duration_val: f64, duration_unit: crate::channel::DurationUnit, easing: String, transition_shader: Option<String> },
+    Wait { duration_val: f64, duration_unit: crate::channel::DurationUnit },
     GoTo { step_index: usize },
 }
 
@@ -723,6 +768,10 @@ pub struct UIActions {
     pub select_channel: Option<usize>,
     /// Select master output for detail view in bottom bar
     pub select_master: bool,
+    /// Select a sequence for detail view in bottom bar (seq_idx)
+    pub select_sequence: Option<usize>,
+    /// Select a step within a sequence for editing in bottom bar (seq_idx, step_idx)
+    pub select_sequence_step: Option<(usize, usize)>,
     /// Add a new channel to the mixer
     pub add_channel: bool,
     /// Remove a channel from the mixer (by index)
@@ -872,8 +921,10 @@ pub enum SequenceAction {
     MoveStep { seq_idx: usize, from: usize, to: usize },
     /// Update fade/wait step duration value
     SetStepDuration { seq_idx: usize, step_idx: usize, value: f64 },
-    /// Toggle step duration unit (beats <-> seconds)
+    /// Toggle step duration unit (cycles s → m → h → b → s)
     ToggleStepDurationUnit { seq_idx: usize, step_idx: usize },
+    /// Set step duration unit directly
+    SetStepDurationUnit { seq_idx: usize, step_idx: usize, unit: crate::channel::DurationUnit },
     /// Set fade step easing
     SetStepEasing { seq_idx: usize, step_idx: usize, easing: String },
     /// Set fade step from_ch
@@ -922,6 +973,8 @@ impl UIActions {
             select_deck: None,
             select_channel: None,
             select_master: false,
+            select_sequence: None,
+            select_sequence_step: None,
             add_channel: false,
             remove_channel: None,
             deck_to_move: None,
@@ -1036,6 +1089,13 @@ pub enum EffectDrag {
     Channel(usize, usize),
     /// Master effect: (effect_idx)
     Master(usize),
+}
+
+/// Drag payload for reordering steps within a sequence (bottom bar only)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SequenceStepDrag {
+    pub seq_idx: usize,
+    pub step_idx: usize,
 }
 
 /// Helper to extract params from ShaderParams for UI display
@@ -1245,6 +1305,8 @@ impl UIData {
             selected_deck: Some((0, 0)),
             selected_channel: None,
             selected_master: false,
+            selected_sequence: None,
+            selected_sequence_step: None,
             outputs: vec![],
             surfaces: vec![],
             stage_editor_open: false,

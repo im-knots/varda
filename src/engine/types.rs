@@ -270,6 +270,7 @@ pub struct SequenceSnapshot {
     pub enabled: bool,
     pub playing: bool,
     pub current_step: usize,
+    pub step_elapsed: f64,
     pub steps: Vec<SequenceStepSnapshot>,
 }
 
@@ -281,8 +282,8 @@ pub struct SequenceStepSnapshot {
 
 #[derive(Clone, Serialize)]
 pub enum SequenceStepKindSnapshot {
-    Fade { from_ch: usize, to_ch: usize, duration_val: f64, is_beats: bool, easing: String, transition_shader: Option<String> },
-    Wait { duration_val: f64, is_beats: bool },
+    Fade { from_ch: usize, to_ch: usize, duration_val: f64, duration_unit: crate::channel::DurationUnit, easing: String, transition_shader: Option<String> },
+    Wait { duration_val: f64, duration_unit: crate::channel::DurationUnit },
     GoTo { step_index: usize },
 }
 

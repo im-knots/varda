@@ -5,6 +5,7 @@ use crate::{BlendMode, ScalingMode};
 use super::super::{UIData, UIActions, ParamUpdate, ModulationAction, VideoAction, AutoTransitionAction, LibraryDrag, widgets, EffectDrag};
 use super::utils::{format_time, channel_color, render_collapsed_column, render_effect_drop_zone, render_effect_drag_handle, render_effect_drag_ghost};
 use super::effects::{render_master_effect_detail, render_channel_effect_detail};
+use super::sequence::{render_timeline_strip, render_sequence_step_editor};
 
 pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     // MIDI learn status indicator
@@ -31,11 +32,13 @@ pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mu
             });
     }
 
-    // Context-sensitive bottom bar: master effects, channel effects, or deck detail
+    // Context-sensitive bottom bar: master effects, channel effects, sequence, or deck detail
     if data.selected_master {
         render_master_effect_detail(ui, data, actions);
     } else if let Some(ch_idx) = data.selected_channel {
         render_channel_effect_detail(ui, ch_idx, data, actions);
+    } else if let Some(seq_idx) = data.selected_sequence {
+        render_sequence_detail(ui, seq_idx, data, actions);
     } else {
         render_selected_deck_detail(ui, data, actions);
     }
@@ -698,6 +701,281 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
 }
 
 
+/// Bottom bar: full sequence editor when a sequence is selected.
+fn render_sequence_detail(ui: &mut egui::Ui, seq_idx: usize, data: &UIData, actions: &mut UIActions) {
+    use super::super::{SequenceAction, SequenceStepDrag, SequenceStepKindUI};
+
+    let Some(seq) = data.sequences.get(seq_idx) else {
+        ui.label(egui::RichText::new("Sequence not found").weak());
+        return;
+    };
+
+    // Header: name, enable, play/stop, delete
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(egui::RichText::new(format!("🎬 {}", seq.name)).strong().size(14.0));
+
+        let (en_label, en_color) = if seq.enabled {
+            ("On", egui::Color32::from_rgb(80, 200, 80))
+        } else {
+            ("Off", egui::Color32::from_rgb(120, 120, 120))
+        };
+        if ui.button(egui::RichText::new(en_label).color(en_color)).on_hover_text("Toggle enabled").clicked() {
+            actions.sequence_actions.push(SequenceAction::ToggleEnabled(seq_idx));
+        }
+
+        if seq.playing {
+            if ui.button("⏹ Stop").on_hover_text("Stop playback").clicked() {
+                actions.sequence_actions.push(SequenceAction::Stop(seq_idx));
+            }
+        } else if seq.enabled && !seq.steps.is_empty() {
+            if ui.button("▶ Play").on_hover_text("Start playback").clicked() {
+                actions.sequence_actions.push(SequenceAction::Play(seq_idx));
+            }
+        }
+
+        if ui.button("🗑 Delete").on_hover_text("Delete sequence").clicked() {
+            actions.sequence_actions.push(SequenceAction::Delete(seq_idx));
+        }
+    });
+
+    ui.add_space(4.0);
+
+    // Interactive timeline strip (larger, clickable)
+    let selected_step_idx = data.selected_sequence_step
+        .filter(|(si, _)| *si == seq_idx)
+        .map(|(_, step)| step);
+
+    if seq.steps.is_empty() {
+        ui.label(egui::RichText::new("No steps yet — add steps below").weak());
+    } else {
+        let (clicked_step, _) = render_timeline_strip(ui, seq, &data.channel_names, true, selected_step_idx, data.clock_bpm);
+        if let Some(clicked) = clicked_step {
+            actions.select_sequence_step = Some((seq_idx, clicked));
+        }
+    }
+
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(2.0);
+
+    // Two-column layout: step list (left) | step editor (right)
+    let target_id = egui::Id::new("__seq_step_dnd_target");
+    ui.horizontal_top(|ui| {
+        // ── Left column: stacked step list + add buttons ──
+        let list_width = 280.0;
+        ui.vertical(|ui| {
+            ui.set_width(list_width);
+
+            // Scrollable step list with visual-gap drag-and-drop
+            egui::ScrollArea::vertical()
+                .id_salt("seq_step_list")
+                .max_height(ui.available_height() - 30.0)
+                .show(ui, |ui| {
+                    let src_id = egui::Id::new("__seq_step_dnd_src");
+                    let is_dragging = egui::DragAndDrop::has_payload_of_type::<SequenceStepDrag>(ui.ctx());
+                    let drag_src: Option<SequenceStepDrag> = if is_dragging {
+                        ui.ctx().memory(|mem| mem.data.get_temp(src_id))
+                    } else {
+                        None
+                    };
+                    let dragged_idx = drag_src.map(|d| d.step_idx);
+
+                    // Compute drop target from pointer position BEFORE rendering,
+                    // using fixed row heights to avoid oscillation from gap insertion.
+                    let row_height = 22.0;
+                    let gap_height = row_height;
+                    let step_count = seq.steps.len();
+                    let list_top = ui.cursor().top();
+
+                    let drop_target: Option<usize> = if is_dragging && dragged_idx.is_some() {
+                        if let Some(pos) = ui.ctx().input(|inp| inp.pointer.hover_pos()) {
+                            let src = dragged_idx.unwrap();
+                            // Compute pointer offset from list top, in terms of
+                            // the *logical* list (source item removed).
+                            let rel_y = pos.y - list_top;
+                            if rel_y >= 0.0 {
+                                // Visible items = all except the dragged one
+                                let visible_count = step_count - 1;
+                                // Which slot the pointer is over (0-based)
+                                let slot = ((rel_y / row_height) as usize).min(visible_count);
+                                // Map slot back to original index, re-inserting the gap for the source
+                                let target = if slot < src { slot } else { slot + 1 };
+                                Some(target.min(step_count))
+                            } else {
+                                Some(0)
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Store the computed target in memory for the deferred handler
+                    if let Some(t) = drop_target {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp::<usize>(target_id, t);
+                        });
+                    }
+
+                    for (i, step) in seq.steps.iter().enumerate() {
+                        // Hide the step being dragged from its original position
+                        if dragged_idx == Some(i) {
+                            continue;
+                        }
+
+                        // Insert gap BEFORE this item if it's the drop target
+                        if drop_target == Some(i) {
+                            let (gap_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), gap_height),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_filled(
+                                gap_rect, 2.0,
+                                egui::Color32::from_rgba_premultiplied(255, 200, 80, 30),
+                            );
+                            ui.painter().rect_stroke(
+                                gap_rect, 2.0,
+                                egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 200, 80)),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+
+                        let is_selected = selected_step_idx == Some(i);
+                        let is_current = seq.playing && i == seq.current_step;
+
+                        let (icon, summary) = match &step.kind {
+                            SequenceStepKindUI::Fade { from_ch, to_ch, duration_val, duration_unit, .. } => {
+                                let from_name = data.channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?");
+                                let to_name = data.channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?");
+                                ("🔀", format!("{} → {}  {:.1}{}", from_name, to_name, duration_val, duration_unit.label()))
+                            }
+                            SequenceStepKindUI::Wait { duration_val, duration_unit } => {
+                                ("⏸", format!("{:.1}{}", duration_val, duration_unit.label()))
+                            }
+                            SequenceStepKindUI::GoTo { step_index } => {
+                                ("↺", format!("→ Step {}", step_index + 1))
+                            }
+                        };
+
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+
+                            // Drag handle (grip dots)
+                            let handle_size = egui::vec2(12.0, 16.0);
+                            let (handle_rect, handle_resp) = ui.allocate_exact_size(handle_size, egui::Sense::drag());
+                            let grip_color = if handle_resp.dragged() || handle_resp.hovered() {
+                                ui.visuals().strong_text_color()
+                            } else {
+                                ui.visuals().weak_text_color()
+                            };
+                            let cx = handle_rect.center().x;
+                            let cy = handle_rect.center().y;
+                            for row in -1..=1 {
+                                for col in [-1.0_f32, 1.0] {
+                                    ui.painter().circle_filled(
+                                        egui::pos2(cx + col * 3.0, cy + row as f32 * 4.0),
+                                        1.5, grip_color,
+                                    );
+                                }
+                            }
+                            if handle_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                            }
+                            if handle_resp.dragged() {
+                                let drag = SequenceStepDrag { seq_idx, step_idx: i };
+                                egui::DragAndDrop::set_payload(ui.ctx(), drag);
+                                ui.ctx().memory_mut(|mem| {
+                                    mem.data.insert_temp(egui::Id::new("__seq_step_dnd_src"), drag);
+                                });
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                            }
+
+                            // Clickable label
+                            let label_text = format!("{} {}. {} {}", icon, i + 1, step.label, summary);
+                            let text = if is_current {
+                                egui::RichText::new(&label_text).color(egui::Color32::from_rgb(80, 200, 80))
+                            } else if is_selected {
+                                egui::RichText::new(&label_text).strong()
+                            } else {
+                                egui::RichText::new(&label_text)
+                            };
+
+                            if ui.selectable_label(is_selected, text).clicked() {
+                                actions.select_sequence_step = Some((seq_idx, i));
+                            }
+                        });
+                    }
+
+                    // Gap at the end of the list (drop after last item)
+                    if drop_target == Some(step_count) {
+                        let (gap_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), gap_height),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().rect_filled(
+                            gap_rect, 2.0,
+                            egui::Color32::from_rgba_premultiplied(255, 200, 80, 30),
+                        );
+                        ui.painter().rect_stroke(
+                            gap_rect, 2.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 200, 80)),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                });
+
+            // Add step buttons at bottom of list
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let from = 0.min(data.channel_count.saturating_sub(1));
+                let to = 1.min(data.channel_count.saturating_sub(1));
+                if ui.small_button("+Fade").clicked() {
+                    actions.sequence_actions.push(SequenceAction::AddFade { seq_idx, from_ch: from, to_ch: to });
+                }
+                if ui.small_button("+Wait").clicked() {
+                    actions.sequence_actions.push(SequenceAction::AddWait(seq_idx));
+                }
+                if ui.small_button("+Loop").clicked() {
+                    actions.sequence_actions.push(SequenceAction::AddGoTo { seq_idx, step_index: 0 });
+                }
+            });
+        });
+
+        ui.separator();
+
+        // ── Right column: selected step editor ──
+        ui.vertical(|ui| {
+            ui.set_min_width(ui.available_width());
+            if let Some(step_idx) = selected_step_idx {
+                if let Some(step) = seq.steps.get(step_idx) {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Step {} — {}", step_idx + 1, step.label)).strong());
+                        if ui.small_button("🗑 Remove").on_hover_text("Remove this step").clicked() {
+                            actions.sequence_actions.push(SequenceAction::RemoveStep { seq_idx, step_idx });
+                        }
+                    });
+                    ui.add_space(4.0);
+                    render_sequence_step_editor(ui, seq_idx, step_idx, step, data, actions);
+                } else {
+                    ui.label(egui::RichText::new("Step not found").weak());
+                }
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.label(egui::RichText::new("← Select a step to edit").weak());
+                });
+            }
+        });
+    });
+
+    // Animate playhead
+    if seq.playing {
+        ui.ctx().request_repaint();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,6 +1017,54 @@ mod tests {
         data.selected_deck = None;
         data.selected_channel = None;
         data.selected_master = false;
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_bottom_panel(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_bottom_panel_smoke_sequence_selected() {
+        use super::super::super::{SequenceUIData, SequenceStepUI, SequenceStepKindUI};
+        use crate::channel::DurationUnit;
+        let mut data = UIData::test_fixture();
+        data.selected_deck = None;
+        data.sequences.push(SequenceUIData {
+            name: "Test Seq".to_string(),
+            enabled: true,
+            playing: false,
+            current_step: 0,
+            step_elapsed: 0.0,
+            steps: vec![
+                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None } },
+            ],
+        });
+        data.selected_sequence = Some(0);
+        let mut actions = UIActions::new();
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            render_bottom_panel(ui, &data, &mut actions);
+        });
+    }
+
+    #[test]
+    fn render_bottom_panel_smoke_sequence_with_step_selected() {
+        use super::super::super::{SequenceUIData, SequenceStepUI, SequenceStepKindUI};
+        use crate::channel::DurationUnit;
+        let mut data = UIData::test_fixture();
+        data.selected_deck = None;
+        data.sequences.push(SequenceUIData {
+            name: "Test Seq".to_string(),
+            enabled: true,
+            playing: false,
+            current_step: 0,
+            step_elapsed: 0.0,
+            steps: vec![
+                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None } },
+                SequenceStepUI { label: "Wait".into(), kind: SequenceStepKindUI::Wait { duration_val: 2.0, duration_unit: DurationUnit::Seconds } },
+            ],
+        });
+        data.selected_sequence = Some(0);
+        data.selected_sequence_step = Some((0, 1));
         let mut actions = UIActions::new();
         let _harness = egui_kittest::Harness::new_ui(|ui| {
             render_bottom_panel(ui, &data, &mut actions);

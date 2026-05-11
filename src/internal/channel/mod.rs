@@ -63,11 +63,44 @@ impl BlendMode {
 
 // ── Auto-Transition Types ──────────────────────────────────────────
 
-/// Duration specified in beats or wall-clock seconds.
+/// Unit of a duration value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum DurationUnit {
+    Seconds,
+    Minutes,
+    Hours,
+    Beats,
+}
+
+impl DurationUnit {
+    /// Short label for UI display.
+    pub fn label(&self) -> &'static str {
+        match self {
+            DurationUnit::Seconds => "s",
+            DurationUnit::Minutes => "m",
+            DurationUnit::Hours => "h",
+            DurationUnit::Beats => "b",
+        }
+    }
+
+    /// Cycle to the next unit: s → m → h → b → s
+    pub fn next(&self) -> Self {
+        match self {
+            DurationUnit::Seconds => DurationUnit::Minutes,
+            DurationUnit::Minutes => DurationUnit::Hours,
+            DurationUnit::Hours => DurationUnit::Beats,
+            DurationUnit::Beats => DurationUnit::Seconds,
+        }
+    }
+}
+
+/// Duration specified in beats or wall-clock time (seconds, minutes, or hours).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DurationSpec {
     Beats(f64),
     Seconds(f64),
+    Minutes(f64),
+    Hours(f64),
 }
 
 impl DurationSpec {
@@ -76,23 +109,47 @@ impl DurationSpec {
         match self {
             DurationSpec::Beats(b) => b * 60.0 / bpm.unwrap_or(120.0),
             DurationSpec::Seconds(s) => *s,
+            DurationSpec::Minutes(m) => m * 60.0,
+            DurationSpec::Hours(h) => h * 3600.0,
         }
     }
 
-    /// Get the raw numeric value (beats or seconds).
+    /// Get the raw numeric value.
     pub fn value(&self) -> f64 {
         match self {
-            DurationSpec::Beats(v) | DurationSpec::Seconds(v) => *v,
+            DurationSpec::Beats(v) | DurationSpec::Seconds(v) | DurationSpec::Minutes(v) | DurationSpec::Hours(v) => *v,
         }
     }
 
     pub fn is_beats(&self) -> bool { matches!(self, DurationSpec::Beats(_)) }
+
+    /// Get the unit of this duration.
+    pub fn unit(&self) -> DurationUnit {
+        match self {
+            DurationSpec::Seconds(_) => DurationUnit::Seconds,
+            DurationSpec::Minutes(_) => DurationUnit::Minutes,
+            DurationSpec::Hours(_) => DurationUnit::Hours,
+            DurationSpec::Beats(_) => DurationUnit::Beats,
+        }
+    }
+
+    /// Create a DurationSpec from a value and unit.
+    pub fn from_value_unit(value: f64, unit: DurationUnit) -> Self {
+        match unit {
+            DurationUnit::Seconds => DurationSpec::Seconds(value),
+            DurationUnit::Minutes => DurationSpec::Minutes(value),
+            DurationUnit::Hours => DurationSpec::Hours(value),
+            DurationUnit::Beats => DurationSpec::Beats(value),
+        }
+    }
 
     /// Set the numeric value, preserving the unit.
     pub fn set_value(&mut self, v: f64) {
         match self {
             DurationSpec::Beats(ref mut b) => *b = v,
             DurationSpec::Seconds(ref mut s) => *s = v,
+            DurationSpec::Minutes(ref mut m) => *m = v,
+            DurationSpec::Hours(ref mut h) => *h = v,
         }
     }
 }
@@ -940,6 +997,48 @@ mod tests {
         assert!((d.to_seconds(Some(60.0)) - 1.0).abs() < 1e-5);
         // 1 beat at 180 BPM = 60/180 = 0.333s
         assert!((d.to_seconds(Some(180.0)) - 0.333).abs() < 0.01);
+    }
+
+    #[test]
+    fn duration_spec_minutes() {
+        let d = DurationSpec::Minutes(2.0);
+        assert!((d.to_seconds(None) - 120.0).abs() < 1e-5);
+        assert!((d.value() - 2.0).abs() < 1e-5);
+        assert!(!d.is_beats());
+        assert_eq!(d.unit(), DurationUnit::Minutes);
+    }
+
+    #[test]
+    fn duration_spec_hours() {
+        let d = DurationSpec::Hours(1.5);
+        assert!((d.to_seconds(None) - 5400.0).abs() < 1e-5);
+        assert!((d.value() - 1.5).abs() < 1e-5);
+        assert!(!d.is_beats());
+        assert_eq!(d.unit(), DurationUnit::Hours);
+    }
+
+    #[test]
+    fn duration_unit_cycle() {
+        assert_eq!(DurationUnit::Seconds.next(), DurationUnit::Minutes);
+        assert_eq!(DurationUnit::Minutes.next(), DurationUnit::Hours);
+        assert_eq!(DurationUnit::Hours.next(), DurationUnit::Beats);
+        assert_eq!(DurationUnit::Beats.next(), DurationUnit::Seconds);
+    }
+
+    #[test]
+    fn duration_unit_labels() {
+        assert_eq!(DurationUnit::Seconds.label(), "s");
+        assert_eq!(DurationUnit::Minutes.label(), "m");
+        assert_eq!(DurationUnit::Hours.label(), "h");
+        assert_eq!(DurationUnit::Beats.label(), "b");
+    }
+
+    #[test]
+    fn duration_spec_from_value_unit() {
+        let d = DurationSpec::from_value_unit(5.0, DurationUnit::Minutes);
+        assert!(matches!(d, DurationSpec::Minutes(v) if (v - 5.0).abs() < 1e-5));
+        let d = DurationSpec::from_value_unit(2.0, DurationUnit::Hours);
+        assert!(matches!(d, DurationSpec::Hours(v) if (v - 2.0).abs() < 1e-5));
     }
 
     // ── DeckAutoTransition tests ─────────────────────────────────────

@@ -10,7 +10,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
 - **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, images, solid color
 - **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 6 blend modes
-- **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer
+- **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations. 
 - **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
 - **Modulation**: LFO, audio-reactive, ADSR, step sequencer, mod-on-mod chaining on any parameter
 - **Audio**: 512-bin FFT, beat detection, bass/mid/treble bands, BPM with beat phase
@@ -140,6 +140,38 @@ The **usecases layer** is the only place that touches egui or windowed rendering
 This means you can drive the same engine from a GUI, an HTTP API, a CLI, or a test harness without changing engine code.
 
 External I/O (NDI, SRT, recording) uses non-blocking subprocess architecture with bounded channels to keep the render thread fast. GPU work is batched into minimal command buffer submissions. The render pass culls zero-opacity decks and channels so you only pay for what's live.
+
+### Entity Identity & Address Scheme
+
+Every mutable entity in the signal graph — channels, decks, effects, surfaces, and outputs — is assigned a stable 8-character hex UUID on creation (e.g. `a3f1b20c`). UUIDs persist across moves, reorders, and scene save/restore. This means MIDI mappings, modulation assignments, and scene references never break when you rearrange your setup. Outputs (windowed, recording, NDI, SRT, Syphon) carry their own UUIDs so surface assignments and saved window positions survive reconfiguration.
+
+Parameters are addressed with a slash-delimited path rooted at the entity UUID:
+
+```
+crossfader                              # mixer crossfader position
+
+deck/<uuid>/opacity                     # deck opacity
+deck/<uuid>/mute                        # deck mute toggle
+deck/<uuid>/solo                        # deck solo toggle
+deck/<uuid>/trigger                     # deck trigger (set opacity to 1)
+deck/<uuid>/param/<name>                # generator shader param
+deck/<uuid>/effect/<index>/param/<name> # deck effect chain param
+deck/<uuid>/at/play_duration            # auto-transition play duration
+deck/<uuid>/at/trans_duration           # auto-transition transition duration
+
+ch/<uuid>/opacity                       # channel opacity
+ch/<uuid>/effect/<index>/param/<name>   # channel effect chain param
+
+master/effect/<index>/param/<name>      # master effect chain param
+
+mod/<index>/<param_name>                # modulation source param (frequency, amplitude, etc.)
+mod/<index>/step/<step_idx>             # step sequencer step value
+
+surface/<uuid>/source                   # surface content source (Master, Channel, Channels, Deck)
+output/<uuid>/surface/<surface_uuid>    # output ↔ surface assignment with warp calibration
+```
+
+Modulation uses a colon-separated key scheme (`deck_<uuid>:<param>`, `fx_<uuid>:<param>`) so the modulation engine can route LFOs, envelopes, and audio-reactive sources to any parameter in the graph without coupling to positional indices.
 
 ## License
 [MIT](LICENSE)

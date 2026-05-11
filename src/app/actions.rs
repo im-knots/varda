@@ -108,6 +108,9 @@ impl VardaApp {
         self.apply_modulation_actions(ui_actions);
         self.apply_sequence_actions(ui_actions);
 
+        // Channel add first — new channel must exist before deck/effect adds target it
+        self.apply_add_channel(ui_actions);
+
         // Deck/effect add/remove (needs egui texture management)
         self.apply_deck_and_effect_actions(ui_actions, egui_renderer, deck_preview_textures);
 
@@ -119,8 +122,7 @@ impl VardaApp {
             }
         }
 
-        // Channel add/remove + camera
-        self.apply_add_channel(ui_actions);
+        // Camera add + channel remove
         self.apply_camera_add(ui_actions, egui_renderer, deck_preview_textures);
         let removed_channel = self.apply_remove_channel(ui_actions);
 

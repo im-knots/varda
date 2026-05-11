@@ -155,23 +155,23 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
         let steps = seq.steps.iter().map(|step| {
             let (label, kind) = match &step.kind {
                 crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
-                    let unit = if duration.is_beats() { "beats" } else { "s" };
+                    let unit_label = duration.unit().label();
                     let easing_name = format!("{:?}", easing);
                     let label = format!("Fade {} -> {} ({:.1}{})",
                         channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?"),
                         channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?"),
-                        duration.value(), unit);
+                        duration.value(), unit_label);
                     (label, SequenceStepKindSnapshot::Fade {
                         from_ch: *from_ch, to_ch: *to_ch,
-                        duration_val: duration.value(), is_beats: duration.is_beats(),
+                        duration_val: duration.value(), duration_unit: duration.unit(),
                         easing: easing_name, transition_shader: transition_shader.clone(),
                     })
                 }
                 crate::mixer::StepKind::Wait { duration } => {
-                    let unit = if duration.is_beats() { "beats" } else { "s" };
-                    let label = format!("Wait {:.1}{}", duration.value(), unit);
+                    let unit_label = duration.unit().label();
+                    let label = format!("Wait {:.1}{}", duration.value(), unit_label);
                     (label, SequenceStepKindSnapshot::Wait {
-                        duration_val: duration.value(), is_beats: duration.is_beats(),
+                        duration_val: duration.value(), duration_unit: duration.unit(),
                     })
                 }
                 crate::mixer::StepKind::GoTo { step_index } => {
@@ -186,6 +186,7 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
             enabled: seq.enabled,
             playing: seq.state.playing,
             current_step: seq.state.current_step,
+            step_elapsed: seq.state.step_elapsed,
             steps,
         }
     }).collect()
@@ -502,16 +503,16 @@ pub(crate) fn build_ui_data(
     let sequences = engine.mixer.sequences.iter().map(|seq| {
         let steps = seq.steps.iter().map(|s| {
             let kind = match &s.kind {
-                SequenceStepKindSnapshot::Fade { from_ch, to_ch, duration_val, is_beats, easing, transition_shader } =>
-                    SequenceStepKindUI::Fade { from_ch: *from_ch, to_ch: *to_ch, duration_val: *duration_val, is_beats: *is_beats, easing: easing.clone(), transition_shader: transition_shader.clone() },
-                SequenceStepKindSnapshot::Wait { duration_val, is_beats } =>
-                    SequenceStepKindUI::Wait { duration_val: *duration_val, is_beats: *is_beats },
+                SequenceStepKindSnapshot::Fade { from_ch, to_ch, duration_val, duration_unit, easing, transition_shader } =>
+                    SequenceStepKindUI::Fade { from_ch: *from_ch, to_ch: *to_ch, duration_val: *duration_val, duration_unit: *duration_unit, easing: easing.clone(), transition_shader: transition_shader.clone() },
+                SequenceStepKindSnapshot::Wait { duration_val, duration_unit } =>
+                    SequenceStepKindUI::Wait { duration_val: *duration_val, duration_unit: *duration_unit },
                 SequenceStepKindSnapshot::GoTo { step_index } =>
                     SequenceStepKindUI::GoTo { step_index: *step_index },
             };
             SequenceStepUI { label: s.label.clone(), kind }
         }).collect();
-        SequenceUIData { name: seq.name.clone(), enabled: seq.enabled, playing: seq.playing, current_step: seq.current_step, steps }
+        SequenceUIData { name: seq.name.clone(), enabled: seq.enabled, playing: seq.playing, current_step: seq.current_step, step_elapsed: seq.step_elapsed, steps }
     }).collect();
 
     // Notifications — UI-only, not in EngineState
@@ -539,6 +540,7 @@ pub(crate) fn build_ui_data(
         // UI layout/selection state — owned by the UI consumer, not the engine
         selected_deck: layout.selected_deck, selected_channel: layout.selected_channel,
         selected_master: layout.selected_master,
+        selected_sequence: layout.selected_sequence, selected_sequence_step: layout.selected_sequence_step,
         outputs, surfaces,
         stage_editor_open: layout.stage_editor_open, library_panel_open: layout.library_panel_open, right_panel_open: layout.right_panel_open,
         stage_editor_grid_size: layout.stage_editor_grid_size, stage_editor_snap: layout.stage_editor_snap,
