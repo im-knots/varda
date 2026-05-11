@@ -13,11 +13,11 @@
           "path": "shaders/kaleidoscope.fs",
           "enabled": true,
           "params": {
-            "rotation": 0.0,
             "segments": 2.0,
+            "center_x": 0.5,
+            "rotation": 0.0,
             "center_y": 0.5,
-            "zoom": 1.0,
-            "center_x": 0.5
+            "zoom": 1.0
           }
         }
       ]
@@ -26,22 +26,6 @@
       "uuid": "c6b715b4",
       "name": "Ch 1",
       "opacity": 1.0,
-      "blend_mode": "normal",
-      "decks": [],
-      "effects": []
-    },
-    {
-      "uuid": "937923f9",
-      "name": "Ch 2",
-      "opacity": 0.0,
-      "blend_mode": "normal",
-      "decks": [],
-      "effects": []
-    },
-    {
-      "uuid": "eec1bf67",
-      "name": "Ch 7",
-      "opacity": 0.0,
       "blend_mode": "normal",
       "decks": [],
       "effects": []
@@ -352,38 +336,19 @@
       }
     ],
     "assignments": {
-      "deck_4c523e98:pattern": [
+      "deck_9d226b11:fx3:gr": [
         {
-          "source_id": "70645afa",
+          "source_id": "1494dbbb",
           "amount": 0.5,
           "component": null
         },
         {
-          "source_id": "70645afa",
+          "source_id": "1494dbbb",
           "amount": 0.5,
           "component": null
         },
         {
-          "source_id": "70645afa",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_ddde6acd:streak_thin": [
-        {
-          "source_id": "5f10e244",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_6ba53879:fx0:shadow_g": [
-        {
-          "source_id": "4037a3ae",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "4037a3ae",
+          "source_id": "1494dbbb",
           "amount": 0.5,
           "component": null
         }
@@ -401,114 +366,6 @@
         },
         {
           "source_id": "17de0ce1",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_9d226b11:fx3:rg": [
-        {
-          "source_id": "6c309dc4",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "6c309dc4",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "6c309dc4",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_ddde6acd:spin_speed": [
-        {
-          "source_id": "1f55ba90",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_d34acfbd:anim_speed": [
-        {
-          "source_id": "6c4f543a",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "6c4f543a",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "6c4f543a",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_ddde6acd:crystal_dist": [
-        {
-          "source_id": "3df1fe51",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "1f55ba90",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_9d226b11:fx0:group_speed_5": [
-        {
-          "source_id": "1494dbbb",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "1494dbbb",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "1494dbbb",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_ddde6acd:pulse_rate": [
-        {
-          "source_id": "5f10e244",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_ddde6acd:cloud_density": [
-        {
-          "source_id": "3df1fe51",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_9d226b11:fx0:group_speed_4": [
-        {
-          "source_id": "1494dbbb",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "1494dbbb",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "1494dbbb",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_e7ab541a:fx1:bg_mode": [
-        {
-          "source_id": "1ae6f467",
           "amount": 0.5,
           "component": null
         }
@@ -545,19 +402,14 @@
           "component": null
         }
       ],
-      "deck_9d226b11:fx3:gr": [
+      "deck_6ba53879:membrane_amp": [
         {
-          "source_id": "1494dbbb",
+          "source_id": "160c5671",
           "amount": 0.5,
           "component": null
         },
         {
-          "source_id": "1494dbbb",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "1494dbbb",
+          "source_id": "160c5671",
           "amount": 0.5,
           "component": null
         }
@@ -570,25 +422,6 @@
         },
         {
           "source_id": "06b1dbaf",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_e7ab541a:speed_variation": [
-        {
-          "source_id": "c5530ba7",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_6ba53879:membrane_amp": [
-        {
-          "source_id": "160c5671",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "160c5671",
           "amount": 0.5,
           "component": null
         }
@@ -639,6 +472,42 @@
           "component": null
         }
       ],
+      "deck_e7ab541a:grid_size": [
+        {
+          "source_id": "c5530ba7",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "da424d42",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_ddde6acd:camera_speed": [
+        {
+          "source_id": "1f55ba90",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_9d226b11:fx1:drip_speed": [
+        {
+          "source_id": "1494dbbb",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "1494dbbb",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "1494dbbb",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
       "deck_4c523e98:layers": [
         {
           "source_id": "3a22c8b7",
@@ -671,21 +540,9 @@
           "component": null
         }
       ],
-      "deck_e7ab541a:grid_size": [
+      "deck_e7ab541a:speed_variation": [
         {
           "source_id": "c5530ba7",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "da424d42",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_ddde6acd:camera_speed": [
-        {
-          "source_id": "1f55ba90",
           "amount": 0.5,
           "component": null
         }
@@ -734,7 +591,134 @@
           "component": null
         }
       ],
-      "deck_9d226b11:fx1:drip_speed": [
+      "deck_4c523e98:pattern": [
+        {
+          "source_id": "70645afa",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "70645afa",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "70645afa",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_ddde6acd:streak_thin": [
+        {
+          "source_id": "5f10e244",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_6ba53879:fx0:shadow_g": [
+        {
+          "source_id": "4037a3ae",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "4037a3ae",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_ddde6acd:pulse_rate": [
+        {
+          "source_id": "5f10e244",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_ddde6acd:crystal_dist": [
+        {
+          "source_id": "3df1fe51",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "1f55ba90",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_ddde6acd:cloud_density": [
+        {
+          "source_id": "3df1fe51",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_d34acfbd:anim_speed": [
+        {
+          "source_id": "6c4f543a",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "6c4f543a",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "6c4f543a",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_ddde6acd:spin_speed": [
+        {
+          "source_id": "1f55ba90",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_9d226b11:fx3:rg": [
+        {
+          "source_id": "6c309dc4",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "6c309dc4",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "6c309dc4",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_9d226b11:fx0:group_speed_5": [
+        {
+          "source_id": "1494dbbb",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "1494dbbb",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "1494dbbb",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_e7ab541a:fx1:bg_mode": [
+        {
+          "source_id": "1ae6f467",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_9d226b11:fx0:group_speed_4": [
         {
           "source_id": "1494dbbb",
           "amount": 0.5,

@@ -179,7 +179,7 @@ External I/O (NDI, SRT, recording) uses non-blocking subprocess architecture wit
 
 ### Entity Identity & Address Scheme
 
-Every mutable entity in the signal graph — channels, decks, effects, surfaces, and outputs — is assigned a stable 8-character hex UUID on creation (e.g. `a3f1b20c`). UUIDs persist across moves, reorders, and scene save/restore. This means MIDI mappings, modulation assignments, and scene references never break when you rearrange your setup. Outputs (windowed, recording, NDI, SRT, Syphon) carry their own UUIDs so surface assignments and saved window positions survive reconfiguration.
+Every mutable entity in the signal graph (channels, decks, effects, surfaces, and outputs) is assigned a stable 8-character hex UUID on creation (e.g. `a3f1b20c`). UUIDs persist across moves, reorders, and scene save/restore. This means MIDI mappings, modulation assignments, and scene references never break when you rearrange your setup. Outputs (windowed, recording, NDI, SRT) carry their own UUIDs so surface assignments and saved window positions survive reconfiguration.
 
 Parameters are addressed with a slash-delimited path rooted at the entity UUID:
 
