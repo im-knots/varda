@@ -623,6 +623,7 @@ impl VardaApp {
             }
             EngineCommand::SetSurfaceSource { uuid, source } => {
                 self.set_surface_source(&uuid, source);
+                self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
             EngineCommand::SetSurfaceOutputType { uuid, output_type } => {
@@ -631,6 +632,7 @@ impl VardaApp {
             }
             EngineCommand::SetSurfaceContentMapping { uuid, mapping } => {
                 self.set_surface_content_mapping(&uuid, mapping);
+                self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
             EngineCommand::RenameSurface { uuid, name } => {
@@ -640,6 +642,7 @@ impl VardaApp {
             EngineCommand::UpdateSurfaceVertices { uuid, vertices } => {
                 if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
                     surface.vertices = vertices;
+                    self.recompute_auto_edge_blend();
                     CommandResult::Ok
                 } else {
                     CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
@@ -730,6 +733,7 @@ impl VardaApp {
                         });
                         hint.center = [sum[0] / n, sum[1] / n];
                     }
+                    self.recompute_auto_edge_blend();
                     CommandResult::Ok
                 } else {
                     CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
@@ -756,10 +760,12 @@ impl VardaApp {
             }
             EngineCommand::AssignSurfaceToOutput { output_uuid, surface_uuid } => {
                 self.assign_surface_to_output(&output_uuid, &surface_uuid);
+                self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
             EngineCommand::UnassignSurfaceFromOutput { output_uuid, assignment_idx } => {
                 self.unassign_surface_from_output(&output_uuid, assignment_idx);
+                self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
             EngineCommand::AssignSurfaceToOutputByIdx { output_idx, surface_uuid } => {
@@ -777,10 +783,12 @@ impl VardaApp {
                                     [bb.x, bb.y + bb.height],
                                 ],
                                 enabled: true,
+                                overlap_zones: Default::default(),
                             };
                             assignments.push(assignment);
                         }
                     }
+                    self.recompute_auto_edge_blend();
                     CommandResult::Ok
                 } else {
                     CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
@@ -792,6 +800,7 @@ impl VardaApp {
                     if assignment_idx < assignments.len() {
                         assignments.remove(assignment_idx);
                     }
+                    self.recompute_auto_edge_blend();
                     CommandResult::Ok
                 } else {
                     CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
@@ -1419,6 +1428,35 @@ impl VardaApp {
                     } else {
                         CommandResult::Err { code: ErrorCode::NotFound, message: "Assignment not found".into() }
                     }
+                } else {
+                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
+                }
+            }
+
+            EngineCommand::SetEdgeBlend { output_idx, config } => {
+                use crate::renderer::context::UnifiedOutput;
+                if let Some(output) = self.outputs.get_mut(output_idx) {
+                    match output {
+                        UnifiedOutput::Window(w) => { w.edge_blend = config; }
+                        UnifiedOutput::Headless(h) => { h.edge_blend = config; }
+                    }
+                    CommandResult::Ok
+                } else {
+                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
+                }
+            }
+            EngineCommand::SetEdgeBlendMode { output_idx, mode } => {
+                use crate::renderer::context::UnifiedOutput;
+                use crate::renderer::edge_blend::EdgeBlendMode;
+                if let Some(output) = self.outputs.get_mut(output_idx) {
+                    match output {
+                        UnifiedOutput::Window(w) => { w.edge_blend_mode = mode; }
+                        UnifiedOutput::Headless(h) => { h.edge_blend_mode = mode; }
+                    }
+                    if mode == EdgeBlendMode::Auto {
+                        self.recompute_auto_edge_blend();
+                    }
+                    CommandResult::Ok
                 } else {
                     CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
                 }

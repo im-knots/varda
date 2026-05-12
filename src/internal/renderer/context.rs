@@ -262,6 +262,8 @@ pub struct SurfaceRenderInfo<'a> {
     /// Per-surface warp corners in output space [0..1] — TL, TR, BR, BL.
     /// None = no warp (render at polygon's native position).
     pub warp_corners: Option<[[f32; 2]; 4]>,
+    /// Per-surface overlap zones (Auto mode). Default = no zones.
+    pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
 }
 
 /// Assignment of a surface to an output, with per-surface warp calibration.
@@ -275,6 +277,9 @@ pub struct SurfaceAssignment {
     pub warp_corners: [[f32; 2]; 4],
     /// Whether this assignment is enabled
     pub enabled: bool,
+    /// Per-surface overlap zones (set by Auto mode detection).
+    #[serde(default)]
+    pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
 }
 
 /// Where an output sends its content — unified across windowed and headless outputs.
@@ -353,6 +358,20 @@ pub struct OutputWindow {
     pub surface_assignments: Vec<SurfaceAssignment>,
     /// Whether calibration mode is active (shows warp handles)
     pub calibration_mode: bool,
+    /// Whether edge blend is auto-computed or manually configured.
+    pub edge_blend_mode: super::edge_blend::EdgeBlendMode,
+    /// Edge blending configuration for multi-projector overlap zones.
+    pub edge_blend: super::edge_blend::EdgeBlendConfig,
+    /// GPU pipeline for applying edge blend post-process.
+    pub edge_blend_pipeline: super::edge_blend::EdgeBlendPipeline,
+    /// Pre-blend intermediate: surfaces render here when edge blending is active.
+    pub surface_texture: wgpu::Texture,
+    pub surface_texture_view: wgpu::TextureView,
+    /// Post-blend result texture. UI preview reads from this.
+    /// When edge blend is off, surfaces render directly here.
+    /// When edge blend is on, edge blend shader writes here from surface_texture.
+    pub preview_texture: wgpu::Texture,
+    pub preview_texture_view: wgpu::TextureView,
 }
 
 impl OutputWindow {
@@ -398,6 +417,9 @@ impl OutputWindow {
 
         let blit_pipeline = BlitPipeline::new(&context.device, surface_config.format)?;
         let polygon_pipeline = PolygonBlitPipeline::new(&context.device, surface_config.format)?;
+        let edge_blend_pipeline = super::edge_blend::EdgeBlendPipeline::new(&context.device, surface_config.format)?;
+        let (surface_texture, surface_texture_view) = Self::create_intermediate_texture(&context.device, size.width, size.height, surface_config.format, "Surface Intermediate");
+        let (preview_texture, preview_texture_view) = Self::create_intermediate_texture(&context.device, size.width, size.height, surface_config.format, "Preview");
 
         Ok(Self {
             uuid: crate::deck::generate_short_uuid(),
@@ -411,7 +433,30 @@ impl OutputWindow {
             target: OutputTarget::Windowed,
             surface_assignments: Vec::new(),
             calibration_mode: false,
+            edge_blend_mode: super::edge_blend::EdgeBlendMode::default(),
+            edge_blend: super::edge_blend::EdgeBlendConfig::default(),
+            edge_blend_pipeline,
+            surface_texture,
+            surface_texture_view,
+            preview_texture,
+            preview_texture_view,
         })
+    }
+
+    /// Create an intermediate GPU texture for the render pipeline.
+    fn create_intermediate_texture(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
     }
 
     /// Resize this output window's surface
@@ -421,6 +466,13 @@ impl OutputWindow {
             self.surface_config.width = new_size.width;
             self.surface_config.height = new_size.height;
             self.surface.configure(device, &self.surface_config);
+            let fmt = self.surface_config.format;
+            let (tex, view) = Self::create_intermediate_texture(device, new_size.width, new_size.height, fmt, "Surface Intermediate");
+            self.surface_texture = tex;
+            self.surface_texture_view = view;
+            let (tex, view) = Self::create_intermediate_texture(device, new_size.width, new_size.height, fmt, "Preview");
+            self.preview_texture = tex;
+            self.preview_texture_view = view;
         }
     }
 
@@ -434,6 +486,7 @@ impl OutputWindow {
             uv_scale: [1.0, 1.0],
             uv_offset: [0.0, 0.0],
             warp_corners: None,
+            overlap_zones: Default::default(),
         }]);
     }
 
@@ -449,23 +502,31 @@ impl OutputWindow {
                 return;
             }
         };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let final_view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Post-process edge blend only applies in Manual mode.
+        // Auto mode uses per-surface blend in the polygon shader.
+        let use_edge_blend = self.edge_blend_mode == super::edge_blend::EdgeBlendMode::Manual
+            && self.edge_blend.any_enabled();
+
+        // Pipeline:
+        //   No edge blend:  surfaces → preview_texture → swap chain  (2 passes)
+        //   Edge blend:     surfaces → surface_texture → edge blend → preview_texture → swap chain  (3 passes)
+        // The UI preview always reads preview_texture_view.
+        let surface_render_target = if use_edge_blend { &self.surface_texture_view } else { &self.preview_texture_view };
 
         let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(&format!("Output '{}' Encoder", self.name)),
         });
 
-        // Pre-create bind groups and vertex buffers for each surface
+        // Pass 1: Render surfaces into the surface render target
         let prepared: Vec<_> = surfaces.iter().map(|surf| {
             let bb = surf.bounding_box;
-
-            // Compute forward homography: from bbox corners → warp corners
             let homography = surf.warp_corners.map(|warp_corners| {
                 let src_corners = [
-                    [bb[0], bb[1]],                     // TL
-                    [bb[0] + bb[2], bb[1]],             // TR
-                    [bb[0] + bb[2], bb[1] + bb[3]],     // BR
-                    [bb[0], bb[1] + bb[3]],             // BL
+                    [bb[0], bb[1]],
+                    [bb[0] + bb[2], bb[1]],
+                    [bb[0] + bb[2], bb[1] + bb[3]],
+                    [bb[0], bb[1] + bb[3]],
                 ];
                 super::warp::compute_forward_homography(&src_corners, &warp_corners)
             });
@@ -476,6 +537,7 @@ impl OutputWindow {
                 surf.uv_scale,
                 surf.uv_offset,
                 homography.as_ref(),
+                &surf.overlap_zones,
             );
             let (vb, num_tris) = PolygonBlitPipeline::triangulate(
                 &context.device,
@@ -487,9 +549,9 @@ impl OutputWindow {
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&format!("Output '{}' Pass", self.name)),
+                label: Some(&format!("Output '{}' Surface Pass", self.name)),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: surface_render_target,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -513,6 +575,35 @@ impl OutputWindow {
                     );
                 }
             }
+        }
+
+        // Pass 2 (edge blend only): surface_texture → edge blend → preview_texture
+        if use_edge_blend {
+            self.edge_blend_pipeline.render(
+                &context.device, &context.queue, &mut encoder,
+                &self.surface_texture_view, &self.preview_texture_view, &self.edge_blend,
+            );
+        }
+
+        // Final pass: blit preview_texture → swap chain
+        {
+            let blit_bg = self.blit_pipeline.create_bind_group(&context.device, &self.preview_texture_view);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&format!("Output '{}' Swap Blit", self.name)),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &final_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.blit_pipeline.render(&mut pass, &blit_bg);
         }
 
         context.queue.submit(std::iter::once(encoder.finish()));
@@ -883,6 +974,16 @@ pub struct HeadlessOutput {
     /// Surface assignments — which surfaces this output renders, with per-surface warp.
     /// Empty = render source directly (fallback behavior).
     pub surface_assignments: Vec<SurfaceAssignment>,
+    /// Whether edge blend is auto-computed or manually configured.
+    pub edge_blend_mode: super::edge_blend::EdgeBlendMode,
+    /// Edge blending configuration for multi-projector overlap zones.
+    pub edge_blend: super::edge_blend::EdgeBlendConfig,
+    /// GPU pipeline for applying edge blend post-process.
+    pub edge_blend_pipeline: super::edge_blend::EdgeBlendPipeline,
+    /// Intermediate texture used when edge blending is active.
+    pub edge_blend_texture: wgpu::Texture,
+    /// View into the intermediate edge blend texture.
+    pub edge_blend_texture_view: wgpu::TextureView,
 }
 
 impl HeadlessOutput {
@@ -914,6 +1015,19 @@ impl HeadlessOutput {
             .expect("Failed to create headless blit pipeline");
         let polygon_pipeline = PolygonBlitPipeline::new(device, format)
             .expect("Failed to create headless polygon pipeline");
+        let edge_blend_pipeline = super::edge_blend::EdgeBlendPipeline::new(device, format)
+            .expect("Failed to create headless edge blend pipeline");
+        let eb_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Headless Edge Blend Intermediate"),
+            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let eb_view = eb_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         Self {
             uuid: crate::deck::generate_short_uuid(),
@@ -931,6 +1045,11 @@ impl HeadlessOutput {
             active: false,
             started_at: None,
             surface_assignments: Vec::new(),
+            edge_blend_mode: super::edge_blend::EdgeBlendMode::default(),
+            edge_blend: super::edge_blend::EdgeBlendConfig::default(),
+            edge_blend_pipeline,
+            edge_blend_texture: eb_tex,
+            edge_blend_texture_view: eb_view,
         }
     }
 }
@@ -998,6 +1117,22 @@ impl UnifiedOutput {
         match self {
             UnifiedOutput::Window(w) => &w.surface_assignments,
             UnifiedOutput::Headless(h) => &h.surface_assignments,
+        }
+    }
+
+    /// Current edge blend mode.
+    pub fn edge_blend_mode(&self) -> super::edge_blend::EdgeBlendMode {
+        match self {
+            UnifiedOutput::Window(w) => w.edge_blend_mode,
+            UnifiedOutput::Headless(h) => h.edge_blend_mode,
+        }
+    }
+
+    /// Current edge blend config.
+    pub fn edge_blend(&self) -> super::edge_blend::EdgeBlendConfig {
+        match self {
+            UnifiedOutput::Window(w) => w.edge_blend,
+            UnifiedOutput::Headless(h) => h.edge_blend,
         }
     }
 

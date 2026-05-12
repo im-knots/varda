@@ -386,6 +386,12 @@ pub struct OutputConfig {
     /// Saved window size [width, height] in physical pixels (for Windowed targets).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_size: Option<[u32; 2]>,
+    /// Whether edge blend is auto-computed or manually configured.
+    #[serde(default)]
+    pub edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode,
+    /// Edge blending configuration for multi-projector overlap zones.
+    #[serde(default)]
+    pub edge_blend: crate::renderer::edge_blend::EdgeBlendConfig,
 }
 
 impl OutputConfig {
@@ -399,6 +405,8 @@ impl OutputConfig {
             surface_assignments: Vec::new(),
             window_position: None,
             window_size: None,
+            edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
+            edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
         }
     }
 }

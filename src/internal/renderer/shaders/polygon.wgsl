@@ -11,6 +11,20 @@ struct PolygonParams {
     h_row0: vec4<f32>,
     h_row1: vec4<f32>,
     h_row2: vec4<f32>,
+    // Overlap zone count (as f32) + 3 padding floats
+    zone_count: f32,
+    _zone_pad0: f32,
+    _zone_pad1: f32,
+    _zone_pad2: f32,
+    // Up to 4 overlap zones: rect = [u_min, v_min, u_max, v_max], cfg = [gamma, _, _, _]
+    zone0_rect: vec4<f32>,
+    zone0_cfg: vec4<f32>,
+    zone1_rect: vec4<f32>,
+    zone1_cfg: vec4<f32>,
+    zone2_rect: vec4<f32>,
+    zone2_cfg: vec4<f32>,
+    zone3_rect: vec4<f32>,
+    zone3_cfg: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -51,6 +65,61 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
+// Smoothstep blend: t² × (3 − 2t), raised to gamma.
+fn blend_alpha(t: f32, gamma: f32) -> f32 {
+    let tc = clamp(t, 0.0, 1.0);
+    let s = tc * tc * (3.0 - 2.0 * tc);
+    return pow(s, gamma);
+}
+
+// Compute blend factor for a single overlap zone.
+// Returns 1.0 outside the zone, ramps toward 0.0 in the ramp direction inside the zone.
+// cfg = [gamma, ramp_x, ramp_y, _pad]
+//   ramp_x: +1.0 = fade toward u_max, -1.0 = fade toward u_min, 0.0 = none
+//   ramp_y: +1.0 = fade toward v_max, -1.0 = fade toward v_min, 0.0 = none
+fn zone_blend(uv: vec2<f32>, rect: vec4<f32>, cfg: vec4<f32>) -> f32 {
+    let u_min = rect.x;
+    let v_min = rect.y;
+    let u_max = rect.z;
+    let v_max = rect.w;
+    let gamma = cfg.x;
+    let ramp_x = cfg.y;
+    let ramp_y = cfg.z;
+
+    // Outside the overlap rect: no dimming
+    if (uv.x < u_min || uv.x > u_max || uv.y < v_min || uv.y > v_max) {
+        return 1.0;
+    }
+
+    let zone_w = u_max - u_min;
+    let zone_h = v_max - v_min;
+    var t = 1.0;
+
+    // Horizontal ramp: fade toward the specified direction
+    if (abs(ramp_x) > 0.001 && zone_w > 0.001) {
+        if (ramp_x > 0.0) {
+            // Fade toward u_max (other surface is to the right)
+            t = min(t, (u_max - uv.x) / zone_w);
+        } else {
+            // Fade toward u_min (other surface is to the left)
+            t = min(t, (uv.x - u_min) / zone_w);
+        }
+    }
+
+    // Vertical ramp: fade toward the specified direction
+    if (abs(ramp_y) > 0.001 && zone_h > 0.001) {
+        if (ramp_y > 0.0) {
+            // Fade toward v_max (other surface is below)
+            t = min(t, (v_max - uv.y) / zone_h);
+        } else {
+            // Fade toward v_min (other surface is above)
+            t = min(t, (uv.y - v_min) / zone_h);
+        }
+    }
+
+    return blend_alpha(t, gamma);
+}
+
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     // Apply UV transform for content mapping modes
@@ -63,5 +132,16 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
 
     var color = textureSample(source_texture, texture_sampler, source_uv);
     color.a *= params.opacity;
+
+    // Per-surface overlap zone blending — dim only within overlap rectangles.
+    // Multiplies RGB (pre-multiplied blend).
+    let n = i32(params.zone_count);
+    var blend = 1.0;
+    if (n >= 1) { blend *= zone_blend(uv, params.zone0_rect, params.zone0_cfg); }
+    if (n >= 2) { blend *= zone_blend(uv, params.zone1_rect, params.zone1_cfg); }
+    if (n >= 3) { blend *= zone_blend(uv, params.zone2_rect, params.zone2_cfg); }
+    if (n >= 4) { blend *= zone_blend(uv, params.zone3_rect, params.zone3_cfg); }
+    color = vec4<f32>(color.rgb * blend, color.a);
+
     return color;
 }

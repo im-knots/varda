@@ -607,6 +607,7 @@ impl SurfaceCommands for VardaApp {
                             [bb.x, bb.y + bb.height],
                         ],
                         enabled: true,
+                        overlap_zones: Default::default(),
                     });
                 }
             }

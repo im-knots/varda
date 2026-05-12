@@ -1,6 +1,7 @@
 /// Simple blit pipeline for copying textures to the screen
 use anyhow::Result;
 use wgpu::util::DeviceExt;
+use super::edge_blend::SurfaceOverlapZones;
 
 /// Uniform buffer for blit parameters - 32 bytes (8 x f32)
 #[repr(C)]
@@ -258,7 +259,8 @@ impl BlitPipeline {
 
 // === Polygon rendering pipeline ===
 
-/// Extended params for polygon pipeline — includes homography matrix for warp.
+/// Extended params for polygon pipeline — includes homography matrix for warp
+/// and per-surface overlap zone blending parameters.
 /// Must match the PolygonParams struct in polygon.wgsl.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -272,6 +274,18 @@ struct PolygonParams {
     h_row0: [f32; 4],
     h_row1: [f32; 4],
     h_row2: [f32; 4],
+    // Overlap zone count (as f32 for alignment) + padding
+    zone_count: f32,
+    _zone_pad: [f32; 3],
+    // Up to 4 overlap zones, each: [u_min, v_min, u_max, v_max] + [gamma, _pad, _pad, _pad]
+    zone0_rect: [f32; 4],
+    zone0_cfg: [f32; 4],
+    zone1_rect: [f32; 4],
+    zone1_cfg: [f32; 4],
+    zone2_rect: [f32; 4],
+    zone2_cfg: [f32; 4],
+    zone3_rect: [f32; 4],
+    zone3_cfg: [f32; 4],
 }
 
 impl PolygonParams {
@@ -411,7 +425,7 @@ impl PolygonBlitPipeline {
         Ok(Self { pipeline, bind_group_layout, sampler })
     }
 
-    /// Create a bind group for a texture with UV transform and homography warp.
+    /// Create a bind group for a texture with UV transform, homography warp, and overlap zones.
     /// `homography` is a 3×3 matrix packed as 12 floats (3 rows × 4, with w padding).
     /// Pass `None` for identity (no warp).
     pub fn create_bind_group(
@@ -421,6 +435,7 @@ impl PolygonBlitPipeline {
         uv_scale: [f32; 2],
         uv_offset: [f32; 2],
         homography: Option<&[f32; 12]>,
+        overlap_zones: &SurfaceOverlapZones,
     ) -> wgpu::BindGroup {
         let h = homography.copied().unwrap_or_else(|| {
             let id = PolygonParams::identity_homography();
@@ -428,6 +443,18 @@ impl PolygonBlitPipeline {
              id[1][0], id[1][1], id[1][2], id[1][3],
              id[2][0], id[2][1], id[2][2], id[2][3]]
         });
+
+        let z = |i: usize| -> ([f32; 4], [f32; 4]) {
+            if let Some(zone) = overlap_zones.zones.get(i) {
+                (zone.uv_rect, [zone.gamma, zone.ramp_x, zone.ramp_y, 0.0])
+            } else {
+                ([0.0; 4], [0.0; 4])
+            }
+        };
+        let (z0r, z0c) = z(0);
+        let (z1r, z1c) = z(1);
+        let (z2r, z2c) = z(2);
+        let (z3r, z3c) = z(3);
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Polygon Params Buffer"),
@@ -440,6 +467,12 @@ impl PolygonBlitPipeline {
                 h_row0: [h[0], h[1], h[2], h[3]],
                 h_row1: [h[4], h[5], h[6], h[7]],
                 h_row2: [h[8], h[9], h[10], h[11]],
+                zone_count: overlap_zones.zones.len().min(4) as f32,
+                _zone_pad: [0.0; 3],
+                zone0_rect: z0r, zone0_cfg: z0c,
+                zone1_rect: z1r, zone1_cfg: z1c,
+                zone2_rect: z2r, zone2_cfg: z2c,
+                zone3_rect: z3r, zone3_cfg: z3c,
             }]),
             usage: wgpu::BufferUsages::UNIFORM,
         });

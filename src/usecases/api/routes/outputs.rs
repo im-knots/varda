@@ -155,3 +155,56 @@ pub async fn set_target(State(s): State<SharedState>, Path(idx): Path<usize>, Js
         Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
+
+
+// ── Edge Blending ────────────────────────────────────────────────────
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetEdgeBlendBody {
+    /// Edge blending configuration (four edges with enabled, width, gamma).
+    pub config: crate::renderer::edge_blend::EdgeBlendConfig,
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/outputs/{idx}/edge-blend",
+    params(("idx" = usize, Path, description = "Output index")),
+    request_body = SetEdgeBlendBody,
+    responses((status = 200, body = CommandResult)),
+    tag = "Outputs"
+)]
+pub async fn set_edge_blend(
+    State(s): State<SharedState>,
+    Path(idx): Path<usize>,
+    Json(b): Json<SetEdgeBlendBody>,
+) -> impl IntoResponse {
+    match s.send_command(EngineCommand::SetEdgeBlend { output_idx: idx, config: b.config }).await {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetEdgeBlendModeBody {
+    /// Edge blend mode: "Auto" or "Manual".
+    pub mode: crate::renderer::edge_blend::EdgeBlendMode,
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/outputs/{idx}/edge-blend-mode",
+    params(("idx" = usize, Path, description = "Output index")),
+    request_body = SetEdgeBlendModeBody,
+    responses((status = 200, body = CommandResult)),
+    tag = "Outputs"
+)]
+pub async fn set_edge_blend_mode(
+    State(s): State<SharedState>,
+    Path(idx): Path<usize>,
+    Json(b): Json<SetEdgeBlendModeBody>,
+) -> impl IntoResponse {
+    match s.send_command(EngineCommand::SetEdgeBlendMode { output_idx: idx, mode: b.mode }).await {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}

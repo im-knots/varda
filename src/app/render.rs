@@ -291,6 +291,7 @@ impl VardaApp {
                         bounding_box: [bb.x, bb.y, bb.width, bb.height],
                         uv_scale, uv_offset,
                         warp_corners: Some(assignment.warp_corners),
+                        overlap_zones: assignment.overlap_zones.clone(),
                     })
                 })
                 .collect();
@@ -314,6 +315,7 @@ impl VardaApp {
                         content_view, vertices: &surface.vertices,
                         bounding_box: [bb.x, bb.y, bb.width, bb.height],
                         uv_scale, uv_offset, warp_corners: None,
+                        overlap_zones: Default::default(),
                     })
                 })
                 .collect();
@@ -380,6 +382,12 @@ impl VardaApp {
                 label: Some("Headless Output Encoder"),
             });
 
+            // Post-process edge blend only for Manual mode; Auto uses per-surface shader blend.
+            let use_edge_blend = h.edge_blend_mode == crate::renderer::edge_blend::EdgeBlendMode::Manual
+                && h.edge_blend.any_enabled();
+            // When edge blending: render to intermediate, then blend → final texture.
+            let render_target = if use_edge_blend { &h.edge_blend_texture_view } else { &h.texture_view };
+
             if !h.surface_assignments.is_empty() {
                 // Surface-routed rendering: render assigned surfaces with warp
                 let prepared: Vec<_> = h.surface_assignments.iter()
@@ -401,6 +409,7 @@ impl VardaApp {
                         let bind_group = h.polygon_pipeline.create_bind_group(
                             &context.device, content_view,
                             uv_scale, uv_offset, Some(&homography),
+                            &assignment.overlap_zones,
                         );
                         let (vb, num_tris) = crate::renderer::blit::PolygonBlitPipeline::triangulate(
                             &context.device, &surface.vertices,
@@ -414,7 +423,7 @@ impl VardaApp {
                     let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Headless Surface Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &h.texture_view,
+                            view: render_target,
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -445,7 +454,7 @@ impl VardaApp {
                     let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Headless Blit Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &h.texture_view,
+                            view: render_target,
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -459,6 +468,14 @@ impl VardaApp {
                     });
                     h.blit_pipeline.render(&mut rp, &bind_group);
                 }
+            }
+
+            // Apply edge blend post-process if any edge is enabled
+            if use_edge_blend {
+                h.edge_blend_pipeline.render(
+                    &context.device, &context.queue, &mut encoder,
+                    &h.edge_blend_texture_view, &h.texture_view, &h.edge_blend,
+                );
             }
 
             // Enqueue readback copy from the now-rendered texture

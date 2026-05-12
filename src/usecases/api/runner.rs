@@ -105,6 +105,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::outputs::start, routes::outputs::stop,
         routes::outputs::toggle_calibration, routes::outputs::set_warp,
         routes::outputs::reset_warp, routes::outputs::set_target,
+        routes::outputs::set_edge_blend, routes::outputs::set_edge_blend_mode,
         // Sequences
         routes::sequences::create, routes::sequences::delete,
         routes::sequences::play, routes::sequences::stop,
@@ -305,6 +306,8 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/outputs/{idx}/warp", axum::routing::put(routes::outputs::set_warp))
         .route("/api/outputs/{idx}/reset-warp", axum::routing::post(routes::outputs::reset_warp))
         .route("/api/outputs/{idx}/target", axum::routing::put(routes::outputs::set_target))
+        .route("/api/outputs/{idx}/edge-blend", axum::routing::put(routes::outputs::set_edge_blend))
+        .route("/api/outputs/{idx}/edge-blend-mode", axum::routing::put(routes::outputs::set_edge_blend_mode))
         // ── Write: Sequences ────────────────────────────────────
         .route("/api/sequences", axum::routing::post(routes::sequences::create))
         .route("/api/sequences/{idx}", axum::routing::delete(routes::sequences::delete))

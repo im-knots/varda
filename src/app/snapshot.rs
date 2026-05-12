@@ -456,6 +456,7 @@ pub(crate) fn build_ui_data(
                     SurfaceAssignmentUI {
                         surface_uuid: a.surface_uuid.clone(), surface_name,
                         warp_corners: a.warp_corners, enabled: a.enabled,
+                        overlap_zones: a.overlap_zones.clone(),
                     }
                 }).collect();
                 (w.target.clone(), format!("{}", w.target), true, true, std::time::Duration::ZERO, sa, w.calibration_mode)
@@ -467,16 +468,19 @@ pub(crate) fn build_ui_data(
                         surface_name: app.surface_manager.find_by_uuid(&a.surface_uuid)
                             .map(|(_, s)| s.name.clone()).unwrap_or_else(|| format!("Surface {}", a.surface_uuid)),
                         warp_corners: a.warp_corners, enabled: a.enabled,
+                        overlap_zones: a.overlap_zones.clone(),
                     }
                 }).collect();
                 (h.target.clone(), format!("{}", h.target), false, h.active, o.active_duration(), sa, false)
             }
         };
+        let edge_blend_mode = o.edge_blend_mode();
+        let edge_blend = o.edge_blend();
         OutputUI {
             uuid: o.uuid().to_string(),
             name: o.name().to_string(), target, target_label,
             is_windowed, is_active, active_duration,
-            surface_assignments, calibration_mode,
+            surface_assignments, calibration_mode, edge_blend_mode, edge_blend,
         }
     }).collect();
 

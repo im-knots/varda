@@ -159,6 +159,9 @@ fn render_windowed_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
     if output.calibration_mode && !output.surface_assignments.is_empty() {
         render_warp_calibration(ui, idx, output, actions);
     }
+
+    // Edge blending
+    render_edge_blend_controls(ui, idx, output, actions);
 }
 
 /// Controls specific to headless outputs (start/stop, duration, inline config).
@@ -264,6 +267,9 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
             actions.output_actions.push(OutputAction::Start { idx });
         }
     });
+
+    // Edge blending
+    render_edge_blend_controls(ui, idx, output, actions);
 }
 
 
@@ -483,6 +489,120 @@ fn render_hls_dash_name_codec(
     }
 }
 
+/// Render edge blending controls for an output (shared by windowed and headless).
+fn render_edge_blend_controls(
+    ui: &mut egui::Ui,
+    idx: usize,
+    output: &super::super::OutputUI,
+    actions: &mut UIActions,
+) {
+    use crate::renderer::edge_blend::EdgeBlendMode;
+
+    let collapse_id = egui::Id::new("edge_blend_section").with(idx);
+    egui::CollapsingHeader::new(egui::RichText::new("Edge Blending").small().strong())
+        .id_salt(collapse_id)
+        .default_open(false)
+        .show(ui, |ui| {
+            // Mode toggle: Auto / Manual
+            let is_auto = output.edge_blend_mode == EdgeBlendMode::Auto;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Mode:").small());
+                if ui.selectable_label(!is_auto, egui::RichText::new("Manual").small()).clicked() && is_auto {
+                    actions.output_actions.push(OutputAction::SetEdgeBlendMode {
+                        output_idx: idx, mode: EdgeBlendMode::Manual,
+                    });
+                }
+                if ui.selectable_label(is_auto, egui::RichText::new("Auto").small()).clicked() && !is_auto {
+                    actions.output_actions.push(OutputAction::SetEdgeBlendMode {
+                        output_idx: idx, mode: EdgeBlendMode::Auto,
+                    });
+                }
+            });
+
+            let mut cfg = output.edge_blend;
+            let mut changed = false;
+
+            if is_auto {
+                // Auto mode: show per-surface overlap zones (read-only)
+                let mut any_zones = false;
+                for sa in &output.surface_assignments {
+                    if sa.overlap_zones.any_enabled() {
+                        any_zones = true;
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("{}:", sa.surface_name)).small());
+                            ui.label(egui::RichText::new(
+                                format!("{} zone(s)", sa.overlap_zones.zones.len())
+                            ).small().weak());
+                        });
+                        for (zi, zone) in sa.overlap_zones.zones.iter().enumerate() {
+                            let dir = match (zone.ramp_x as i32, zone.ramp_y as i32) {
+                                (1, 0) => "→",
+                                (-1, 0) => "←",
+                                (0, 1) => "↓",
+                                (0, -1) => "↑",
+                                (1, 1) => "↘",
+                                (-1, 1) => "↙",
+                                (1, -1) => "↗",
+                                (-1, -1) => "↖",
+                                _ => "·",
+                            };
+                            ui.horizontal(|ui| {
+                                ui.add_space(12.0);
+                                ui.label(egui::RichText::new(format!(
+                                    "Zone {}: UV [{:.2},{:.2}]→[{:.2},{:.2}] {} γ:{:.1}",
+                                    zi + 1,
+                                    zone.uv_rect[0], zone.uv_rect[1],
+                                    zone.uv_rect[2], zone.uv_rect[3],
+                                    dir, zone.gamma,
+                                )).small().weak());
+                            });
+                        }
+                    }
+                }
+                if !any_zones {
+                    ui.label(egui::RichText::new("No overlapping surfaces detected").small().weak());
+                }
+            } else {
+                // Manual mode: full per-edge controls (existing behavior)
+                for (label, edge) in [
+                    ("Left", &mut cfg.left),
+                    ("Right", &mut cfg.right),
+                    ("Top", &mut cfg.top),
+                    ("Bottom", &mut cfg.bottom),
+                ] {
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut edge.enabled, egui::RichText::new(label).small()).changed() {
+                            changed = true;
+                        }
+                        if edge.enabled {
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new("W:").small());
+                            if ui.add(egui::Slider::new(&mut edge.width, 0.01..=0.5).step_by(0.01).max_decimals(2))
+                                .on_hover_text("Blend zone width (fraction of output)")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            ui.label(egui::RichText::new("γ:").small());
+                            if ui.add(egui::Slider::new(&mut edge.gamma, 0.5..=4.0).step_by(0.1).max_decimals(1))
+                                .on_hover_text("Gamma curve exponent")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        }
+                    });
+                }
+            }
+
+            if changed {
+                actions.output_actions.push(OutputAction::SetEdgeBlend {
+                    output_idx: idx, config: cfg,
+                });
+            }
+        });
+}
+
 /// Render the warp calibration mini-canvas for an output.
 /// Shows surface assignments as quads with draggable corner handles.
 pub(super) fn render_warp_calibration(
@@ -649,6 +769,8 @@ mod tests {
             active_duration: std::time::Duration::ZERO,
             surface_assignments: vec![],
             calibration_mode: false,
+            edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
+            edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
         });
         let mut actions = UIActions::new();
         let _harness = egui_kittest::Harness::new_ui(|ui| {

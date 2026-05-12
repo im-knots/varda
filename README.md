@@ -15,7 +15,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Modulation**: LFO, audio-reactive, ADSR, step sequencer, mod-on-mod chaining on any parameter
 - **Audio**: 512-bin FFT, beat detection, bass/mid/treble bands, BPM with beat phase
 - **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine
-- **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards
+- **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards, edge blending (Auto with precise polygon overlap detection, Manual per-edge)
 - **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments
 - **Network I/O**: NDI, SRT, HLS, LL-HLS, and DASH send/receive
 - **Recording**: H.264, h.265, AV1, ProRes 422, HAP Q per-output

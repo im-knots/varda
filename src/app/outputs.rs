@@ -28,6 +28,10 @@ impl VardaApp {
                     EngineCommand::SetWarpCorner { output_idx: *output_idx, assignment_idx: *assignment_idx, corner_idx: *corner_idx, position: *position },
                 ui::OutputAction::ResetWarp { output_idx, assignment_idx } =>
                     EngineCommand::ResetWarp { output_idx: *output_idx, assignment_idx: *assignment_idx },
+                ui::OutputAction::SetEdgeBlend { output_idx, config } =>
+                    EngineCommand::SetEdgeBlend { output_idx: *output_idx, config: *config },
+                ui::OutputAction::SetEdgeBlendMode { output_idx, mode } =>
+                    EngineCommand::SetEdgeBlendMode { output_idx: *output_idx, mode: *mode },
             };
             self.execute_command(cmd);
         }
@@ -82,8 +86,11 @@ impl VardaApp {
                                         surface_uuid: a.surface_uuid.clone(),
                                         warp_corners: a.warp_corners,
                                         enabled: a.enabled,
+                                        overlap_zones: Default::default(),
                                     }
                                 }).collect();
+                                output.edge_blend_mode = config.edge_blend_mode;
+                                output.edge_blend = config.edge_blend;
                                 // If Display target, set fullscreen — or fall back to
                                 // Windowed if the target monitor is no longer connected.
                                 if let OutputTarget::Display { ref name, .. } = target {
@@ -134,10 +141,78 @@ impl VardaApp {
                         surface_uuid: a.surface_uuid.clone(),
                         warp_corners: a.warp_corners,
                         enabled: a.enabled,
+                        overlap_zones: Default::default(),
                     }
                 }).collect();
+                headless.edge_blend_mode = config.edge_blend_mode;
+                headless.edge_blend = config.edge_blend;
                 log::info!("Created headless output '{}'", name);
                 self.outputs.push(UnifiedOutput::Headless(headless));
+            }
+        }
+    }
+
+    /// Recompute per-surface edge blend for all Auto-mode outputs based on surface topology.
+    pub fn recompute_auto_edge_blend(&mut self) {
+        use crate::renderer::edge_blend::{EdgeBlendMode, OutputSurfaceInfo, MappedRegion, SurfaceOverlapZones, compute_auto_edge_blend};
+
+        // Check if any output is in Auto mode — early exit if none.
+        let auto_count = self.outputs.iter().filter(|o| o.edge_blend_mode() == EdgeBlendMode::Auto).count();
+        if auto_count == 0 {
+            return;
+        }
+        log::debug!("[edge-blend] recompute_auto: {} outputs in Auto mode", auto_count);
+
+        // Build OutputSurfaceInfo for each output (include surface_uuid in MappedRegion).
+        let infos: Vec<OutputSurfaceInfo> = self.outputs.iter().enumerate().map(|(idx, output)| {
+            let mut regions = Vec::new();
+            for assignment in output.surface_assignments() {
+                if let Some((_, surface)) = self.surface_manager.find_by_uuid(&assignment.surface_uuid) {
+                    let bb = surface.bounding_box();
+                    regions.push(MappedRegion {
+                        source_key: format!("{:?}", surface.source),
+                        bbox: [bb.x, bb.y, bb.width, bb.height],
+                        surface_uuid: assignment.surface_uuid.clone(),
+                        vertices: surface.vertices.clone(),
+                        extra_contours: surface.extra_contours.clone(),
+                    });
+                }
+            }
+            let default_gamma = output.edge_blend().left.gamma;
+            OutputSurfaceInfo {
+                output_idx: idx,
+                edge_blend_mode: output.edge_blend_mode(),
+                default_gamma,
+                regions,
+            }
+        }).collect();
+
+        // Clear overlap zones on all Auto-mode assignments before applying new results.
+        for output in self.outputs.iter_mut() {
+            if output.edge_blend_mode() == EdgeBlendMode::Auto {
+                for assignment in output.surface_assignments_mut() {
+                    assignment.overlap_zones = SurfaceOverlapZones::default();
+                }
+            }
+        }
+
+        // Compute per-surface overlap zones and apply to assignments.
+        let results = compute_auto_edge_blend(&infos);
+        log::debug!("[edge-blend] computed {} results", results.len());
+        for result in &results {
+            log::debug!(
+                "[edge-blend]   output={} surface={} zones={}",
+                result.output_idx, result.surface_uuid,
+                result.overlap_zones.zones.len(),
+            );
+        }
+        for result in results {
+            let output = &mut self.outputs[result.output_idx];
+            for assignment in output.surface_assignments_mut() {
+                if assignment.surface_uuid == result.surface_uuid {
+                    assignment.overlap_zones = result.overlap_zones;
+                    break;
+                }
             }
         }
     }

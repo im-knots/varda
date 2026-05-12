@@ -481,7 +481,7 @@ impl SurfaceManager {
 // ── Geo conversion helpers ──────────────────────────────────────────
 
 /// Convert `[f32; 2]` vertices to a `geo::Polygon<f64>`.
-fn verts_to_geo(verts: &[[f32; 2]]) -> Option<geo::Polygon<f64>> {
+pub(crate) fn verts_to_geo(verts: &[[f32; 2]]) -> Option<geo::Polygon<f64>> {
     if verts.len() < 3 { return None; }
     let coords: Vec<geo::Coord<f64>> = verts.iter()
         .map(|v| geo::coord! { x: v[0] as f64, y: v[1] as f64 })

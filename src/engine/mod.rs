@@ -154,6 +154,8 @@ pub enum EngineCommand {
     ToggleCalibration { idx: usize },
     SetWarpCorner { output_idx: usize, assignment_idx: usize, corner_idx: usize, position: [f32; 2] },
     ResetWarp { output_idx: usize, assignment_idx: usize },
+    SetEdgeBlend { output_idx: usize, config: crate::renderer::edge_blend::EdgeBlendConfig },
+    SetEdgeBlendMode { output_idx: usize, mode: crate::renderer::edge_blend::EdgeBlendMode },
 
     // ── Surfaces ────────────────────────────────────────────────
     AddSurface { name: String, source: OutputSource },

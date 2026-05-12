@@ -632,6 +632,10 @@ pub enum OutputAction {
     SetWarpCorner { output_idx: usize, assignment_idx: usize, corner_idx: usize, position: [f32; 2] },
     /// Reset warp to identity for a surface assignment
     ResetWarp { output_idx: usize, assignment_idx: usize },
+    /// Set edge blending configuration for an output
+    SetEdgeBlend { output_idx: usize, config: crate::renderer::edge_blend::EdgeBlendConfig },
+    /// Set edge blend mode (Auto / Manual) for an output
+    SetEdgeBlendMode { output_idx: usize, mode: crate::renderer::edge_blend::EdgeBlendMode },
 }
 
 /// Snapshot of a surface assignment for UI display
@@ -641,6 +645,8 @@ pub struct SurfaceAssignmentUI {
     pub surface_name: String,
     pub warp_corners: [[f32; 2]; 4],
     pub enabled: bool,
+    /// Per-surface overlap zones (Auto mode). Empty when Manual or no overlaps.
+    pub overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones,
 }
 
 /// Snapshot of an output's state for UI display (unified — windowed or headless)
@@ -660,6 +666,10 @@ pub struct OutputUI {
     pub active_duration: std::time::Duration,
     pub surface_assignments: Vec<SurfaceAssignmentUI>,
     pub calibration_mode: bool,
+    /// Edge blend mode (Auto / Manual)
+    pub edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode,
+    /// Edge blending configuration
+    pub edge_blend: crate::renderer::edge_blend::EdgeBlendConfig,
 }
 
 /// Surface action from UI

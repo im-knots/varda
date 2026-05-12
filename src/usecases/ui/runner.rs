@@ -287,14 +287,15 @@ impl UIRunner {
     }
 
     /// Resolve the texture view to use for an output preview.
-    /// Windowed outputs use the mixer composite; headless outputs resolve their source.
+    /// Windowed outputs use their intermediate render texture (shows surface geometry + warp).
+    /// Headless outputs resolve their source.
     fn output_preview_view<'a>(
         output: &'a crate::renderer::context::UnifiedOutput,
         mixer: &'a crate::mixer::Mixer,
     ) -> &'a wgpu::TextureView {
         use crate::renderer::context::{UnifiedOutput, OutputSource};
         match output {
-            UnifiedOutput::Window(_) => mixer.composite_view(),
+            UnifiedOutput::Window(w) => &w.preview_texture_view,
             UnifiedOutput::Headless(h) => match &h.source {
                 OutputSource::Master => mixer.composite_view(),
                 OutputSource::Channel(idx) => mixer.channels().get(*idx)

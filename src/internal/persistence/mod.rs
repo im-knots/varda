@@ -571,6 +571,8 @@ pub fn snapshot_stage(
                 None,
             ),
         };
+        let edge_blend_mode = unified.edge_blend_mode();
+        let edge_blend = unified.edge_blend();
         OutputConfig {
             uuid: unified.uuid().to_string(),
             name,
@@ -579,6 +581,8 @@ pub fn snapshot_stage(
             surface_assignments,
             window_position,
             window_size,
+            edge_blend_mode,
+            edge_blend,
         }
     }).collect();
 
@@ -1045,6 +1049,8 @@ mod tests {
             }],
             window_position: None,
             window_size: None,
+            edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
+            edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
         });
         let errors = prefs.validate();
         assert!(errors.iter().any(|e| e.contains("warp_corners")));

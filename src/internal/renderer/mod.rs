@@ -1,6 +1,7 @@
 pub mod context;
 pub mod pipeline;
 pub mod blit;
+pub mod edge_blend;
 pub mod hap_convert;
 pub mod readback;
 pub mod subprocess;
@@ -10,6 +11,7 @@ pub mod warp;
 pub use context::*;
 pub use pipeline::*;
 pub use blit::*;
+pub use edge_blend::*;
 pub use hap_convert::*;
 pub use readback::*;
 pub use subprocess::*;
