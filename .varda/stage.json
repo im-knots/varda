@@ -118,7 +118,17 @@
       "target": {
         "type": "recording",
         "path": "output.mp4",
-        "codec": "H.264 (fast)"
+        "codec": "H.264"
+      },
+      "surface_assignments": []
+    },
+    {
+      "uuid": "e62c60c8",
+      "name": "Output 3",
+      "target": {
+        "type": "srt_stream",
+        "url": "srt://0.0.0.0:9001",
+        "codec": "H.265 (HEVC)"
       },
       "surface_assignments": []
     }

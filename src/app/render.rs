@@ -479,7 +479,7 @@ impl VardaApp {
                             }
                         }
                     }
-                    crate::renderer::context::OutputTarget::SrtStream { ref url } => {
+                    crate::renderer::context::OutputTarget::SrtStream { ref url, ref codec } => {
                         if let Some(sub) = &mut h.subprocess {
                             if !sub.feed_frame(&frame_data) {
                                 // SRT client disconnected — auto-restart the listener
@@ -488,7 +488,7 @@ impl VardaApp {
                                     sub.stop();
                                 }
                                 match crate::renderer::FfmpegSubprocess::spawn_srt(
-                                    url, h.width, h.height, 30,
+                                    url, codec, h.width, h.height, 30,
                                 ) {
                                     Ok(new_sub) => {
                                         h.subprocess = Some(new_sub);

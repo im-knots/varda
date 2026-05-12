@@ -1263,8 +1263,8 @@ impl VardaApp {
                 if let Some(UnifiedOutput::Headless(h)) = self.outputs.get_mut(idx) {
                     if !h.active {
                         match &h.target {
-                            OutputTarget::SrtStream { url } => {
-                                match crate::renderer::FfmpegSubprocess::spawn_srt(url, h.width, h.height, 30) {
+                            OutputTarget::SrtStream { url, codec } => {
+                                match crate::renderer::FfmpegSubprocess::spawn_srt(url, codec, h.width, h.height, 30) {
                                     Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
                                     Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
                                 }

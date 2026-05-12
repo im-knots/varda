@@ -19,7 +19,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
             // Auto-increment port: find the highest SRT port in use and add 1
             let next_port = data.outputs.iter()
                 .filter_map(|o| {
-                    if let OutputTarget::SrtStream { ref url } = o.target {
+                    if let OutputTarget::SrtStream { ref url, .. } = o.target {
                         url.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())
                     } else {
                         None
@@ -29,7 +29,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                 .map(|p| p + 1)
                 .unwrap_or(9001);
             actions.output_actions.push(OutputAction::CreateHeadless {
-                target: OutputTarget::SrtStream { url: format!("srt://0.0.0.0:{}", next_port) },
+                target: OutputTarget::SrtStream { url: format!("srt://0.0.0.0:{}", next_port), codec: crate::renderer::context::SrtCodec::default() },
             });
         }
         if ui.button("+ NDI").clicked() {
@@ -193,7 +193,7 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
                     .selected_text(egui::RichText::new(codec.to_string()).small())
                     .width(120.0)
                     .show_ui(ui, |ui| {
-                        for c in &[RecordingCodec::H264, RecordingCodec::ProRes, RecordingCodec::HapQ] {
+                        for c in &[RecordingCodec::H264, RecordingCodec::H265, RecordingCodec::AV1, RecordingCodec::ProRes, RecordingCodec::Hap, RecordingCodec::HapAlpha, RecordingCodec::HapQ] {
                             if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
                                 actions.output_actions.push(OutputAction::SetTarget {
                                     idx,
@@ -228,8 +228,28 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
     }
 
     // Inline config for SRT outputs
-    if let OutputTarget::SrtStream { ref url } = output.target {
+    if let OutputTarget::SrtStream { ref url, ref codec } = output.target {
         if !output.is_active {
+            // Codec selector
+            ui.horizontal(|ui| {
+                use crate::renderer::context::SrtCodec;
+                ui.label(egui::RichText::new("Codec:").small());
+                let codec_id = egui::Id::new(format!("srt_codec_{}", idx));
+                egui::ComboBox::from_id_salt(codec_id)
+                    .selected_text(egui::RichText::new(codec.to_string()).small())
+                    .width(120.0)
+                    .show_ui(ui, |ui| {
+                        for c in &[SrtCodec::H264, SrtCodec::H265] {
+                            if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
+                                actions.output_actions.push(OutputAction::SetTarget {
+                                    idx,
+                                    target: OutputTarget::SrtStream { url: url.clone(), codec: c.clone() },
+                                });
+                            }
+                        }
+                    });
+            });
+            // URL input
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("URL:").small());
                 let url_id = egui::Id::new(format!("srt_url_{}", idx));
@@ -245,7 +265,7 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
                     if response.lost_focus() {
                         actions.output_actions.push(OutputAction::SetTarget {
                             idx,
-                            target: OutputTarget::SrtStream { url: current_url },
+                            target: OutputTarget::SrtStream { url: current_url, codec: codec.clone() },
                         });
                     }
                 }

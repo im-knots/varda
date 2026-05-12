@@ -448,7 +448,7 @@ fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
             path: path.clone(),
             codec: codec.to_string(),
         },
-        OutputTarget::SrtStream { url } => OutputTargetConfig::SrtStream { url: url.clone() },
+        OutputTarget::SrtStream { url, codec } => OutputTargetConfig::SrtStream { url: url.clone(), codec: codec.to_string() },
         OutputTarget::NdiSend { sender_name } => OutputTargetConfig::NdiSend { sender_name: sender_name.clone() },
         OutputTarget::SyphonServer { server_name } => OutputTargetConfig::SyphonServer { server_name: server_name.clone() },
     }
@@ -470,12 +470,22 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
         OutputTargetConfig::Recording { path, codec } => OutputTarget::Recording {
             path: path.clone(),
             codec: match codec.as_str() {
-                "prores" | "ProRes" => RecordingCodec::ProRes,
-                "hapq" | "HapQ" => RecordingCodec::HapQ,
+                "prores" | "ProRes" | "ProRes 422" => RecordingCodec::ProRes,
+                "h265" | "H265" | "H.265 (HEVC)" => RecordingCodec::H265,
+                "av1" | "AV1" => RecordingCodec::AV1,
+                "hap" | "Hap" | "HAP" => RecordingCodec::Hap,
+                "hap_alpha" | "HapAlpha" | "HAP Alpha" => RecordingCodec::HapAlpha,
+                "hapq" | "HapQ" | "HAP Q" => RecordingCodec::HapQ,
                 _ => RecordingCodec::H264,
             },
         },
-        OutputTargetConfig::SrtStream { url } => OutputTarget::SrtStream { url: url.clone() },
+        OutputTargetConfig::SrtStream { url, codec } => OutputTarget::SrtStream {
+            url: url.clone(),
+            codec: match codec.as_str() {
+                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::SrtCodec::H265,
+                _ => crate::renderer::context::SrtCodec::H264,
+            },
+        },
         OutputTargetConfig::NdiSend { sender_name } => OutputTarget::NdiSend { sender_name: sender_name.clone() },
         OutputTargetConfig::SyphonServer { server_name } => OutputTarget::SyphonServer { server_name: server_name.clone() },
     }

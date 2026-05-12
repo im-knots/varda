@@ -292,7 +292,7 @@ pub enum OutputTarget {
     /// Record frames to a video file via ffmpeg subprocess
     Recording { path: String, codec: RecordingCodec },
     /// Stream frames via SRT (Secure Reliable Transport) through ffmpeg
-    SrtStream { url: String },
+    SrtStream { url: String, codec: SrtCodec },
     /// Send frames over NDI network protocol
     NdiSend { sender_name: String },
     /// Publish frames via Syphon (macOS inter-app sharing)
@@ -317,7 +317,7 @@ impl std::fmt::Display for OutputTarget {
             OutputTarget::Windowed => write!(f, "Windowed"),
             OutputTarget::Display { name, .. } => write!(f, "{}", name),
             OutputTarget::Recording { path, codec } => write!(f, "Rec [{}]: {}", codec, path),
-            OutputTarget::SrtStream { url } => write!(f, "SRT: {}", url),
+            OutputTarget::SrtStream { url, codec } => write!(f, "SRT [{}]: {}", codec, url),
             OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {}", sender_name),
             OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {}", server_name),
         }
@@ -758,10 +758,18 @@ pub fn create_calibration_textures(
 /// Recording codec for ffmpeg subprocess.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum RecordingCodec {
-    /// H264 ultrafast preset (-c:v libx264 -preset ultrafast -crf 18)
+    /// H.264 ultrafast preset (-c:v libx264 -preset ultrafast -crf 18)
     H264,
+    /// H.265 / HEVC (-c:v libx265 -preset ultrafast -crf 20)
+    H265,
+    /// AV1 via SVT-AV1 (-c:v libsvtav1 -preset 10 -crf 28)
+    AV1,
     /// ProRes 422 (-c:v prores_ks -profile:v 2)
     ProRes,
+    /// HAP (-c:v hap -format hap)
+    Hap,
+    /// HAP Alpha (-c:v hap -format hap_alpha)
+    HapAlpha,
     /// HAP Q (-c:v hap -format hap_q)
     HapQ,
 }
@@ -769,9 +777,35 @@ pub enum RecordingCodec {
 impl std::fmt::Display for RecordingCodec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RecordingCodec::H264 => write!(f, "H.264 (fast)"),
+            RecordingCodec::H264 => write!(f, "H.264"),
+            RecordingCodec::H265 => write!(f, "H.265 (HEVC)"),
+            RecordingCodec::AV1 => write!(f, "AV1"),
             RecordingCodec::ProRes => write!(f, "ProRes 422"),
+            RecordingCodec::Hap => write!(f, "HAP"),
+            RecordingCodec::HapAlpha => write!(f, "HAP Alpha"),
             RecordingCodec::HapQ => write!(f, "HAP Q"),
+        }
+    }
+}
+
+/// Streaming codec for SRT output.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub enum SrtCodec {
+    /// H.264 ultrafast + zerolatency
+    H264,
+    /// H.265 / HEVC ultrafast + zerolatency
+    H265,
+}
+
+impl Default for SrtCodec {
+    fn default() -> Self { Self::H264 }
+}
+
+impl std::fmt::Display for SrtCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SrtCodec::H264 => write!(f, "H.264"),
+            SrtCodec::H265 => write!(f, "H.265 (HEVC)"),
         }
     }
 }

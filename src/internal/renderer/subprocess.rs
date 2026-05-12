@@ -73,10 +73,14 @@ impl FfmpegSubprocess {
         height: u32,
         fps: u32,
     ) -> anyhow::Result<Self> {
-        let codec_args: Vec<&str> = match codec {
-            RecordingCodec::H264 => vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18"],
-            RecordingCodec::ProRes => vec!["-c:v", "prores_ks", "-profile:v", "2"],
-            RecordingCodec::HapQ => vec!["-c:v", "hap", "-format", "hap_q"],
+        let (codec_args, needs_yuv420p): (Vec<&str>, bool) = match codec {
+            RecordingCodec::H264 => (vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18"], true),
+            RecordingCodec::H265 => (vec!["-c:v", "libx265", "-preset", "ultrafast", "-crf", "20"], true),
+            RecordingCodec::AV1 => (vec!["-c:v", "libsvtav1", "-preset", "10", "-crf", "28"], true),
+            RecordingCodec::ProRes => (vec!["-c:v", "prores_ks", "-profile:v", "2"], true),
+            RecordingCodec::Hap => (vec!["-c:v", "hap", "-format", "hap"], false),
+            RecordingCodec::HapAlpha => (vec!["-c:v", "hap", "-format", "hap_alpha"], false),
+            RecordingCodec::HapQ => (vec!["-c:v", "hap", "-format", "hap_q"], false),
         };
 
         let mut cmd = Command::new("ffmpeg");
@@ -86,9 +90,11 @@ impl FfmpegSubprocess {
             .args(["-s", &format!("{}x{}", width, height)])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
-            .args(&codec_args)
-            .args(["-pix_fmt", "yuv420p"])
-            .arg(path)
+            .args(&codec_args);
+        if needs_yuv420p {
+            cmd.args(["-pix_fmt", "yuv420p"]);
+        }
+        cmd.arg(path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -122,6 +128,7 @@ impl FfmpegSubprocess {
     /// Starts an SRT server on the specified port and broadcasts frames to connected clients.
     pub fn spawn_srt(
         url: &str,
+        codec: &super::context::SrtCodec,
         width: u32,
         height: u32,
         fps: u32,
@@ -135,6 +142,11 @@ impl FfmpegSubprocess {
             format!("{}?mode=listener", url)
         };
 
+        let encoder = match codec {
+            super::context::SrtCodec::H264 => "libx264",
+            super::context::SrtCodec::H265 => "libx265",
+        };
+
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
@@ -142,7 +154,7 @@ impl FfmpegSubprocess {
             .args(["-s", &format!("{}x{}", width, height)])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
-            .args(["-c:v", "libx264"])
+            .args(["-c:v", encoder])
             .args(["-preset", "ultrafast"])
             .args(["-tune", "zerolatency"])
             .args(["-pix_fmt", "yuv420p"])
@@ -244,43 +256,30 @@ impl FfmpegSubprocess {
         }
         self.stopped = true;
 
-        // Drop the sender to close the channel — writer thread will finish
+        let duration = self.start_time.elapsed();
+
+        // 1. Drop the sender to close the channel — no more frames queued
         drop(self.frame_tx.take());
 
-        // Join the writer thread (it will exit once channel is closed or on write error)
+        // 2. Kill ffmpeg BEFORE joining the writer thread. The writer thread
+        //    may be blocked on stdin.write_all() (e.g. SRT listener with a
+        //    full pipe buffer). Killing the child breaks the pipe, which
+        //    unblocks the write and lets the thread exit.
+        let _ = self.child.kill();
+
+        // 3. Now safe to join — the writer thread will see a broken pipe or
+        //    a closed channel and exit promptly.
         if let Some(handle) = self.writer_thread.take() {
             let _ = handle.join();
         }
 
-        // Close stdin to signal ffmpeg to finish (writer thread already dropped it, but be safe)
-        drop(self.child.stdin.take());
-        let duration = self.start_time.elapsed();
-
-        // Give ffmpeg a brief moment to exit gracefully
-        let exited = match self.child.try_wait() {
-            Ok(Some(_)) => true,
-            Ok(None) => {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                matches!(self.child.try_wait(), Ok(Some(_)))
-            }
-            Err(_) => false,
-        };
-
-        // If still running (e.g. SRT listener blocking), kill it
-        if !exited {
-            let _ = self.child.kill();
-        }
-
+        // 4. Reap the child process
         let frames = self.frames_written.load(Ordering::Relaxed);
         match self.child.wait() {
-            Ok(status) => {
+            Ok(_status) => {
                 self.drain_stderr();
-                if status.success() || !exited {
-                    log::info!("ffmpeg finished: {} ({} frames, {:.1}s)",
-                        self.label, frames, duration.as_secs_f32());
-                } else {
-                    log::error!("ffmpeg exited with status {} for '{}'", status, self.label);
-                }
+                log::info!("ffmpeg finished: {} ({} frames, {:.1}s)",
+                    self.label, frames, duration.as_secs_f32());
             }
             Err(e) => {
                 log::error!("Failed to wait for ffmpeg '{}': {}", self.label, e);
@@ -366,9 +365,18 @@ mod tests {
 
     #[test]
     fn recording_codec_display() {
-        assert_eq!(format!("{}", RecordingCodec::H264), "H.264 (fast)");
+        assert_eq!(format!("{}", RecordingCodec::H264), "H.264");
+        assert_eq!(format!("{}", RecordingCodec::H265), "H.265 (HEVC)");
+        assert_eq!(format!("{}", RecordingCodec::AV1), "AV1");
         assert_eq!(format!("{}", RecordingCodec::ProRes), "ProRes 422");
+        assert_eq!(format!("{}", RecordingCodec::Hap), "HAP");
+        assert_eq!(format!("{}", RecordingCodec::HapAlpha), "HAP Alpha");
         assert_eq!(format!("{}", RecordingCodec::HapQ), "HAP Q");
+
+        // SrtCodec display
+        use crate::renderer::context::SrtCodec;
+        assert_eq!(format!("{}", SrtCodec::H264), "H.264");
+        assert_eq!(format!("{}", SrtCodec::H265), "H.265 (HEVC)");
     }
 
     // ── Subprocess lifecycle (requires ffmpeg) ─────────────────────
@@ -435,7 +443,7 @@ mod tests {
         }
         // Use a high port unlikely to conflict
         let url = "srt://127.0.0.1:19876";
-        let mut sub = FfmpegSubprocess::spawn_srt(url, 64, 64, 30)
+        let mut sub = FfmpegSubprocess::spawn_srt(url, &crate::renderer::context::SrtCodec::H264, 64, 64, 30)
             .expect("failed to spawn SRT");
 
         assert_eq!(sub.label(), url);

@@ -344,7 +344,7 @@ pub enum OutputTargetConfig {
     Windowed,
     Display { name: String },
     Recording { path: String, codec: String },
-    SrtStream { url: String },
+    SrtStream { url: String, #[serde(default)] codec: String },
     NdiSend { sender_name: String },
     SyphonServer { server_name: String },
 }
