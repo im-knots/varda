@@ -5,20 +5,20 @@ Open-source visual performance tool with broadcast-style routing for VJs and ins
 ![Varda](img/screenshot.png)
 
 
-Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, NDI streams, SRT feeds, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). Instead of a clip-launch grid, you control what's live by adjusting opacity, blend modes, crossfaders, mute/solo, and effect chains. Zero-opacity decks and channels are automatically culled from the render pass, the same way a broadcast switcher only processes sources that are live on a bus.
+Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, streams, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). Instead of a clip-launch grid, you control what's live by adjusting opacity, blend modes, crossfaders, mute/solo, and effect chains. Zero-opacity decks and channels are automatically culled from the render pass, the same way a broadcast switcher only processes sources that are live on a bus.
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
-- **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, images, solid color
+- **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, HLS, DASH, images, solid color
 - **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 6 blend modes
 - **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations. 
 - **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
 - **Modulation**: LFO, audio-reactive, ADSR, step sequencer, mod-on-mod chaining on any parameter
 - **Audio**: 512-bin FFT, beat detection, bass/mid/treble bands, BPM with beat phase
-- **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine (shared parameter router, UUID addressing, bidirectional feedback)
+- **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine
 - **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards
 - **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments
 - **Network I/O**: NDI, SRT, HLS, LL-HLS, and DASH send/receive
-- **Recording**: H.264, ProRes 422, HAP Q per-output
+- **Recording**: H.264, h.265, AV1, ProRes 422, HAP Q per-output
 - **Presets**: save/load deck and channel presets with modulation recipes
 - **Persistence**: full scene/venue/MIDI state saved and restored across sessions
 
