@@ -654,9 +654,12 @@ pub(super) fn render_warp_calibration(
         mem.data.get_temp::<Option<(usize, usize)>>(state_id).flatten()
     });
 
-    // Draw each assigned surface's warp quad and handles
+    // Draw each assigned surface's warp quad and handles (corner-pin only)
     for (ai, assignment) in output.surface_assignments.iter().enumerate() {
-        let corners = assignment.warp_corners;
+        let corners = match &assignment.warp_mode {
+            crate::renderer::warp::WarpMode::CornerPin { corners } => corners,
+            crate::renderer::warp::WarpMode::Mesh(_) => continue, // Mesh warp not editable via corner handles
+        };
 
         // Draw the warp quad outline
         let screen_corners: Vec<egui::Pos2> = corners.iter()
@@ -698,13 +701,17 @@ pub(super) fn render_warp_calibration(
         }
     }
 
-    // Handle dragging
+    // Handle dragging (corner-pin only)
     if canvas_response.drag_started() {
         if let Some(pos) = canvas_response.interact_pointer_pos() {
             // Find nearest corner
             let mut best: Option<(usize, usize, f32)> = None;
             for (ai, assignment) in output.surface_assignments.iter().enumerate() {
-                for (ci, corner) in assignment.warp_corners.iter().enumerate() {
+                let corners = match &assignment.warp_mode {
+                    crate::renderer::warp::WarpMode::CornerPin { corners } => corners,
+                    crate::renderer::warp::WarpMode::Mesh(_) => continue,
+                };
+                for (ci, corner) in corners.iter().enumerate() {
                     let screen_pos = to_screen(corner[0], corner[1]);
                     let dist = pos.distance(screen_pos);
                     if dist < 20.0 {

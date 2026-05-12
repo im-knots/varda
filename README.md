@@ -22,6 +22,10 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Presets**: save/load deck and channel presets with modulation recipes
 - **Persistence**: full scene/venue/MIDI state saved and restored across sessions
 
+Experimental: 
+- **Dome projection**: fisheye to equirectangular (360°) and cubemap (3D) rendering with configurable lens correction and chromatic aberration.
+- **Surface overlap zones**: manual and auto-detect modes for precise edge blending.
+
 ## Build & run
 
 Requires [Rust](https://rustup.rs/) (stable) and a GPU with Metal (macOS) or Vulkan (Linux) support.

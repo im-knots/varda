@@ -39,7 +39,8 @@ impl VardaApp {
         let stage = crate::persistence::snapshot_stage(
             &self.surface_manager, &self.outputs,
             layout.stage_editor_grid_size, layout.stage_editor_snap,
-            layout.library_panel_open, layout.right_panel_open, layout.stage_editor_open,
+            layout.library_panel_open, layout.right_panel_open, layout.stage_editor_open, layout.dome_preview_open,
+            layout.dome_mode_active, layout.dome_preset, layout.dome_geometry,
         );
         match stage.save(self.workspace.stage_path()) {
             Ok(()) => log::info!("Saved stage to {}", self.workspace.stage_path().display()),
@@ -76,6 +77,10 @@ impl VardaApp {
                         library_panel_open: prefs.library_panel_open,
                         right_panel_open: prefs.right_panel_open,
                         stage_editor_open: prefs.stage_editor_open,
+                        dome_preview_open: prefs.dome_preview_open,
+                        dome_mode_active: prefs.dome_mode_active,
+                        dome_preset: prefs.dome_preset,
+                        dome_geometry: prefs.dome_geometry,
                         ..UILayoutState::default()
                     });
                     self.surface_manager = prefs.surfaces;

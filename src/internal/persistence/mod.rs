@@ -27,6 +27,17 @@ pub struct StagePrefs {
     pub right_panel_open: bool,
     #[serde(default)]
     pub stage_editor_open: bool,
+    #[serde(default)]
+    pub dome_preview_open: bool,
+    /// Whether the stage editor is in 3D Dome mode
+    #[serde(default)]
+    pub dome_mode_active: bool,
+    /// Active dome preset
+    #[serde(default = "default_dome_preset")]
+    pub dome_preset: crate::renderer::slicer::DomePreset,
+    /// Active dome geometry
+    #[serde(default)]
+    pub dome_geometry: crate::renderer::slicer::DomeGeometry,
     /// 2D stage surface layout
     #[serde(default)]
     pub surfaces: crate::surface::SurfaceManager,
@@ -37,6 +48,7 @@ pub struct StagePrefs {
 
 fn default_grid_size() -> f32 { 0.05 }
 fn default_true() -> bool { true }
+fn default_dome_preset() -> crate::renderer::slicer::DomePreset { crate::renderer::slicer::DomePreset::Quad }
 
 impl Default for StagePrefs {
     fn default() -> Self {
@@ -46,6 +58,10 @@ impl Default for StagePrefs {
             library_panel_open: false,
             right_panel_open: true,
             stage_editor_open: false,
+            dome_preview_open: false,
+            dome_mode_active: false,
+            dome_preset: crate::renderer::slicer::DomePreset::Quad,
+            dome_geometry: crate::renderer::slicer::DomeGeometry::default(),
             surfaces: crate::surface::SurfaceManager::default(),
             outputs: Vec::new(),
         }
@@ -66,13 +82,15 @@ impl StagePrefs {
                 errors.push(format!("{}: name is empty", prefix));
             }
             for (j, sa) in output.surface_assignments.iter().enumerate() {
-                for (c, corner) in sa.warp_corners.iter().enumerate() {
-                    for (k, v) in corner.iter().enumerate() {
-                        if !v.is_finite() {
-                            errors.push(format!(
-                                "{}/surface_assignments[{}]: warp_corners[{}][{}] is not finite",
-                                prefix, j, c, k
-                            ));
+                if let crate::renderer::warp::WarpMode::CornerPin { corners } = &sa.warp_mode {
+                    for (c, corner) in corners.iter().enumerate() {
+                        for (k, v) in corner.iter().enumerate() {
+                            if !v.is_finite() {
+                                errors.push(format!(
+                                    "{}/surface_assignments[{}]: warp corner[{}][{}] is not finite",
+                                    prefix, j, c, k
+                                ));
+                            }
                         }
                     }
                 }
@@ -529,6 +547,10 @@ pub fn snapshot_stage(
     library_panel_open: bool,
     right_panel_open: bool,
     stage_editor_open: bool,
+    dome_preview_open: bool,
+    dome_mode_active: bool,
+    dome_preset: crate::renderer::slicer::DomePreset,
+    dome_geometry: crate::renderer::slicer::DomeGeometry,
 ) -> StagePrefs {
     let outputs = outputs_list.iter().map(|unified| {
         let (name, target, surface_assignments, window_position, window_size) = match unified {
@@ -549,7 +571,7 @@ pub fn snapshot_stage(
                     w.surface_assignments.iter().map(|a| {
                         SurfaceAssignmentConfig {
                             surface_uuid: a.surface_uuid.clone(),
-                            warp_corners: a.warp_corners,
+                            warp_mode: a.warp_mode.clone(),
                             enabled: a.enabled,
                         }
                     }).collect(),
@@ -563,7 +585,7 @@ pub fn snapshot_stage(
                 h.surface_assignments.iter().map(|a| {
                     SurfaceAssignmentConfig {
                         surface_uuid: a.surface_uuid.clone(),
-                        warp_corners: a.warp_corners,
+                        warp_mode: a.warp_mode.clone(),
                         enabled: a.enabled,
                     }
                 }).collect(),
@@ -592,6 +614,10 @@ pub fn snapshot_stage(
         library_panel_open,
         right_panel_open,
         stage_editor_open,
+        dome_preview_open,
+        dome_mode_active,
+        dome_preset,
+        dome_geometry,
         surfaces: surface_manager.clone(),
         outputs,
     }
@@ -1044,7 +1070,9 @@ mod tests {
             target_display: None,
             surface_assignments: vec![crate::scene::SurfaceAssignmentConfig {
                 surface_uuid: "abcd1234".into(),
-                warp_corners: [[0.0, 0.0], [1.0, 0.0], [f32::INFINITY, 1.0], [0.0, 1.0]],
+                warp_mode: crate::renderer::warp::WarpMode::CornerPin {
+                    corners: [[0.0, 0.0], [1.0, 0.0], [f32::INFINITY, 1.0], [0.0, 1.0]],
+                },
                 enabled: true,
             }],
             window_position: None,
@@ -1053,6 +1081,6 @@ mod tests {
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
         });
         let errors = prefs.validate();
-        assert!(errors.iter().any(|e| e.contains("warp_corners")));
+        assert!(errors.iter().any(|e| e.contains("warp corner")));
     }
 }

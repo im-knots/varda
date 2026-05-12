@@ -237,10 +237,22 @@ impl VardaApp {
 
         let mixer = &self.mixer;
 
+        // Run domemaster renderer if enabled
+        let domemaster_view = if let Some(dome) = &self.domemaster {
+            if dome.enabled {
+                dome.render(&self.context.device, &self.context.queue, mixer.composite_view());
+                Some(dome.output_view())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         for output in &self.outputs {
             match output {
                 crate::renderer::context::UnifiedOutput::Window(output) => {
-                    Self::render_window_output(output, context, mixer, &self.surface_manager, &self.calibration_textures);
+                    Self::render_window_output(output, context, mixer, &self.surface_manager, &self.calibration_textures, domemaster_view);
                 }
                 crate::renderer::context::UnifiedOutput::Headless(_) => {
                     // Headless rendering handled separately (needs &mut for subprocess)
@@ -255,6 +267,7 @@ impl VardaApp {
             &mut self.ndi_manager,
             #[cfg(target_os = "macos")]
             &mut self.syphon_manager,
+            domemaster_view,
         );
     }
 
@@ -264,6 +277,7 @@ impl VardaApp {
         mixer: &crate::mixer::Mixer,
         surface_manager: &crate::surface::SurfaceManager,
         calibration_textures: &[(wgpu::Texture, wgpu::TextureView)],
+        domemaster_view: Option<&wgpu::TextureView>,
     ) {
         if output.calibration_mode && !calibration_textures.is_empty() && surface_manager.surfaces.is_empty() {
             output.render(context, &calibration_textures[0].1);
@@ -279,7 +293,7 @@ impl VardaApp {
                     let content_view = if output.calibration_mode && !calibration_textures.is_empty() {
                         &calibration_textures[ai % calibration_textures.len()].1
                     } else {
-                        Self::resolve_source(mixer, &surface.source)?
+                        Self::resolve_source(mixer, &surface.source, domemaster_view)?
                     };
                     let (uv_scale, uv_offset) = if output.calibration_mode {
                         ([1.0, 1.0], [0.0, 0.0])
@@ -290,7 +304,7 @@ impl VardaApp {
                         content_view, vertices: &surface.vertices,
                         bounding_box: [bb.x, bb.y, bb.width, bb.height],
                         uv_scale, uv_offset,
-                        warp_corners: Some(assignment.warp_corners),
+                        warp_mode: Some(assignment.warp_mode.clone()),
                         overlap_zones: assignment.overlap_zones.clone(),
                     })
                 })
@@ -304,7 +318,7 @@ impl VardaApp {
                     let content_view = if output.calibration_mode && !calibration_textures.is_empty() {
                         &calibration_textures[si % calibration_textures.len()].1
                     } else {
-                        Self::resolve_source(mixer, &surface.source)?
+                        Self::resolve_source(mixer, &surface.source, domemaster_view)?
                     };
                     let (uv_scale, uv_offset) = if output.calibration_mode {
                         ([1.0, 1.0], [0.0, 0.0])
@@ -314,7 +328,7 @@ impl VardaApp {
                     Some(SurfaceRenderInfo {
                         content_view, vertices: &surface.vertices,
                         bounding_box: [bb.x, bb.y, bb.width, bb.height],
-                        uv_scale, uv_offset, warp_corners: None,
+                        uv_scale, uv_offset, warp_mode: None,
                         overlap_zones: Default::default(),
                     })
                 })
@@ -325,7 +339,11 @@ impl VardaApp {
     }
 
 
-    fn resolve_source<'a>(mixer: &'a Mixer, source: &OutputSource) -> Option<&'a wgpu::TextureView> {
+    fn resolve_source<'a>(
+        mixer: &'a Mixer,
+        source: &OutputSource,
+        domemaster_view: Option<&'a wgpu::TextureView>,
+    ) -> Option<&'a wgpu::TextureView> {
         match source {
             OutputSource::Master => Some(mixer.composite_view()),
             OutputSource::Channel(ch_idx) => {
@@ -342,6 +360,7 @@ impl VardaApp {
                     .and_then(|ch| ch.decks.get(*deck_idx))
                     .map(|slot| &slot.deck.texture_view)
             }
+            OutputSource::Domemaster => domemaster_view,
         }
     }
 
@@ -371,6 +390,7 @@ impl VardaApp {
         ndi_manager: &mut crate::ndi::NdiManager,
         #[cfg(target_os = "macos")]
         syphon_manager: &mut crate::syphon::SyphonManager,
+        domemaster_view: Option<&wgpu::TextureView>,
     ) {
         for output in outputs.iter_mut() {
             let h = match output {
@@ -395,25 +415,35 @@ impl VardaApp {
                     .filter_map(|assignment| {
                         let (_, surface) = surface_manager.find_by_uuid(&assignment.surface_uuid)?;
                         let bb = surface.bounding_box();
-                        let content_view = Self::resolve_source(mixer, &surface.source)?;
+                        let content_view = Self::resolve_source(mixer, &surface.source, domemaster_view)?;
                         let (uv_scale, uv_offset) = Self::compute_uv(surface.content_mapping, &bb);
-                        let homography = {
-                            let src_corners = [
-                                [bb.x, bb.y],
-                                [bb.x + bb.width, bb.y],
-                                [bb.x + bb.width, bb.y + bb.height],
-                                [bb.x, bb.y + bb.height],
-                            ];
-                            crate::renderer::warp::compute_forward_homography(&src_corners, &assignment.warp_corners)
+                        let bb_arr = [bb.x, bb.y, bb.width, bb.height];
+                        let (homography, vb, num_tris) = match &assignment.warp_mode {
+                            crate::renderer::warp::WarpMode::CornerPin { corners } => {
+                                let src_corners = [
+                                    [bb.x, bb.y],
+                                    [bb.x + bb.width, bb.y],
+                                    [bb.x + bb.width, bb.y + bb.height],
+                                    [bb.x, bb.y + bb.height],
+                                ];
+                                let h = crate::renderer::warp::compute_forward_homography(&src_corners, corners);
+                                let (vb, nt) = crate::renderer::blit::PolygonBlitPipeline::triangulate(
+                                    &context.device, &surface.vertices,
+                                    bb.x, bb.y, bb.width, bb.height,
+                                );
+                                (Some(h), vb, nt)
+                            }
+                            crate::renderer::warp::WarpMode::Mesh(mesh) => {
+                                let (vb, nt) = crate::renderer::blit::PolygonBlitPipeline::triangulate_with_mesh(
+                                    &context.device, &surface.vertices, bb_arr, mesh,
+                                );
+                                (None, vb, nt)
+                            }
                         };
                         let bind_group = h.polygon_pipeline.create_bind_group(
                             &context.device, content_view,
-                            uv_scale, uv_offset, Some(&homography),
+                            uv_scale, uv_offset, homography.as_ref(),
                             &assignment.overlap_zones,
-                        );
-                        let (vb, num_tris) = crate::renderer::blit::PolygonBlitPipeline::triangulate(
-                            &context.device, &surface.vertices,
-                            bb.x, bb.y, bb.width, bb.height,
                         );
                         Some((bind_group, vb, num_tris))
                     })
@@ -445,7 +475,7 @@ impl VardaApp {
                 }
             } else {
                 // Fallback: simple blit from source
-                let source_view = match Self::resolve_source(mixer, &h.source) {
+                let source_view = match Self::resolve_source(mixer, &h.source, domemaster_view) {
                     Some(view) => view,
                     None => continue,
                 };

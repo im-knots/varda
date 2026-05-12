@@ -455,7 +455,7 @@ pub(crate) fn build_ui_data(
                         .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
                     SurfaceAssignmentUI {
                         surface_uuid: a.surface_uuid.clone(), surface_name,
-                        warp_corners: a.warp_corners, enabled: a.enabled,
+                        warp_mode: a.warp_mode.clone(), enabled: a.enabled,
                         overlap_zones: a.overlap_zones.clone(),
                     }
                 }).collect();
@@ -467,7 +467,7 @@ pub(crate) fn build_ui_data(
                         surface_uuid: a.surface_uuid.clone(),
                         surface_name: app.surface_manager.find_by_uuid(&a.surface_uuid)
                             .map(|(_, s)| s.name.clone()).unwrap_or_else(|| format!("Surface {}", a.surface_uuid)),
-                        warp_corners: a.warp_corners, enabled: a.enabled,
+                        warp_mode: a.warp_mode.clone(), enabled: a.enabled,
                         overlap_zones: a.overlap_zones.clone(),
                     }
                 }).collect();
@@ -550,7 +550,13 @@ pub(crate) fn build_ui_data(
         selected_master: layout.selected_master,
         selected_sequence: layout.selected_sequence, selected_sequence_step: layout.selected_sequence_step,
         outputs, surfaces,
-        stage_editor_open: layout.stage_editor_open, library_panel_open: layout.library_panel_open, right_panel_open: layout.right_panel_open,
+        stage_editor_open: layout.stage_editor_open,
+        dome_preview_open: layout.dome_preview_open,
+        dome_preview_texture: None, // populated by UIRunner after build
+        dome_mode_active: layout.dome_mode_active,
+        dome_preset: layout.dome_preset,
+        dome_geometry: layout.dome_geometry,
+        library_panel_open: layout.library_panel_open, right_panel_open: layout.right_panel_open,
         stage_editor_grid_size: layout.stage_editor_grid_size, stage_editor_snap: layout.stage_editor_snap,
         available_monitors, midi_devices, midi_mappings,
         cameras: engine.cameras.devices,

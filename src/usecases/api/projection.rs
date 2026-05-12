@@ -187,6 +187,7 @@ pub(crate) mod tests {
                     content_mapping: ContentMapping::Fill,
                     output_type: SurfaceOutputType::Projection,
                     circle_hint: None,
+                    default_warp: None,
                 }],
                 monitors: vec![MonitorSnapshot {
                     name: "HDMI-1".into(), index: 0, width: 1920, height: 1080,

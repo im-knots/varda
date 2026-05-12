@@ -8,6 +8,7 @@ use crate::modulation::{LFOWaveform, AudioBandPreset, AudioReactMode, ADSRStage,
 use crate::audio::AudioSourceId;
 use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
+use crate::renderer::slicer::{DomeSetup, DomePreset, DomeGeometry};
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
@@ -41,6 +42,14 @@ pub struct UILayoutState {
     pub library_panel_open: bool,
     /// Whether the right panel (master output sidebar) is open
     pub right_panel_open: bool,
+    /// Whether the 3D dome preview is open in the stage editor
+    pub dome_preview_open: bool,
+    /// Whether the stage editor is in 3D Dome mode (vs 2D Polygon mode)
+    pub dome_mode_active: bool,
+    /// Active dome preset
+    pub dome_preset: DomePreset,
+    /// Active dome geometry (radius, truncation, tilt)
+    pub dome_geometry: DomeGeometry,
 }
 
 impl Default for UILayoutState {
@@ -56,6 +65,10 @@ impl Default for UILayoutState {
             stage_editor_snap: true,
             library_panel_open: true,
             right_panel_open: true,
+            dome_preview_open: false,
+            dome_mode_active: false,
+            dome_preset: DomePreset::Quad,
+            dome_geometry: DomeGeometry::default(),
         }
     }
 }
@@ -110,6 +123,33 @@ impl UILayoutState {
         }
         if ui_actions.toggle_right_panel {
             self.right_panel_open = !self.right_panel_open;
+        }
+        if ui_actions.toggle_dome_preview {
+            self.dome_preview_open = !self.dome_preview_open;
+        }
+        // Dome mode actions
+        for action in &ui_actions.dome_actions {
+            match action {
+                DomeAction::SetMode(active) => {
+                    self.dome_mode_active = *active;
+                    // When entering dome mode, also open dome preview
+                    if *active {
+                        self.dome_preview_open = true;
+                    }
+                }
+                DomeAction::SetPreset(preset) => self.dome_preset = *preset,
+                DomeAction::SetRadius(r) => self.dome_geometry.radius = *r,
+                DomeAction::SetTruncation(deg) => self.dome_geometry.truncation_degrees = *deg,
+                DomeAction::SetTilt(deg) => self.dome_geometry.tilt_degrees = *deg,
+                DomeAction::SetContentAzimuth(deg) => self.dome_geometry.content_azimuth_degrees = *deg,
+                DomeAction::SetContentElevation(deg) => self.dome_geometry.content_elevation_degrees = *deg,
+                DomeAction::SetContentRoll(deg) => self.dome_geometry.content_roll_degrees = *deg,
+                DomeAction::RotateCamera { .. } |
+                DomeAction::ZoomCamera { .. } |
+                DomeAction::ResetCamera => {
+                    // Camera actions are handled by the runner, not layout state
+                }
+            }
         }
     }
 
@@ -453,6 +493,16 @@ pub struct UIData {
     pub surfaces: Vec<SurfaceUI>,
     /// Whether the full-screen stage editor is open (replaces deck view)
     pub stage_editor_open: bool,
+    /// Whether the 3D dome preview is open in the stage editor
+    pub dome_preview_open: bool,
+    /// Dome preview texture (rendered 3D hemisphere)
+    pub dome_preview_texture: Option<egui::TextureId>,
+    /// Whether the stage editor is in 3D Dome mode (vs 2D Polygon mode)
+    pub dome_mode_active: bool,
+    /// Active dome preset
+    pub dome_preset: DomePreset,
+    /// Active dome geometry (radius, truncation, tilt)
+    pub dome_geometry: DomeGeometry,
     /// Whether the library panel (left sidebar) is open
     pub library_panel_open: bool,
     /// Whether the right panel (master output sidebar) is open
@@ -643,7 +693,7 @@ pub enum OutputAction {
 pub struct SurfaceAssignmentUI {
     pub surface_uuid: String,
     pub surface_name: String,
-    pub warp_corners: [[f32; 2]; 4],
+    pub warp_mode: crate::renderer::warp::WarpMode,
     pub enabled: bool,
     /// Per-surface overlap zones (Auto mode). Empty when Manual or no overlaps.
     pub overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones,
@@ -710,6 +760,35 @@ pub enum SurfaceAction {
     ConvertToPolygon { uuid: String },
     /// Combine multiple surfaces into one (overlapping → merge, non-overlapping → multi-contour)
     Combine { uuids: Vec<String> },
+    /// Generate dome slices: remove old "Dome P*" surfaces, compute warp meshes, create new surfaces
+    GenerateDomeSlices { setup: DomeSetup },
+}
+
+/// Dome-mode UI actions (camera interaction, mode toggle, config changes).
+#[derive(Debug, Clone)]
+pub enum DomeAction {
+    /// Toggle between 2D Polygon mode and 3D Dome mode
+    SetMode(bool),
+    /// Set dome preset
+    SetPreset(DomePreset),
+    /// Set dome radius
+    SetRadius(f32),
+    /// Set dome truncation angle in degrees
+    SetTruncation(f32),
+    /// Set dome tilt angle in degrees
+    SetTilt(f32),
+    /// Set content azimuth rotation in degrees
+    SetContentAzimuth(f32),
+    /// Set content elevation rotation in degrees
+    SetContentElevation(f32),
+    /// Set content roll rotation in degrees
+    SetContentRoll(f32),
+    /// Rotate orbit camera by pixel delta
+    RotateCamera { delta_x: f32, delta_y: f32 },
+    /// Zoom orbit camera by scroll delta
+    ZoomCamera { delta: f32 },
+    /// Reset orbit camera to default
+    ResetCamera,
 }
 
 /// Snapshot of a surface for UI display
@@ -818,6 +897,10 @@ pub struct UIActions {
     pub surface_actions: Vec<SurfaceAction>,
     /// Toggle stage editor open/closed
     pub toggle_stage_editor: bool,
+    /// Toggle 3D dome preview in stage editor
+    pub toggle_dome_preview: bool,
+    /// Dome mode actions (camera, config, mode toggle)
+    pub dome_actions: Vec<DomeAction>,
     /// Set stage editor grid size (normalized)
     pub set_grid_size: Option<f32>,
     /// Toggle snap-to-grid
@@ -1032,6 +1115,8 @@ impl UIActions {
             output_actions: Vec::new(),
             surface_actions: Vec::new(),
             toggle_stage_editor: false,
+            toggle_dome_preview: false,
+            dome_actions: Vec::new(),
             set_grid_size: None,
             toggle_snap: false,
             midi_rescan: false,
@@ -1376,6 +1461,11 @@ impl UIData {
             outputs: vec![],
             surfaces: vec![],
             stage_editor_open: false,
+            dome_preview_open: false,
+            dome_preview_texture: None,
+            dome_mode_active: false,
+            dome_preset: DomePreset::Quad,
+            dome_geometry: DomeGeometry::default(),
             library_panel_open: true,
             right_panel_open: true,
             stage_editor_grid_size: 0.05,

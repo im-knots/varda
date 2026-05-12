@@ -416,7 +416,7 @@ impl OutputConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurfaceAssignmentConfig {
     pub surface_uuid: String,
-    pub warp_corners: [[f32; 2]; 4],
+    pub warp_mode: crate::renderer::warp::WarpMode,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }

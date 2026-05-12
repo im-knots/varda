@@ -84,7 +84,7 @@ impl VardaApp {
                                 output.surface_assignments = config.surface_assignments.iter().map(|a| {
                                     SurfaceAssignment {
                                         surface_uuid: a.surface_uuid.clone(),
-                                        warp_corners: a.warp_corners,
+                                        warp_mode: a.warp_mode.clone(),
                                         enabled: a.enabled,
                                         overlap_zones: Default::default(),
                                     }
@@ -139,7 +139,7 @@ impl VardaApp {
                 headless.surface_assignments = config.surface_assignments.iter().map(|a| {
                     SurfaceAssignment {
                         surface_uuid: a.surface_uuid.clone(),
-                        warp_corners: a.warp_corners,
+                        warp_mode: a.warp_mode.clone(),
                         enabled: a.enabled,
                         overlap_zones: Default::default(),
                     }

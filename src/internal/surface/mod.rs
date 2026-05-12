@@ -72,6 +72,10 @@ pub struct Surface {
     /// Vertices are regenerated from the hint when radius or sides change.
     #[serde(default)]
     pub circle_hint: Option<CircleHint>,
+    /// Pre-computed warp mesh for dome-generated surfaces.
+    /// When assigned to an output, this is used instead of identity corners.
+    #[serde(default)]
+    pub default_warp: Option<crate::renderer::warp::WarpMode>,
 }
 
 /// How content is mapped onto a surface.
@@ -132,6 +136,7 @@ impl Surface {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: None,
+            default_warp: None,
         }
     }
 
@@ -293,11 +298,14 @@ impl std::fmt::Display for SurfaceOutputType {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SurfaceManager {
     pub surfaces: Vec<Surface>,
+    /// Active dome setup (if dome slices have been generated)
+    #[serde(default)]
+    pub dome_setup: Option<crate::renderer::slicer::DomeSetup>,
 }
 
 impl SurfaceManager {
     pub fn new() -> Self {
-        Self { surfaces: Vec::new() }
+        Self { surfaces: Vec::new(), dome_setup: None }
     }
 
     /// Add a new rectangular surface with default positioning. Returns the new surface's UUID.
@@ -327,6 +335,7 @@ impl SurfaceManager {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: None,
+            default_warp: None,
         });
         uuid
     }
@@ -344,6 +353,7 @@ impl SurfaceManager {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: Some(hint),
+            default_warp: None,
         });
         uuid
     }
@@ -470,6 +480,7 @@ impl SurfaceManager {
             content_mapping,
             output_type,
             circle_hint: None,
+            default_warp: None,
         };
 
         let insert_at = first_idx.min(self.surfaces.len());
@@ -547,7 +558,7 @@ mod tests {
         let s = Surface {
             uuid: generate_short_uuid(), name: "E".into(), vertices: vec![], extra_contours: vec![],
             source: master_source(), content_mapping: ContentMapping::default(),
-            output_type: SurfaceOutputType::Projection, circle_hint: None,
+            output_type: SurfaceOutputType::Projection, circle_hint: None, default_warp: None,
         };
         assert_eq!(s.center(), [0.0, 0.0]);
     }
@@ -573,7 +584,7 @@ mod tests {
             uuid: generate_short_uuid(), name: "Line".into(), vertices: vec![[0.0, 0.0], [1.0, 1.0]],
             extra_contours: vec![], source: master_source(),
             content_mapping: ContentMapping::default(),
-            output_type: SurfaceOutputType::Projection, circle_hint: None,
+            output_type: SurfaceOutputType::Projection, circle_hint: None, default_warp: None,
         };
         assert!(!s.contains(0.5, 0.5));
     }
@@ -679,7 +690,7 @@ mod tests {
             extra_contours: vec![], source: master_source(),
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
-            circle_hint: Some(hint),
+            circle_hint: Some(hint), default_warp: None,
         };
         s.regenerate_circle_vertices();
         assert_eq!(s.vertices.len(), 6);
@@ -693,7 +704,7 @@ mod tests {
             extra_contours: vec![], source: master_source(),
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
-            circle_hint: Some(hint),
+            circle_hint: Some(hint), default_warp: None,
         };
         assert!(s.is_circle());
         s.convert_to_polygon();

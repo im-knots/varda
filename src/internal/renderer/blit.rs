@@ -546,6 +546,70 @@ impl PolygonBlitPipeline {
 
         (buffer, num_tris)
     }
+    /// Build a vertex buffer from a UV warp mesh grid.
+    ///
+    /// Each cell in the mesh grid (cols-1 × rows-1) becomes 2 triangles.
+    /// Vertex positions come from `mesh.points[].position` (output space),
+    /// UVs come from `mesh.points[].uv` (source texture space).
+    /// The homography should be set to identity when using mesh warp.
+    ///
+    /// Returns (buffer, num_triangles).
+    pub fn triangulate_with_mesh(
+        device: &wgpu::Device,
+        _canvas_verts: &[[f32; 2]],
+        _bb: [f32; 4],
+        mesh: &super::warp::WarpMesh,
+    ) -> (wgpu::Buffer, u32) {
+        let cols = mesh.cols as usize;
+        let rows = mesh.rows as usize;
+        if cols < 2 || rows < 2 || mesh.points.len() != cols * rows {
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Mesh Warp Vertex Buffer (empty)"),
+                contents: &[],
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            return (buffer, 0);
+        }
+
+        let num_cells = (cols - 1) * (rows - 1);
+        let num_tris = (num_cells * 2) as u32;
+        let mut gpu_verts: Vec<PolygonVertex> = Vec::with_capacity(num_cells * 6);
+
+        for r in 0..(rows - 1) {
+            for c in 0..(cols - 1) {
+                let tl = &mesh.points[r * cols + c];
+                let tr = &mesh.points[r * cols + c + 1];
+                let bl = &mesh.points[(r + 1) * cols + c];
+                let br = &mesh.points[(r + 1) * cols + c + 1];
+
+                // Convert positions from [0..1] to NDC [-1..1] for the vertex shader
+                let to_ndc = |p: &super::warp::MeshPoint| -> PolygonVertex {
+                    PolygonVertex {
+                        position: [p.position[0] * 2.0 - 1.0, p.position[1] * 2.0 - 1.0],
+                        uv: p.uv,
+                    }
+                };
+
+                // Triangle 1: TL, TR, BL
+                gpu_verts.push(to_ndc(tl));
+                gpu_verts.push(to_ndc(tr));
+                gpu_verts.push(to_ndc(bl));
+
+                // Triangle 2: TR, BR, BL
+                gpu_verts.push(to_ndc(tr));
+                gpu_verts.push(to_ndc(br));
+                gpu_verts.push(to_ndc(bl));
+            }
+        }
+
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Mesh Warp Vertex Buffer"),
+            contents: bytemuck::cast_slice(&gpu_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        (buffer, num_tris)
+    }
 }
 
 

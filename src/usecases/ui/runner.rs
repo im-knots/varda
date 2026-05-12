@@ -33,6 +33,8 @@ pub struct UIRunner {
     channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
+    dome_preview_renderer: Option<crate::renderer::dome_preview::DomePreviewRenderer>,
+    dome_preview_texture: Option<egui::TextureId>,
     main_window_id: Option<WindowId>,
 
     // ── UI-consumer-owned layout/selection state ─────────────────────
@@ -83,6 +85,8 @@ impl UIRunner {
             channel_preview_textures: std::collections::HashMap::new(),
             output_preview_textures: std::collections::HashMap::new(),
             main_output_texture: None,
+            dome_preview_renderer: None,
+            dome_preview_texture: None,
             main_window_id: None,
             layout: super::UILayoutState::default(),
             file_dialog_tx,
@@ -284,6 +288,22 @@ impl UIRunner {
             );
             self.output_preview_textures.insert(out_idx, tid);
         }
+        // Dome preview renderer + texture
+        if self.dome_preview_renderer.is_none() {
+            match crate::renderer::dome_preview::DomePreviewRenderer::new(
+                &context.device,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+            ) {
+                Ok(renderer) => {
+                    let tid = egui_renderer.register_native_texture(
+                        &context.device, &renderer.output_view, wgpu::FilterMode::Linear,
+                    );
+                    self.dome_preview_texture = Some(tid);
+                    self.dome_preview_renderer = Some(renderer);
+                }
+                Err(e) => log::error!("Failed to create dome preview renderer: {}", e),
+            }
+        }
     }
 
     /// Resolve the texture view to use for an output preview.
@@ -311,6 +331,11 @@ impl UIRunner {
                     sorted.dedup();
                     mixer.get_sub_mix_view(&sorted)
                         .unwrap_or_else(|| mixer.composite_view())
+                }
+                OutputSource::Domemaster => {
+                    // Domemaster preview falls back to composite view;
+                    // the actual domemaster texture is rendered in the output pipeline.
+                    mixer.composite_view()
                 }
             },
         }
@@ -415,6 +440,29 @@ impl UIRunner {
             varda.refresh_monitors(event_loop);
         }
 
+        // 3b. Render dome preview if open (either dome_preview_open or dome_mode_active)
+        if self.layout.dome_preview_open || self.layout.dome_mode_active {
+            if let (Some(renderer), Some(varda)) = (&mut self.dome_preview_renderer, &self.varda) {
+                let context = varda.gpu_context();
+
+                // Update slice overlays when in dome mode
+                if self.layout.dome_mode_active {
+                    let setup = self.layout.dome_preset.to_setup_with_geometry(self.layout.dome_geometry);
+                    renderer.set_slice_overlays(&context.device, &setup);
+                } else {
+                    renderer.clear_slice_overlays();
+                }
+
+                // Use domemaster output if available, otherwise fall back to mixer composite
+                let source_view = varda.domemaster_view()
+                    .unwrap_or_else(|| varda.mixer_ref().composite_view());
+                let c_az = self.layout.dome_geometry.content_azimuth_degrees.to_radians();
+                let c_el = self.layout.dome_geometry.content_elevation_degrees.to_radians();
+                let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
+                renderer.render(&context.device, &context.queue, source_view, c_az, c_el, c_roll);
+            }
+        }
+
         // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
         let Some(varda_ref) = self.varda.as_ref() else { return; };
         let mut ui_data = varda_ref
@@ -422,6 +470,8 @@ impl UIRunner {
         ui_data.can_undo = self.history.can_undo();
         ui_data.can_redo = self.history.can_redo();
         ui_data.pending_deck_loads = self.pending_deck_loads.load(std::sync::atomic::Ordering::Relaxed);
+        ui_data.dome_preview_open = self.layout.dome_preview_open;
+        ui_data.dome_preview_texture = self.dome_preview_texture;
 
         // 5. Run egui frame
         let raw_input = {
@@ -440,6 +490,42 @@ impl UIRunner {
         // 6. Apply all UI actions
         // 6a. UI-consumer-owned selection/layout state
         self.layout.apply_selections(&ui_actions);
+
+        // 6a2. Dome camera actions — apply to renderer (not layout state)
+        {
+            let dome_resized = false;
+            for action in &ui_actions.dome_actions {
+                match action {
+                    ui::DomeAction::RotateCamera { delta_x, delta_y } => {
+                        if let Some(renderer) = &mut self.dome_preview_renderer {
+                            renderer.camera.rotate(*delta_x, *delta_y);
+                        }
+                    }
+                    ui::DomeAction::ZoomCamera { delta } => {
+                        if let Some(renderer) = &mut self.dome_preview_renderer {
+                            renderer.camera.zoom(*delta);
+                        }
+                    }
+                    ui::DomeAction::ResetCamera => {
+                        if let Some(renderer) = &mut self.dome_preview_renderer {
+                            renderer.camera.reset();
+                        }
+                    }
+                    _ => {} // Config actions handled by layout.apply_selections
+                }
+            }
+            // Handle dome resize if needed
+            if let (Some(renderer), Some(varda)) = (&mut self.dome_preview_renderer, &self.varda) {
+                let context = varda.gpu_context();
+                if let Some(egui_renderer) = &mut self.egui_renderer {
+                    // Check if dome_preview_texture needs re-registration after resize
+                    if dome_resized {
+                        let _ = dome_resized; // suppress unused warning
+                    }
+                    let _ = (context, egui_renderer, renderer); // used below if resize
+                }
+            }
+        }
 
         // 6b. Engine actions (delegated to VardaApp)
         {

@@ -310,7 +310,7 @@ pub struct OutputWindowSnapshot {
 pub struct SurfaceAssignmentSnapshot {
     pub surface_uuid: String,
     pub surface_name: String,
-    pub warp_corners: [[f32; 2]; 4],
+    pub warp_mode: crate::renderer::warp::WarpMode,
     pub enabled: bool,
 }
 
@@ -324,6 +324,7 @@ pub struct SurfaceSnapshot {
     pub content_mapping: ContentMapping,
     pub output_type: SurfaceOutputType,
     pub circle_hint: Option<CircleHint>,
+    pub default_warp: Option<crate::renderer::warp::WarpMode>,
 }
 
 #[derive(Clone, Serialize)]

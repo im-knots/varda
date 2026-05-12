@@ -1,9 +1,18 @@
 //! Surface editor and stage editor panels.
 
 use crate::renderer::context::OutputSource;
+use crate::renderer::slicer::DomePreset;
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
-use super::super::{UIData, UIActions, SurfaceAction};
+use super::super::{UIData, UIActions, SurfaceAction, DomeAction};
 use super::geometry::polygon_shape;
+
+/// Stage editor mode: 2D polygon editing or 3D dome mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+enum StageEditorMode {
+    #[default]
+    Polygon2D,
+    Dome3D,
+}
 
 pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     // Open Editor / Add Surface buttons
@@ -544,11 +553,107 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             if ui.button("x Close Editor").clicked() {
                 actions.toggle_stage_editor = true;
             }
+            ui.separator();
+            // Mode toggle: 2D Polygon / 3D Dome
+            let mode = if data.dome_mode_active { StageEditorMode::Dome3D } else { StageEditorMode::Polygon2D };
+            if ui.selectable_label(mode == StageEditorMode::Polygon2D, "⬡ 2D").on_hover_text("2D Polygon mode").clicked() {
+                actions.dome_actions.push(DomeAction::SetMode(false));
+            }
+            if ui.selectable_label(mode == StageEditorMode::Dome3D, "🔮 3D Dome").on_hover_text("3D Dome mode").clicked() {
+                actions.dome_actions.push(DomeAction::SetMode(true));
+            }
         });
     });
 
+    let mode = if data.dome_mode_active { StageEditorMode::Dome3D } else { StageEditorMode::Polygon2D };
+
+    // Dome config toolbar (second row, only in Dome3D mode)
+    if mode == StageEditorMode::Dome3D {
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("🔮 Dome:").strong());
+
+            // Preset dropdown
+            let presets = [
+                DomePreset::Single, DomePreset::Dual, DomePreset::Triple,
+                DomePreset::Quad, DomePreset::Penta, DomePreset::Hexa, DomePreset::Octa,
+            ];
+            let mut current_preset = data.dome_preset;
+            egui::ComboBox::from_id_salt("dome_preset")
+                .selected_text(format!("{}", current_preset))
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    for preset in &presets {
+                        if ui.selectable_value(&mut current_preset, *preset, format!("{}", preset)).clicked() {
+                            actions.dome_actions.push(DomeAction::SetPreset(*preset));
+                        }
+                    }
+                });
+
+            ui.separator();
+
+            // Radius slider
+            let mut radius = data.dome_geometry.radius;
+            ui.label("R:");
+            if ui.add(egui::DragValue::new(&mut radius).range(0.5..=5.0).speed(0.01)).changed() {
+                actions.dome_actions.push(DomeAction::SetRadius(radius));
+            }
+
+            // Truncation angle slider
+            let mut trunc = data.dome_geometry.truncation_degrees;
+            ui.label("Trunc:");
+            if ui.add(egui::DragValue::new(&mut trunc).range(30.0..=90.0).speed(0.5).suffix("°")).changed() {
+                actions.dome_actions.push(DomeAction::SetTruncation(trunc));
+            }
+
+            // Tilt slider
+            let mut tilt = data.dome_geometry.tilt_degrees;
+            ui.label("Tilt:");
+            if ui.add(egui::DragValue::new(&mut tilt).range(0.0..=45.0).speed(0.5).suffix("°")).changed() {
+                actions.dome_actions.push(DomeAction::SetTilt(tilt));
+            }
+
+            ui.separator();
+
+            // Content rotation controls
+            let mut c_az = data.dome_geometry.content_azimuth_degrees;
+            ui.label("Content Az:");
+            if ui.add(egui::DragValue::new(&mut c_az).range(-180.0..=180.0).speed(1.0).suffix("°")).changed() {
+                actions.dome_actions.push(DomeAction::SetContentAzimuth(c_az));
+            }
+
+            let mut c_el = data.dome_geometry.content_elevation_degrees;
+            ui.label("Content El:");
+            if ui.add(egui::DragValue::new(&mut c_el).range(-90.0..=90.0).speed(1.0).suffix("°")).changed() {
+                actions.dome_actions.push(DomeAction::SetContentElevation(c_el));
+            }
+
+            let mut c_roll = data.dome_geometry.content_roll_degrees;
+            ui.label("Content Roll:");
+            if ui.add(egui::DragValue::new(&mut c_roll).range(-180.0..=180.0).speed(1.0).suffix("°")).changed() {
+                actions.dome_actions.push(DomeAction::SetContentRoll(c_roll));
+            }
+
+            ui.separator();
+
+            // Generate Slices button
+            if ui.button("🎯 Generate Slices").on_hover_text("Create per-projector surfaces with warp meshes").clicked() {
+                let setup = current_preset.to_setup_with_geometry(data.dome_geometry);
+                actions.surface_actions.push(SurfaceAction::GenerateDomeSlices { setup });
+            }
+        });
+    }
+
     ui.add_space(4.0);
 
+    // ── Dome 3D mode: full-canvas interactive dome view ──
+    if mode == StageEditorMode::Dome3D {
+        render_dome_canvas(ui, data, actions);
+        ui.memory_mut(|mem| mem.data.insert_temp(state_id, state));
+        return;
+    }
+
+    // ── 2D Polygon mode: original canvas ──
     // Main canvas — fill available space
     let canvas_width = ui.available_width();
     let canvas_height = ui.available_height().max(200.0);
@@ -1242,4 +1347,87 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
     // Persist state
     ui.memory_mut(|mem| mem.data.insert_temp(state_id, state));
+}
+
+
+/// Fixed 8-color palette for dome projector slices.
+const SLICE_COLORS: [egui::Color32; 8] = [
+    egui::Color32::from_rgb(230, 57, 70),    // Red
+    egui::Color32::from_rgb(42, 157, 143),    // Green/Teal
+    egui::Color32::from_rgb(69, 123, 157),    // Blue
+    egui::Color32::from_rgb(241, 196, 15),    // Yellow
+    egui::Color32::from_rgb(230, 126, 34),    // Orange
+    egui::Color32::from_rgb(155, 89, 182),    // Purple
+    egui::Color32::from_rgb(26, 188, 156),    // Cyan
+    egui::Color32::from_rgb(232, 67, 147),    // Pink
+];
+
+/// Render the 3D dome canvas (Dome3D mode).
+fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    let available_width = ui.available_width();
+    let available_height = ui.available_height().max(200.0);
+    // Square, centered in available space
+    let dome_size = available_width.min(available_height);
+    let padding_x = (available_width - dome_size) * 0.5;
+
+    if padding_x > 0.0 {
+        ui.add_space(0.0); // ensure horizontal layout
+    }
+
+    ui.horizontal(|ui| {
+        if padding_x > 1.0 {
+            ui.add_space(padding_x);
+        }
+        if let Some(tex_id) = data.dome_preview_texture {
+            let img = egui::Image::new(egui::load::SizedTexture::new(
+                tex_id, egui::vec2(dome_size, dome_size),
+            ));
+            let response = ui.add(img.sense(egui::Sense::click_and_drag()));
+
+            // Mouse interaction: orbit camera
+            if response.dragged_by(egui::PointerButton::Primary) {
+                let delta = response.drag_delta();
+                actions.dome_actions.push(DomeAction::RotateCamera {
+                    delta_x: delta.x,
+                    delta_y: delta.y,
+                });
+            }
+
+            // Scroll to zoom
+            if response.hovered() {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll.abs() > 0.1 {
+                    actions.dome_actions.push(DomeAction::ZoomCamera { delta: scroll });
+                }
+            }
+
+            // Right-click to reset camera
+            if response.clicked_by(egui::PointerButton::Secondary) {
+                actions.dome_actions.push(DomeAction::ResetCamera);
+            }
+
+            // Projector labels overlay
+            let rect = response.rect;
+            let painter = ui.painter_at(rect);
+            let setup = data.dome_preset.to_setup_with_geometry(data.dome_geometry);
+            for (i, proj) in setup.projectors.iter().enumerate() {
+                let color = SLICE_COLORS[i % SLICE_COLORS.len()];
+                let label = format!("P{}", i + 1);
+                // Position label at projector azimuth around the dome edge
+                let az = proj.azimuth_degrees.to_radians();
+                let label_r = dome_size * 0.42;
+                let cx = rect.center().x + label_r * az.sin();
+                let cy = rect.center().y - label_r * az.cos();
+                painter.text(
+                    egui::pos2(cx, cy),
+                    egui::Align2::CENTER_CENTER,
+                    &label,
+                    egui::FontId::proportional(12.0),
+                    color,
+                );
+            }
+        } else {
+            ui.label(egui::RichText::new("3D dome: waiting for renderer…").weak().italics());
+        }
+    });
 }

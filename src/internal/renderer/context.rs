@@ -220,6 +220,8 @@ pub enum OutputSource {
     Channels(Vec<usize>),
     /// A specific deck's raw output (channel index, deck index)
     Deck(usize, usize),
+    /// The domemaster fisheye output (equidistant azimuthal projection)
+    Domemaster,
 }
 
 impl OutputSource {
@@ -243,6 +245,7 @@ impl std::fmt::Display for OutputSource {
                 write!(f, "{}", names.join("+"))
             }
             OutputSource::Deck(ch, dk) => write!(f, "Ch {} Deck {}", ch + 1, dk + 1),
+            OutputSource::Domemaster => write!(f, "Domemaster"),
         }
     }
 }
@@ -259,9 +262,8 @@ pub struct SurfaceRenderInfo<'a> {
     pub uv_scale: [f32; 2],
     /// UV offset for content sampling (Fill=[0,0], Mapped=[bb_x, bb_y])
     pub uv_offset: [f32; 2],
-    /// Per-surface warp corners in output space [0..1] — TL, TR, BR, BL.
-    /// None = no warp (render at polygon's native position).
-    pub warp_corners: Option<[[f32; 2]; 4]>,
+    /// Warp mode: CornerPin or Mesh. None = no warp (render at polygon's native position).
+    pub warp_mode: Option<super::warp::WarpMode>,
     /// Per-surface overlap zones (Auto mode). Default = no zones.
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
 }
@@ -271,10 +273,8 @@ pub struct SurfaceRenderInfo<'a> {
 pub struct SurfaceAssignment {
     /// UUID of the assigned surface
     pub surface_uuid: String,
-    /// Warp corners in output-normalized coords [0..1] — TL, TR, BR, BL.
-    /// These define where the surface's bounding box corners map to in the output frame.
-    /// Default = the surface's bounding box corners (identity/no warp).
-    pub warp_corners: [[f32; 2]; 4],
+    /// Warp mode: corner-pin (4-point homography) or arbitrary mesh warp.
+    pub warp_mode: super::warp::WarpMode,
     /// Whether this assignment is enabled
     pub enabled: bool,
     /// Per-surface overlap zones (set by Auto mode detection).
@@ -485,15 +485,15 @@ impl OutputWindow {
             bounding_box: [0.0, 0.0, 1.0, 1.0],
             uv_scale: [1.0, 1.0],
             uv_offset: [0.0, 0.0],
-            warp_corners: None,
+            warp_mode: None,
             overlap_zones: Default::default(),
         }]);
     }
 
     /// Render multiple surfaces composited at their canvas positions.
     /// Each surface is rendered as a textured polygon using fan triangulation.
-    /// If a surface has warp_corners, a homography is computed and applied in the vertex shader
-    /// for perspective-correct rendering.
+    /// Warp is applied per the WarpMode: CornerPin uses homography in the vertex shader,
+    /// Mesh mode bakes warp into triangle vertices directly.
     pub fn render_surfaces(&self, context: &GpuContext, surfaces: &[SurfaceRenderInfo<'_>]) {
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
@@ -521,15 +521,36 @@ impl OutputWindow {
         // Pass 1: Render surfaces into the surface render target
         let prepared: Vec<_> = surfaces.iter().map(|surf| {
             let bb = surf.bounding_box;
-            let homography = surf.warp_corners.map(|warp_corners| {
-                let src_corners = [
-                    [bb[0], bb[1]],
-                    [bb[0] + bb[2], bb[1]],
-                    [bb[0] + bb[2], bb[1] + bb[3]],
-                    [bb[0], bb[1] + bb[3]],
-                ];
-                super::warp::compute_forward_homography(&src_corners, &warp_corners)
-            });
+
+            // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
+            let (homography, vb, num_tris) = match &surf.warp_mode {
+                Some(super::warp::WarpMode::CornerPin { corners }) => {
+                    let src_corners = [
+                        [bb[0], bb[1]],
+                        [bb[0] + bb[2], bb[1]],
+                        [bb[0] + bb[2], bb[1] + bb[3]],
+                        [bb[0], bb[1] + bb[3]],
+                    ];
+                    let h = super::warp::compute_forward_homography(&src_corners, corners);
+                    let (vb, nt) = PolygonBlitPipeline::triangulate(
+                        &context.device, surf.vertices, bb[0], bb[1], bb[2], bb[3],
+                    );
+                    (Some(h), vb, nt)
+                }
+                Some(super::warp::WarpMode::Mesh(mesh)) => {
+                    // Mesh mode: warp baked into vertices, identity homography
+                    let (vb, nt) = PolygonBlitPipeline::triangulate_with_mesh(
+                        &context.device, surf.vertices, bb, mesh,
+                    );
+                    (None, vb, nt)
+                }
+                None => {
+                    let (vb, nt) = PolygonBlitPipeline::triangulate(
+                        &context.device, surf.vertices, bb[0], bb[1], bb[2], bb[3],
+                    );
+                    (None, vb, nt)
+                }
+            };
 
             let bind_group = self.polygon_pipeline.create_bind_group(
                 &context.device,
@@ -538,11 +559,6 @@ impl OutputWindow {
                 surf.uv_offset,
                 homography.as_ref(),
                 &surf.overlap_zones,
-            );
-            let (vb, num_tris) = PolygonBlitPipeline::triangulate(
-                &context.device,
-                surf.vertices,
-                bb[0], bb[1], bb[2], bb[3],
             );
             (bind_group, vb, num_tris)
         }).collect();

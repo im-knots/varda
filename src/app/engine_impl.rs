@@ -501,7 +501,7 @@ impl OutputQueries for VardaApp {
                             SurfaceAssignmentSnapshot {
                                 surface_uuid: a.surface_uuid.clone(),
                                 surface_name,
-                                warp_corners: a.warp_corners,
+                                warp_mode: a.warp_mode.clone(),
                                 enabled: a.enabled,
                             }
                         }).collect(),
@@ -520,6 +520,7 @@ impl OutputQueries for VardaApp {
                 content_mapping: s.content_mapping,
                 output_type: s.output_type,
                 circle_hint: s.circle_hint,
+                default_warp: s.default_warp.clone(),
             }).collect(),
             monitors: self.cached_monitors.iter().enumerate().map(|(i, (name, handle))| {
                 let size = handle.size();
@@ -597,15 +598,16 @@ impl SurfaceCommands for VardaApp {
             let assignments = output.surface_assignments_mut();
             if !assignments.iter().any(|a| a.surface_uuid == surface_uuid) {
                 if let Some((_, surface)) = self.surface_manager.find_by_uuid(surface_uuid) {
-                    let bb = surface.bounding_box();
+                    // Use pre-computed warp mesh if available (dome surfaces), otherwise identity corners
+                    let warp_mode = surface.default_warp.clone().unwrap_or_else(|| {
+                        let bb = surface.bounding_box();
+                        crate::renderer::warp::WarpMode::identity_corners(
+                            [bb.x, bb.y, bb.width, bb.height]
+                        )
+                    });
                     assignments.push(crate::renderer::context::SurfaceAssignment {
                         surface_uuid: surface_uuid.to_string(),
-                        warp_corners: [
-                            [bb.x, bb.y],
-                            [bb.x + bb.width, bb.y],
-                            [bb.x + bb.width, bb.y + bb.height],
-                            [bb.x, bb.y + bb.height],
-                        ],
+                        warp_mode,
                         enabled: true,
                         overlap_zones: Default::default(),
                     });
@@ -635,6 +637,7 @@ impl SurfaceQueries for VardaApp {
             content_mapping: s.content_mapping,
             output_type: s.output_type,
             circle_hint: s.circle_hint,
+            default_warp: s.default_warp.clone(),
         }).collect()
     }
 }

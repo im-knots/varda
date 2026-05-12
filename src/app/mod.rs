@@ -125,6 +125,9 @@ pub struct VardaApp {
     surface_manager: SurfaceManager,
     calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
 
+    // ── Dome projection ────────────────────────────────────────
+    domemaster: Option<crate::renderer::dome::DomemasterRenderer>,
+
     // ── Notifications ──────────────────────────────────────────
     notifications: NotificationSystem,
 
@@ -297,6 +300,7 @@ impl VardaApp {
             outputs: Vec::new(),
             surface_manager: SurfaceManager::new(),
             calibration_textures,
+            domemaster: None,
             notifications: NotificationSystem::new(),
             workspace,
             pending_output_creates: Vec::new(),
@@ -776,12 +780,9 @@ impl VardaApp {
                             let bb = surface.bounding_box();
                             let assignment = crate::renderer::context::SurfaceAssignment {
                                 surface_uuid,
-                                warp_corners: [
-                                    [bb.x, bb.y],
-                                    [bb.x + bb.width, bb.y],
-                                    [bb.x + bb.width, bb.y + bb.height],
-                                    [bb.x, bb.y + bb.height],
-                                ],
+                                warp_mode: crate::renderer::warp::WarpMode::identity_corners(
+                                    [bb.x, bb.y, bb.width, bb.height]
+                                ),
                                 enabled: true,
                                 overlap_zones: Default::default(),
                             };
@@ -1402,7 +1403,9 @@ impl VardaApp {
                 use crate::renderer::context::UnifiedOutput;
                 if let Some(UnifiedOutput::Window(w)) = self.outputs.get_mut(output_idx) {
                     if let Some(a) = w.surface_assignments.get_mut(assignment_idx) {
-                        if corner_idx < 4 { a.warp_corners[corner_idx] = position; }
+                        if let Some(corners) = a.warp_mode.corners_mut() {
+                            if corner_idx < 4 { corners[corner_idx] = position; }
+                        }
                         CommandResult::Ok
                     } else {
                         CommandResult::Err { code: ErrorCode::NotFound, message: "Assignment not found".into() }
@@ -1417,12 +1420,9 @@ impl VardaApp {
                     if let Some(a) = assignments.get_mut(assignment_idx) {
                         if let Some((_, surface)) = self.surface_manager.find_by_uuid(&a.surface_uuid) {
                             let bb = surface.bounding_box();
-                            a.warp_corners = [
-                                [bb.x, bb.y],
-                                [bb.x + bb.width, bb.y],
-                                [bb.x + bb.width, bb.y + bb.height],
-                                [bb.x, bb.y + bb.height],
-                            ];
+                            a.warp_mode = crate::renderer::warp::WarpMode::identity_corners(
+                                [bb.x, bb.y, bb.width, bb.height]
+                            );
                         }
                         CommandResult::Ok
                     } else {
@@ -1830,6 +1830,11 @@ impl VardaApp {
     /// Mutable access to the mixer (for deck insertion from background loads).
     pub fn mixer_mut(&mut self) -> &mut crate::mixer::Mixer {
         &mut self.mixer
+    }
+
+    /// Read-only access to the domemaster renderer output view (if enabled).
+    pub fn domemaster_view(&self) -> Option<&wgpu::TextureView> {
+        self.domemaster.as_ref().map(|d| d.output_view())
     }
 
     /// Number of loaded shaders.
