@@ -1,14 +1,25 @@
-//! SRT receive — background ffmpeg decode thread → shared buffer → GPU upload.
+//! Stream receive — background ffmpeg decode thread → shared buffer → GPU upload.
 //!
 //! SRT output streaming is handled per-output via `FfmpegSubprocess` in
-//! `src/renderer/subprocess.rs`. This module handles SRT *input* (receiving
-//! video from an SRT source and displaying it as a deck source).
+//! `src/renderer/subprocess.rs`. This module handles stream *input* (receiving
+//! video from SRT/HLS/DASH sources and displaying them as deck sources).
 //!
 //! Architecture mirrors `NdiManager`: background thread decodes frames into
 //! `Arc<Mutex<Option<Vec<u8>>>>`, main thread uploads to GPU each frame.
 
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread::JoinHandle;
+
+/// Stream protocol for input receivers.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub enum StreamProtocol {
+    /// SRT (Secure Reliable Transport) with connection mode.
+    Srt { mode: SrtMode },
+    /// HLS (HTTP Live Streaming) — reads `.m3u8` manifest.
+    Hls,
+    /// DASH (Dynamic Adaptive Streaming over HTTP) — reads `.mpd` manifest.
+    Dash,
+}
 
 /// SRT connection mode — listener waits for connections, caller connects out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
@@ -29,9 +40,9 @@ impl std::fmt::Display for SrtMode {
 }
 
 #[allow(dead_code)]
-struct SrtReceiver {
+struct StreamReceiver {
     url: String,
-    mode: SrtMode,
+    protocol: StreamProtocol,
     frame_data: Arc<Mutex<Option<Vec<u8>>>>,
     stop_flag: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
@@ -40,13 +51,14 @@ struct SrtReceiver {
     height: u32,
 }
 
-/// Manages SRT input receivers (background decode threads + GPU textures).
-pub struct SrtManager {
-    receivers: Vec<SrtReceiver>,
+/// Manages stream input receivers (background decode threads + GPU textures).
+/// Handles SRT, HLS, and DASH input protocols.
+pub struct StreamManager {
+    receivers: Vec<StreamReceiver>,
     textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
 }
 
-impl SrtManager {
+impl StreamManager {
     pub fn new() -> Self {
         Self {
             receivers: Vec::new(),
@@ -54,13 +66,13 @@ impl SrtManager {
         }
     }
 
-    /// Start receiving from an SRT URL. Spawns a background ffmpeg decode thread.
+    /// Start receiving from a stream URL. Spawns a background ffmpeg decode thread.
     /// Returns receiver index on success. If an active receiver for the same URL
-    /// already exists, returns its index (SRT listeners only accept one client).
-    pub fn start_receive(&mut self, url: &str, mode: SrtMode, device: &wgpu::Device) -> Option<usize> {
+    /// already exists, returns its index.
+    pub fn start_receive(&mut self, url: &str, protocol: StreamProtocol, device: &wgpu::Device) -> Option<usize> {
         // Reuse existing receiver for the same URL if it's still alive
         if let Some(idx) = self.receivers.iter().position(|r| r.url == url && !r.stop_flag.load(Ordering::SeqCst)) {
-            log::info!("Reusing existing SRT receiver {} for '{}'", idx, url);
+            log::info!("Reusing existing stream receiver {} for '{}'", idx, url);
             return Some(idx);
         }
 
@@ -69,11 +81,20 @@ impl SrtManager {
         let connected = Arc::new(AtomicBool::new(false));
         let (width, height) = (1920u32, 1080u32);
 
-        // Build the full SRT URL with mode query param
-        let full_url = build_srt_url(url, mode);
+        // Build the full URL with protocol-specific params
+        let full_url = match &protocol {
+            StreamProtocol::Srt { mode } => build_srt_url(url, *mode),
+            StreamProtocol::Hls | StreamProtocol::Dash => url.to_string(),
+        };
+
+        let label = match &protocol {
+            StreamProtocol::Srt { .. } => format!("SRT Receive: {}", url),
+            StreamProtocol::Hls => format!("HLS Receive: {}", url),
+            StreamProtocol::Dash => format!("DASH Receive: {}", url),
+        };
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("SRT Receive: {}", url)),
+            label: Some(&label),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -89,22 +110,28 @@ impl SrtManager {
         let url_for_thread = full_url.clone();
         let url_display = url.to_string();
 
+        let thread_name = match &protocol {
+            StreamProtocol::Srt { .. } => format!("srt-recv-{}", url),
+            StreamProtocol::Hls => format!("hls-recv-{}", url),
+            StreamProtocol::Dash => format!("dash-recv-{}", url),
+        };
+
         let thread = std::thread::Builder::new()
-            .name(format!("srt-recv-{}", url))
+            .name(thread_name)
             .spawn(move || {
-                srt_receive_thread(url_for_thread, url_display, frame_clone, stop_clone, connected_clone);
+                stream_receive_thread(url_for_thread, url_display, frame_clone, stop_clone, connected_clone);
             })
             .ok();
 
         if thread.is_none() {
-            log::error!("Failed to spawn SRT receive thread for '{}'", url);
+            log::error!("Failed to spawn stream receive thread for '{}'", url);
             return None;
         }
 
         let idx = self.receivers.len();
-        self.receivers.push(SrtReceiver {
+        self.receivers.push(StreamReceiver {
             url: url.to_string(),
-            mode,
+            protocol,
             frame_data,
             stop_flag,
             connected,
@@ -113,8 +140,13 @@ impl SrtManager {
             height,
         });
         self.textures.push((texture, texture_view));
-        log::info!("SRT receiver started for '{}' (mode: {:?})", url, mode);
+        log::info!("Stream receiver started for '{}'", url);
         Some(idx)
+    }
+
+    /// Start receiving from an SRT URL (convenience wrapper).
+    pub fn start_srt_receive(&mut self, url: &str, mode: SrtMode, device: &wgpu::Device) -> Option<usize> {
+        self.start_receive(url, StreamProtocol::Srt { mode }, device)
     }
 
     /// Upload latest frames from all receivers to GPU.
@@ -167,20 +199,33 @@ impl SrtManager {
         self.receivers.get(idx).map(|r| r.url.as_str())
     }
 
-    /// Get mode of receiver at index.
+    /// Get protocol of receiver at index.
+    pub fn receiver_protocol(&self, idx: usize) -> Option<&StreamProtocol> {
+        self.receivers.get(idx).map(|r| &r.protocol)
+    }
+
+    /// Get SRT mode of receiver at index (convenience for SRT receivers).
     pub fn receiver_mode(&self, idx: usize) -> Option<SrtMode> {
-        self.receivers.get(idx).map(|r| r.mode)
+        self.receivers.get(idx).and_then(|r| match &r.protocol {
+            StreamProtocol::Srt { mode } => Some(*mode),
+            _ => None,
+        })
     }
 
     pub fn stop_receive(&mut self, idx: usize) {
         if let Some(r) = self.receivers.get_mut(idx) {
             r.stop_flag.store(true, Ordering::SeqCst);
-            if let Some(t) = r._thread.take() { let _ = t.join(); }
+            // Don't join — the thread may be blocked in ffmpeg I/O.
+            // The interrupt callback will cause ffmpeg to abort, and
+            // the thread holds only Arc clones so it's safe to detach.
+            if let Some(t) = r._thread.take() {
+                drop(t);
+            }
         }
     }
 }
 
-impl Drop for SrtManager {
+impl Drop for StreamManager {
     fn drop(&mut self) {
         for r in &mut self.receivers {
             r.stop_flag.store(true, Ordering::SeqCst);
@@ -201,15 +246,16 @@ fn build_srt_url(url: &str, mode: SrtMode) -> String {
     }
 }
 
-/// Background thread: decode SRT stream via ffmpeg_next into RGBA frames.
-fn srt_receive_thread(
+/// Background thread: decode stream via ffmpeg_next into RGBA frames.
+/// Protocol-agnostic — ffmpeg handles SRT, HLS, and DASH URLs natively.
+fn stream_receive_thread(
     url: String,
     url_display: String,
     frame_data: Arc<Mutex<Option<Vec<u8>>>>,
     stop_flag: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
 ) {
-    log::info!("SRT receive thread starting for '{}'", url_display);
+    log::info!("Stream receive thread starting for '{}'", url_display);
 
     // Initialize ffmpeg
     ffmpeg_next::init().ok();
@@ -217,12 +263,17 @@ fn srt_receive_thread(
     loop {
         if stop_flag.load(Ordering::SeqCst) { return; }
 
-        match ffmpeg_next::format::input(&url) {
+        // Use input_with_interrupt so ffmpeg checks the stop flag during
+        // blocking I/O (e.g. waiting for the next HLS segment). Without
+        // this, stop_receive() would hang because the packets iterator
+        // blocks inside ffmpeg's network read.
+        let stop_for_interrupt = Arc::clone(&stop_flag);
+        match ffmpeg_next::format::input_with_interrupt(&url, move || stop_for_interrupt.load(Ordering::SeqCst)) {
             Ok(mut input_ctx) => {
                 let stream_idx = match input_ctx.streams().best(ffmpeg_next::media::Type::Video) {
                     Some(s) => s.index(),
                     None => {
-                        log::error!("SRT '{}': no video stream found", url_display);
+                        log::error!("Stream '{}': no video stream found", url_display);
                         return;
                     }
                 };
@@ -232,12 +283,12 @@ fn srt_receive_thread(
                     Ok(ctx) => match ctx.decoder().video() {
                         Ok(d) => d,
                         Err(e) => {
-                            log::error!("SRT '{}': failed to create video decoder: {}", url_display, e);
+                            log::error!("Stream '{}': failed to create video decoder: {}", url_display, e);
                             return;
                         }
                     },
                     Err(e) => {
-                        log::error!("SRT '{}': failed to create codec context: {}", url_display, e);
+                        log::error!("Stream '{}': failed to create codec context: {}", url_display, e);
                         return;
                     }
                 };
@@ -248,13 +299,26 @@ fn srt_receive_thread(
                     ffmpeg_next::software::scaling::Flags::BILINEAR,
                 ).ok();
 
-                log::info!("SRT '{}' connected, decoding video", url_display);
+                log::info!("Stream '{}' connected, decoding video", url_display);
+
+                let mut last_frame_time = std::time::Instant::now();
+                let stall_timeout = std::time::Duration::from_secs(5);
+                let mut consecutive_errors: u32 = 0;
+                const MAX_CONSECUTIVE_ERRORS: u32 = 50;
 
                 for (stream, packet) in input_ctx.packets() {
                     if stop_flag.load(Ordering::SeqCst) { return; }
                     if stream.index() != stream_idx { continue; }
 
-                    if decoder.send_packet(&packet).is_err() { continue; }
+                    if decoder.send_packet(&packet).is_err() {
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            log::warn!("Stream '{}': {} consecutive decode errors, reconnecting", url_display, consecutive_errors);
+                            break;
+                        }
+                        continue;
+                    }
+                    consecutive_errors = 0;
 
                     let mut decoded = ffmpeg_next::frame::Video::empty();
                     while decoder.receive_frame(&mut decoded).is_ok() {
@@ -280,14 +344,12 @@ fn srt_receive_thread(
                                 let data = rgb_frame.data(0);
 
                                 let rgba = if stride == row_bytes {
-                                    // No padding — fast path
                                     if data.len() >= expected {
                                         data[..expected].to_vec()
                                     } else {
                                         continue;
                                     }
                                 } else {
-                                    // Stride-aware copy (remove padding)
                                     let mut buf = Vec::with_capacity(expected);
                                     for row in 0..height {
                                         let start = row * stride;
@@ -302,25 +364,33 @@ fn srt_receive_thread(
                                 if let Ok(mut guard) = frame_data.lock() {
                                     *guard = Some(rgba);
                                 }
+                                last_frame_time = std::time::Instant::now();
                                 if !connected.load(Ordering::SeqCst) {
                                     connected.store(true, Ordering::SeqCst);
-                                    log::info!("SRT '{}' first frame received ({}x{}, stride={})",
+                                    log::info!("Stream '{}' first frame received ({}x{}, stride={})",
                                         url_display, width, height, stride);
                                 }
                             }
                         }
                     }
+
+                    // If we haven't produced a frame in a while, the demuxer is
+                    // likely stuck (e.g. HLS segments deleted). Force reconnect.
+                    if last_frame_time.elapsed() > stall_timeout {
+                        log::warn!("Stream '{}': no frames for {:.1}s, reconnecting",
+                            url_display, last_frame_time.elapsed().as_secs_f32());
+                        break;
+                    }
                 }
 
-                // Stream ended — retry after a short delay
-                log::warn!("SRT '{}' stream ended, retrying in 2s...", url_display);
+                log::warn!("Stream '{}' ended, reconnecting in 500ms...", url_display);
                 connected.store(false, Ordering::SeqCst);
-                std::thread::sleep(std::time::Duration::from_secs(2));
+                std::thread::sleep(std::time::Duration::from_millis(500));
             }
             Err(e) => {
-                log::warn!("SRT '{}' connection failed: {}, retrying in 2s...", url_display, e);
+                log::warn!("Stream '{}' connection failed: {}, retrying in 1s...", url_display, e);
                 connected.store(false, Ordering::SeqCst);
-                std::thread::sleep(std::time::Duration::from_secs(2));
+                std::thread::sleep(std::time::Duration::from_secs(1));
             }
         }
     }
@@ -331,8 +401,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn srt_manager_new_empty() {
-        let mgr = SrtManager::new();
+    fn stream_manager_new_empty() {
+        let mgr = StreamManager::new();
         assert_eq!(mgr.receivers.len(), 0);
         assert_eq!(mgr.textures.len(), 0);
         assert!(!mgr.is_connected(0));
@@ -341,44 +411,67 @@ mod tests {
     }
 
     #[test]
-    fn srt_manager_receiver_count_empty() {
-        let mgr = SrtManager::new();
+    fn stream_manager_receiver_count_empty() {
+        let mgr = StreamManager::new();
         assert_eq!(mgr.receiver_count(), 0);
     }
 
     #[test]
-    fn srt_manager_receiver_url_out_of_bounds() {
-        let mgr = SrtManager::new();
+    fn stream_manager_receiver_url_out_of_bounds() {
+        let mgr = StreamManager::new();
         assert!(mgr.receiver_url(0).is_none());
         assert!(mgr.receiver_url(999).is_none());
     }
 
     #[test]
-    fn srt_manager_receiver_mode_out_of_bounds() {
-        let mgr = SrtManager::new();
+    fn stream_manager_receiver_mode_out_of_bounds() {
+        let mgr = StreamManager::new();
         assert!(mgr.receiver_mode(0).is_none());
         assert!(mgr.receiver_mode(999).is_none());
     }
 
     #[test]
-    fn srt_manager_is_connected_out_of_bounds() {
-        let mgr = SrtManager::new();
+    fn stream_manager_is_connected_out_of_bounds() {
+        let mgr = StreamManager::new();
         assert!(!mgr.is_connected(0));
         assert!(!mgr.is_connected(100));
     }
 
     #[test]
-    fn srt_manager_receiver_dimensions_out_of_bounds() {
-        let mgr = SrtManager::new();
+    fn stream_manager_receiver_dimensions_out_of_bounds() {
+        let mgr = StreamManager::new();
         assert!(mgr.receiver_dimensions(0).is_none());
     }
 
     #[test]
-    fn srt_manager_stop_receive_out_of_bounds_no_panic() {
-        let mut mgr = SrtManager::new();
-        // Should not panic on invalid indices
+    fn stream_manager_stop_receive_out_of_bounds_no_panic() {
+        let mut mgr = StreamManager::new();
         mgr.stop_receive(0);
         mgr.stop_receive(999);
+    }
+
+    #[test]
+    fn stream_protocol_srt_serialization() {
+        let proto = StreamProtocol::Srt { mode: SrtMode::Listener };
+        let json = serde_json::to_string(&proto).unwrap();
+        let restored: StreamProtocol = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, StreamProtocol::Srt { mode: SrtMode::Listener });
+    }
+
+    #[test]
+    fn stream_protocol_hls_serialization() {
+        let proto = StreamProtocol::Hls;
+        let json = serde_json::to_string(&proto).unwrap();
+        let restored: StreamProtocol = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, StreamProtocol::Hls);
+    }
+
+    #[test]
+    fn stream_protocol_dash_serialization() {
+        let proto = StreamProtocol::Dash;
+        let json = serde_json::to_string(&proto).unwrap();
+        let restored: StreamProtocol = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, StreamProtocol::Dash);
     }
 
     #[test]

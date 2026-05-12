@@ -378,7 +378,21 @@ pub struct ChannelRenderStats {
 #[derive(Clone)]
 pub struct SrtLibraryEntry {
     pub url: String,
-    pub mode: crate::srt::SrtMode,
+    pub mode: crate::stream::SrtMode,
+    pub connected: bool,
+}
+
+/// HLS source entry for the library panel
+#[derive(Clone)]
+pub struct HlsLibraryEntry {
+    pub url: String,
+    pub connected: bool,
+}
+
+/// DASH source entry for the library panel
+#[derive(Clone)]
+pub struct DashLibraryEntry {
+    pub url: String,
     pub connected: bool,
 }
 
@@ -465,6 +479,10 @@ pub struct UIData {
     pub syphon_available: bool,
     /// SRT library source configs for the library panel
     pub srt_library_configs: Vec<SrtLibraryEntry>,
+    /// HLS library source configs
+    pub hls_library_configs: Vec<HlsLibraryEntry>,
+    /// DASH library source configs
+    pub dash_library_configs: Vec<DashLibraryEntry>,
     // Recording/SRT state is now per-output (see OutputUI.is_active, active_duration)
     /// Transition sequences (multiple named sequences)
     pub sequences: Vec<SequenceUIData>,
@@ -749,6 +767,8 @@ pub struct UIActions {
     pub master_effect_to_remove: Option<usize>,
     pub master_effect_to_toggle: Option<usize>,
     pub notifications_to_dismiss: Vec<usize>,
+    /// Info notifications to push (e.g. "Copied URL to clipboard")
+    pub info_notifications: Vec<String>,
     pub crossfader_action: Option<CrossfaderAction>,
     /// (ch_idx, opacity, blend_mode) — per-channel updates
     pub channel_updates: Vec<(usize, f32, BlendMode)>,
@@ -823,11 +843,27 @@ pub struct UIActions {
     /// Rescan for Syphon servers
     pub syphon_rescan: bool,
     /// (ch_idx, url, mode) — add an SRT source as a new deck to channel
-    pub srt_to_add: Option<(usize, String, crate::srt::SrtMode)>,
-    /// (url, mode) — add an SRT source config to the library (no deck created)
-    pub srt_library_add: Option<(String, crate::srt::SrtMode)>,
+    pub srt_to_add: Option<(usize, String, crate::stream::SrtMode)>,
+    /// (url, mode) — add a stream source config to the library (no deck created)
+    pub srt_library_add: Option<(String, crate::stream::SrtMode)>,
     /// URL to remove from the SRT library
     pub srt_library_remove: Option<String>,
+    /// (ch_idx, url) — add an HLS source as a new deck to channel
+    pub hls_to_add: Option<(usize, String)>,
+    /// (ch_idx, url) — add a DASH source as a new deck to channel
+    pub dash_to_add: Option<(usize, String)>,
+    /// HLS URLs in the library
+    pub hls_library_configs: Vec<HlsLibraryEntry>,
+    /// DASH URLs in the library
+    pub dash_library_configs: Vec<DashLibraryEntry>,
+    /// HLS URL to add to library
+    pub hls_library_add: Option<String>,
+    /// DASH URL to add to library
+    pub dash_library_add: Option<String>,
+    /// HLS URL to remove from library
+    pub hls_library_remove: Option<String>,
+    /// DASH URL to remove from library
+    pub dash_library_remove: Option<String>,
     // Recording/SRT start/stop is now via OutputAction::Start/Stop per output
     /// Rescan for audio input devices
     pub audio_rescan: bool,
@@ -965,6 +1001,7 @@ impl UIActions {
             master_effect_to_remove: None,
             master_effect_to_toggle: None,
             notifications_to_dismiss: Vec::new(),
+            info_notifications: Vec::new(),
             crossfader_action: None,
             channel_updates: Vec::new(),
             midi_learn_toggle: false,
@@ -1005,7 +1042,14 @@ impl UIActions {
             srt_to_add: None,
             srt_library_add: None,
             srt_library_remove: None,
-            // Recording/SRT now per-output via OutputAction
+            hls_to_add: None,
+            dash_to_add: None,
+            hls_library_configs: Vec::new(),
+            dash_library_configs: Vec::new(),
+            hls_library_add: None,
+            dash_library_add: None,
+            hls_library_remove: None,
+            dash_library_remove: None,
             audio_rescan: false,
             audio_source_toggles: Vec::new(),
             video_actions: Vec::new(),
@@ -1056,6 +1100,8 @@ impl UIActions {
             || self.ndi_to_add.is_some()
             || self.syphon_to_add.is_some()
             || self.srt_to_add.is_some()
+            || self.hls_to_add.is_some()
+            || self.dash_to_add.is_some()
             || !self.auto_transition_actions.is_empty()
             || !self.sequence_actions.is_empty()
             || self.deck_preset_to_add.is_some()
@@ -1077,7 +1123,11 @@ pub enum LibraryDrag {
     /// Syphon server (server name)
     Syphon(String),
     /// SRT network source (url, mode)
-    Srt(String, crate::srt::SrtMode),
+    Srt(String, crate::stream::SrtMode),
+    /// HLS stream source (url)
+    Hls(String),
+    /// DASH stream source (url)
+    Dash(String),
     /// Deck preset from library (index into preset_library.deck_presets)
     DeckPreset(usize),
     /// Channel preset from library (index into preset_library.channel_presets)
@@ -1329,6 +1379,8 @@ impl UIData {
             syphon_sources: vec![],
             syphon_available: false,
             srt_library_configs: vec![],
+            hls_library_configs: vec![],
+            dash_library_configs: vec![],
 
             sequences: vec![],
             channel_count: 2,

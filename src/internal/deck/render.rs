@@ -307,11 +307,13 @@ impl Deck {
                         *scaling_mode, generator_target, "Syphon", cmd_buffers);
                 }
             }
-            DeckSource::Srt { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
+            DeckSource::Srt { blit_pipeline, source_width, source_height, scaling_mode, .. }
+            | DeckSource::Hls { blit_pipeline, source_width, source_height, scaling_mode, .. }
+            | DeckSource::Dash { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
                 if let Some(srt_view) = &self.srt_source_view {
                     Self::blit_external_source(context, blit_pipeline, srt_view,
                         *source_width, *source_height, self.texture.width(), self.texture.height(),
-                        *scaling_mode, generator_target, "SRT", cmd_buffers);
+                        *scaling_mode, generator_target, "Stream", cmd_buffers);
                 }
             }
         }

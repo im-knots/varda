@@ -50,6 +50,10 @@ impl VardaApp {
         for idx in dismissals {
             self.notifications.dismiss(idx);
         }
+
+        for msg in &ui_actions.info_notifications {
+            self.notifications.info(msg);
+        }
     }
 
     /// Apply engine mutations: mixer, decks, effects, transitions, channels, cameras.

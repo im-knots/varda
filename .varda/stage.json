@@ -97,38 +97,12 @@
   },
   "outputs": [
     {
-      "uuid": "49c997f6",
+      "uuid": "03737fc2",
       "name": "Output 1",
       "target": {
-        "type": "windowed"
-      },
-      "surface_assignments": [],
-      "window_position": [
-        -1880,
-        25
-      ],
-      "window_size": [
-        1920,
-        1080
-      ]
-    },
-    {
-      "uuid": "4241e131",
-      "name": "Output 2",
-      "target": {
-        "type": "recording",
-        "path": "output.mp4",
+        "type": "dash_stream",
+        "name": "live",
         "codec": "H.264"
-      },
-      "surface_assignments": []
-    },
-    {
-      "uuid": "e62c60c8",
-      "name": "Output 3",
-      "target": {
-        "type": "srt_stream",
-        "url": "srt://0.0.0.0:9001",
-        "codec": "H.265 (HEVC)"
       },
       "surface_assignments": []
     }

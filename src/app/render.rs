@@ -154,8 +154,8 @@ impl VardaApp {
         #[cfg(target_os = "macos")]
         self.syphon_manager.update(&self.context.queue);
 
-        // Update SRT receiver frames
-        self.srt_manager.update(&self.context.queue);
+        // Update stream receiver frames
+        self.stream_manager.update(&self.context.queue);
 
         for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
@@ -177,9 +177,9 @@ impl VardaApp {
                         .texture_view(syph_idx)
                         .cloned();
                 }
-                // Update SRT deck texture views
+                // Update stream deck texture views
                 if let Some(srt_idx) = slot.deck.srt_receiver_idx() {
-                    slot.deck.srt_source_view = self.srt_manager
+                    slot.deck.srt_source_view = self.stream_manager
                         .texture_view(srt_idx)
                         .cloned();
                 }
@@ -499,6 +499,18 @@ impl VardaApp {
                                         h.active = false;
                                     }
                                 }
+                            }
+                        }
+                    }
+                    crate::renderer::context::OutputTarget::HlsStream { .. } |
+                    crate::renderer::context::OutputTarget::DashStream { .. } => {
+                        if let Some(sub) = &mut h.subprocess {
+                            if !sub.feed_frame(&frame_data) {
+                                log::error!("Stream subprocess write failed for '{}', stopping", h.name);
+                                if let Some(mut sub) = h.subprocess.take() {
+                                    sub.stop();
+                                }
+                                h.active = false;
                             }
                         }
                     }

@@ -33,6 +33,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::system::remove_midi_mapping,
         // Streams
         routes::system::add_stream_library_entry, routes::system::remove_stream_library_entry,
+        routes::system::add_hls_library_entry, routes::system::remove_hls_library_entry,
+        routes::system::add_dash_library_entry, routes::system::remove_dash_library_entry,
         // Mixer
         routes::mixer::set_crossfader, routes::mixer::auto_crossfade,
         routes::mixer::beat_crossfade,
@@ -48,7 +50,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::move_deck, routes::decks::set_scaling_mode,
         routes::decks::set_transition, routes::decks::set_param,
         routes::decks::add_ndi_deck, routes::decks::add_syphon_deck,
-        routes::decks::add_srt_deck, routes::decks::reset_generator_params,
+        routes::decks::add_srt_deck, routes::decks::add_hls_deck, routes::decks::add_dash_deck,
+        routes::decks::reset_generator_params,
         // Video
         routes::decks::video_toggle_play, routes::decks::video_seek,
         routes::decks::video_set_speed, routes::decks::video_set_loop_mode,
@@ -115,7 +118,7 @@ use utoipa_swagger_ui::SwaggerUi;
     tags(
         (name = "System", description = "Health, state, shutdown, undo/redo, resolution, workspace"),
         (name = "Devices", description = "Device scanning, MIDI mappings, audio sources"),
-        (name = "Streams", description = "SRT stream library management"),
+        (name = "Streams", description = "Stream library management (SRT, HLS, DASH)"),
         (name = "Mixer", description = "Crossfader and transition controls"),
         (name = "Channels", description = "Channel CRUD and properties"),
         (name = "Decks", description = "Deck CRUD and properties"),
@@ -253,6 +256,8 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/channels/{ch}/decks/ndi", axum::routing::post(routes::decks::add_ndi_deck))
         .route("/api/channels/{ch}/decks/syphon", axum::routing::post(routes::decks::add_syphon_deck))
         .route("/api/channels/{ch}/decks/srt", axum::routing::post(routes::decks::add_srt_deck))
+        .route("/api/channels/{ch}/decks/hls", axum::routing::post(routes::decks::add_hls_deck))
+        .route("/api/channels/{ch}/decks/dash", axum::routing::post(routes::decks::add_dash_deck))
         // ── Write: Modulation Updates ────────────────────────────
         .route("/api/modulation/{uuid}/lfo/frequency", axum::routing::put(routes::modulation::update_lfo_frequency))
         .route("/api/modulation/{uuid}/lfo/waveform", axum::routing::put(routes::modulation::update_lfo_waveform))
@@ -338,6 +343,8 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/midi/mappings/remove", axum::routing::post(routes::system::remove_midi_mapping))
         // ── Write: Stream Library ───────────────────────────────
         .route("/api/streams/library", axum::routing::post(routes::system::add_stream_library_entry).delete(routes::system::remove_stream_library_entry))
+        .route("/api/streams/hls/library", axum::routing::post(routes::system::add_hls_library_entry).delete(routes::system::remove_hls_library_entry))
+        .route("/api/streams/dash/library", axum::routing::post(routes::system::add_dash_library_entry).delete(routes::system::remove_dash_library_entry))
         // ── Write: Mixer extras ────────────────────────────────
         .route("/api/mixer/transition", axum::routing::put(routes::decks::set_transition))
         // ── Write: Params ──────────────────────────────────────
@@ -347,6 +354,8 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/command", axum::routing::post(routes::decks::generic_command))
         // ── WebSocket ──────────────────────────────────────────
         .route("/api/ws", get(super::ws::ws_upgrade))
+        // ── Static file serving for HLS/DASH stream segments ────
+        .nest_service("/streams", tower_http::services::ServeDir::new(".varda/streams"))
         // ── OpenAPI / Swagger UI ─────────────────────────────────
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
         // ── Middleware ───────────────────────────────────────────

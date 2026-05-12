@@ -17,7 +17,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine (shared parameter router, UUID addressing, bidirectional feedback)
 - **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards
 - **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments
-- **Network I/O**: NDI send/receive, SRT stream/receive.
+- **Network I/O**: NDI, SRT, HLS, LL-HLS, and DASH send/receive
 - **Recording**: H.264, ProRes 422, HAP Q per-output
 - **Presets**: save/load deck and channel presets with modulation recipes
 - **Persistence**: full scene/venue/MIDI state saved and restored across sessions
@@ -76,15 +76,17 @@ Varda treats the current working directory as a workspace. All state lives in a 
 ```
 your-show/
   .varda/
-    scene.json          # channels, decks, effects, modulation, crossfader, transition sequences
-    stage.json          # surface layout, outputs, warp calibration
-    midi.json           # MIDI controller mappings that differ from the auto-mapped defaults
-    keymap.json         # keyboard shortcut bindings
+    scene.json            # channels, decks, effects, modulation, crossfader, transition sequences
+    stage.json            # surface layout, outputs, warp calibration
+    midi.json             # MIDI controller mappings that differ from the auto-mapped defaults
+    keymap.json           # keyboard shortcut bindings
     presets/
-      decks/            # saved deck presets (JSON)
-      channels/          # saved channel presets (JSON)
-  shaders/              # ISF shaders 
-  controller-profiles/  # MIDI controller profiles (JSON)
+      decks/              # saved deck presets (JSON)
+      channels/           # saved channel presets (JSON)
+    shaders/              # ISF shaders 
+    controller-profiles/  # MIDI controller profiles (JSON)
+    recordings/           # recording output files
+    streams/              # HLS/DASH output files
 ```
 
 Run Varda from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
@@ -173,9 +175,9 @@ The **app layer** (`VardaApp`) is the concrete implementation. It owns all subsy
 
 The **usecases layer** is the only place that touches egui or windowed rendering. It reads engine state snapshots and emits action structs. The UI never mutates engine state directly.
 
-This means you can drive the same engine from a GUI, an HTTP API, a CLI, or a test harness without changing engine code.
+This means you can drive the same engine from the GUI, the HTTP API, or a test harness without changing engine code.
 
-External I/O (NDI, SRT, recording) uses non-blocking subprocess architecture with bounded channels to keep the render thread fast. GPU work is batched into minimal command buffer submissions. The render pass culls zero-opacity decks and channels so you only pay for what's live.
+External I/O (NDI, SRT, HLS/DASH, and recording) uses non-blocking subprocess architecture with bounded channels to keep the render thread fast. GPU work is batched into minimal command buffer submissions. The render pass culls zero-opacity decks and channels so you only pay for what's live.
 
 ### Entity Identity & Address Scheme
 

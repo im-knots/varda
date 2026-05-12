@@ -152,9 +152,27 @@ pub enum DeckSource {
         source_height: u32,
         scaling_mode: ScalingMode,
     },
-    /// SRT network video input (reads shared texture from SrtManager)
+    /// SRT network video input (reads shared texture from StreamManager)
     Srt {
-        /// Index into SrtManager's receiver list
+        /// Index into StreamManager's receiver list
+        receiver_idx: usize,
+        blit_pipeline: BlitPipeline,
+        source_width: u32,
+        source_height: u32,
+        scaling_mode: ScalingMode,
+    },
+    /// HLS stream input (reads shared texture from StreamManager)
+    Hls {
+        /// Index into StreamManager's receiver list
+        receiver_idx: usize,
+        blit_pipeline: BlitPipeline,
+        source_width: u32,
+        source_height: u32,
+        scaling_mode: ScalingMode,
+    },
+    /// DASH stream input (reads shared texture from StreamManager)
+    Dash {
+        /// Index into StreamManager's receiver list
         receiver_idx: usize,
         blit_pipeline: BlitPipeline,
         source_width: u32,
@@ -255,7 +273,7 @@ pub struct Deck {
     /// Syphon source texture view (set each frame for Syphon decks, cloned from SyphonManager)
     pub syphon_source_view: Option<wgpu::TextureView>,
 
-    /// SRT source texture view (set each frame for SRT decks, cloned from SrtManager)
+    /// SRT source texture view (set each frame for SRT decks, cloned from StreamManager)
     pub srt_source_view: Option<wgpu::TextureView>,
 
     /// Smoothed FPS derived from actual render pipeline timing (EMA of 1/time_delta)
@@ -307,6 +325,8 @@ impl Deck {
             DeckSource::Ndi { .. } => "ndi",
             DeckSource::Syphon { .. } => "syphon",
             DeckSource::Srt { .. } => "srt",
+            DeckSource::Hls { .. } => "hls",
+            DeckSource::Dash { .. } => "dash",
         }
     }
 
@@ -359,7 +379,9 @@ impl Deck {
             | DeckSource::Camera { scaling_mode, .. }
             | DeckSource::Ndi { scaling_mode, .. }
             | DeckSource::Syphon { scaling_mode, .. }
-            | DeckSource::Srt { scaling_mode, .. } => Some(*scaling_mode),
+            | DeckSource::Srt { scaling_mode, .. }
+            | DeckSource::Hls { scaling_mode, .. }
+            | DeckSource::Dash { scaling_mode, .. } => Some(*scaling_mode),
             _ => None,
         }
     }
@@ -371,7 +393,9 @@ impl Deck {
             | DeckSource::Camera { scaling_mode, .. }
             | DeckSource::Ndi { scaling_mode, .. }
             | DeckSource::Syphon { scaling_mode, .. }
-            | DeckSource::Srt { scaling_mode, .. } => *scaling_mode = mode,
+            | DeckSource::Srt { scaling_mode, .. }
+            | DeckSource::Hls { scaling_mode, .. }
+            | DeckSource::Dash { scaling_mode, .. } => *scaling_mode = mode,
             _ => {}
         }
     }
@@ -392,10 +416,12 @@ impl Deck {
         }
     }
 
-    /// Get the SRT receiver index (if source is SRT)
+    /// Get the SRT/HLS/DASH receiver index (if source is a stream)
     pub fn srt_receiver_idx(&self) -> Option<usize> {
         match &self.source {
-            DeckSource::Srt { receiver_idx, .. } => Some(*receiver_idx),
+            DeckSource::Srt { receiver_idx, .. }
+            | DeckSource::Hls { receiver_idx, .. }
+            | DeckSource::Dash { receiver_idx, .. } => Some(*receiver_idx),
             _ => None,
         }
     }

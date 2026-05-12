@@ -322,22 +322,22 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         syphon_sources: vec![],
         #[cfg(not(target_os = "macos"))]
         syphon_available: false,
-        srt_receivers: build_srt_receiver_snapshots(app),
+        stream_receivers: build_stream_receiver_snapshots(app),
     }
 }
 
-/// Build SRT library snapshots: library entries merged with active receiver status.
-fn build_srt_receiver_snapshots(app: &VardaApp) -> Vec<crate::engine::types::SrtReceiverSnapshot> {
-    let mut result: Vec<crate::engine::types::SrtReceiverSnapshot> = Vec::new();
+/// Build stream library snapshots: library entries merged with active receiver status.
+fn build_stream_receiver_snapshots(app: &VardaApp) -> Vec<crate::engine::types::StreamReceiverSnapshot> {
+    let mut result: Vec<crate::engine::types::StreamReceiverSnapshot> = Vec::new();
 
     // Add library entries (configured but possibly not connected)
-    for (url, mode) in &app.srt_library {
-        let connected = (0..app.srt_manager.receiver_count())
+    for (url, mode) in &app.stream_library {
+        let connected = (0..app.stream_manager.receiver_count())
             .any(|i| {
-                app.srt_manager.receiver_url(i) == Some(url.as_str())
-                    && app.srt_manager.is_connected(i)
+                app.stream_manager.receiver_url(i) == Some(url.as_str())
+                    && app.stream_manager.is_connected(i)
             });
-        result.push(crate::engine::types::SrtReceiverSnapshot {
+        result.push(crate::engine::types::StreamReceiverSnapshot {
             url: url.clone(),
             mode: format!("{}", mode).to_lowercase(),
             connected,
@@ -345,13 +345,13 @@ fn build_srt_receiver_snapshots(app: &VardaApp) -> Vec<crate::engine::types::Srt
     }
 
     // Add active receivers not already in the library (e.g. restored from scene)
-    for i in 0..app.srt_manager.receiver_count() {
-        if let (Some(url), Some(mode)) = (app.srt_manager.receiver_url(i), app.srt_manager.receiver_mode(i)) {
+    for i in 0..app.stream_manager.receiver_count() {
+        if let (Some(url), Some(mode)) = (app.stream_manager.receiver_url(i), app.stream_manager.receiver_mode(i)) {
             if !result.iter().any(|r| r.url == url) {
-                result.push(crate::engine::types::SrtReceiverSnapshot {
+                result.push(crate::engine::types::StreamReceiverSnapshot {
                     url: url.to_string(),
                     mode: format!("{}", mode).to_lowercase(),
-                    connected: app.srt_manager.is_connected(i),
+                    connected: app.stream_manager.is_connected(i),
                 });
             }
         }
@@ -554,15 +554,29 @@ pub(crate) fn build_ui_data(
         ndi_available: engine.ndi_available,
         syphon_sources: engine.syphon_sources.clone(),
         syphon_available: engine.syphon_available,
-        srt_library_configs: engine.srt_receivers.iter().map(|r| {
+        srt_library_configs: engine.stream_receivers.iter().map(|r| {
             let mode = match r.mode.as_str() {
-                "listener" => crate::srt::SrtMode::Listener,
-                _ => crate::srt::SrtMode::Caller,
+                "listener" => crate::stream::SrtMode::Listener,
+                _ => crate::stream::SrtMode::Caller,
             };
             SrtLibraryEntry {
                 url: r.url.clone(),
                 mode,
                 connected: r.connected,
+            }
+        }).collect(),
+        hls_library_configs: app.hls_library.iter().map(|url| {
+            crate::usecases::ui::HlsLibraryEntry {
+                url: url.clone(),
+                connected: (0..app.stream_manager.receiver_count())
+                    .any(|i| app.stream_manager.receiver_url(i) == Some(url.as_str()) && app.stream_manager.is_connected(i)),
+            }
+        }).collect(),
+        dash_library_configs: app.dash_library.iter().map(|url| {
+            crate::usecases::ui::DashLibraryEntry {
+                url: url.clone(),
+                connected: (0..app.stream_manager.receiver_count())
+                    .any(|i| app.stream_manager.receiver_url(i) == Some(url.as_str()) && app.stream_manager.is_connected(i)),
             }
         }).collect(),
 

@@ -56,7 +56,7 @@ pub struct SceneResponse {
     pub active_transition_name: Option<String>,
     pub modulation: ModulationSnapshot,
     pub sequences: Vec<SequenceSnapshot>,
-    pub streams: Vec<SrtReceiverSnapshot>,
+    pub streams: Vec<StreamReceiverSnapshot>,
 }
 
 pub fn project_scene(state: &EngineState) -> SceneResponse {
@@ -67,7 +67,7 @@ pub fn project_scene(state: &EngineState) -> SceneResponse {
         active_transition_name: state.mixer.active_transition_name.clone(),
         modulation: state.modulation.clone(),
         sequences: state.mixer.sequences.clone(),
-        streams: state.srt_receivers.clone(),
+        streams: state.stream_receivers.clone(),
     }
 }
 
@@ -208,7 +208,7 @@ pub(crate) mod tests {
             fps: 60.0, frame_count: 100,
             ndi_sources: vec!["OBS".into()], ndi_available: true,
             syphon_sources: vec![], syphon_available: false,
-            srt_receivers: vec![],
+            stream_receivers: vec![],
         }
     }
 

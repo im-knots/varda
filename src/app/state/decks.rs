@@ -26,7 +26,7 @@ impl VardaApp {
                         self.camera_manager.release_camera(cam_id);
                     }
                     if let Some(idx) = slot.deck.srt_receiver_idx() {
-                        self.srt_manager.stop_receive(idx);
+                        self.stream_manager.stop_receive(idx);
                     }
                 }
             }
@@ -204,9 +204,9 @@ impl VardaApp {
 
         // Add SRT source deck if requested
         if let Some((ch_idx, url, mode)) = actions.srt_to_add.take() {
-            match self.srt_manager.start_receive(&url, mode, &context.device) {
+            match self.stream_manager.start_srt_receive(&url, mode, &context.device) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.srt_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                     match Deck::new_from_srt(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -234,18 +234,106 @@ impl VardaApp {
             }
         }
 
-        // Add SRT source to library (no deck created — user drags to channel)
+        // Add stream source to library (no deck created — user drags to channel)
         if let Some((url, mode)) = actions.srt_library_add.take() {
-            if !self.srt_library.iter().any(|(u, _)| u == &url) {
-                log::info!("Added SRT source to library: {} ({})", url, mode);
-                self.srt_library.push((url, mode));
+            if !self.stream_library.iter().any(|(u, _)| u == &url) {
+                log::info!("Added stream source to library: {} ({})", url, mode);
+                self.stream_library.push((url, mode));
             }
         }
 
-        // Remove SRT source from library
+        // Remove stream source from library
         if let Some(url) = actions.srt_library_remove.take() {
-            self.srt_library.retain(|(u, _)| u != &url);
+            self.stream_library.retain(|(u, _)| u != &url);
             log::info!("Removed SRT source from library: {}", url);
+        }
+
+        // Add HLS source deck if requested
+        if let Some((ch_idx, url)) = actions.hls_to_add.take() {
+            match self.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Hls, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    match Deck::new_from_hls(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                        Ok(deck) => {
+                            if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                let idx = ch.add_deck(deck);
+                                log::info!("Added HLS deck {} to channel {}: {}", idx, ch_idx, url);
+                                let texture_id = egui_renderer.register_native_texture(
+                                    &context.device,
+                                    &ch.decks[idx].deck.texture_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                deck_preview_textures.insert((ch_idx, idx), texture_id);
+                                self.notifications.info(format!("📡 HLS '{}' added to Ch {}", url, ch_idx + 1));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create HLS deck: {}", e);
+                            self.notifications.error(format!("Failed to create HLS deck: {}", e));
+                        }
+                    }
+                }
+                None => {
+                    log::error!("Failed to start HLS receive for '{}'", url);
+                    self.notifications.error(format!("Failed to receive HLS source '{}'", url));
+                }
+            }
+        }
+
+        // Add DASH source deck if requested
+        if let Some((ch_idx, url)) = actions.dash_to_add.take() {
+            match self.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Dash, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    match Deck::new_from_dash(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                        Ok(deck) => {
+                            if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                let idx = ch.add_deck(deck);
+                                log::info!("Added DASH deck {} to channel {}: {}", idx, ch_idx, url);
+                                let texture_id = egui_renderer.register_native_texture(
+                                    &context.device,
+                                    &ch.decks[idx].deck.texture_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                deck_preview_textures.insert((ch_idx, idx), texture_id);
+                                self.notifications.info(format!("📡 DASH '{}' added to Ch {}", url, ch_idx + 1));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create DASH deck: {}", e);
+                            self.notifications.error(format!("Failed to create DASH deck: {}", e));
+                        }
+                    }
+                }
+                None => {
+                    log::error!("Failed to start DASH receive for '{}'", url);
+                    self.notifications.error(format!("Failed to receive DASH source '{}'", url));
+                }
+            }
+        }
+
+        // Add/remove HLS library entries
+        if let Some(url) = actions.hls_library_add.take() {
+            if !self.hls_library.contains(&url) {
+                log::info!("Added HLS source to library: {}", url);
+                self.hls_library.push(url);
+            }
+        }
+        if let Some(url) = actions.hls_library_remove.take() {
+            self.hls_library.retain(|u| u != &url);
+            log::info!("Removed HLS source from library: {}", url);
+        }
+
+        // Add/remove DASH library entries
+        if let Some(url) = actions.dash_library_add.take() {
+            if !self.dash_library.contains(&url) {
+                log::info!("Added DASH source to library: {}", url);
+                self.dash_library.push(url);
+            }
+        }
+        if let Some(url) = actions.dash_library_remove.take() {
+            self.dash_library.retain(|u| u != &url);
+            log::info!("Removed DASH source from library: {}", url);
         }
 
         // Add Syphon server deck if requested
@@ -287,7 +375,7 @@ impl VardaApp {
                 let preset = self.preset_library.deck_presets[preset_idx].clone();
                 match Self::restore_deck_into_channel(
                     &preset.config, ch_idx, context, &self.registry,
-                    &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager,
+                    &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager,
                     self.render_width, self.render_height,
                     mixer, egui_renderer, deck_preview_textures,
                 ) {
@@ -365,7 +453,7 @@ impl VardaApp {
                 for deck_config in &preset.config.decks {
                     if let Err(e) = Self::restore_deck_into_channel(
                         deck_config, ch_idx, context, &self.registry,
-                        &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager,
+                        &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager,
                         self.render_width, self.render_height,
                         mixer, egui_renderer, deck_preview_textures,
                     ) {
@@ -651,7 +739,7 @@ impl VardaApp {
         registry: &crate::registry::ShaderRegistry,
         camera_manager: &mut crate::camera::CameraManager,
         ndi_manager: &mut crate::ndi::NdiManager,
-        srt_manager: &mut crate::srt::SrtManager,
+        stream_manager: &mut crate::stream::StreamManager,
         render_width: u32,
         render_height: u32,
         mixer: &mut crate::mixer::Mixer,
@@ -660,7 +748,7 @@ impl VardaApp {
     ) -> anyhow::Result<()> {
         let mut deck = crate::persistence::restore_deck(
             config, context, registry,
-            camera_manager, ndi_manager, srt_manager,
+            camera_manager, ndi_manager, stream_manager,
             render_width, render_height,
         )?;
         // Apply the preset's display name (overrides the generator/source name)

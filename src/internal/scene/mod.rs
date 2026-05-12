@@ -313,6 +313,14 @@ pub enum SourceConfig {
         url: String,
         mode: String,
     },
+    /// HLS stream source (reconnected on restore)
+    Hls {
+        url: String,
+    },
+    /// DASH stream source (reconnected on restore)
+    Dash {
+        url: String,
+    },
 }
 
 // ── Effect ─────────────────────────────────────────────────────────
@@ -345,6 +353,8 @@ pub enum OutputTargetConfig {
     Display { name: String },
     Recording { path: String, codec: String },
     SrtStream { url: String, #[serde(default)] codec: String },
+    HlsStream { name: String, #[serde(default)] codec: String, #[serde(default)] low_latency: bool },
+    DashStream { name: String, #[serde(default)] codec: String },
     NdiSend { sender_name: String },
     SyphonServer { server_name: String },
 }
@@ -490,6 +500,16 @@ impl SourceConfig {
             SourceConfig::Srt { url, .. } => {
                 if url.trim().is_empty() {
                     errors.push(format!("{}: SRT url is empty", prefix));
+                }
+            }
+            SourceConfig::Hls { url } => {
+                if url.trim().is_empty() {
+                    errors.push(format!("{}: HLS url is empty", prefix));
+                }
+            }
+            SourceConfig::Dash { url } => {
+                if url.trim().is_empty() {
+                    errors.push(format!("{}: DASH url is empty", prefix));
                 }
             }
         }

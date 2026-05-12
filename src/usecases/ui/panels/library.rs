@@ -183,7 +183,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     });
                     ui.horizontal(|ui| {
                         if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                            let mode = if mode_idx == 0 { crate::srt::SrtMode::Listener } else { crate::srt::SrtMode::Caller };
+                            let mode = if mode_idx == 0 { crate::stream::SrtMode::Listener } else { crate::stream::SrtMode::Caller };
                             // Add to library only — user drags to channel to create deck
                             actions.srt_library_add = Some((url.clone(), mode));
                             ui.data_mut(|d| d.insert_temp(adding_id, false));
@@ -226,6 +226,126 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     if ui.ctx().is_being_dragged(item_id) {
                         ui.ctx().memory_mut(|mem| {
                             mem.data.insert_temp(egui::Id::new("__lib_dnd_srt_config"), (url, mode));
+                        });
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+        }
+
+        // === HLS SOURCES ===
+        {
+            let hls_header = egui::RichText::new(format!("📡 HLS Sources ({})", data.hls_library_configs.len())).strong();
+            egui::CollapsingHeader::new(hls_header).id_salt("lib_hls").default_open(false).show(ui, |ui| {
+                let adding_id = ui.id().with("hls_adding");
+                let url_id = ui.id().with("hls_url_input");
+                let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                if is_adding {
+                    let mut url: String = ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| "https://example.com/stream.m3u8".to_string());
+                    ui.horizontal(|ui| {
+                        ui.label("URL:");
+                        ui.text_edit_singleline(&mut url);
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                            actions.hls_library_add = Some(url.clone());
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                        if ui.small_button("✕ Cancel").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                    });
+                    ui.data_mut(|d| {
+                        d.insert_temp(url_id, url);
+                    });
+                } else if ui.small_button("+ Add HLS").clicked() {
+                    ui.data_mut(|d| d.insert_temp(adding_id, true));
+                }
+
+                for (i, entry) in data.hls_library_configs.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_hls", i));
+                    let status_color = if entry.connected {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else {
+                        egui::Color32::from_rgb(180, 180, 180)
+                    };
+                    let url = entry.url.clone();
+                    ui.horizontal(|ui| {
+                        ui.dnd_drag_source(item_id, LibraryDrag::Hls(url.clone()), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("●").color(status_color));
+                                ui.label(egui::RichText::new(format!("📡 {}", url)).size(12.0));
+                            });
+                        }).response;
+                        if ui.small_button("✕").on_hover_text("Remove from library").clicked() {
+                            actions.hls_library_remove = Some(url.clone());
+                        }
+                    });
+                    if ui.ctx().is_being_dragged(item_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__lib_dnd_hls_url"), url);
+                        });
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+        }
+
+        // === DASH SOURCES ===
+        {
+            let dash_header = egui::RichText::new(format!("📡 DASH Sources ({})", data.dash_library_configs.len())).strong();
+            egui::CollapsingHeader::new(dash_header).id_salt("lib_dash").default_open(false).show(ui, |ui| {
+                let adding_id = ui.id().with("dash_adding");
+                let url_id = ui.id().with("dash_url_input");
+                let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                if is_adding {
+                    let mut url: String = ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| "https://example.com/stream.mpd".to_string());
+                    ui.horizontal(|ui| {
+                        ui.label("URL:");
+                        ui.text_edit_singleline(&mut url);
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                            actions.dash_library_add = Some(url.clone());
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                        if ui.small_button("✕ Cancel").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                    });
+                    ui.data_mut(|d| {
+                        d.insert_temp(url_id, url);
+                    });
+                } else if ui.small_button("+ Add DASH").clicked() {
+                    ui.data_mut(|d| d.insert_temp(adding_id, true));
+                }
+
+                for (i, entry) in data.dash_library_configs.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_dash", i));
+                    let status_color = if entry.connected {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else {
+                        egui::Color32::from_rgb(180, 180, 180)
+                    };
+                    let url = entry.url.clone();
+                    ui.horizontal(|ui| {
+                        ui.dnd_drag_source(item_id, LibraryDrag::Dash(url.clone()), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("●").color(status_color));
+                                ui.label(egui::RichText::new(format!("📡 {}", url)).size(12.0));
+                            });
+                        }).response;
+                        if ui.small_button("✕").on_hover_text("Remove from library").clicked() {
+                            actions.dash_library_remove = Some(url.clone());
+                        }
+                    });
+                    if ui.ctx().is_being_dragged(item_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__lib_dnd_dash_url"), url);
                         });
                     }
                 }

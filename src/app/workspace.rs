@@ -106,7 +106,7 @@ impl VardaApp {
                             log::info!("Scene render resolution: {}×{}", w, h);
                         }
                     }
-                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager, self.render_width, self.render_height) {
+                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager, self.render_width, self.render_height) {
                         Ok(result) => {
                             self.mixer = result.mixer;
                             for warn in &result.warnings {
@@ -242,7 +242,7 @@ impl VardaApp {
                     // Different source — rebuild just this deck
                     match crate::persistence::restore_deck(
                         deck_config, &self.context, &self.registry,
-                        &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager, rw, rh,
+                        &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager, rw, rh,
                     ) {
                         Ok(deck) => {
                             let mut slot = crate::channel::DeckSlot::new(deck);
@@ -268,7 +268,7 @@ impl VardaApp {
                 let deck_config = &ch_config.decks[d_idx];
                 match crate::persistence::restore_deck(
                     deck_config, &self.context, &self.registry,
-                    &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager, rw, rh,
+                    &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager, rw, rh,
                 ) {
                     Ok(deck) => {
                         let mut slot = crate::channel::DeckSlot::new(deck);
@@ -305,7 +305,7 @@ impl VardaApp {
                     for deck_config in &ch_config.decks {
                         match crate::persistence::restore_deck(
                             deck_config, &self.context, &self.registry,
-                            &mut self.camera_manager, &mut self.ndi_manager, &mut self.srt_manager, rw, rh,
+                            &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager, rw, rh,
                         ) {
                             Ok(deck) => {
                                 let mut slot = crate::channel::DeckSlot::new(deck);

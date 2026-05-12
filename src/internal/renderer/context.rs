@@ -293,6 +293,10 @@ pub enum OutputTarget {
     Recording { path: String, codec: RecordingCodec },
     /// Stream frames via SRT (Secure Reliable Transport) through ffmpeg
     SrtStream { url: String, codec: SrtCodec },
+    /// Stream frames as HLS segments via ffmpeg
+    HlsStream { name: String, codec: StreamingCodec, low_latency: bool },
+    /// Stream frames as DASH segments via ffmpeg
+    DashStream { name: String, codec: StreamingCodec },
     /// Send frames over NDI network protocol
     NdiSend { sender_name: String },
     /// Publish frames via Syphon (macOS inter-app sharing)
@@ -318,6 +322,11 @@ impl std::fmt::Display for OutputTarget {
             OutputTarget::Display { name, .. } => write!(f, "{}", name),
             OutputTarget::Recording { path, codec } => write!(f, "Rec [{}]: {}", codec, path),
             OutputTarget::SrtStream { url, codec } => write!(f, "SRT [{}]: {}", codec, url),
+            OutputTarget::HlsStream { name, codec, low_latency } => {
+                if *low_latency { write!(f, "LL-HLS [{}]: {}", codec, name) }
+                else { write!(f, "HLS [{}]: {}", codec, name) }
+            }
+            OutputTarget::DashStream { name, codec } => write!(f, "DASH [{}]: {}", codec, name),
             OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {}", sender_name),
             OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {}", server_name),
         }
@@ -806,6 +815,31 @@ impl std::fmt::Display for SrtCodec {
         match self {
             SrtCodec::H264 => write!(f, "H.264"),
             SrtCodec::H265 => write!(f, "H.265 (HEVC)"),
+        }
+    }
+}
+
+/// Streaming codec for HLS/DASH output.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub enum StreamingCodec {
+    /// H.264 ultrafast preset
+    H264,
+    /// H.265 / HEVC ultrafast preset
+    H265,
+    /// AV1 via SVT-AV1
+    AV1,
+}
+
+impl Default for StreamingCodec {
+    fn default() -> Self { Self::H264 }
+}
+
+impl std::fmt::Display for StreamingCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamingCodec::H264 => write!(f, "H.264"),
+            StreamingCodec::H265 => write!(f, "H.265 (HEVC)"),
+            StreamingCodec::AV1 => write!(f, "AV1"),
         }
     }
 }

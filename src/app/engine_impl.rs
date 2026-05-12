@@ -84,7 +84,7 @@ impl MixerCommands for VardaApp {
                     self.camera_manager.release_camera(cam_id);
                 }
                 if let Some(idx) = slot.deck.srt_receiver_idx() {
-                    self.srt_manager.stop_receive(idx);
+                    self.stream_manager.stop_receive(idx);
                 }
             }
         }

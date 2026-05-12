@@ -95,7 +95,7 @@ pub async fn sequences(State(state): State<SharedState>) -> impl IntoResponse {
 /// GET /api/scene/streams
 pub async fn streams(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
-        Ok(s) => Json(&s.srt_receivers).into_response(),
+        Ok(s) => Json(&s.stream_receivers).into_response(),
         Err((status, msg)) => (status, msg).into_response(),
     }
 }

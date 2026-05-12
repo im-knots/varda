@@ -12,6 +12,51 @@ use std::sync::Arc;
 
 use crate::renderer::context::RecordingCodec;
 
+/// Write a self-contained HTML player page into a stream directory.
+/// Uses hls.js for HLS streams and dash.js for DASH streams.
+/// For LL-HLS, enables hls.js low-latency mode with live-edge tuning.
+fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, low_latency: bool) {
+    let (lib_url, lib_setup) = match kind {
+        "hls" if low_latency => (
+            "https://cdn.jsdelivr.net/npm/hls.js@latest",
+            format!(
+                r#"if(Hls.isSupported()){{var h=new Hls({{lowLatencyMode:true,liveSyncDurationCount:2,liveMaxLatencyDurationCount:4,maxBufferLength:4,backBufferLength:0}});h.loadSource('{}');h.attachMedia(v);}}else if(v.canPlayType('application/vnd.apple.mpegurl')){{v.src='{}';}}"#,
+                manifest_filename, manifest_filename,
+            ),
+        ),
+        "hls" => (
+            "https://cdn.jsdelivr.net/npm/hls.js@latest",
+            format!(
+                r#"if(Hls.isSupported()){{var h=new Hls();h.loadSource('{}');h.attachMedia(v);}}else if(v.canPlayType('application/vnd.apple.mpegurl')){{v.src='{}';}}"#,
+                manifest_filename, manifest_filename,
+            ),
+        ),
+        _ => (
+            "https://cdn.jsdelivr.net/npm/dashjs@latest/dist/dash.all.min.js",
+            format!(
+                r#"var p=dashjs.MediaPlayer().create();p.updateSettings({{streaming:{{delay:{{liveDelay:2}},buffer:{{fastSwitchEnabled:true}}}}}});p.initialize(v,'{}',true);v.play().catch(function(){{}});"#,
+                manifest_filename,
+            ),
+        ),
+    };
+    let title = if low_latency { format!("LL-{}", kind.to_uppercase()) } else { kind.to_uppercase() };
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Varda — {title} stream</title>
+<style>*{{margin:0;padding:0;background:#000}}video{{width:100vw;height:100vh;object-fit:contain}}</style>
+<script src="{lib_url}"></script></head>
+<body><video id="v" autoplay muted controls></video>
+<script>var v=document.getElementById('v');{lib_setup}</script></body></html>"#,
+        title = title,
+        lib_url = lib_url,
+        lib_setup = lib_setup,
+    );
+    let path = format!("{}/player.html", dir);
+    if let Err(e) = std::fs::write(&path, html) {
+        log::warn!("Failed to write stream player to '{}': {}", path, e);
+    }
+}
+
 /// Shared ffmpeg subprocess for recording and SRT streaming.
 ///
 /// Frames are sent to a background writer thread via a bounded channel.
@@ -184,6 +229,148 @@ impl FfmpegSubprocess {
             frames_written,
             write_failed,
             label: url.to_string(),
+            start_time: std::time::Instant::now(),
+            stopped: false,
+        })
+    }
+
+    /// Spawn an ffmpeg HLS output subprocess.
+    /// Writes HLS segments to `.varda/streams/<name>/` with `-hls_list_size 0` for VOD archive.
+    pub fn spawn_hls(
+        name: &str,
+        codec: &super::context::StreamingCodec,
+        width: u32,
+        height: u32,
+        fps: u32,
+        low_latency: bool,
+    ) -> anyhow::Result<Self> {
+        let dir = format!(".varda/streams/{}", name);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow::anyhow!("Failed to create HLS output dir '{}': {}", dir, e))?;
+        let playlist = format!("{}/index.m3u8", dir);
+        write_stream_player(&dir, "hls", "index.m3u8", low_latency);
+
+        let (encoder, extra): (&str, Vec<&str>) = match codec {
+            super::context::StreamingCodec::H264 => ("libx264", vec!["-preset", "ultrafast", "-tune", "zerolatency"]),
+            super::context::StreamingCodec::H265 => ("libx265", vec!["-preset", "ultrafast"]),
+            super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
+        };
+
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-y")
+            .args(["-f", "rawvideo"])
+            .args(["-pix_fmt", "rgba"])
+            .args(["-s", &format!("{}x{}", width, height)])
+            .args(["-r", &fps.to_string()])
+            .args(["-i", "-"])
+            .args(["-c:v", encoder])
+            .args(&extra)
+            .args(["-pix_fmt", "yuv420p"])
+            .args(["-f", "hls"]);
+
+        if low_latency {
+            cmd.args(["-hls_time", "1"])
+                .args(["-hls_list_size", "6"])
+                .args(["-hls_flags", "independent_segments+delete_segments"])
+                .args(["-hls_segment_type", "fmp4"])
+                .args(["-hls_fmp4_init_filename", "init.mp4"])
+                .args(["-hls_segment_filename", &format!("{}/seg_%05d.m4s", dir)]);
+        } else {
+            cmd.args(["-hls_time", "2"])
+                .args(["-hls_list_size", "0"])
+                .args(["-hls_segment_filename", &format!("{}/seg_%05d.ts", dir)]);
+        }
+
+        cmd.arg(&playlist)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg for HLS: {}. Is ffmpeg installed?", e))?;
+
+        let mode = if low_latency { "LL-HLS" } else { "HLS" };
+        log::info!("{} output started: {} ({}x{} @ {}fps)", mode, playlist, width, height, fps);
+
+        let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
+        let frames_written = Arc::new(AtomicU64::new(0));
+        let write_failed = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
+        let writer_thread = Self::start_writer_thread(
+            stdin, rx, frames_written.clone(), write_failed.clone(), name.to_string(),
+        );
+
+        Ok(Self {
+            child,
+            frame_tx: Some(tx),
+            writer_thread: Some(writer_thread),
+            frames_written,
+            write_failed,
+            label: name.to_string(),
+            start_time: std::time::Instant::now(),
+            stopped: false,
+        })
+    }
+
+    /// Spawn an ffmpeg DASH output subprocess.
+    /// Writes DASH segments to `.varda/streams/<name>/` with `-window_size 0` for VOD archive.
+    pub fn spawn_dash(
+        name: &str,
+        codec: &super::context::StreamingCodec,
+        width: u32,
+        height: u32,
+        fps: u32,
+    ) -> anyhow::Result<Self> {
+        let dir = format!(".varda/streams/{}", name);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow::anyhow!("Failed to create DASH output dir '{}': {}", dir, e))?;
+        let manifest = format!("{}/manifest.mpd", dir);
+        write_stream_player(&dir, "dash", "manifest.mpd", false);
+
+        let (encoder, extra): (&str, Vec<&str>) = match codec {
+            super::context::StreamingCodec::H264 => ("libx264", vec!["-preset", "ultrafast", "-tune", "zerolatency"]),
+            super::context::StreamingCodec::H265 => ("libx265", vec!["-preset", "ultrafast"]),
+            super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
+        };
+
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-y")
+            .args(["-f", "rawvideo"])
+            .args(["-pix_fmt", "rgba"])
+            .args(["-s", &format!("{}x{}", width, height)])
+            .args(["-r", &fps.to_string()])
+            .args(["-i", "-"])
+            .args(["-c:v", encoder])
+            .args(&extra)
+            .args(["-pix_fmt", "yuv420p"])
+            .args(["-f", "dash"])
+            .args(["-seg_duration", "2"])
+            .args(["-window_size", "0"])
+            .arg(&manifest)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg for DASH: {}. Is ffmpeg installed?", e))?;
+
+        log::info!("DASH output started: {} ({}x{} @ {}fps)", manifest, width, height, fps);
+
+        let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
+        let frames_written = Arc::new(AtomicU64::new(0));
+        let write_failed = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
+        let writer_thread = Self::start_writer_thread(
+            stdin, rx, frames_written.clone(), write_failed.clone(), name.to_string(),
+        );
+
+        Ok(Self {
+            child,
+            frame_tx: Some(tx),
+            writer_thread: Some(writer_thread),
+            frames_written,
+            write_failed,
+            label: name.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
         })

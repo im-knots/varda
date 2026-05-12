@@ -15,24 +15,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                 target: OutputTarget::Recording { path: "output.mp4".to_string(), codec: RecordingCodec::H264 },
             });
         }
-        if ui.button("+ SRT").clicked() {
-            // Auto-increment port: find the highest SRT port in use and add 1
-            let next_port = data.outputs.iter()
-                .filter_map(|o| {
-                    if let OutputTarget::SrtStream { ref url, .. } = o.target {
-                        url.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())
-                    } else {
-                        None
-                    }
-                })
-                .max()
-                .map(|p| p + 1)
-                .unwrap_or(9001);
-            actions.output_actions.push(OutputAction::CreateHeadless {
-                target: OutputTarget::SrtStream { url: format!("srt://0.0.0.0:{}", next_port), codec: crate::renderer::context::SrtCodec::default() },
-            });
-        }
-        if ui.button("+ NDI").clicked() {
+        if ui.button("+ Stream").clicked() {
             actions.output_actions.push(OutputAction::CreateHeadless {
                 target: OutputTarget::NdiSend { sender_name: "Varda NDI".to_string() },
             });
@@ -227,76 +210,13 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
         }
     }
 
-    // Inline config for SRT outputs
-    if let OutputTarget::SrtStream { ref url, ref codec } = output.target {
-        if !output.is_active {
-            // Codec selector
-            ui.horizontal(|ui| {
-                use crate::renderer::context::SrtCodec;
-                ui.label(egui::RichText::new("Codec:").small());
-                let codec_id = egui::Id::new(format!("srt_codec_{}", idx));
-                egui::ComboBox::from_id_salt(codec_id)
-                    .selected_text(egui::RichText::new(codec.to_string()).small())
-                    .width(120.0)
-                    .show_ui(ui, |ui| {
-                        for c in &[SrtCodec::H264, SrtCodec::H265] {
-                            if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                                actions.output_actions.push(OutputAction::SetTarget {
-                                    idx,
-                                    target: OutputTarget::SrtStream { url: url.clone(), codec: c.clone() },
-                                });
-                            }
-                        }
-                    });
-            });
-            // URL input
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("URL:").small());
-                let url_id = egui::Id::new(format!("srt_url_{}", idx));
-                let mut current_url: String = ui.data(|d| d.get_temp(url_id))
-                    .unwrap_or_else(|| url.clone());
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut current_url)
-                        .desired_width(180.0)
-                        .font(egui::TextStyle::Small)
-                );
-                if response.lost_focus() || response.changed() {
-                    ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
-                    if response.lost_focus() {
-                        actions.output_actions.push(OutputAction::SetTarget {
-                            idx,
-                            target: OutputTarget::SrtStream { url: current_url, codec: codec.clone() },
-                        });
-                    }
-                }
-            });
-        }
-    }
-
-    // Inline config for NDI outputs
-    if let OutputTarget::NdiSend { ref sender_name } = output.target {
-        if !output.is_active {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Name:").small());
-                let name_id = egui::Id::new(format!("ndi_name_{}", idx));
-                let mut current_name: String = ui.data(|d| d.get_temp(name_id))
-                    .unwrap_or_else(|| sender_name.clone());
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut current_name)
-                        .desired_width(140.0)
-                        .font(egui::TextStyle::Small)
-                );
-                if response.lost_focus() || response.changed() {
-                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
-                    if response.lost_focus() {
-                        actions.output_actions.push(OutputAction::SetTarget {
-                            idx,
-                            target: OutputTarget::NdiSend { sender_name: current_name },
-                        });
-                    }
-                }
-            });
-        }
+    // Unified stream config (SRT, HLS, DASH, NDI)
+    let is_stream = matches!(output.target,
+        OutputTarget::SrtStream { .. } | OutputTarget::HlsStream { .. } |
+        OutputTarget::DashStream { .. } | OutputTarget::NdiSend { .. }
+    );
+    if is_stream {
+        render_stream_config(ui, idx, output, actions);
     }
 
     // Surface assignments
@@ -344,6 +264,223 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
             actions.output_actions.push(OutputAction::Start { idx });
         }
     });
+}
+
+
+/// Unified stream output config with protocol dropdown (SRT, HLS, DASH, NDI).
+fn render_stream_config(ui: &mut egui::Ui, idx: usize, output: &super::super::OutputUI, actions: &mut UIActions) {
+    use crate::renderer::context::{StreamingCodec, SrtCodec};
+
+    // Determine current protocol label
+    let current_proto = match &output.target {
+        OutputTarget::SrtStream { .. } => "SRT",
+        OutputTarget::HlsStream { .. } => "HLS",
+        OutputTarget::DashStream { .. } => "DASH",
+        OutputTarget::NdiSend { .. } => "NDI",
+        _ => return,
+    };
+
+    // Protocol dropdown (disabled while active)
+    if !output.is_active {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Protocol:").small());
+            egui::ComboBox::from_id_salt(format!("stream_proto_{}", idx))
+                .selected_text(egui::RichText::new(current_proto).small())
+                .width(80.0)
+                .show_ui(ui, |ui| {
+                    for (label, default_target) in &[
+                        ("SRT", OutputTarget::SrtStream {
+                            url: format!("srt://0.0.0.0:9001"),
+                            codec: SrtCodec::default(),
+                        }),
+                        ("HLS", OutputTarget::HlsStream {
+                            name: "live".to_string(),
+                            codec: StreamingCodec::default(),
+                            low_latency: false,
+                        }),
+                        ("DASH", OutputTarget::DashStream {
+                            name: "live".to_string(),
+                            codec: StreamingCodec::default(),
+                        }),
+                        ("NDI", OutputTarget::NdiSend {
+                            sender_name: "Varda NDI".to_string(),
+                        }),
+                    ] {
+                        if ui.selectable_label(current_proto == *label, *label).clicked() && current_proto != *label {
+                            actions.output_actions.push(OutputAction::SetTarget {
+                                idx,
+                                target: default_target.clone(),
+                            });
+                        }
+                    }
+                });
+        });
+    } else {
+        ui.label(egui::RichText::new(format!("Protocol: {}", current_proto)).small().weak());
+    }
+
+    // Protocol-specific config
+    match &output.target {
+        OutputTarget::SrtStream { ref url, ref codec } => {
+            if !output.is_active {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Codec:").small());
+                    egui::ComboBox::from_id_salt(format!("srt_codec_{}", idx))
+                        .selected_text(egui::RichText::new(codec.to_string()).small())
+                        .width(120.0)
+                        .show_ui(ui, |ui| {
+                            for c in &[SrtCodec::H264, SrtCodec::H265] {
+                                if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
+                                    actions.output_actions.push(OutputAction::SetTarget {
+                                        idx,
+                                        target: OutputTarget::SrtStream { url: url.clone(), codec: c.clone() },
+                                    });
+                                }
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("URL:").small());
+                    let url_id = egui::Id::new(format!("srt_url_{}", idx));
+                    let mut current_url: String = ui.data(|d| d.get_temp(url_id))
+                        .unwrap_or_else(|| url.clone());
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut current_url)
+                            .desired_width(180.0)
+                            .font(egui::TextStyle::Small)
+                    );
+                    if response.lost_focus() || response.changed() {
+                        ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
+                        if response.lost_focus() {
+                            actions.output_actions.push(OutputAction::SetTarget {
+                                idx,
+                                target: OutputTarget::SrtStream { url: current_url, codec: codec.clone() },
+                            });
+                        }
+                    }
+                });
+            }
+        }
+        OutputTarget::HlsStream { ref name, ref codec, low_latency } => {
+            render_hls_dash_name_codec(ui, idx, "hls", name, codec, output.is_active, actions,
+                |n, c| OutputTarget::HlsStream { name: n, codec: c, low_latency: *low_latency });
+            if !output.is_active {
+                ui.horizontal(|ui| {
+                    let mut ll = *low_latency;
+                    if ui.checkbox(&mut ll, egui::RichText::new("LL-HLS (Low Latency)").small()).changed() {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: OutputTarget::HlsStream { name: name.clone(), codec: codec.clone(), low_latency: ll },
+                        });
+                    }
+                });
+            }
+            let player_url = format!("http://localhost:8080/streams/{}/player.html", name);
+            let manifest_url = format!("http://localhost:8080/streams/{}/index.m3u8", name);
+            render_copyable_url(ui, "▶", &player_url, 10.0, actions);
+            render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
+        }
+        OutputTarget::DashStream { ref name, ref codec } => {
+            render_hls_dash_name_codec(ui, idx, "dash", name, codec, output.is_active, actions,
+                |n, c| OutputTarget::DashStream { name: n, codec: c });
+            let player_url = format!("http://localhost:8080/streams/{}/player.html", name);
+            let manifest_url = format!("http://localhost:8080/streams/{}/manifest.mpd", name);
+            render_copyable_url(ui, "▶", &player_url, 10.0, actions);
+            render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
+        }
+        OutputTarget::NdiSend { ref sender_name } => {
+            if !output.is_active {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Name:").small());
+                    let name_id = egui::Id::new(format!("ndi_name_{}", idx));
+                    let mut current_name: String = ui.data(|d| d.get_temp(name_id))
+                        .unwrap_or_else(|| sender_name.clone());
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut current_name)
+                            .desired_width(140.0)
+                            .font(egui::TextStyle::Small)
+                    );
+                    if response.lost_focus() || response.changed() {
+                        ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
+                        if response.lost_focus() {
+                            actions.output_actions.push(OutputAction::SetTarget {
+                                idx,
+                                target: OutputTarget::NdiSend { sender_name: current_name },
+                            });
+                        }
+                    }
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+
+/// Render a clickable URL label that copies to clipboard on click.
+fn render_copyable_url(ui: &mut egui::Ui, icon: &str, url: &str, font_size: f32, actions: &mut UIActions) {
+    let text = format!("{} {}", icon, url);
+    let response = ui.add(
+        egui::Label::new(egui::RichText::new(&text).size(font_size).color(egui::Color32::from_rgb(130, 160, 200)))
+            .sense(egui::Sense::click())
+    );
+    if response.clicked() {
+        ui.ctx().copy_text(url.to_string());
+        actions.info_notifications.push(format!("📋 Copied to clipboard: {}", url));
+    }
+    response.on_hover_text("Click to copy URL");
+}
+
+/// Shared codec + name config for HLS and DASH stream outputs.
+fn render_hls_dash_name_codec(
+    ui: &mut egui::Ui,
+    idx: usize,
+    prefix: &str,
+    name: &str,
+    codec: &crate::renderer::context::StreamingCodec,
+    is_active: bool,
+    actions: &mut UIActions,
+    make_target: impl Fn(String, crate::renderer::context::StreamingCodec) -> OutputTarget,
+) {
+    use crate::renderer::context::StreamingCodec;
+    if !is_active {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Codec:").small());
+            egui::ComboBox::from_id_salt(format!("{}_codec_{}", prefix, idx))
+                .selected_text(egui::RichText::new(codec.to_string()).small())
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for c in &[StreamingCodec::H264, StreamingCodec::H265, StreamingCodec::AV1] {
+                        if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
+                            actions.output_actions.push(OutputAction::SetTarget {
+                                idx,
+                                target: make_target(name.to_string(), c.clone()),
+                            });
+                        }
+                    }
+                });
+        });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Name:").small());
+            let name_id = egui::Id::new(format!("{}_name_{}", prefix, idx));
+            let mut current_name: String = ui.data(|d| d.get_temp(name_id))
+                .unwrap_or_else(|| name.to_string());
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut current_name)
+                    .desired_width(140.0)
+                    .font(egui::TextStyle::Small)
+            );
+            if response.lost_focus() || response.changed() {
+                ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
+                if response.lost_focus() {
+                    actions.output_actions.push(OutputAction::SetTarget {
+                        idx,
+                        target: make_target(current_name, codec.clone()),
+                    });
+                }
+            }
+        });
+    }
 }
 
 /// Render the warp calibration mini-canvas for an output.

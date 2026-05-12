@@ -18,7 +18,7 @@ pub mod recording;
 pub mod registry;
 pub mod renderer;
 pub mod scene;
-pub mod srt;
+pub mod stream;
 pub mod surface;
 #[cfg(target_os = "macos")]
 pub mod syphon;

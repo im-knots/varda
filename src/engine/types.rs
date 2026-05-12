@@ -52,13 +52,13 @@ pub struct EngineState {
     pub syphon_sources: Vec<String>,
     /// Whether Syphon framework is available
     pub syphon_available: bool,
-    /// Active SRT receiver configs (url, mode, connected)
-    pub srt_receivers: Vec<SrtReceiverSnapshot>,
+    /// Active stream receiver configs (url, mode, connected)
+    pub stream_receivers: Vec<StreamReceiverSnapshot>,
 }
 
-/// Snapshot of an active SRT receiver for UI consumption.
+/// Snapshot of an active stream receiver for UI consumption.
 #[derive(Clone, Serialize)]
-pub struct SrtReceiverSnapshot {
+pub struct StreamReceiverSnapshot {
     pub url: String,
     pub mode: String,
     pub connected: bool,
@@ -461,7 +461,7 @@ mod tests {
             ndi_available: false,
             syphon_sources: vec![],
             syphon_available: false,
-            srt_receivers: vec![],
+            stream_receivers: vec![],
         };
         assert!((state.fps - 60.0).abs() < 1e-5);
         assert_eq!(state.frame_count, 0);
@@ -509,7 +509,7 @@ mod tests {
             ndi_available: false,
             syphon_sources: vec![],
             syphon_available: false,
-            srt_receivers: vec![],
+            stream_receivers: vec![],
         };
         let cloned = state.clone();
         assert!((cloned.mixer.crossfader - 0.5).abs() < 1e-5);

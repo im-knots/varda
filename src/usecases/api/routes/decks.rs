@@ -442,11 +442,35 @@ pub struct SrtSourceBody {
     /// SRT stream URL.
     pub url: String,
     /// SRT connection mode (caller or listener).
-    pub mode: crate::srt::SrtMode,
+    pub mode: crate::stream::SrtMode,
 }
 #[utoipa::path(post, path = "/api/channels/{ch}/decks/srt", params(("ch" = usize, Path, description = "Channel index")), request_body = SrtSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
 pub async fn add_srt_deck(State(s): State<SharedState>, Path(ch): Path<usize>, Json(b): Json<SrtSourceBody>) -> impl IntoResponse {
     match s.send_command(EngineCommand::AddSrtDeck { channel_idx: ch, url: b.url, mode: b.mode }).await {
+        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct HlsSourceBody {
+    /// HLS stream URL (.m3u8).
+    pub url: String,
+}
+#[utoipa::path(post, path = "/api/channels/{ch}/decks/hls", params(("ch" = usize, Path, description = "Channel index")), request_body = HlsSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn add_hls_deck(State(s): State<SharedState>, Path(ch): Path<usize>, Json(b): Json<HlsSourceBody>) -> impl IntoResponse {
+    match s.send_command(EngineCommand::AddHlsDeck { channel_idx: ch, url: b.url }).await {
+        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct DashSourceBody {
+    /// DASH stream URL (.mpd).
+    pub url: String,
+}
+#[utoipa::path(post, path = "/api/channels/{ch}/decks/dash", params(("ch" = usize, Path, description = "Channel index")), request_body = DashSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn add_dash_deck(State(s): State<SharedState>, Path(ch): Path<usize>, Json(b): Json<DashSourceBody>) -> impl IntoResponse {
+    match s.send_command(EngineCommand::AddDashDeck { channel_idx: ch, url: b.url }).await {
         Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }

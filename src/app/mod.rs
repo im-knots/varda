@@ -162,10 +162,13 @@ pub struct VardaApp {
     ndi_manager: crate::ndi::NdiManager,
     #[cfg(target_os = "macos")]
     syphon_manager: crate::syphon::SyphonManager,
-    srt_manager: crate::srt::SrtManager,
+    stream_manager: crate::stream::StreamManager,
     /// Configured SRT input sources in the library (url, mode).
-    /// These appear in the library panel for drag-and-drop to channels.
-    srt_library: Vec<(String, crate::srt::SrtMode)>,
+    stream_library: Vec<(String, crate::stream::SrtMode)>,
+    /// Configured HLS input sources in the library (urls).
+    hls_library: Vec<String>,
+    /// Configured DASH input sources in the library (urls).
+    dash_library: Vec<String>,
 
     // ── Presets ─────────────────────────────────────────────────
     preset_library: crate::persistence::presets::PresetLibrary,
@@ -322,8 +325,10 @@ impl VardaApp {
             } else {
                 crate::syphon::SyphonManager::new()
             },
-            srt_manager: crate::srt::SrtManager::new(),
-            srt_library: Vec::new(),
+            stream_manager: crate::stream::StreamManager::new(),
+            stream_library: Vec::new(),
+            hls_library: Vec::new(),
+            dash_library: Vec::new(),
             preset_library,
             history: history::HistoryManager::new(),
             midi_pending_undo: false,
@@ -989,9 +994,9 @@ impl VardaApp {
                 }
             }
             EngineCommand::AddSrtDeck { channel_idx, url, mode } => {
-                match self.srt_manager.start_receive(&url, mode, &self.context.device) {
+                match self.stream_manager.start_srt_receive(&url, mode, &self.context.device) {
                     Some(receiver_idx) => {
-                        let (src_w, src_h) = self.srt_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                         match crate::deck::Deck::new_from_srt(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                             Ok(deck) => {
                                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -1005,6 +1010,45 @@ impl VardaApp {
                         }
                     }
                     None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start SRT receive for '{}'", url) },
+                }
+            }
+
+            EngineCommand::AddHlsDeck { channel_idx, url } => {
+                match self.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Hls, &self.context.device) {
+                    Some(receiver_idx) => {
+                        let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        match crate::deck::Deck::new_from_hls(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                            Ok(deck) => {
+                                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
+                                    ch.add_deck(deck);
+                                    CommandResult::Ok
+                                } else {
+                                    CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
+                                }
+                            }
+                            Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
+                        }
+                    }
+                    None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start HLS receive for '{}'", url) },
+                }
+            }
+            EngineCommand::AddDashDeck { channel_idx, url } => {
+                match self.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Dash, &self.context.device) {
+                    Some(receiver_idx) => {
+                        let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        match crate::deck::Deck::new_from_dash(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                            Ok(deck) => {
+                                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
+                                    ch.add_deck(deck);
+                                    CommandResult::Ok
+                                } else {
+                                    CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
+                                }
+                            }
+                            Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
+                        }
+                    }
+                    None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start DASH receive for '{}'", url) },
                 }
             }
 
@@ -1235,13 +1279,35 @@ impl VardaApp {
 
             // ── Stream Library ─────────────────────────────────
             EngineCommand::AddStreamLibraryEntry { url, mode } => {
-                if !self.srt_library.iter().any(|(u, _)| u == &url) {
-                    self.srt_library.push((url, mode));
+                if !self.stream_library.iter().any(|(u, _)| u == &url) {
+                    self.stream_library.push((url, mode));
                 }
                 CommandResult::Ok
             }
             EngineCommand::RemoveStreamLibraryEntry { url } => {
-                self.srt_library.retain(|(u, _)| u != &url);
+                self.stream_library.retain(|(u, _)| u != &url);
+                CommandResult::Ok
+            }
+            EngineCommand::AddHlsLibraryEntry { url } => {
+                if !self.hls_library.contains(&url) {
+                    log::info!("Added HLS source to library via API: {}", url);
+                    self.hls_library.push(url);
+                }
+                CommandResult::Ok
+            }
+            EngineCommand::RemoveHlsLibraryEntry { url } => {
+                self.hls_library.retain(|u| u != &url);
+                CommandResult::Ok
+            }
+            EngineCommand::AddDashLibraryEntry { url } => {
+                if !self.dash_library.contains(&url) {
+                    log::info!("Added DASH source to library via API: {}", url);
+                    self.dash_library.push(url);
+                }
+                CommandResult::Ok
+            }
+            EngineCommand::RemoveDashLibraryEntry { url } => {
+                self.dash_library.retain(|u| u != &url);
                 CommandResult::Ok
             }
 
@@ -1271,6 +1337,18 @@ impl VardaApp {
                             }
                             OutputTarget::Recording { path, codec } => {
                                 match crate::renderer::FfmpegSubprocess::spawn_recording(path, codec, h.width, h.height, 30) {
+                                    Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
+                                    Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
+                                }
+                            }
+                            OutputTarget::HlsStream { name, codec, low_latency } => {
+                                match crate::renderer::FfmpegSubprocess::spawn_hls(name, codec, h.width, h.height, 30, *low_latency) {
+                                    Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
+                                    Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
+                                }
+                            }
+                            OutputTarget::DashStream { name, codec } => {
+                                match crate::renderer::FfmpegSubprocess::spawn_dash(name, codec, h.width, h.height, 30) {
                                     Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
                                     Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
                                 }

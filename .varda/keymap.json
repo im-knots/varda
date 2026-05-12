@@ -2,30 +2,21 @@
   "version": 1,
   "bindings": [
     {
-      "key": "Z",
-      "command": true,
-      "shift": true,
-      "alt": false,
-      "target": {
-        "Action": "Redo"
-      }
-    },
-    {
-      "key": "L",
+      "key": "Escape",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "ToggleLibrary"
+        "Action": "ClearDrawing"
       }
     },
     {
-      "key": "H",
+      "key": "C",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "FlipHorizontal"
+        "Action": "ToolCircle"
       }
     },
     {
@@ -38,12 +29,12 @@
       }
     },
     {
-      "key": "R",
+      "key": "L",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "ToolRectangle"
+        "Action": "ToggleLibrary"
       }
     },
     {
@@ -74,6 +65,15 @@
       }
     },
     {
+      "key": "D",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "DuplicateSurface"
+      }
+    },
+    {
       "key": "S",
       "command": true,
       "shift": false,
@@ -83,30 +83,21 @@
       }
     },
     {
-      "key": "C",
+      "key": "S",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "ToolCircle"
+        "Action": "ToolSelect"
       }
     },
     {
-      "key": "Escape",
+      "key": "R",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "ClearDrawing"
-      }
-    },
-    {
-      "key": "Backspace",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "DeleteSurface"
+        "Action": "ToolRectangle"
       }
     },
     {
@@ -119,21 +110,30 @@
       }
     },
     {
-      "key": "D",
-      "command": false,
-      "shift": false,
+      "key": "Z",
+      "command": true,
+      "shift": true,
       "alt": false,
       "target": {
-        "Action": "DuplicateSurface"
+        "Action": "Redo"
       }
     },
     {
-      "key": "S",
+      "key": "Backspace",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "ToolSelect"
+        "Action": "DeleteSurface"
+      }
+    },
+    {
+      "key": "H",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "FlipHorizontal"
       }
     }
   ]

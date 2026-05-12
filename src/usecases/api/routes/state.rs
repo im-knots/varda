@@ -36,7 +36,7 @@ state_route!(registry, |s: &crate::engine::EngineState| s.registry.clone());
 state_route!(midi, |s: &crate::engine::EngineState| s.midi.clone());
 state_route!(cameras, |s: &crate::engine::EngineState| s.cameras.clone());
 state_route!(clock, |s: &crate::engine::EngineState| s.clock.clone());
-state_route!(streams, |s: &crate::engine::EngineState| s.srt_receivers.clone());
+state_route!(streams, |s: &crate::engine::EngineState| s.stream_receivers.clone());
 
 pub async fn ndi(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {

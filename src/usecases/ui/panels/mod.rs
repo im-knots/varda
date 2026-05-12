@@ -454,10 +454,22 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 }
 
                 let srt_key = egui::Id::new("__lib_dnd_srt_config");
-                let srt_config: Option<(String, crate::srt::SrtMode)> = ctx.memory(|mem| mem.data.get_temp(srt_key));
+                let srt_config: Option<(String, crate::stream::SrtMode)> = ctx.memory(|mem| mem.data.get_temp(srt_key));
                 if let Some((url, mode)) = srt_config {
                     log::info!("Library drop (deferred): SRT '{}' ({:?}) -> ch{}", url, mode, ch_idx);
                     actions.srt_to_add = Some((ch_idx, url, mode));
+                }
+
+                let hls_key = egui::Id::new("__lib_dnd_hls_url");
+                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(hls_key)) {
+                    log::info!("Library drop (deferred): HLS '{}' -> ch{}", url, ch_idx);
+                    actions.hls_to_add = Some((ch_idx, url));
+                }
+
+                let dash_key = egui::Id::new("__lib_dnd_dash_url");
+                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
+                    log::info!("Library drop (deferred): DASH '{}' -> ch{}", url, ch_idx);
+                    actions.dash_to_add = Some((ch_idx, url));
                 }
 
                 // Deck preset dropped on a channel
@@ -497,9 +509,21 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 }
 
                 let srt_key = egui::Id::new("__lib_dnd_srt_config");
-                if let Some((url, mode)) = ctx.memory(|mem| mem.data.get_temp::<(String, crate::srt::SrtMode)>(srt_key)) {
+                if let Some((url, mode)) = ctx.memory(|mem| mem.data.get_temp::<(String, crate::stream::SrtMode)>(srt_key)) {
                     log::info!("Library drop (deferred): SRT '{}' ({:?}) -> new ch{}", url, mode, new_ch_idx);
                     actions.srt_to_add = Some((new_ch_idx, url, mode));
+                }
+
+                let hls_key = egui::Id::new("__lib_dnd_hls_url");
+                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(hls_key)) {
+                    log::info!("Library drop (deferred): HLS '{}' -> new ch{}", url, new_ch_idx);
+                    actions.hls_to_add = Some((new_ch_idx, url));
+                }
+
+                let dash_key = egui::Id::new("__lib_dnd_dash_url");
+                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
+                    log::info!("Library drop (deferred): DASH '{}' -> new ch{}", url, new_ch_idx);
+                    actions.dash_to_add = Some((new_ch_idx, url));
                 }
 
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
@@ -554,7 +578,9 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 mem.data.remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));
                 mem.data.remove::<String>(egui::Id::new("__lib_dnd_ndi_name"));
                 mem.data.remove::<String>(egui::Id::new("__lib_dnd_syph_name"));
-                mem.data.remove::<(String, crate::srt::SrtMode)>(egui::Id::new("__lib_dnd_srt_config"));
+                mem.data.remove::<(String, crate::stream::SrtMode)>(egui::Id::new("__lib_dnd_srt_config"));
+                mem.data.remove::<String>(egui::Id::new("__lib_dnd_hls_url"));
+                mem.data.remove::<String>(egui::Id::new("__lib_dnd_dash_url"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_deck_preset_idx"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_ch_preset_idx"));
             });

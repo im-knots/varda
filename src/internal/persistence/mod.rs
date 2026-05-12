@@ -315,13 +315,23 @@ pub fn snapshot_scene(
                     SourceConfig::Syphon { name }
                 }
                 "srt" => {
-                    // Store the SRT URL (strip the 📺 prefix we add)
                     let url = slot.deck.source_name()
                         .trim_start_matches("📺 ")
                         .to_string();
-                    // Determine mode from the deck source
-                    let mode = "caller".to_string(); // Default; actual mode stored in manager
+                    let mode = "caller".to_string();
                     SourceConfig::Srt { url, mode }
+                }
+                "hls" => {
+                    let url = slot.deck.source_name()
+                        .trim_start_matches("📡 ")
+                        .to_string();
+                    SourceConfig::Hls { url }
+                }
+                "dash" => {
+                    let url = slot.deck.source_name()
+                        .trim_start_matches("📡 ")
+                        .to_string();
+                    SourceConfig::Dash { url }
                 }
                 _ => return None,
             };
@@ -449,6 +459,8 @@ fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
             codec: codec.to_string(),
         },
         OutputTarget::SrtStream { url, codec } => OutputTargetConfig::SrtStream { url: url.clone(), codec: codec.to_string() },
+        OutputTarget::HlsStream { name, codec, low_latency } => OutputTargetConfig::HlsStream { name: name.clone(), codec: codec.to_string(), low_latency: *low_latency },
+        OutputTarget::DashStream { name, codec } => OutputTargetConfig::DashStream { name: name.clone(), codec: codec.to_string() },
         OutputTarget::NdiSend { sender_name } => OutputTargetConfig::NdiSend { sender_name: sender_name.clone() },
         OutputTarget::SyphonServer { server_name } => OutputTargetConfig::SyphonServer { server_name: server_name.clone() },
     }
@@ -484,6 +496,23 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
             codec: match codec.as_str() {
                 "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::SrtCodec::H265,
                 _ => crate::renderer::context::SrtCodec::H264,
+            },
+        },
+        OutputTargetConfig::HlsStream { name, codec, low_latency } => OutputTarget::HlsStream {
+            name: name.clone(),
+            codec: match codec.as_str() {
+                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
+                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
+                _ => crate::renderer::context::StreamingCodec::H264,
+            },
+            low_latency: *low_latency,
+        },
+        OutputTargetConfig::DashStream { name, codec } => OutputTarget::DashStream {
+            name: name.clone(),
+            codec: match codec.as_str() {
+                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
+                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
+                _ => crate::renderer::context::StreamingCodec::H264,
             },
         },
         OutputTargetConfig::NdiSend { sender_name } => OutputTarget::NdiSend { sender_name: sender_name.clone() },
@@ -584,7 +613,7 @@ pub fn restore_scene(
     registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
     ndi_manager: &mut crate::ndi::NdiManager,
-    srt_manager: &mut crate::srt::SrtManager,
+    stream_manager: &mut crate::stream::StreamManager,
     render_width: u32,
     render_height: u32,
 ) -> Result<RestoreResult> {
@@ -608,7 +637,7 @@ pub fn restore_scene(
         channel.blend_mode = ch_config.blend_mode.into();
 
         for deck_config in &ch_config.decks {
-            match restore_deck(deck_config, context, registry, camera_manager, ndi_manager, srt_manager, render_width, render_height) {
+            match restore_deck(deck_config, context, registry, camera_manager, ndi_manager, stream_manager, render_width, render_height) {
                 Ok(deck) => {
                     let mut slot = crate::channel::DeckSlot::new(deck);
                     slot.opacity = deck_config.opacity;
@@ -760,7 +789,7 @@ pub(crate) fn restore_deck(
     _registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
     ndi_manager: &mut crate::ndi::NdiManager,
-    srt_manager: &mut crate::srt::SrtManager,
+    stream_manager: &mut crate::stream::StreamManager,
     render_width: u32,
     render_height: u32,
 ) -> Result<Deck> {
@@ -815,16 +844,38 @@ pub(crate) fn restore_deck(
         }
         SourceConfig::Srt { url, mode } => {
             let srt_mode = match mode.as_str() {
-                "listener" => crate::srt::SrtMode::Listener,
-                _ => crate::srt::SrtMode::Caller,
+                "listener" => crate::stream::SrtMode::Listener,
+                _ => crate::stream::SrtMode::Caller,
             };
-            match srt_manager.start_receive(url, srt_mode, &context.device) {
+            match stream_manager.start_srt_receive(url, srt_mode, &context.device) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = srt_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    let (src_w, src_h) = stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                     Deck::new_from_srt(context, receiver_idx, url, src_w, src_h, render_width, render_height)?
                 }
                 None => {
                     return Err(anyhow::anyhow!("SRT source '{}' not available for restore", url));
+                }
+            }
+        }
+        SourceConfig::Hls { url } => {
+            match stream_manager.start_receive(url, crate::stream::StreamProtocol::Hls, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    Deck::new_from_hls(context, receiver_idx, url, src_w, src_h, render_width, render_height)?
+                }
+                None => {
+                    return Err(anyhow::anyhow!("HLS source '{}' not available for restore", url));
+                }
+            }
+        }
+        SourceConfig::Dash { url } => {
+            match stream_manager.start_receive(url, crate::stream::StreamProtocol::Dash, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    Deck::new_from_dash(context, receiver_idx, url, src_w, src_h, render_width, render_height)?
+                }
+                None => {
+                    return Err(anyhow::anyhow!("DASH source '{}' not available for restore", url));
                 }
             }
         }
@@ -882,6 +933,12 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
         }
         ("srt", SourceConfig::Srt { url, .. }) => {
             deck.source_name().trim_start_matches("📺 ") == url
+        }
+        ("hls", SourceConfig::Hls { url }) => {
+            deck.source_name().trim_start_matches("📡 ") == url
+        }
+        ("dash", SourceConfig::Dash { url }) => {
+            deck.source_name().trim_start_matches("📡 ") == url
         }
         _ => false,
     }

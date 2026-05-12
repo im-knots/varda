@@ -671,7 +671,7 @@ impl Deck {
     }
 
     /// Create a new deck from an SRT network source.
-    /// The SRT receiver is managed by SrtManager — this deck reads from the shared texture.
+    /// The SRT receiver is managed by StreamManager — this deck reads from the shared texture.
     pub fn new_from_srt(
         context: &GpuContext,
         receiver_idx: usize,
@@ -685,6 +685,54 @@ impl Deck {
         let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
 
         let source = DeckSource::Srt {
+            receiver_idx,
+            blit_pipeline,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        Self::build_media_deck(context, source_name_str, None, source, width, height)
+    }
+
+    /// Create a new deck from an HLS stream source.
+    pub fn new_from_hls(
+        context: &GpuContext,
+        receiver_idx: usize,
+        url: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name_str = format!("📡 {}", url);
+        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+        let source = DeckSource::Hls {
+            receiver_idx,
+            blit_pipeline,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        Self::build_media_deck(context, source_name_str, None, source, width, height)
+    }
+
+    /// Create a new deck from a DASH stream source.
+    pub fn new_from_dash(
+        context: &GpuContext,
+        receiver_idx: usize,
+        url: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name_str = format!("📡 {}", url);
+        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+        let source = DeckSource::Dash {
             receiver_idx,
             blit_pipeline,
             source_width,

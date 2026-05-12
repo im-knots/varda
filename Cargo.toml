@@ -58,7 +58,7 @@ geo = "0.33.1"
 sysinfo = "0.38.4"
 tokio = { version = "1.52.2", features = ["rt-multi-thread", "macros", "net", "sync"] }
 axum = { version = "0.8.9", features = ["ws"] }
-tower-http = { version = "0.6.10", features = ["cors"] }
+tower-http = { version = "0.6.10", features = ["cors", "fs"] }
 futures-util = "0.3.32"
 libloading = "0.9.0"
 futures-lite = "2.6.1"

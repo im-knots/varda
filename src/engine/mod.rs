@@ -110,7 +110,9 @@ pub enum EngineCommand {
     // ── External I/O Deck Sources ──────────────────────────────
     AddNdiDeck { channel_idx: usize, source_name: String },
     AddSyphonDeck { channel_idx: usize, server_name: String },
-    AddSrtDeck { channel_idx: usize, url: String, mode: crate::srt::SrtMode },
+    AddSrtDeck { channel_idx: usize, url: String, mode: crate::stream::SrtMode },
+    AddHlsDeck { channel_idx: usize, url: String },
+    AddDashDeck { channel_idx: usize, url: String },
 
     // ── Transition Sequences ───────────────────────────────────
     CreateSequence,
@@ -134,8 +136,12 @@ pub enum EngineCommand {
     SetStepDurationValue { seq_idx: usize, step_idx: usize, value: f64 },
 
     // ── Stream Library ─────────────────────────────────────────
-    AddStreamLibraryEntry { url: String, mode: crate::srt::SrtMode },
+    AddStreamLibraryEntry { url: String, mode: crate::stream::SrtMode },
     RemoveStreamLibraryEntry { url: String },
+    AddHlsLibraryEntry { url: String },
+    RemoveHlsLibraryEntry { url: String },
+    AddDashLibraryEntry { url: String },
+    RemoveDashLibraryEntry { url: String },
 
     // ── Output ─────────────────────────────────────────────────
     CreateOutput,

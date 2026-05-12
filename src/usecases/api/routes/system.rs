@@ -190,10 +190,10 @@ pub async fn remove_midi_mapping(State(state): State<SharedState>, Json(b): Json
 
 #[derive(Deserialize, ToSchema)]
 pub struct StreamLibraryBody {
-    /// SRT stream URL.
+    /// Stream URL.
     pub url: String,
-    /// SRT connection mode (caller or listener).
-    pub mode: crate::srt::SrtMode,
+    /// Stream connection mode (caller or listener for SRT).
+    pub mode: crate::stream::SrtMode,
 }
 #[utoipa::path(post, path = "/api/streams/library", request_body = StreamLibraryBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
 pub async fn add_stream_library_entry(State(state): State<SharedState>, Json(b): Json<StreamLibraryBody>) -> impl IntoResponse {
@@ -210,6 +210,58 @@ pub struct RemoveStreamBody {
 #[utoipa::path(delete, path = "/api/streams/library", request_body = RemoveStreamBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
 pub async fn remove_stream_library_entry(State(state): State<SharedState>, Json(b): Json<RemoveStreamBody>) -> impl IntoResponse {
     match state.send_command(EngineCommand::RemoveStreamLibraryEntry { url: b.url }).await {
+        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+// ── HLS Library ────────────────────────────────────────────────
+
+#[derive(Deserialize, ToSchema)]
+pub struct HlsLibraryBody {
+    /// HLS stream URL (.m3u8).
+    pub url: String,
+}
+#[utoipa::path(post, path = "/api/streams/hls/library", request_body = HlsLibraryBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
+pub async fn add_hls_library_entry(State(state): State<SharedState>, Json(b): Json<HlsLibraryBody>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::AddHlsLibraryEntry { url: b.url }).await {
+        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct RemoveHlsBody {
+    /// HLS stream URL to remove.
+    pub url: String,
+}
+#[utoipa::path(delete, path = "/api/streams/hls/library", request_body = RemoveHlsBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
+pub async fn remove_hls_library_entry(State(state): State<SharedState>, Json(b): Json<RemoveHlsBody>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::RemoveHlsLibraryEntry { url: b.url }).await {
+        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+// ── DASH Library ───────────────────────────────────────────────
+
+#[derive(Deserialize, ToSchema)]
+pub struct DashLibraryBody {
+    /// DASH stream URL (.mpd).
+    pub url: String,
+}
+#[utoipa::path(post, path = "/api/streams/dash/library", request_body = DashLibraryBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
+pub async fn add_dash_library_entry(State(state): State<SharedState>, Json(b): Json<DashLibraryBody>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::AddDashLibraryEntry { url: b.url }).await {
+        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct RemoveDashBody {
+    /// DASH stream URL to remove.
+    pub url: String,
+}
+#[utoipa::path(delete, path = "/api/streams/dash/library", request_body = RemoveDashBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
+pub async fn remove_dash_library_entry(State(state): State<SharedState>, Json(b): Json<RemoveDashBody>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::RemoveDashLibraryEntry { url: b.url }).await {
         Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
