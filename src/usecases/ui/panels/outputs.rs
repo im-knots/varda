@@ -70,6 +70,25 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                     // Target label
                     ui.label(egui::RichText::new(&output.target_label).small().weak());
 
+                    // Preview toggle + image
+                    {
+                        let preview_id = egui::Id::new("output_preview_toggle").with(&output.uuid);
+                        let show_preview: bool = ui.data(|d| d.get_temp(preview_id)).unwrap_or(false);
+                        let toggle_label = if show_preview { "▼ Hide Preview" } else { "▶ Show Preview" };
+                        if ui.small_button(egui::RichText::new(toggle_label).small()).clicked() {
+                            ui.data_mut(|d| d.insert_temp(preview_id, !show_preview));
+                        }
+                        if show_preview {
+                            if let Some(&tex_id) = data.output_preview_textures.get(&idx) {
+                                let preview_width = ui.available_width().min(320.0);
+                                let preview_height = preview_width * 9.0 / 16.0;
+                                ui.image(egui::load::SizedTexture::new(tex_id, egui::vec2(preview_width, preview_height)));
+                            } else {
+                                ui.label(egui::RichText::new("No preview available").small().weak());
+                            }
+                        }
+                    }
+
                     if output.is_windowed {
                         // Windowed output controls
                         render_windowed_controls(ui, idx, output, data, actions);

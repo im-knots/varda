@@ -30,6 +30,8 @@ pub struct UIRunner {
     egui_state: Option<egui_winit::State>,
     egui_renderer: Option<egui_wgpu::Renderer>,
     deck_preview_textures: std::collections::HashMap<(usize, usize), egui::TextureId>,
+    channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
+    output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
     main_window_id: Option<WindowId>,
 
@@ -78,6 +80,8 @@ impl UIRunner {
             egui_state: None,
             egui_renderer: None,
             deck_preview_textures: std::collections::HashMap::new(),
+            channel_preview_textures: std::collections::HashMap::new(),
+            output_preview_textures: std::collections::HashMap::new(),
             main_output_texture: None,
             main_window_id: None,
             layout: super::UILayoutState::default(),
@@ -249,7 +253,7 @@ impl ApplicationHandler for UIRunner {
 
 
 impl UIRunner {
-    /// Register GPU textures with egui for deck previews and main output.
+    /// Register GPU textures with egui for deck/channel/output previews and main output.
     fn register_preview_textures(&mut self) {
         let Some(varda) = &self.varda else { return };
         let Some(egui_renderer) = &mut self.egui_renderer else { return };
@@ -263,13 +267,55 @@ impl UIRunner {
                 );
                 self.deck_preview_textures.insert((ch_idx, deck_idx), tid);
             }
+            // Channel composite preview
+            let ch_tid = egui_renderer.register_native_texture(
+                &context.device, &ch.composite_view, wgpu::FilterMode::Linear,
+            );
+            self.channel_preview_textures.insert(ch_idx, ch_tid);
         }
         self.main_output_texture = Some(egui_renderer.register_native_texture(
             &context.device, &mixer.composite_view(), wgpu::FilterMode::Linear,
         ));
+        // Output preview textures — resolve source view for live preview
+        for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
+            let view = Self::output_preview_view(output, mixer);
+            let tid = egui_renderer.register_native_texture(
+                &context.device, view, wgpu::FilterMode::Linear,
+            );
+            self.output_preview_textures.insert(out_idx, tid);
+        }
     }
 
-    /// Re-register GPU textures when deck layout changes.
+    /// Resolve the texture view to use for an output preview.
+    /// Windowed outputs use the mixer composite; headless outputs resolve their source.
+    fn output_preview_view<'a>(
+        output: &'a crate::renderer::context::UnifiedOutput,
+        mixer: &'a crate::mixer::Mixer,
+    ) -> &'a wgpu::TextureView {
+        use crate::renderer::context::{UnifiedOutput, OutputSource};
+        match output {
+            UnifiedOutput::Window(_) => mixer.composite_view(),
+            UnifiedOutput::Headless(h) => match &h.source {
+                OutputSource::Master => mixer.composite_view(),
+                OutputSource::Channel(idx) => mixer.channels().get(*idx)
+                    .map(|c| &c.composite_view)
+                    .unwrap_or_else(|| mixer.composite_view()),
+                OutputSource::Deck(ch, dk) => mixer.channels().get(*ch)
+                    .and_then(|c| c.decks.get(*dk))
+                    .map(|s| &s.deck.texture_view)
+                    .unwrap_or_else(|| mixer.composite_view()),
+                OutputSource::Channels(indices) => {
+                    let mut sorted = indices.clone();
+                    sorted.sort();
+                    sorted.dedup();
+                    mixer.get_sub_mix_view(&sorted)
+                        .unwrap_or_else(|| mixer.composite_view())
+                }
+            },
+        }
+    }
+
+    /// Re-register GPU textures when deck/channel/output layout changes.
     fn refresh_textures(&mut self) {
         let Some(varda) = &self.varda else { return };
         let Some(egui_renderer) = &mut self.egui_renderer else { return };
@@ -290,6 +336,22 @@ impl UIRunner {
                     );
                     self.deck_preview_textures.insert(key, tid);
                 }
+            }
+            if !self.channel_preview_textures.contains_key(&ch_idx) {
+                let tid = egui_renderer.register_native_texture(
+                    &context.device, &ch.composite_view, wgpu::FilterMode::Linear,
+                );
+                self.channel_preview_textures.insert(ch_idx, tid);
+            }
+        }
+        // Register any new output preview textures
+        for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
+            if !self.output_preview_textures.contains_key(&out_idx) {
+                let view = Self::output_preview_view(output, mixer);
+                let tid = egui_renderer.register_native_texture(
+                    &context.device, view, wgpu::FilterMode::Linear,
+                );
+                self.output_preview_textures.insert(out_idx, tid);
             }
         }
     }
@@ -355,7 +417,7 @@ impl UIRunner {
         // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
         let Some(varda_ref) = self.varda.as_ref() else { return; };
         let mut ui_data = varda_ref
-            .collect_ui_data(&self.layout, &self.deck_preview_textures, self.main_output_texture);
+            .collect_ui_data(&self.layout, &self.deck_preview_textures, &self.channel_preview_textures, &self.output_preview_textures, self.main_output_texture);
         ui_data.can_undo = self.history.can_undo();
         ui_data.can_redo = self.history.can_redo();
         ui_data.pending_deck_loads = self.pending_deck_loads.load(std::sync::atomic::Ordering::Relaxed);
@@ -442,8 +504,9 @@ impl UIRunner {
                     varda.notify_info(label);
 
                     if structural_changed {
-                        // Structural change: re-register all deck preview textures
+                        // Structural change: re-register all deck + channel preview textures
                         self.deck_preview_textures.clear();
+                        self.channel_preview_textures.clear();
                         let context = varda.gpu_context();
                         let mixer = varda.mixer_ref();
                         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
@@ -454,12 +517,27 @@ impl UIRunner {
                                 );
                                 self.deck_preview_textures.insert((ch_idx, deck_idx), tex_id);
                             }
+                            let ch_tid = egui_renderer.register_native_texture(
+                                &context.device, &ch.composite_view,
+                                wgpu::FilterMode::Linear,
+                            );
+                            self.channel_preview_textures.insert(ch_idx, ch_tid);
                         }
                         if let Some(main_id) = self.main_output_texture {
                             egui_renderer.update_egui_texture_from_wgpu_texture(
                                 &context.device, &varda.mixer_ref().composite_view(),
                                 wgpu::FilterMode::Linear, main_id,
                             );
+                        }
+                        // Re-register output preview textures
+                        self.output_preview_textures.clear();
+                        for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
+                            let view = Self::output_preview_view(output, mixer);
+                            let tid = egui_renderer.register_native_texture(
+                                &context.device, view,
+                                wgpu::FilterMode::Linear,
+                            );
+                            self.output_preview_textures.insert(out_idx, tid);
                         }
                     }
                 }
@@ -489,12 +567,28 @@ impl UIRunner {
                             );
                         }
                     }
+                    if let Some(&ch_tid) = self.channel_preview_textures.get(&ch_idx) {
+                        egui_renderer.update_egui_texture_from_wgpu_texture(
+                            &context.device, &ch.composite_view,
+                            wgpu::FilterMode::Linear, ch_tid,
+                        );
+                    }
                 }
                 if let Some(main_id) = self.main_output_texture {
                     egui_renderer.update_egui_texture_from_wgpu_texture(
                         &context.device, &mixer.composite_view(),
                         wgpu::FilterMode::Linear, main_id,
                     );
+                }
+                // Update output preview textures after resolution change
+                for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
+                    if let Some(&tid) = self.output_preview_textures.get(&out_idx) {
+                        let view = Self::output_preview_view(output, mixer);
+                        egui_renderer.update_egui_texture_from_wgpu_texture(
+                            &context.device, view,
+                            wgpu::FilterMode::Linear, tid,
+                        );
+                    }
                 }
             }
 

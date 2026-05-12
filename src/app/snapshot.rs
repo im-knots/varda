@@ -366,6 +366,8 @@ pub(crate) fn build_ui_data(
     app: &VardaApp,
     layout: &crate::usecases::ui::UILayoutState,
     deck_preview_textures: &std::collections::HashMap<(usize, usize), egui::TextureId>,
+    channel_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
+    output_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
 ) -> crate::usecases::ui::UIData {
     use crate::usecases::ui::*;
@@ -526,6 +528,8 @@ pub(crate) fn build_ui_data(
         channels, master_effect_info,
         modulation_sources, modulation_current_values, modulation_assignments,
         audio, deck_preview_textures: deck_preview_textures.clone(),
+        channel_preview_textures: channel_preview_textures.clone(),
+        output_preview_textures: output_preview_textures.clone(),
         main_output_texture, notifications,
         crossfader: engine.mixer.crossfader,
         auto_crossfade_active: engine.mixer.auto_crossfade_active,

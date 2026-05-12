@@ -397,6 +397,10 @@ pub struct UIData {
     pub audio: AudioUIData,
     /// Deck preview textures keyed by (ch_idx, deck_idx)
     pub deck_preview_textures: std::collections::HashMap<(usize, usize), egui::TextureId>,
+    /// Channel preview textures keyed by ch_idx
+    pub channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
+    /// Output preview textures keyed by output index
+    pub output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     pub main_output_texture: Option<egui::TextureId>,
     pub notifications: Vec<NotificationUI>,
     /// Crossfader position (0.0 = A, 1.0 = B)
@@ -1290,6 +1294,8 @@ impl UIData {
                 sample_rate: 44100.0,
             },
             deck_preview_textures: std::collections::HashMap::new(),
+            channel_preview_textures: std::collections::HashMap::new(),
+            output_preview_textures: std::collections::HashMap::new(),
             main_output_texture: None,
             notifications: vec![],
             crossfader: 0.5,

@@ -176,6 +176,25 @@ pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, dat
 
     egui::ScrollArea::horizontal().id_salt("channel_fx_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
+            // Channel composite preview (first column before effect cards)
+            if let Some(&tex_id) = data.channel_preview_textures.get(&ch_idx) {
+                let available_height = ui.available_height() - 12.0;
+                let preview_height = available_height.max(60.0);
+                let preview_width = preview_height * 16.0 / 9.0;
+                egui::Frame::default()
+                    .inner_margin(6.0)
+                    .corner_radius(4.0)
+                    .fill(ui.visuals().faint_bg_color)
+                    .show(ui, |ui| {
+                        ui.set_min_width(preview_width + 12.0);
+                        ui.set_max_width(preview_width + 12.0);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.image(egui::load::SizedTexture::new(tex_id, egui::vec2(preview_width, preview_height)));
+                            ui.label(egui::RichText::new(&ch.name).small().color(accent));
+                        });
+                    });
+                ui.separator();
+            }
             {
                 for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in ch.effects.iter().enumerate() {
                     let eff_uuid_ch_assign = eff_uuid.clone();

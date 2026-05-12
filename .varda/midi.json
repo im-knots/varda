@@ -1,12 +1,4 @@
 {
   "version": 1,
-  "mappings": [
-    {
-      "device_name": "APC MINI",
-      "msg_type": "note",
-      "channel": 0,
-      "number": 82,
-      "param_path": "mod/3/gate"
-    }
-  ]
+  "mappings": []
 }

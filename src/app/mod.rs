@@ -1687,9 +1687,11 @@ impl VardaApp {
         &self,
         layout: &crate::usecases::ui::UILayoutState,
         deck_preview_textures: &std::collections::HashMap<(usize, usize), egui::TextureId>,
+        channel_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
+        output_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
         main_output_texture: Option<egui::TextureId>,
     ) -> crate::usecases::ui::UIData {
-        snapshot::build_ui_data(self, layout, deck_preview_textures, main_output_texture)
+        snapshot::build_ui_data(self, layout, deck_preview_textures, channel_preview_textures, output_preview_textures, main_output_texture)
     }
 
     // ── Public accessors (controlled access for delivery layers) ─────
@@ -1702,6 +1704,11 @@ impl VardaApp {
     /// Read-only access to the mixer.
     pub fn mixer_ref(&self) -> &crate::mixer::Mixer {
         &self.mixer
+    }
+
+    /// Read-only access to the outputs.
+    pub fn outputs_ref(&self) -> &[crate::renderer::context::UnifiedOutput] {
+        &self.outputs
     }
 
     /// Mutable access to the mixer (for deck insertion from background loads).
