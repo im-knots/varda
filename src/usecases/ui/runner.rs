@@ -409,6 +409,12 @@ impl UIRunner {
         // GPU render (mixer compositing)
         varda.render_mixer_frame();
 
+        // Push content rotation to domemaster renderer (headless path)
+        let c_az = self.layout.dome_geometry.content_azimuth_degrees.to_radians();
+        let c_el = self.layout.dome_geometry.content_elevation_degrees.to_radians();
+        let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
+        varda.set_domemaster_content_rotation(c_az, c_el, c_roll);
+
         // Render output windows + publish state
         varda.render_outputs();
         self.publish_counter += 1;
@@ -757,6 +763,11 @@ impl UIRunner {
         // 8. Render output windows + publish state
         {
             let Some(varda) = self.varda.as_mut() else { return; };
+            // Push content rotation to domemaster renderer each frame (real-time, MIDI-mappable)
+            let c_az = self.layout.dome_geometry.content_azimuth_degrees.to_radians();
+            let c_el = self.layout.dome_geometry.content_elevation_degrees.to_radians();
+            let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
+            varda.set_domemaster_content_rotation(c_az, c_el, c_roll);
             varda.render_outputs();
             self.publish_counter += 1;
             if self.publish_counter % 10 == 0 {

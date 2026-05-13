@@ -1837,6 +1837,15 @@ impl VardaApp {
         self.domemaster.as_ref().map(|d| d.output_view())
     }
 
+    /// Set domemaster content rotation (azimuth, elevation, roll) in radians.
+    /// Called each frame from the UI layer so content rotation is applied
+    /// in real-time by the domemaster shader, not baked into warp meshes.
+    pub fn set_domemaster_content_rotation(&mut self, az: f32, el: f32, roll: f32) {
+        if let Some(dome) = &mut self.domemaster {
+            dome.set_content_rotation(az, el, roll);
+        }
+    }
+
     /// Number of loaded shaders.
     pub fn shader_count(&self) -> usize {
         self.registry.count()

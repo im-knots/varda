@@ -237,9 +237,10 @@ impl VardaApp {
 
         let mixer = &self.mixer;
 
-        // Run domemaster renderer if enabled
+        // Run domemaster renderer if enabled (content rotation is updated each frame via set_content_rotation)
         let domemaster_view = if let Some(dome) = &self.domemaster {
             if dome.enabled {
+                dome.update_params(&self.context.queue);
                 dome.render(&self.context.device, &self.context.queue, mixer.composite_view());
                 Some(dome.output_view())
             } else {

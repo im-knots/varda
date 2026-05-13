@@ -70,8 +70,12 @@ impl Default for DomemasterConfig {
 struct DomemasterParams {
     fov: f32,
     tilt: f32,
+    content_az: f32,
+    content_el: f32,
+    content_roll: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 }
 
 /// Cubemap face index constants.
@@ -105,6 +109,8 @@ pub struct DomemasterRenderer {
     face_size: u32,
     /// Whether the renderer is enabled
     pub enabled: bool,
+    /// Content rotation (radians), updated each frame from UI
+    pub content_rotation: [f32; 3],
 }
 
 
@@ -229,7 +235,8 @@ impl DomemasterRenderer {
             contents: bytemuck::cast_slice(&[DomemasterParams {
                 fov: config.fov_degrees.to_radians(),
                 tilt: config.tilt_degrees.to_radians(),
-                _pad0: 0.0, _pad1: 0.0,
+                content_az: 0.0, content_el: 0.0, content_roll: 0.0,
+                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -238,16 +245,25 @@ impl DomemasterRenderer {
             face_textures, face_views, output_texture, output_view,
             face_blit, projection_pipeline, projection_bind_group_layout,
             sampler, params_buffer, config, face_size, enabled: false,
+            content_rotation: [0.0; 3],
         })
     }
 
-    /// Update the shader params from the current config.
+    /// Update the shader params from the current config + content rotation.
     pub fn update_params(&self, queue: &wgpu::Queue) {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[DomemasterParams {
             fov: self.config.fov_degrees.to_radians(),
             tilt: self.config.tilt_degrees.to_radians(),
-            _pad0: 0.0, _pad1: 0.0,
+            content_az: self.content_rotation[0],
+            content_el: self.content_rotation[1],
+            content_roll: self.content_rotation[2],
+            _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
         }]));
+    }
+
+    /// Set content rotation (azimuth, elevation, roll) in radians.
+    pub fn set_content_rotation(&mut self, az: f32, el: f32, roll: f32) {
+        self.content_rotation = [az, el, roll];
     }
 
     /// Render the domemaster from the mixer composite.
@@ -409,8 +425,8 @@ mod tests {
 
     #[test]
     fn params_alignment() {
-        // DomemasterParams must be 16 bytes for GPU uniform alignment
-        assert_eq!(std::mem::size_of::<DomemasterParams>(), 16);
+        // DomemasterParams must be 32 bytes (2 × vec4) for GPU uniform alignment
+        assert_eq!(std::mem::size_of::<DomemasterParams>(), 32);
     }
 
     #[test]

@@ -12,8 +12,14 @@ struct DomemasterParams {
     fov: f32,
     // Content tilt angle in radians (0 = zenith centered)
     tilt: f32,
+    // Content rotation: azimuth (Y axis), elevation (X axis)
+    content_az: f32,
+    content_el: f32,
+    // Content rotation: roll (Z axis) + padding
+    content_roll: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
@@ -105,12 +111,28 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         sin_angle * cos(azimuth)    // Z = forward
     );
 
-    // Apply tilt rotation around X axis (tilts the dome content forward/backward)
+    // Apply dome tilt (X axis rotation)
     let cos_tilt = cos(params.tilt);
     let sin_tilt = sin(params.tilt);
     let tilted_y = dir.y * cos_tilt - dir.z * sin_tilt;
     let tilted_z = dir.y * sin_tilt + dir.z * cos_tilt;
     dir = vec3<f32>(dir.x, tilted_y, tilted_z);
+
+    // Apply content rotation: rotate the sampling direction in the opposite
+    // direction so content appears to move in the intended direction.
+    // Order: roll (Z) → elevation (X) → azimuth (Y)
+    // Roll around Z
+    let cr = cos(-params.content_roll);
+    let sr = sin(-params.content_roll);
+    dir = vec3<f32>(dir.x * cr - dir.y * sr, dir.x * sr + dir.y * cr, dir.z);
+    // Elevation around X
+    let ce = cos(-params.content_el);
+    let se = sin(-params.content_el);
+    dir = vec3<f32>(dir.x, dir.y * ce - dir.z * se, dir.y * se + dir.z * ce);
+    // Azimuth around Y
+    let ca = cos(-params.content_az);
+    let sa = sin(-params.content_az);
+    dir = vec3<f32>(dir.x * ca + dir.z * sa, dir.y, -dir.x * sa + dir.z * ca);
 
     return sample_cubemap(dir);
 }

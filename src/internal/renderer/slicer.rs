@@ -111,9 +111,11 @@ pub fn compute_projector_mesh(
     let el = projector.elevation_degrees.to_radians();
     let dome_trunc = geometry.truncation_degrees.to_radians();
     let dome_tilt = geometry.tilt_degrees.to_radians();
-    let content_az = geometry.content_azimuth_degrees.to_radians();
-    let content_el = geometry.content_elevation_degrees.to_radians();
-    let content_roll = geometry.content_roll_degrees.to_radians();
+    // Content rotation is NOT baked into warp meshes — it is applied
+    // in the domemaster shader in real-time so slices stay fixed.
+    let content_az = 0.0_f32;
+    let content_el = 0.0_f32;
+    let content_roll = 0.0_f32;
 
     let mut points = Vec::with_capacity((cols * rows) as usize);
 

@@ -176,7 +176,7 @@ mod tests {
                 MeshPoint { position: [0.0, 0.0], uv: [0.5, 0.0] },
                 MeshPoint { position: [1.0, 0.0], uv: [1.0, 1.0] },
                 MeshPoint { position: [0.0, 1.0], uv: [0.0, 1.0] },
-                MeshPoint { position: [1.0, 1.0], uv: [0.5, 0.5] }, // inside triangle
+                MeshPoint { position: [1.0, 1.0], uv: [0.5, 0.5] }, // UV inside triangle
             ],
         };
         let hull = convex_hull_of_uvs(&mesh);
