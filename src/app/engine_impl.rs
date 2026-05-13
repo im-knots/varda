@@ -641,3 +641,137 @@ impl SurfaceQueries for VardaApp {
         }).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse_args(args: &[&str]) -> super::super::AppConfig {
+        super::super::AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
+    }
+
+    fn headless_app() -> Option<super::super::VardaApp> {
+        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
+        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        super::super::VardaApp::new(gpu, &config).ok()
+    }
+
+    #[test]
+    fn move_deck_same_channel_noop() {
+        let Some(mut app) = headless_app() else { return; };
+        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let result = app.move_deck(0, 0, 0);
+        assert!(result.is_ok());
+        // Deck should still be in channel 0
+        let snap = app.mixer_snapshot();
+        assert_eq!(snap.channels[0].decks.len(), 1);
+    }
+
+    #[test]
+    fn move_deck_invalid_src_channel() {
+        let Some(mut app) = headless_app() else { return; };
+        let result = app.move_deck(99, 0, 0);
+        assert!(result.is_ok()); // silent no-op
+    }
+
+    #[test]
+    fn move_deck_invalid_src_deck() {
+        let Some(mut app) = headless_app() else { return; };
+        let result = app.move_deck(0, 99, 1);
+        assert!(result.is_ok()); // silent no-op
+    }
+
+    #[test]
+    fn move_deck_valid() {
+        let Some(mut app) = headless_app() else { return; };
+        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let snap = app.mixer_snapshot();
+        assert_eq!(snap.channels[0].decks.len(), 1);
+        assert_eq!(snap.channels[1].decks.len(), 0);
+
+        let result = app.move_deck(0, 0, 1);
+        assert!(result.is_ok());
+        let snap = app.mixer_snapshot();
+        assert_eq!(snap.channels[0].decks.len(), 0);
+        assert_eq!(snap.channels[1].decks.len(), 1);
+    }
+
+    #[test]
+    fn set_deck_opacity_invalid_channel() {
+        let Some(mut app) = headless_app() else { return; };
+        app.set_deck_opacity(99, 0, 0.5); // no crash
+    }
+
+    #[test]
+    fn set_deck_opacity_invalid_deck() {
+        let Some(mut app) = headless_app() else { return; };
+        app.set_deck_opacity(0, 99, 0.5); // no crash
+    }
+
+    #[test]
+    fn set_deck_blend_mode_invalid() {
+        let Some(mut app) = headless_app() else { return; };
+        app.set_deck_blend_mode(99, 99, BlendMode::Add); // no crash
+    }
+
+    #[test]
+    fn set_deck_solo_invalid() {
+        let Some(mut app) = headless_app() else { return; };
+        app.set_deck_solo(99, 99, true); // no crash
+    }
+
+    #[test]
+    fn set_deck_mute_invalid() {
+        let Some(mut app) = headless_app() else { return; };
+        app.set_deck_mute(99, 99, true); // no crash
+    }
+
+    #[test]
+    fn set_channel_opacity_clamps() {
+        let Some(mut app) = headless_app() else { return; };
+        app.set_channel_opacity(0, 2.0);
+        let snap = app.mixer_snapshot();
+        assert!((snap.channels[0].opacity - 1.0).abs() < 1e-5, "should clamp to 1.0");
+
+        app.set_channel_opacity(0, -1.0);
+        let snap = app.mixer_snapshot();
+        assert!((snap.channels[0].opacity).abs() < 1e-5, "should clamp to 0.0");
+    }
+
+    #[test]
+    fn add_channel_increases_count() {
+        let Some(mut app) = headless_app() else { return; };
+        let before = app.mixer_snapshot().channels.len();
+        assert_eq!(before, 2);
+        app.add_channel().unwrap();
+        let after = app.mixer_snapshot().channels.len();
+        assert_eq!(after, 3);
+    }
+
+    #[test]
+    fn remove_channel_enforces_minimum() {
+        let Some(mut app) = headless_app() else { return; };
+        assert_eq!(app.mixer_snapshot().channels.len(), 2);
+        // Trying to remove should fail (minimum 2)
+        let result = app.remove_channel(0);
+        assert!(result.is_err());
+        assert_eq!(app.mixer_snapshot().channels.len(), 2);
+    }
+
+    #[test]
+    fn toggle_effect_invalid_index() {
+        let Some(mut app) = headless_app() else { return; };
+        // Toggle on non-existent effect → no crash
+        app.toggle_effect(EffectTarget::Deck(0, 0), 99);
+        app.toggle_effect(EffectTarget::Channel(0), 99);
+        app.toggle_effect(EffectTarget::Master, 99);
+    }
+
+    #[test]
+    fn set_param_invalid_path() {
+        let Some(mut app) = headless_app() else { return; };
+        // Non-existent param path → silent failure
+        app.set_param("ch99/deck99/nonexistent_param", ParamValue::Float(0.5));
+    }
+}

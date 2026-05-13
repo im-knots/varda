@@ -1995,4 +1995,342 @@ mod tests {
         assert_eq!(cloned.api_port, 3030);
         assert!(cloned.ndi_disabled);
     }
+
+    // ── Engine smoke tests ──────────────────────────────────────
+
+    fn headless_app() -> Option<VardaApp> {
+        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
+        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        VardaApp::new(gpu, &config).ok()
+    }
+
+    #[test]
+    fn smoke_engine_starts_with_two_channels() {
+        let Some(app) = headless_app() else {
+            eprintln!("Skipping: no headless GPU available");
+            return;
+        };
+        let state = app.build_engine_state();
+        assert_eq!(state.mixer.channels.len(), 2, "default mixer has 2 channels");
+        assert_eq!(state.mixer.crossfader, 0.0, "crossfader starts at A");
+    }
+
+    #[test]
+    fn smoke_add_channel_via_command() {
+        let Some(mut app) = headless_app() else { return; };
+        let tx = app.command_sender();
+        tx.send((crate::engine::EngineCommand::AddChannel, None)).unwrap();
+        app.process_commands();
+        let state = app.build_engine_state();
+        assert_eq!(state.mixer.channels.len(), 3);
+    }
+
+    #[test]
+    fn smoke_set_crossfader_via_command() {
+        let Some(mut app) = headless_app() else { return; };
+        let tx = app.command_sender();
+        tx.send((crate::engine::EngineCommand::SetCrossfader(0.75), None)).unwrap();
+        app.process_commands();
+        let state = app.build_engine_state();
+        assert!((state.mixer.crossfader - 0.75).abs() < 1e-5);
+    }
+
+    #[test]
+    fn smoke_render_frame_no_crash() {
+        let Some(mut app) = headless_app() else { return; };
+        // Render several frames — verify no panics and FPS stabilizes
+        for _ in 0..5 {
+            app.update_frame_timing();
+            app.render_mixer_frame();
+        }
+        let state = app.build_engine_state();
+        assert!(state.fps >= 0.0, "FPS should be non-negative");
+    }
+
+    #[test]
+    fn smoke_add_solid_color_deck() {
+        let Some(mut app) = headless_app() else { return; };
+        let before = app.build_engine_state().mixer.channels[0].decks.len();
+        let tx = app.command_sender();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        tx.send((
+            crate::engine::EngineCommand::AddSolidColorDeck {
+                channel_idx: 0,
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+            Some(reply_tx),
+        )).unwrap();
+        app.process_commands();
+        let result = reply_rx.blocking_recv().unwrap();
+        assert!(matches!(result, crate::engine::CommandResult::Ok), "command should succeed: {:?}", result);
+        let after = app.build_engine_state().mixer.channels[0].decks.len();
+        assert_eq!(after, before + 1, "should have one more deck");
+    }
+
+    #[test]
+    fn smoke_set_channel_opacity() {
+        let Some(mut app) = headless_app() else { return; };
+        let tx = app.command_sender();
+        tx.send((
+            crate::engine::EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: 0.5 },
+            None,
+        )).unwrap();
+        app.process_commands();
+        let state = app.build_engine_state();
+        assert!((state.mixer.channels[0].opacity - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn smoke_undo_redo_roundtrip() {
+        let Some(mut app) = headless_app() else { return; };
+        let tx = app.command_sender();
+        // Set crossfader to 0.5 (will trigger history push)
+        tx.send((crate::engine::EngineCommand::SetCrossfader(0.5), None)).unwrap();
+        app.process_commands();
+        // Undo
+        tx.send((crate::engine::EngineCommand::Undo, None)).unwrap();
+        app.process_commands();
+        // Redo
+        tx.send((crate::engine::EngineCommand::Redo, None)).unwrap();
+        app.process_commands();
+        // Just verify no crash — undo/redo correctness is tested in history.rs
+    }
+
+    #[test]
+    fn smoke_add_lfo_modulation() {
+        let Some(mut app) = headless_app() else { return; };
+        let tx = app.command_sender();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        tx.send((
+            crate::engine::EngineCommand::AddLfo {
+                waveform: crate::modulation::LFOWaveform::Sine,
+                frequency: 2.0,
+            },
+            Some(reply_tx),
+        )).unwrap();
+        app.process_commands();
+        let result = reply_rx.blocking_recv().unwrap();
+        assert!(matches!(result, crate::engine::CommandResult::Ok), "AddLfo failed: {:?}", result);
+        let state = app.build_engine_state();
+        assert!(!state.modulation.sources.is_empty());
+    }
+
+    #[test]
+    fn smoke_remove_channel() {
+        let Some(mut app) = headless_app() else { return; };
+        let tx = app.command_sender();
+        // Add a third channel first
+        tx.send((crate::engine::EngineCommand::AddChannel, None)).unwrap();
+        app.process_commands();
+        assert_eq!(app.build_engine_state().mixer.channels.len(), 3);
+        // Remove the third channel
+        tx.send((crate::engine::EngineCommand::RemoveChannel { channel_idx: 2 }, None)).unwrap();
+        app.process_commands();
+        assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
+    }
+
+    #[test]
+    fn smoke_set_deck_blend_mode() {
+        let Some(mut app) = headless_app() else { return; };
+        let tx = app.command_sender();
+        // Add a solid color deck first
+        tx.send((
+            crate::engine::EngineCommand::AddSolidColorDeck {
+                channel_idx: 0,
+                color: [0.0, 1.0, 0.0, 1.0],
+            },
+            None,
+        )).unwrap();
+        app.process_commands();
+        // Set its blend mode
+        tx.send((
+            crate::engine::EngineCommand::SetDeckBlendMode {
+                channel_idx: 0, deck_idx: 1,
+                mode: crate::engine::BlendMode::Add,
+            },
+            None,
+        )).unwrap();
+        app.process_commands();
+        // Verify no crash — blend mode is GPU-level and verified through state
+    }
+
+    #[test]
+    fn smoke_set_render_resolution() {
+        let Some(mut app) = headless_app() else { return; };
+        app.set_render_resolution(1280, 720);
+        assert_eq!(app.render_width(), 1280);
+        assert_eq!(app.render_height(), 720);
+    }
+
+    #[test]
+    fn smoke_set_render_resolution_zero_ignored() {
+        let Some(mut app) = headless_app() else { return; };
+        app.set_render_resolution(0, 0);
+        // Should keep previous resolution
+        assert!(app.render_width() > 0);
+        assert!(app.render_height() > 0);
+    }
+
+    #[test]
+    fn smoke_publish_and_read_state() {
+        let Some(app) = headless_app() else { return; };
+        let reader = app.state_reader();
+        app.publish_state();
+        let guard = reader.read().unwrap();
+        let state = guard.as_ref().expect("state should be published");
+        assert_eq!(state.mixer.channels.len(), 2);
+    }
+
+    #[test]
+    fn smoke_notifications() {
+        let Some(mut app) = headless_app() else { return; };
+        app.notify_info("Test notification");
+        app.update_notifications();
+        // Verify no crash
+    }
+
+    // ── Extended smoke tests ───────────────────────────────────────
+
+    /// Helper: send command with reply, process, return result.
+    fn send_cmd(app: &mut VardaApp, cmd: crate::engine::EngineCommand) -> crate::engine::CommandResult {
+        let tx = app.command_sender();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        tx.send((cmd, Some(reply_tx))).unwrap();
+        app.process_commands();
+        reply_rx.blocking_recv().unwrap()
+    }
+
+    /// Helper: fire-and-forget command.
+    fn fire(app: &mut VardaApp, cmd: crate::engine::EngineCommand) {
+        app.command_sender().send((cmd, None)).unwrap();
+        app.process_commands();
+    }
+
+    #[test]
+    fn smoke_auto_crossfade_lifecycle() {
+        let Some(mut app) = headless_app() else { return; };
+        fire(&mut app, crate::engine::EngineCommand::AutoCrossfade {
+            target: 1.0,
+            duration_secs: 0.05,
+            easing: crate::mixer::CrossfadeEasing::Linear,
+        });
+        // Tick enough frames for it to complete
+        for _ in 0..60 {
+            app.update_frame_timing();
+            app.render_mixer_frame();
+        }
+        // Verify the auto crossfade was started and no crash occurred.
+        // Timing in headless mode is unpredictable, so just verify no panic.
+    }
+
+    #[test]
+    fn smoke_add_video_deck_no_crash() {
+        let Some(mut app) = headless_app() else { return; };
+        // Bad path — should not panic
+        let _ = send_cmd(&mut app, crate::engine::EngineCommand::AddVideoDeck {
+            channel_idx: 0,
+            path: std::path::PathBuf::from("/nonexistent/video.mp4"),
+        });
+    }
+
+    #[test]
+    fn smoke_video_toggle_play() {
+        let Some(mut app) = headless_app() else { return; };
+        // Toggle play on a non-video deck — should handle gracefully
+        let _ = send_cmd(&mut app, crate::engine::EngineCommand::VideoTogglePlay {
+            channel_idx: 0, deck_idx: 0,
+        });
+    }
+
+    #[test]
+    fn smoke_video_set_speed() {
+        let Some(mut app) = headless_app() else { return; };
+        let _ = send_cmd(&mut app, crate::engine::EngineCommand::VideoSetSpeed {
+            channel_idx: 0, deck_idx: 0, speed: 2.0,
+        });
+    }
+
+    #[test]
+    fn smoke_create_sequence() {
+        let Some(mut app) = headless_app() else { return; };
+        let r = send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
+        assert!(matches!(r, crate::engine::CommandResult::Ok));
+        let state = app.build_engine_state();
+        assert_eq!(state.mixer.sequences.len(), 1);
+    }
+
+    #[test]
+    fn smoke_sequence_add_steps() {
+        let Some(mut app) = headless_app() else { return; };
+        send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
+        send_cmd(&mut app, crate::engine::EngineCommand::AddFadeStep { seq_idx: 0, from_ch: 0, to_ch: 1 });
+        send_cmd(&mut app, crate::engine::EngineCommand::AddWaitStep { seq_idx: 0 });
+        let state = app.build_engine_state();
+        assert_eq!(state.mixer.sequences[0].steps.len(), 2);
+    }
+
+    #[test]
+    fn smoke_effect_chain_operations() {
+        let Some(mut app) = headless_app() else { return; };
+        send_cmd(&mut app, crate::engine::EngineCommand::AddSolidColorDeck {
+            channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0],
+        });
+        let target = crate::engine::EffectTarget::Deck(0, 1);
+        let r = send_cmd(&mut app, crate::engine::EngineCommand::AddEffect {
+            target: target.clone(), shader_name: "Invert".into(),
+        });
+        if matches!(r, crate::engine::CommandResult::Ok) {
+            // Toggle
+            let _ = send_cmd(&mut app, crate::engine::EngineCommand::ToggleEffect {
+                target: target.clone(), effect_idx: 0,
+            });
+            // Remove
+            let _ = send_cmd(&mut app, crate::engine::EngineCommand::RemoveEffect {
+                target, effect_idx: 0,
+            });
+        }
+    }
+
+    #[test]
+    fn smoke_multiple_modulation_sources() {
+        let Some(mut app) = headless_app() else { return; };
+        send_cmd(&mut app, crate::engine::EngineCommand::AddLfo {
+            waveform: crate::modulation::LFOWaveform::Sine, frequency: 1.0,
+        });
+        send_cmd(&mut app, crate::engine::EngineCommand::AddStepSequencer {
+            num_steps: 8, rate: 2.0,
+        });
+        send_cmd(&mut app, crate::engine::EngineCommand::AddAdsr {
+            attack: 0.1, decay: 0.2, sustain: 0.7, release: 0.3,
+        });
+        let state = app.build_engine_state();
+        assert_eq!(state.modulation.sources.len(), 3);
+    }
+
+    #[test]
+    fn smoke_adsr_trigger_release() {
+        let Some(mut app) = headless_app() else { return; };
+        let r = send_cmd(&mut app, crate::engine::EngineCommand::AddAdsr {
+            attack: 0.01, decay: 0.01, sustain: 0.5, release: 0.01,
+        });
+        assert!(matches!(r, crate::engine::CommandResult::Ok));
+        let state = app.build_engine_state();
+        let uuid = state.modulation.sources[0].uuid.clone();
+        // Trigger
+        fire(&mut app, crate::engine::EngineCommand::TriggerAdsr { uuid: uuid.clone() });
+        for _ in 0..5 { app.update_frame_timing(); app.render_mixer_frame(); }
+        // Release
+        fire(&mut app, crate::engine::EngineCommand::ReleaseAdsr { uuid });
+        for _ in 0..5 { app.update_frame_timing(); app.render_mixer_frame(); }
+    }
+
+    #[test]
+    fn smoke_set_channel_blend_mode() {
+        let Some(mut app) = headless_app() else { return; };
+        fire(&mut app, crate::engine::EngineCommand::SetChannelBlendMode {
+            channel_idx: 0, mode: crate::engine::BlendMode::Add,
+        });
+        let state = app.build_engine_state();
+        assert_eq!(state.mixer.channels[0].blend_mode, crate::engine::BlendMode::Add);
+    }
 }

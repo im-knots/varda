@@ -677,4 +677,121 @@ mod tests {
         assert_eq!(uuid, "custom01");
         assert!(engine.has_source("custom01"));
     }
+
+    // ── Gap coverage: chains, removal, edge cases ───────────────────
+
+    #[test]
+    fn circular_mod_on_mod_no_hang() {
+        let mut engine = ModulationEngine::new();
+        let a = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let b = engine.add_source(ModulationSource::sine_lfo(2.0));
+        let c = engine.add_source(ModulationSource::sine_lfo(3.0));
+        // A modulates B, B modulates C, C modulates A (cycle)
+        engine.assign_mod_on_mod(&b, "frequency", &a, 0.5);
+        engine.assign_mod_on_mod(&c, "frequency", &b, 0.5);
+        engine.assign_mod_on_mod(&a, "frequency", &c, 0.5);
+        // Must complete without hanging, values must be finite
+        let audio = AudioValues::default();
+        engine.update(1.0, &audio);
+        for v in engine.current_values() {
+            assert!(v.is_finite(), "circular chain produced non-finite value");
+        }
+    }
+
+    #[test]
+    fn deep_chain_fallback() {
+        let mut engine = ModulationEngine::new();
+        let mut uuids = Vec::new();
+        for i in 0..5 {
+            uuids.push(engine.add_source(ModulationSource::sine_lfo((i + 1) as f32)));
+        }
+        // Chain: 0→1→2→3→4
+        for i in 0..4 {
+            engine.assign_mod_on_mod(&uuids[i + 1], "frequency", &uuids[i], 0.1);
+        }
+        let audio = AudioValues::default();
+        engine.update(1.0, &audio);
+        // All 5 sources should have been evaluated
+        assert_eq!(engine.current_values().len(), 5);
+        for v in engine.current_values() {
+            assert!(v.is_finite());
+        }
+    }
+
+    #[test]
+    fn evaluation_order_respects_deps() {
+        let mut engine = ModulationEngine::new();
+        let a = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let b = engine.add_source(ModulationSource::sine_lfo(2.0));
+        // A modulates B → A must be evaluated before B
+        engine.assign_mod_on_mod(&b, "frequency", &a, 0.5);
+        let order = engine.evaluation_order();
+        let a_pos = order.iter().position(|&i| i == engine.sources.iter().position(|e| e.uuid == a).unwrap()).unwrap();
+        let b_pos = order.iter().position(|&i| i == engine.sources.iter().position(|e| e.uuid == b).unwrap()).unwrap();
+        assert!(a_pos < b_pos, "dependency A should be evaluated before target B");
+    }
+
+    #[test]
+    fn remove_source_mid_chain() {
+        let mut engine = ModulationEngine::new();
+        let a = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let b = engine.add_source(ModulationSource::sine_lfo(2.0));
+        let c = engine.add_source(ModulationSource::sine_lfo(3.0));
+        engine.assign_mod_on_mod(&b, "frequency", &a, 0.5);
+        engine.assign_mod_on_mod(&c, "frequency", &b, 0.5);
+        // Remove the middle source
+        engine.remove_source(&b);
+        assert_eq!(engine.source_count(), 2);
+        // Should still update without panic
+        let audio = AudioValues::default();
+        engine.update(1.0, &audio);
+        assert!(engine.has_source(&a));
+        assert!(engine.has_source(&c));
+    }
+
+    #[test]
+    fn index_consistency_after_removal() {
+        let mut engine = ModulationEngine::new();
+        let a = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let _b = engine.add_source(ModulationSource::sine_lfo(2.0));
+        let c = engine.add_source(ModulationSource::sine_lfo(3.0));
+        engine.remove_source(&_b);
+        // UUIDs a and c should still resolve correctly
+        assert!(engine.find_source_by_uuid(&a).is_some());
+        assert!(engine.find_source_by_uuid(&c).is_some());
+        assert_eq!(engine.source_count(), 2);
+    }
+
+    #[test]
+    fn empty_source_list_update() {
+        let mut engine = ModulationEngine::new();
+        let audio = AudioValues::default();
+        // Update with 0 sources → no crash
+        engine.update(0.0, &audio);
+        assert_eq!(engine.source_count(), 0);
+        assert!(engine.current_values().is_empty());
+    }
+
+    #[test]
+    fn mod_on_mod_removed_target() {
+        let mut engine = ModulationEngine::new();
+        let a = engine.add_source(ModulationSource::sine_lfo(1.0));
+        let b = engine.add_source(ModulationSource::sine_lfo(2.0));
+        engine.assign_mod_on_mod(&a, "frequency", &b, 0.5);
+        // Remove the target — assignments should be cleaned up
+        engine.remove_source(&a);
+        assert!(!engine.has_source(&a));
+        // The mod-on-mod key "mod:{a}:frequency" should have been purged
+        for key in engine.assignments_iter().map(|(k, _)| k) {
+            assert!(!key.contains(&a), "stale mod-on-mod key found after target removal");
+        }
+    }
+
+    #[test]
+    fn assign_nonexistent_source_ignored() {
+        let mut engine = ModulationEngine::new();
+        engine.assign("some_param", "bogus_uuid", 1.0, None);
+        // No assignment should have been created
+        assert!(!engine.has_modulation("some_param"));
+    }
 }

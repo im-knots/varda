@@ -659,3 +659,137 @@ fn params_snapshot_to_ui(snap: &ShaderParamsSnapshot) -> ShaderParamsUI {
 fn effect_snapshot_to_ui(snap: &EffectSnapshot) -> EffectInfo {
     (snap.uuid.clone(), snap.name.clone(), snap.enabled, params_snapshot_to_ui(&snap.params))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::traits::*;
+    use clap::Parser;
+
+    fn parse_args(args: &[&str]) -> super::super::AppConfig {
+        super::super::AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
+    }
+
+    fn headless_app() -> Option<super::super::VardaApp> {
+        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
+        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        super::super::VardaApp::new(gpu, &config).ok()
+    }
+
+    #[test]
+    fn snapshot_default_mixer_two_channels() {
+        let Some(app) = headless_app() else { return; };
+        let snap = build_mixer_snapshot(&app);
+        assert_eq!(snap.channels.len(), 2);
+        assert_eq!(snap.crossfader, 0.0);
+        for ch in &snap.channels {
+            assert!(ch.decks.is_empty());
+        }
+    }
+
+    #[test]
+    fn snapshot_deck_opacity_and_effective() {
+        let Some(mut app) = headless_app() else { return; };
+        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        app.set_deck_opacity(0, 0, 0.5);
+        let snap = build_mixer_snapshot(&app);
+        let deck = &snap.channels[0].decks[0];
+        assert!((deck.opacity - 0.5).abs() < 1e-5);
+        // No transition → effective == opacity
+        assert!((deck.effective_opacity - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn snapshot_deck_with_effects() {
+        let Some(mut app) = headless_app() else { return; };
+        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let target = crate::engine::types::EffectTarget::Deck(0, 0);
+        // Try adding an effect — may fail if "Invert" not in registry
+        if app.add_effect(target, "Invert").is_ok() {
+            let snap = build_mixer_snapshot(&app);
+            assert!(!snap.channels[0].decks[0].effects.is_empty());
+        }
+    }
+
+    #[test]
+    fn snapshot_empty_channel_has_no_decks() {
+        let Some(app) = headless_app() else { return; };
+        let snap = build_mixer_snapshot(&app);
+        assert!(snap.channels[0].decks.is_empty());
+    }
+
+    #[test]
+    fn build_shader_params_filters_missing() {
+        // param_order has "brightness" but values doesn't → filtered out
+        let mut params = crate::params::ShaderParams::from_inputs(&[]);
+        params.param_order.push("brightness".into());
+        // values map is empty, so "brightness" has no value → should be filtered
+        let snap = build_shader_params("test_shader", &params);
+        assert!(snap.params.is_empty());
+    }
+
+    #[test]
+    fn build_shader_params_missing_definition() {
+        // Value exists but no definition → label/min/max are None
+        let mut params = crate::params::ShaderParams::from_inputs(&[]);
+        params.param_order.push("mystery".into());
+        params.values.insert("mystery".into(), crate::params::ParamValue::Float(0.5));
+        let snap = build_shader_params("test_shader", &params);
+        assert_eq!(snap.params.len(), 1);
+        let p = &snap.params[0];
+        assert!(p.label.is_none());
+        assert!(p.min.is_none());
+        assert!(p.max.is_none());
+    }
+
+    #[test]
+    fn build_registry_snapshot_sorted() {
+        let Some(app) = headless_app() else { return; };
+        let snap = build_registry_snapshot(&app);
+        // Verify generators are sorted case-insensitively
+        for pair in snap.generators.windows(2) {
+            assert!(
+                pair[0].0.to_lowercase() <= pair[1].0.to_lowercase(),
+                "generators not sorted: {} > {}",
+                pair[0].0, pair[1].0,
+            );
+        }
+        for pair in snap.filters.windows(2) {
+            assert!(
+                pair[0].0.to_lowercase() <= pair[1].0.to_lowercase(),
+                "filters not sorted: {} > {}",
+                pair[0].0, pair[1].0,
+            );
+        }
+    }
+
+    #[test]
+    fn build_clock_snapshot_inactive() {
+        let Some(app) = headless_app() else { return; };
+        let snap = build_clock_snapshot(&app);
+        // Default clock is inactive → bpm is None
+        assert!(snap.bpm.is_none() || !snap.active);
+    }
+
+    #[test]
+    fn build_clock_snapshot_source_labels() {
+        let Some(app) = headless_app() else { return; };
+        let snap = build_clock_snapshot(&app);
+        // Source label should be one of the known values
+        let valid = ["Audio", "MIDI", "OSC", "Manual"];
+        assert!(valid.contains(&snap.source_label.as_str()),
+            "unexpected source label: {}", snap.source_label);
+    }
+
+    #[test]
+    fn build_stream_receiver_dedup() {
+        let Some(app) = headless_app() else { return; };
+        let receivers = build_stream_receiver_snapshots(&app);
+        // All URLs should be unique
+        let urls: Vec<&str> = receivers.iter().map(|r| r.url.as_str()).collect();
+        let mut deduped = urls.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(urls.len(), deduped.len(), "duplicate stream receivers found");
+    }
+}

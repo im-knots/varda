@@ -604,3 +604,86 @@ impl VardaApp {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::surface::{BoundingBox, ContentMapping};
+
+    #[test]
+    fn compute_uv_fill() {
+        let bb = BoundingBox { x: 0.2, y: 0.3, width: 0.4, height: 0.5 };
+        let (scale, offset) = VardaApp::compute_uv(ContentMapping::Fill, &bb);
+        assert_eq!(scale, [1.0, 1.0]);
+        assert_eq!(offset, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn compute_uv_mapped() {
+        let bb = BoundingBox { x: 0.2, y: 0.3, width: 0.4, height: 0.5 };
+        let (scale, offset) = VardaApp::compute_uv(ContentMapping::Mapped, &bb);
+        assert_eq!(scale, [0.4, 0.5]);
+        assert_eq!(offset, [0.2, 0.3]);
+    }
+
+    #[test]
+    fn compute_uv_mapped_full_canvas() {
+        let bb = BoundingBox { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+        let (scale, offset) = VardaApp::compute_uv(ContentMapping::Mapped, &bb);
+        // Full canvas mapped should behave like fill
+        assert_eq!(scale, [1.0, 1.0]);
+        assert_eq!(offset, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn fps_smoothing_converges() {
+        use clap::Parser;
+        fn parse_args(args: &[&str]) -> super::super::AppConfig {
+            super::super::AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
+        }
+        let gpu = crate::renderer::context::GpuContext::new_headless();
+        let Ok(gpu) = gpu else {
+            eprintln!("Skipping: no headless GPU available");
+            return;
+        };
+        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        let Ok(mut app) = VardaApp::new(gpu, &config) else {
+            eprintln!("Skipping: VardaApp creation failed");
+            return;
+        };
+        // Seed with 60 identical FPS values
+        app.fps_history.clear();
+        for _ in 0..60 {
+            app.fps_history.push(60.0);
+        }
+        app.fps_smoothed = app.fps_history.iter().sum::<f32>() / app.fps_history.len() as f32;
+        assert!((app.fps_smoothed - 60.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn fps_smoothing_window_cap() {
+        use clap::Parser;
+        fn parse_args(args: &[&str]) -> super::super::AppConfig {
+            super::super::AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
+        }
+        let gpu = crate::renderer::context::GpuContext::new_headless();
+        let Ok(gpu) = gpu else {
+            eprintln!("Skipping: no headless GPU available");
+            return;
+        };
+        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        let Ok(mut app) = VardaApp::new(gpu, &config) else {
+            eprintln!("Skipping: VardaApp creation failed");
+            return;
+        };
+        // Push more than 60 entries
+        app.fps_history.clear();
+        for _ in 0..100 {
+            app.fps_history.push(30.0);
+            if app.fps_history.len() > 60 {
+                app.fps_history.remove(0);
+            }
+        }
+        assert_eq!(app.fps_history.len(), 60, "Window should cap at 60 entries");
+    }
+}

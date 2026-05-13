@@ -743,3 +743,52 @@ impl Deck {
         Self::build_media_deck(context, source_name_str, None, source, width, height)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_size_none_returns_base() {
+        assert_eq!(Deck::parse_size_expression(&None, 1920), 1920);
+    }
+
+    #[test]
+    fn parse_size_width_variable() {
+        assert_eq!(Deck::parse_size_expression(&Some("$WIDTH".into()), 1920), 1920);
+        assert_eq!(Deck::parse_size_expression(&Some("$HEIGHT".into()), 1080), 1080);
+    }
+
+    #[test]
+    fn parse_size_divide() {
+        assert_eq!(Deck::parse_size_expression(&Some("$WIDTH/2".into()), 1920), 960);
+        assert_eq!(Deck::parse_size_expression(&Some("$HEIGHT/4".into()), 1080), 270);
+    }
+
+    #[test]
+    fn parse_size_multiply() {
+        assert_eq!(Deck::parse_size_expression(&Some("$WIDTH*2".into()), 960), 1920);
+        assert_eq!(Deck::parse_size_expression(&Some("$HEIGHT*3".into()), 360), 1080);
+    }
+
+    #[test]
+    fn parse_size_literal() {
+        assert_eq!(Deck::parse_size_expression(&Some("512".into()), 1920), 512);
+        assert_eq!(Deck::parse_size_expression(&Some("1024".into()), 1080), 1024);
+    }
+
+    #[test]
+    fn parse_size_invalid_literal_falls_back() {
+        assert_eq!(Deck::parse_size_expression(&Some("abc".into()), 1920), 1920);
+    }
+
+    #[test]
+    fn parse_size_divide_by_zero_safe() {
+        assert_eq!(Deck::parse_size_expression(&Some("$WIDTH/0".into()), 1920), 1920);
+    }
+
+    #[test]
+    fn parse_size_whitespace_trim() {
+        assert_eq!(Deck::parse_size_expression(&Some(" $WIDTH ".into()), 1920), 1920);
+    }
+}

@@ -342,3 +342,132 @@ impl Mixer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── CrossfadeEasing tests ────────────────────────────────────────
+
+    #[test]
+    fn easing_linear_passthrough() {
+        assert_eq!(CrossfadeEasing::Linear.apply(0.0), 0.0);
+        assert_eq!(CrossfadeEasing::Linear.apply(0.5), 0.5);
+        assert_eq!(CrossfadeEasing::Linear.apply(1.0), 1.0);
+    }
+
+    #[test]
+    fn easing_ease_in_out_endpoints() {
+        assert!((CrossfadeEasing::EaseInOut.apply(0.0)).abs() < 1e-6);
+        assert!((CrossfadeEasing::EaseInOut.apply(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn easing_ease_in_out_midpoint() {
+        let mid = CrossfadeEasing::EaseInOut.apply(0.5);
+        assert!((mid - 0.5).abs() < 1e-6, "EaseInOut midpoint: {mid}");
+    }
+
+    #[test]
+    fn easing_ease_in_slow_start() {
+        let quarter = CrossfadeEasing::EaseIn.apply(0.25);
+        assert!(quarter < 0.25, "EaseIn at 0.25 should be < 0.25: {quarter}");
+    }
+
+    #[test]
+    fn easing_ease_out_fast_start() {
+        let quarter = CrossfadeEasing::EaseOut.apply(0.25);
+        assert!(quarter > 0.25, "EaseOut at 0.25 should be > 0.25: {quarter}");
+    }
+
+    #[test]
+    fn easing_clamps_input() {
+        assert_eq!(CrossfadeEasing::Linear.apply(-0.5), 0.0);
+        assert_eq!(CrossfadeEasing::Linear.apply(1.5), 1.0);
+    }
+
+    #[test]
+    fn easing_monotonic() {
+        for easing in [CrossfadeEasing::Linear, CrossfadeEasing::EaseInOut,
+                       CrossfadeEasing::EaseIn, CrossfadeEasing::EaseOut] {
+            let mut prev = 0.0;
+            for i in 0..=100 {
+                let t = i as f32 / 100.0;
+                let val = easing.apply(t);
+                assert!(val >= prev - 1e-6, "{easing:?} not monotonic at t={t}: {val} < {prev}");
+                prev = val;
+            }
+        }
+    }
+
+    // ── AutoCrossfade tests ──────────────────────────────────────────
+
+    #[test]
+    fn auto_crossfade_tick_interpolates() {
+        let mut cf = AutoCrossfade::new(0.0, 1.0, 2.0, CrossfadeEasing::Linear);
+        let val = cf.tick(1.0).expect("should still be active");
+        assert!((val - 0.5).abs() < 1e-5, "Midpoint: {val}");
+    }
+
+    #[test]
+    fn auto_crossfade_tick_completes() {
+        let mut cf = AutoCrossfade::new(0.0, 1.0, 1.0, CrossfadeEasing::Linear);
+        let result = cf.tick(1.5);
+        assert!(result.is_none(), "Should complete when elapsed >= duration");
+    }
+
+    #[test]
+    fn auto_crossfade_reverse_direction() {
+        let mut cf = AutoCrossfade::new(1.0, 0.0, 2.0, CrossfadeEasing::Linear);
+        let val = cf.tick(1.0).expect("active");
+        assert!((val - 0.5).abs() < 1e-5, "Reverse midpoint: {val}");
+    }
+
+    #[test]
+    fn auto_crossfade_progress() {
+        let mut cf = AutoCrossfade::new(0.0, 1.0, 4.0, CrossfadeEasing::Linear);
+        assert_eq!(cf.progress(), 0.0);
+        cf.tick(2.0);
+        assert!((cf.progress() - 0.5).abs() < 1e-5);
+        cf.tick(2.0);
+        assert!((cf.progress() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn auto_crossfade_with_easing() {
+        let mut cf = AutoCrossfade::new(0.0, 1.0, 2.0, CrossfadeEasing::EaseInOut);
+        let val = cf.tick(1.0).expect("active");
+        // EaseInOut at t=0.5 → 0.5
+        assert!((val - 0.5).abs() < 1e-5, "EaseInOut midpoint: {val}");
+    }
+
+    // ── SequencerState tests ─────────────────────────────────────────
+
+    #[test]
+    fn sequencer_state_defaults() {
+        let state = SequencerState::new();
+        assert!(!state.playing);
+        assert_eq!(state.current_step, 0);
+        assert_eq!(state.step_elapsed, 0.0);
+    }
+
+    #[test]
+    fn sequencer_state_reset() {
+        let mut state = SequencerState { playing: true, current_step: 5, step_elapsed: 3.2 };
+        state.reset();
+        assert!(!state.playing);
+        assert_eq!(state.current_step, 0);
+        assert_eq!(state.step_elapsed, 0.0);
+    }
+
+    // ── TransitionSequence tests ─────────────────────────────────────
+
+    #[test]
+    fn transition_sequence_new_defaults() {
+        let seq = TransitionSequence::new("TestSeq".to_string());
+        assert_eq!(seq.name, "TestSeq");
+        assert!(seq.steps.is_empty());
+        assert!(seq.enabled);
+        assert!(!seq.state.playing);
+    }
+}

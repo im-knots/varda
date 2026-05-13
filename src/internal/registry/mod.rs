@@ -47,22 +47,22 @@ impl ShaderRegistry {
             change_receiver: None,
         }
     }
-    
+
     /// Add a library path to scan
     pub fn add_library_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let path = path.as_ref().to_path_buf();
-        
+
         if !path.exists() {
             log::warn!("Library path does not exist: {}", path.display());
             std::fs::create_dir_all(&path)
                 .with_context(|| format!("Failed to create library path: {}", path.display()))?;
             log::info!("Created library path: {}", path.display());
         }
-        
+
         self.library_paths.push(path);
         Ok(())
     }
-    
+
     /// Scan all library paths for ISF shaders
     pub fn scan(&mut self) -> Result<usize> {
         self.shaders.clear();
@@ -214,17 +214,17 @@ impl ShaderRegistry {
 
         Ok(())
     }
-    
+
     /// Get a shader by name
     pub fn get(&self, name: &str) -> Option<&ISFShader> {
         self.shaders.get(name)
     }
-    
+
     /// Get all shader names
     pub fn shader_names(&self) -> Vec<String> {
         self.shaders.keys().cloned().collect()
     }
-    
+
     /// Get all generators
     pub fn generators(&self) -> Vec<&ISFShader> {
         self.shaders
@@ -232,7 +232,7 @@ impl ShaderRegistry {
             .filter(|s| s.metadata.is_generator())
             .collect()
     }
-    
+
     /// Get all filters (excludes transitions)
     pub fn filters(&self) -> Vec<&ISFShader> {
         self.shaders
@@ -248,7 +248,7 @@ impl ShaderRegistry {
             .filter(|s| s.metadata.is_transition())
             .collect()
     }
-    
+
     /// Get shader count
     pub fn count(&self) -> usize {
         self.shaders.len()
@@ -264,7 +264,7 @@ impl Default for ShaderRegistry {
 /// Get the default library paths for the current platform
 pub fn get_default_library_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    
+
     #[cfg(target_os = "macos")]
     {
         if let Some(home) = std::env::var_os("HOME") {
@@ -276,7 +276,7 @@ pub fn get_default_library_paths() -> Vec<PathBuf> {
             paths.push(path);
         }
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         if let Some(home) = std::env::var_os("HOME") {
@@ -288,7 +288,171 @@ pub fn get_default_library_paths() -> Vec<PathBuf> {
             paths.push(path);
         }
     }
-    
+
     paths
 }
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_shader(dir: &Path, name: &str, category: &str, is_filter: bool) {
+        let input = if is_filter {
+            r#"{"NAME": "inputImage", "TYPE": "image"}"#
+        } else {
+            r#"{"NAME": "brightness", "TYPE": "float"}"#
+        };
+        let content = format!(
+            "/*{{\n\"CATEGORIES\": [\"{category}\"],\n\"INPUTS\": [{input}]\n}}*/\nvoid main() {{}}"
+        );
+        fs::write(dir.join(format!("{name}.fs")), content).unwrap();
+    }
+
+    #[test]
+    fn new_registry_is_empty() {
+        let reg = ShaderRegistry::new();
+        assert_eq!(reg.count(), 0);
+        assert!(reg.shader_names().is_empty());
+        assert!(reg.generators().is_empty());
+        assert!(reg.filters().is_empty());
+        assert!(reg.transitions().is_empty());
+    }
+
+    #[test]
+    fn scan_empty_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(tmp.path()).unwrap();
+        let count = reg.scan().unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(reg.count(), 0);
+    }
+
+    #[test]
+    fn scan_finds_shaders() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_shader(tmp.path(), "TestGen", "Generator", false);
+        write_shader(tmp.path(), "TestFilter", "Filter", true);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(tmp.path()).unwrap();
+        let count = reg.scan().unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(reg.count(), 2);
+        assert!(reg.get("TestGen").is_some());
+        assert!(reg.get("TestFilter").is_some());
+    }
+
+    #[test]
+    fn generators_and_filters_classified() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_shader(tmp.path(), "Gen1", "Generator", false);
+        write_shader(tmp.path(), "Gen2", "Generator", false);
+        write_shader(tmp.path(), "Filt1", "Filter", true);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(tmp.path()).unwrap();
+        reg.scan().unwrap();
+
+        assert_eq!(reg.generators().len(), 2);
+        assert_eq!(reg.filters().len(), 1);
+    }
+
+    #[test]
+    fn transitions_classified() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Transition = has "Transition" category + image input
+        let content = r#"/*{
+"CATEGORIES": ["Transition"],
+"INPUTS": [{"NAME": "inputImage", "TYPE": "image"}, {"NAME": "startImage", "TYPE": "image"}]
+}*/
+void main() {}"#;
+        fs::write(tmp.path().join("Dissolve.fs"), content).unwrap();
+        write_shader(tmp.path(), "Gen1", "Generator", false);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(tmp.path()).unwrap();
+        reg.scan().unwrap();
+
+        assert_eq!(reg.transitions().len(), 1);
+        assert_eq!(reg.generators().len(), 1);
+        // Transitions are filters too, but filters() excludes transitions
+        assert_eq!(reg.filters().len(), 0);
+    }
+
+    #[test]
+    fn get_nonexistent_returns_none() {
+        let reg = ShaderRegistry::new();
+        assert!(reg.get("DoesNotExist").is_none());
+    }
+
+    #[test]
+    fn ignores_non_fs_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("readme.txt"), "not a shader").unwrap();
+        fs::write(tmp.path().join("data.json"), "{}").unwrap();
+        write_shader(tmp.path(), "RealShader", "Generator", false);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(tmp.path()).unwrap();
+        let count = reg.scan().unwrap();
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn skips_malformed_shaders() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("bad.fs"), "not valid ISF content").unwrap();
+        write_shader(tmp.path(), "Good", "Generator", false);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(tmp.path()).unwrap();
+        let count = reg.scan().unwrap();
+
+        assert_eq!(count, 1);
+        assert!(reg.get("Good").is_some());
+    }
+
+    #[test]
+    fn scan_subdirectories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        write_shader(&sub, "Nested", "Generator", false);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(tmp.path()).unwrap();
+        let count = reg.scan().unwrap();
+
+        assert_eq!(count, 1);
+        assert!(reg.get("Nested").is_some());
+    }
+
+    #[test]
+    fn rescan_clears_and_reloads() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_shader(tmp.path(), "S1", "Generator", false);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(tmp.path()).unwrap();
+        reg.scan().unwrap();
+        assert_eq!(reg.count(), 1);
+
+        // Add another shader and rescan
+        write_shader(tmp.path(), "S2", "Filter", true);
+        let count = reg.scan().unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn add_nonexistent_path_errors() {
+        let mut reg = ShaderRegistry::new();
+        let result = reg.add_library_path("/nonexistent/path/that/should/not/exist");
+        assert!(result.is_err());
+    }
+}

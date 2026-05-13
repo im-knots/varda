@@ -447,3 +447,128 @@ impl Deck {
         self.fps_smoothed
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_short_uuid_format() {
+        let id = generate_short_uuid();
+        assert_eq!(id.len(), 8, "UUID should be 8 chars");
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit()),
+            "UUID should be hex: {id}"
+        );
+    }
+
+    #[test]
+    fn generate_short_uuid_unique() {
+        let ids: Vec<String> = (0..100).map(|_| generate_short_uuid()).collect();
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), 100, "100 UUIDs should all be unique");
+    }
+
+    #[test]
+    fn scaling_mode_default_is_fill() {
+        assert_eq!(ScalingMode::default(), ScalingMode::Fill);
+    }
+
+    #[test]
+    fn stretch_returns_identity() {
+        let (scale, offset) = ScalingMode::Stretch.compute_uv_transform(800, 600, 1920, 1080);
+        assert_eq!(scale, [1.0, 1.0]);
+        assert_eq!(offset, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn stretch_same_aspect() {
+        let (scale, offset) = ScalingMode::Stretch.compute_uv_transform(1920, 1080, 1920, 1080);
+        assert_eq!(scale, [1.0, 1.0]);
+        assert_eq!(offset, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn fill_same_aspect_is_identity() {
+        let (scale, offset) = ScalingMode::Fill.compute_uv_transform(1920, 1080, 960, 540);
+        assert!((scale[0] - 1.0).abs() < 1e-5);
+        assert!((scale[1] - 1.0).abs() < 1e-5);
+        assert!((offset[0]).abs() < 1e-5);
+        assert!((offset[1]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fill_wide_source_crops_horizontal() {
+        // Source 2:1, target 1:1 → crop left/right
+        let (scale, offset) = ScalingMode::Fill.compute_uv_transform(200, 100, 100, 100);
+        assert!((scale[0] - 0.5).abs() < 1e-5, "scale_x should be 0.5, got {}", scale[0]);
+        assert!((scale[1] - 1.0).abs() < 1e-5);
+        assert!((offset[0] - 0.25).abs() < 1e-5, "offset_x should center crop");
+        assert!((offset[1]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fill_tall_source_crops_vertical() {
+        // Source 1:2, target 1:1 → crop top/bottom
+        let (scale, offset) = ScalingMode::Fill.compute_uv_transform(100, 200, 100, 100);
+        assert!((scale[0] - 1.0).abs() < 1e-5);
+        assert!((scale[1] - 0.5).abs() < 1e-5, "scale_y should be 0.5, got {}", scale[1]);
+        assert!((offset[0]).abs() < 1e-5);
+        assert!((offset[1] - 0.25).abs() < 1e-5, "offset_y should center crop");
+    }
+
+    #[test]
+    fn fit_same_aspect_is_identity() {
+        let (scale, offset) = ScalingMode::Fit.compute_uv_transform(1920, 1080, 960, 540);
+        assert!((scale[0] - 1.0).abs() < 1e-5);
+        assert!((scale[1] - 1.0).abs() < 1e-5);
+        assert!((offset[0]).abs() < 1e-5);
+        assert!((offset[1]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fit_wide_source_letterboxes() {
+        // Source 2:1, target 1:1 → letterbox top/bottom
+        let (scale, _offset) = ScalingMode::Fit.compute_uv_transform(200, 100, 100, 100);
+        assert!((scale[0] - 1.0).abs() < 1e-5);
+        assert!((scale[1] - 2.0).abs() < 1e-5, "scale_y={}", scale[1]);
+    }
+
+    #[test]
+    fn fit_tall_source_pillarboxes() {
+        // Source 1:2, target 1:1 → pillarbox left/right
+        let (scale, _offset) = ScalingMode::Fit.compute_uv_transform(100, 200, 100, 100);
+        assert!((scale[0] - 2.0).abs() < 1e-5, "scale_x={}", scale[0]);
+        assert!((scale[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn center_smaller_source() {
+        // Source 100x100 in target 200x200 → scale 2.0, offset -0.5
+        let (scale, offset) = ScalingMode::Center.compute_uv_transform(100, 100, 200, 200);
+        assert!((scale[0] - 2.0).abs() < 1e-5);
+        assert!((scale[1] - 2.0).abs() < 1e-5);
+        assert!((offset[0] - -0.5).abs() < 1e-5);
+        assert!((offset[1] - -0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn center_larger_source() {
+        // Source 400x400 in target 200x200 → scale 0.5, offset 0.25
+        let (scale, offset) = ScalingMode::Center.compute_uv_transform(400, 400, 200, 200);
+        assert!((scale[0] - 0.5).abs() < 1e-5);
+        assert!((scale[1] - 0.5).abs() < 1e-5);
+        assert!((offset[0] - 0.25).abs() < 1e-5);
+        assert!((offset[1] - 0.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn center_same_size_is_identity() {
+        let (scale, offset) = ScalingMode::Center.compute_uv_transform(1920, 1080, 1920, 1080);
+        assert!((scale[0] - 1.0).abs() < 1e-5);
+        assert!((scale[1] - 1.0).abs() < 1e-5);
+        assert!((offset[0]).abs() < 1e-5);
+        assert!((offset[1]).abs() < 1e-5);
+    }
+}

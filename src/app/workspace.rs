@@ -486,3 +486,151 @@ impl VardaApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::traits::*;
+    use clap::Parser;
+    use tempfile::TempDir;
+
+    fn parse_args(args: &[&str]) -> super::super::AppConfig {
+        super::super::AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
+    }
+
+    fn headless_app_in(workspace: &std::path::Path) -> Option<super::super::VardaApp> {
+        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
+        let ws = workspace.to_str().unwrap();
+        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon", "--workspace", ws]);
+        super::super::VardaApp::new(gpu, &config).ok()
+    }
+
+    #[test]
+    fn load_workspace_no_varda_dir() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        // No .varda/ exists → load_workspace returns None
+        let result = app.load_workspace();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn save_load_roundtrip_scene() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        app.set_crossfader(0.6);
+        app.save_workspace(&UILayoutState::default());
+
+        let Some(mut app2) = headless_app_in(tmp.path()) else { return; };
+        let _ = app2.load_workspace();
+        let snap = app2.mixer_snapshot();
+        assert!(!snap.channels[0].decks.is_empty(), "deck should survive roundtrip");
+        assert!((snap.crossfader - 0.6).abs() < 1e-4);
+    }
+
+    #[test]
+    fn save_load_roundtrip_stage() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        let _uuid = app.add_surface("Test Surface", crate::renderer::context::OutputSource::Master);
+        app.save_workspace(&UILayoutState::default());
+
+        let Some(mut app2) = headless_app_in(tmp.path()) else { return; };
+        let _ = app2.load_workspace();
+        let surfaces = app2.surface_snapshot();
+        assert!(surfaces.iter().any(|s| s.name == "Test Surface"), "surface should survive roundtrip");
+    }
+
+    #[test]
+    fn load_corrupt_scene_json() {
+        let tmp = TempDir::new().unwrap();
+        let varda_dir = tmp.path().join(".varda");
+        std::fs::create_dir_all(&varda_dir).unwrap();
+        // Write corrupt JSON
+        std::fs::write(varda_dir.join("scene.json"), "not valid json {{{").unwrap();
+
+        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        // Should not crash, should return None or gracefully handle
+        let _result = app.load_workspace();
+        // App should still function with default state
+        let snap = app.mixer_snapshot();
+        assert_eq!(snap.channels.len(), 2);
+    }
+
+    #[test]
+    fn load_missing_scene_file() {
+        let tmp = TempDir::new().unwrap();
+        let varda_dir = tmp.path().join(".varda");
+        std::fs::create_dir_all(&varda_dir).unwrap();
+        // .varda/ exists but no scene.json
+
+        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        let _ = app.load_workspace();
+        // Should skip scene loading gracefully
+        let snap = app.mixer_snapshot();
+        assert_eq!(snap.channels.len(), 2);
+    }
+
+    #[test]
+    fn save_creates_varda_dir() {
+        let tmp = TempDir::new().unwrap();
+        let varda_dir = tmp.path().join(".varda");
+        assert!(!varda_dir.exists());
+        let Some(app) = headless_app_in(tmp.path()) else { return; };
+        app.save_workspace(&UILayoutState::default());
+        assert!(varda_dir.exists());
+    }
+
+    #[test]
+    fn load_workspace_returns_layout() {
+        let tmp = TempDir::new().unwrap();
+        let Some(app) = headless_app_in(tmp.path()) else { return; };
+        let mut layout = UILayoutState::default();
+        layout.stage_editor_open = true;
+        layout.library_panel_open = true;
+        app.save_workspace(&layout);
+
+        let Some(mut app2) = headless_app_in(tmp.path()) else { return; };
+        let loaded = app2.load_workspace();
+        assert!(loaded.is_some(), "should return layout");
+        let loaded = loaded.unwrap();
+        assert!(loaded.stage_editor_open);
+        assert!(loaded.library_panel_open);
+    }
+
+    #[test]
+    fn apply_scene_diff_crossfader() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        // Build a minimal SceneConfig with different crossfader
+        let scene = crate::scene::SceneConfig {
+            version: 3,
+            channels: vec![
+                crate::scene::ChannelConfig {
+                    uuid: crate::deck::generate_short_uuid(),
+                    name: "Ch 0".into(), opacity: 1.0,
+                    blend_mode: crate::scene::BlendModeConfig::Normal,
+                    decks: vec![], effects: vec![],
+                },
+                crate::scene::ChannelConfig {
+                    uuid: crate::deck::generate_short_uuid(),
+                    name: "Ch 1".into(), opacity: 1.0,
+                    blend_mode: crate::scene::BlendModeConfig::Normal,
+                    decks: vec![], effects: vec![],
+                },
+            ],
+            crossfader: 0.42,
+            active_transition: None,
+            master_effects: vec![],
+            modulation: Default::default(),
+            transition_sequences: vec![],
+            render_width: Some(1920),
+            render_height: Some(1080),
+        };
+        let (warnings, _structural) = app.apply_scene_diff(&scene, 1920, 1080);
+        assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
+        let snap = app.mixer_snapshot();
+        assert!((snap.crossfader - 0.42).abs() < 1e-4, "crossfader should be applied via diff");
+    }
+}
