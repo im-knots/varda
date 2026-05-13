@@ -11,9 +11,9 @@
     "radius": 1.98,
     "truncation_degrees": 82.0,
     "tilt_degrees": 0.0,
-    "content_azimuth_degrees": 94.0,
+    "content_azimuth_degrees": 0.0,
     "content_elevation_degrees": 0.0,
-    "content_roll_degrees": -45.0
+    "content_roll_degrees": 0.0
   },
   "surfaces": {
     "surfaces": [
