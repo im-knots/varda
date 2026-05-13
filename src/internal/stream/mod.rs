@@ -10,6 +10,13 @@
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread::JoinHandle;
 
+/// Serializes ffmpeg context creation (input_with_interrupt + decoder open).
+/// ffmpeg's `avcodec_open2` is NOT thread-safe — two threads opening decoders
+/// simultaneously can corrupt the internal codec registry, producing silent
+/// black output. The mutex is released before entering the decode loop so
+/// frame decoding remains fully parallel across receivers.
+static FFMPEG_INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Stream protocol for input receivers.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum StreamProtocol {
@@ -60,6 +67,8 @@ pub struct StreamManager {
 
 impl StreamManager {
     pub fn new() -> Self {
+        // Init ffmpeg once on the main thread before any receiver threads spawn.
+        ffmpeg_next::init().ok();
         Self {
             receivers: Vec::new(),
             textures: Vec::new(),
@@ -257,142 +266,156 @@ fn stream_receive_thread(
 ) {
     log::info!("Stream receive thread starting for '{}'", url_display);
 
-    // Initialize ffmpeg
-    ffmpeg_next::init().ok();
+    // Exponential backoff: starts at 500ms, caps at 10s, resets on successful frame
+    let mut backoff_ms: u64 = 500;
+    const MIN_BACKOFF_MS: u64 = 500;
+    const MAX_BACKOFF_MS: u64 = 10_000;
 
     loop {
         if stop_flag.load(Ordering::SeqCst) { return; }
 
-        // Use input_with_interrupt so ffmpeg checks the stop flag during
-        // blocking I/O (e.g. waiting for the next HLS segment). Without
-        // this, stop_receive() would hang because the packets iterator
-        // blocks inside ffmpeg's network read.
-        let stop_for_interrupt = Arc::clone(&stop_flag);
-        match ffmpeg_next::format::input_with_interrupt(&url, move || stop_for_interrupt.load(Ordering::SeqCst)) {
-            Ok(mut input_ctx) => {
-                let stream_idx = match input_ctx.streams().best(ffmpeg_next::media::Type::Video) {
-                    Some(s) => s.index(),
-                    None => {
-                        log::error!("Stream '{}': no video stream found", url_display);
-                        return;
-                    }
-                };
+        // Serialize ffmpeg context creation — avcodec_open2 is not thread-safe.
+        // Hold the lock through input open + decoder creation, release before
+        // entering the decode loop so frame decoding is parallel.
+        let setup_result = {
+            let _guard = FFMPEG_INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-                let codec_params = input_ctx.stream(stream_idx).unwrap().parameters();
-                let mut decoder = match ffmpeg_next::codec::Context::from_parameters(codec_params) {
-                    Ok(ctx) => match ctx.decoder().video() {
-                        Ok(d) => d,
-                        Err(e) => {
-                            log::error!("Stream '{}': failed to create video decoder: {}", url_display, e);
-                            return;
-                        }
-                    },
+            let stop_for_interrupt = Arc::clone(&stop_flag);
+            (|| -> Option<_> {
+                let ctx = match ffmpeg_next::format::input_with_interrupt(
+                    &url,
+                    move || stop_for_interrupt.load(Ordering::SeqCst),
+                ) {
+                    Ok(c) => c,
                     Err(e) => {
-                        log::error!("Stream '{}': failed to create codec context: {}", url_display, e);
-                        return;
+                        log::warn!("Stream '{}' connection failed: {}, retrying in {}ms...", url_display, e, backoff_ms);
+                        return None;
                     }
                 };
 
-                let mut scaler = ffmpeg_next::software::scaling::Context::get(
+                let stream_idx = ctx.streams().best(ffmpeg_next::media::Type::Video)
+                    .map(|s| s.index())
+                    .or_else(|| {
+                        log::warn!("Stream '{}': no video stream found, retrying in {}ms...", url_display, backoff_ms);
+                        None
+                    })?;
+
+                let codec_params = ctx.stream(stream_idx).unwrap().parameters();
+                let codec_ctx = ffmpeg_next::codec::Context::from_parameters(codec_params)
+                    .map_err(|e| log::warn!("Stream '{}': failed to create codec context: {}, retrying in {}ms...", url_display, e, backoff_ms))
+                    .ok()?;
+                let decoder = codec_ctx.decoder().video()
+                    .map_err(|e| log::warn!("Stream '{}': failed to create video decoder: {}, retrying in {}ms...", url_display, e, backoff_ms))
+                    .ok()?;
+
+                let scaler = ffmpeg_next::software::scaling::Context::get(
                     decoder.format(), decoder.width(), decoder.height(),
                     ffmpeg_next::format::Pixel::RGBA, 1920, 1080,
                     ffmpeg_next::software::scaling::Flags::BILINEAR,
                 ).ok();
 
-                log::info!("Stream '{}' connected, decoding video", url_display);
+                Some((ctx, stream_idx, decoder, scaler))
+            })()
+            // _guard dropped here — lock released before decode loop
+        };
 
-                let mut last_frame_time = std::time::Instant::now();
-                let stall_timeout = std::time::Duration::from_secs(5);
-                let mut consecutive_errors: u32 = 0;
-                const MAX_CONSECUTIVE_ERRORS: u32 = 50;
+        let Some((mut input_ctx, stream_idx, mut decoder, mut scaler)) = setup_result else {
+            connected.store(false, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+            backoff_ms = (backoff_ms * 2).min(MAX_BACKOFF_MS);
+            continue;
+        };
 
-                for (stream, packet) in input_ctx.packets() {
-                    if stop_flag.load(Ordering::SeqCst) { return; }
-                    if stream.index() != stream_idx { continue; }
+        log::info!("Stream '{}' connected, decoding video", url_display);
 
-                    if decoder.send_packet(&packet).is_err() {
-                        consecutive_errors += 1;
-                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                            log::warn!("Stream '{}': {} consecutive decode errors, reconnecting", url_display, consecutive_errors);
-                            break;
-                        }
-                        continue;
-                    }
-                    consecutive_errors = 0;
+        let mut last_frame_time = std::time::Instant::now();
+        let stall_timeout = std::time::Duration::from_secs(5);
+        let mut consecutive_errors: u32 = 0;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 50;
 
-                    let mut decoded = ffmpeg_next::frame::Video::empty();
-                    while decoder.receive_frame(&mut decoded).is_ok() {
-                        if stop_flag.load(Ordering::SeqCst) { return; }
+        for (stream, packet) in input_ctx.packets() {
+            if stop_flag.load(Ordering::SeqCst) { return; }
+            if stream.index() != stream_idx { continue; }
 
-                        // Lazily init/reinit scaler if dimensions changed
-                        if scaler.is_none() || decoded.width() != 1920 || decoded.height() != 1080 {
-                            scaler = ffmpeg_next::software::scaling::Context::get(
-                                decoded.format(), decoded.width(), decoded.height(),
-                                ffmpeg_next::format::Pixel::RGBA, 1920, 1080,
-                                ffmpeg_next::software::scaling::Flags::BILINEAR,
-                            ).ok();
-                        }
+            if decoder.send_packet(&packet).is_err() {
+                consecutive_errors += 1;
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    log::warn!("Stream '{}': {} consecutive decode errors, reconnecting", url_display, consecutive_errors);
+                    break;
+                }
+                continue;
+            }
+            consecutive_errors = 0;
 
-                        if let Some(ref mut sws) = scaler {
-                            let mut rgb_frame = ffmpeg_next::frame::Video::empty();
-                            if sws.run(&decoded, &mut rgb_frame).is_ok() {
-                                let width = rgb_frame.width() as usize;
-                                let height = rgb_frame.height() as usize;
-                                let stride = rgb_frame.stride(0);
-                                let row_bytes = width * 4;
-                                let expected = row_bytes * height;
-                                let data = rgb_frame.data(0);
+            let mut decoded = ffmpeg_next::frame::Video::empty();
+            while decoder.receive_frame(&mut decoded).is_ok() {
+                if stop_flag.load(Ordering::SeqCst) { return; }
 
-                                let rgba = if stride == row_bytes {
-                                    if data.len() >= expected {
-                                        data[..expected].to_vec()
-                                    } else {
-                                        continue;
-                                    }
-                                } else {
-                                    let mut buf = Vec::with_capacity(expected);
-                                    for row in 0..height {
-                                        let start = row * stride;
-                                        let end = start + row_bytes;
-                                        if end > data.len() { break; }
-                                        buf.extend_from_slice(&data[start..end]);
-                                    }
-                                    if buf.len() != expected { continue; }
-                                    buf
-                                };
-
-                                if let Ok(mut guard) = frame_data.lock() {
-                                    *guard = Some(rgba);
-                                }
-                                last_frame_time = std::time::Instant::now();
-                                if !connected.load(Ordering::SeqCst) {
-                                    connected.store(true, Ordering::SeqCst);
-                                    log::info!("Stream '{}' first frame received ({}x{}, stride={})",
-                                        url_display, width, height, stride);
-                                }
-                            }
-                        }
-                    }
-
-                    // If we haven't produced a frame in a while, the demuxer is
-                    // likely stuck (e.g. HLS segments deleted). Force reconnect.
-                    if last_frame_time.elapsed() > stall_timeout {
-                        log::warn!("Stream '{}': no frames for {:.1}s, reconnecting",
-                            url_display, last_frame_time.elapsed().as_secs_f32());
-                        break;
-                    }
+                // Lazily init/reinit scaler if dimensions changed
+                if scaler.is_none() || decoded.width() != 1920 || decoded.height() != 1080 {
+                    scaler = ffmpeg_next::software::scaling::Context::get(
+                        decoded.format(), decoded.width(), decoded.height(),
+                        ffmpeg_next::format::Pixel::RGBA, 1920, 1080,
+                        ffmpeg_next::software::scaling::Flags::BILINEAR,
+                    ).ok();
                 }
 
-                log::warn!("Stream '{}' ended, reconnecting in 500ms...", url_display);
-                connected.store(false, Ordering::SeqCst);
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                if let Some(ref mut sws) = scaler {
+                    let mut rgb_frame = ffmpeg_next::frame::Video::empty();
+                    if sws.run(&decoded, &mut rgb_frame).is_ok() {
+                        let width = rgb_frame.width() as usize;
+                        let height = rgb_frame.height() as usize;
+                        let stride = rgb_frame.stride(0);
+                        let row_bytes = width * 4;
+                        let expected = row_bytes * height;
+                        let data = rgb_frame.data(0);
+
+                        let rgba = if stride == row_bytes {
+                            if data.len() >= expected {
+                                data[..expected].to_vec()
+                            } else {
+                                continue;
+                            }
+                        } else {
+                            let mut buf = Vec::with_capacity(expected);
+                            for row in 0..height {
+                                let start = row * stride;
+                                let end = start + row_bytes;
+                                if end > data.len() { break; }
+                                buf.extend_from_slice(&data[start..end]);
+                            }
+                            if buf.len() != expected { continue; }
+                            buf
+                        };
+
+                        if let Ok(mut guard) = frame_data.lock() {
+                            *guard = Some(rgba);
+                        }
+                        last_frame_time = std::time::Instant::now();
+                        // Reset backoff on successful frame delivery
+                        backoff_ms = MIN_BACKOFF_MS;
+                        if !connected.load(Ordering::SeqCst) {
+                            connected.store(true, Ordering::SeqCst);
+                            log::info!("Stream '{}' first frame received ({}x{}, stride={})",
+                                url_display, width, height, stride);
+                        }
+                    }
+                }
             }
-            Err(e) => {
-                log::warn!("Stream '{}' connection failed: {}, retrying in 1s...", url_display, e);
-                connected.store(false, Ordering::SeqCst);
-                std::thread::sleep(std::time::Duration::from_secs(1));
+
+            // If we haven't produced a frame in a while, the demuxer is
+            // likely stuck (e.g. HLS segments deleted). Force reconnect.
+            if last_frame_time.elapsed() > stall_timeout {
+                log::warn!("Stream '{}': no frames for {:.1}s, reconnecting",
+                    url_display, last_frame_time.elapsed().as_secs_f32());
+                break;
             }
         }
+
+        log::warn!("Stream '{}' ended, reconnecting in {}ms...", url_display, backoff_ms);
+        connected.store(false, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+        backoff_ms = (backoff_ms * 2).min(MAX_BACKOFF_MS);
     }
 }
 

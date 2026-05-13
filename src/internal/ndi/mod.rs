@@ -40,6 +40,7 @@ struct NdiReceiver {
     source_name: String,
     frame_data: Arc<Mutex<Option<NdiFrame>>>,
     stop_flag: Arc<AtomicBool>,
+    connected: Arc<AtomicBool>,
     _thread: Option<std::thread::JoinHandle<()>>,
     #[allow(dead_code)]
     recv_instance: ffi::NDIlib_recv_instance_t,
@@ -180,9 +181,12 @@ impl NdiManager {
         });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let connected = Arc::new(AtomicBool::new(false));
+
         // Spawn background receive thread
         let frame_clone = Arc::clone(&frame_data);
         let stop_clone = Arc::clone(&stop_flag);
+        let connected_clone = Arc::clone(&connected);
         // Note: recv_instance is a raw pointer, sent across thread boundary.
         // Safe because NDI SDK guarantees thread safety for recv instances.
         let recv_ptr = recv_instance as usize;
@@ -218,6 +222,8 @@ impl NdiManager {
                                 log::info!("NDI '{}': first frame {}×{} FourCC={:?} stride={}", source_name_log, w, h, vf.FourCC, vf.line_stride_in_bytes);
                             }
                             frame_count += 1;
+                            none_count = 0;
+                            connected_clone.store(true, Ordering::SeqCst);
                             let rgba = convert_ndi_frame_to_rgba(&vf, w, h);
                             if let Ok(mut guard) = frame_clone.lock() {
                                 *guard = Some(NdiFrame { data: rgba, width: w, height: h });
@@ -229,8 +235,14 @@ impl NdiManager {
                         if none_count == 30 {
                             log::warn!("NDI '{}': 30 consecutive empty captures — source may not be sending", source_name_log);
                         }
+                        if none_count >= 50 {
+                            connected_clone.store(false, Ordering::SeqCst);
+                        }
                     } else if frame_type == ffi::NDIlib_frame_type_e::STATUS_CHANGE {
                         log::info!("NDI '{}': connection status changed", source_name_log);
+                    } else if frame_type == ffi::NDIlib_frame_type_e::ERROR {
+                        log::warn!("NDI '{}': received ERROR frame", source_name_log);
+                        connected_clone.store(false, Ordering::SeqCst);
                     }
                 }
 
@@ -246,6 +258,7 @@ impl NdiManager {
             source_name: source_name.to_string(),
             frame_data,
             stop_flag,
+            connected,
             _thread: thread,
             recv_instance: std::ptr::null_mut(), // Owned by the thread now
             width,
@@ -315,6 +328,14 @@ impl NdiManager {
         self.receivers.get(idx).map(|r| (r.width, r.height))
     }
 
+    /// Check if a receiver is currently connected (receiving video frames).
+    /// Returns `false` for out-of-bounds indices.
+    pub fn is_connected(&self, idx: usize) -> bool {
+        self.receivers
+            .get(idx)
+            .map(|r| r.connected.load(Ordering::SeqCst))
+            .unwrap_or(false)
+    }
 
     /// Send a frame via NDI for a specific sender name.
     /// Creates the sender instance on first call for a given name.
@@ -541,6 +562,13 @@ mod tests {
     fn ndi_manager_receiver_dimensions_out_of_bounds() {
         let mgr = NdiManager::new();
         assert!(mgr.receiver_dimensions(0).is_none());
+    }
+
+    #[test]
+    fn ndi_manager_is_connected_out_of_bounds() {
+        let mgr = NdiManager::new();
+        assert!(!mgr.is_connected(0));
+        assert!(!mgr.is_connected(999));
     }
 
     #[test]

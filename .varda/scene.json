@@ -14,24 +14,24 @@
             "type": "Shader",
             "path": "shaders/turing_patterns.fs",
             "params": {
-              "kill_rate": 0.062,
               "bg_color": [
                 1.0,
                 1.0,
                 1.0,
                 0.0
               ],
-              "feed_rate": 0.055,
-              "seed_size": 0.05,
-              "perturbation": 0.0,
-              "sim_speed": 0.35,
               "seed": 0.27,
+              "kill_rate": 0.062,
+              "seed_size": 0.05,
               "growth_color": [
                 0.0,
                 0.0,
                 0.0,
                 1.0
-              ]
+              ],
+              "feed_rate": 0.055,
+              "perturbation": 0.0,
+              "sim_speed": 0.35
             }
           },
           "effects": [
@@ -40,15 +40,15 @@
               "path": "shaders/edge_detect.fs",
               "enabled": true,
               "params": {
+                "sensitivity": 3.5,
                 "edge_color": [
                   1.0,
                   1.0,
                   1.0,
                   1.0
                 ],
-                "sensitivity": 3.5,
-                "bg_opacity": 0.0,
-                "use_source_color": 0.0
+                "use_source_color": 0.0,
+                "bg_opacity": 0.0
               }
             },
             {
@@ -56,12 +56,12 @@
               "path": "shaders/ripple.fs",
               "enabled": true,
               "params": {
+                "center_y": 0.5,
                 "anim_speed": 1.0,
-                "frequency": 15.0,
-                "decay": 2.0,
                 "ripple_amount": 0.02,
                 "center_x": 0.5,
-                "center_y": 0.5
+                "decay": 2.0,
+                "frequency": 15.0
               }
             },
             {
@@ -69,15 +69,15 @@
               "path": "shaders/edge_glow.fs",
               "enabled": true,
               "params": {
-                "show_original": true,
+                "edge_strength": 1.3,
                 "glow_color": [
                   1.0,
                   1.0,
                   1.0,
                   1.0
                 ],
-                "glow_amount": 0.2,
-                "edge_strength": 1.3
+                "show_original": true,
+                "glow_amount": 0.2
               }
             }
           ],
@@ -94,26 +94,26 @@
             "type": "Shader",
             "path": "shaders/voronoi.fs",
             "params": {
-              "style": 0.0,
               "anim_speed": 2.1,
+              "color2": [
+                0.9,
+                0.2,
+                0.3,
+                1.0
+              ],
               "color1": [
                 0.1,
                 0.4,
                 0.9,
                 1.0
               ],
-              "cell_count": 8.0,
+              "style": 0.0,
               "edge_width": 0.065,
+              "cell_count": 8.0,
               "edge_color": [
                 1.0,
                 1.0,
                 1.0,
-                1.0
-              ],
-              "color2": [
-                0.9,
-                0.2,
-                0.3,
                 1.0
               ]
             }
@@ -126,8 +126,8 @@
               "params": {
                 "hue_shift": 0.55,
                 "auto_cycle": false,
-                "saturation": 1.0,
-                "cycle_speed": 0.5
+                "cycle_speed": 0.5,
+                "saturation": 1.0
               }
             }
           ],
@@ -144,10 +144,10 @@
           "path": "shaders/kaleidoscope.fs",
           "enabled": true,
           "params": {
-            "center_x": 0.5,
             "center_y": 0.5,
             "rotation": 0.0,
             "segments": 2.0,
+            "center_x": 0.5,
             "zoom": 1.0
           }
         }
@@ -156,7 +156,7 @@
     {
       "uuid": "c6b715b4",
       "name": "Ch 1",
-      "opacity": 0.0,
+      "opacity": 1.0,
       "blend_mode": "normal",
       "decks": [
         {
@@ -166,33 +166,33 @@
             "type": "Shader",
             "path": "shaders/black_hole.fs",
             "params": {
-              "camera_speed": 0.3,
-              "shell_radius": 4.5,
-              "jet_speed": 1.0,
-              "crystal_size": 0.3,
-              "streak_count": 60.0,
-              "pulse_rate": 1.0,
-              "crystal_dist": 2.5,
-              "invert": 0.0,
-              "density": 2.5,
-              "bloom": 0.2,
-              "jet_width": 0.72,
-              "crystal_glow": 0.6,
-              "contrast": 1.3,
-              "color_mode": 0.0,
-              "hole_size": 0.2,
-              "orbit_radius": 6.0,
-              "streak_thin": 0.75,
-              "spin_speed": 0.5,
-              "distortion": 0.4,
-              "hue_shift": 0.0,
-              "equator_bias": 0.6,
               "orbit_tilt": 3.9,
-              "cloud_density": 0.75,
-              "jet_power": 0.7,
               "scatter": 0.5,
+              "crystal_size": 0.3,
+              "streak_thin": 0.75,
+              "invert": 0.0,
+              "shell_radius": 4.5,
+              "crystal_count": 0.0,
+              "cloud_density": 0.75,
               "jet_height": 6.0,
-              "crystal_count": 0.0
+              "pulse_rate": 1.0,
+              "crystal_glow": 0.6,
+              "crystal_dist": 2.5,
+              "density": 2.5,
+              "streak_count": 60.0,
+              "orbit_radius": 6.0,
+              "hole_size": 0.2,
+              "spin_speed": 0.5,
+              "equator_bias": 0.6,
+              "distortion": 0.4,
+              "color_mode": 0.0,
+              "jet_power": 0.7,
+              "hue_shift": 0.0,
+              "jet_speed": 1.0,
+              "bloom": 0.2,
+              "contrast": 1.3,
+              "jet_width": 0.72,
+              "camera_speed": 0.3
             }
           },
           "effects": [],
@@ -209,24 +209,24 @@
             "type": "Shader",
             "path": "shaders/char_cycle.fs",
             "params": {
+              "speed_variation": 0.5,
+              "offset_amount": 10.7,
+              "table_mode": 3.0,
               "speed": 0.1,
-              "bg_color": [
-                0.0,
-                0.0,
-                0.0,
-                1.0
-              ],
+              "char_set": 11.0,
               "fg_color": [
                 1.0,
                 1.0,
                 1.0,
                 1.0
               ],
-              "speed_variation": 0.5,
-              "offset_amount": 10.7,
               "grid_size": 5.0,
-              "table_mode": 3.0,
-              "char_set": 11.0
+              "bg_color": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
             }
           },
           "effects": [
@@ -235,13 +235,13 @@
               "path": "shaders/scatter_popup.fs",
               "enabled": true,
               "params": {
-                "popup_scale": 0.15,
-                "pop_speed": 2.3,
+                "bg_mode": 0.0,
                 "popup_count": 16.0,
                 "min_radius": 0.25,
+                "popup_scale": 0.15,
                 "max_radius": 0.45,
-                "opacity": 0.9,
-                "bg_mode": 0.0
+                "pop_speed": 2.3,
+                "opacity": 0.9
               }
             },
             {
@@ -249,15 +249,15 @@
               "path": "shaders/chroma_key.fs",
               "enabled": true,
               "params": {
-                "opacity": 0.0,
-                "tolerance": 0.15,
                 "target_color": [
                   0.0,
                   0.0,
                   0.0,
                   1.0
                 ],
-                "softness": 0.1
+                "opacity": 0.0,
+                "softness": 0.1,
+                "tolerance": 0.15
               }
             }
           ],
@@ -273,7 +273,7 @@
     {
       "uuid": "13604ff3",
       "name": "Ch 2",
-      "opacity": 1.0,
+      "opacity": 0.0,
       "blend_mode": "normal",
       "decks": [
         {
@@ -289,8 +289,41 @@
               "path": "shaders/chroma_flow.fs",
               "enabled": true,
               "params": {
-                "group_angle_1": 45.0,
+                "displacement_falloff": 0.2,
+                "displacement_amount": 0.1,
+                "group_angle_4": 180.0,
+                "palette_size": 4.0,
+                "group_angle_3": 135.0,
+                "group_speed_1": 1.0,
+                "flow_scale": 1.0,
                 "group_angle_2": 90.0,
+                "group_angle_1": 45.0,
+                "palette_7": [
+                  0.5,
+                  0.0,
+                  1.0,
+                  1.0
+                ],
+                "color_preservation": 1.0,
+                "edge_blend_width": 0.05,
+                "flow_type": 0.0,
+                "group_angle_7": 315.0,
+                "group_speed_6": 1.0,
+                "group_speed_5": 1.0,
+                "palette_4": [
+                  1.0,
+                  0.0,
+                  1.0,
+                  1.0
+                ],
+                "group_angle_0": 0.0,
+                "palette_0": [
+                  1.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "palette_mode": false,
                 "palette_2": [
                   0.0,
                   1.0,
@@ -303,57 +336,8 @@
                   0.0,
                   1.0
                 ],
-                "group_angle_3": 135.0,
-                "flow_speed": 0.5,
-                "group_speed_0": 1.0,
                 "group_speed_2": 1.0,
-                "palette_size": 4.0,
-                "group_speed_6": 1.0,
-                "palette_4": [
-                  1.0,
-                  0.0,
-                  1.0,
-                  1.0
-                ],
-                "group_speed_5": 1.0,
-                "snap_hardness": 0.7,
-                "palette_7": [
-                  0.5,
-                  0.0,
-                  1.0,
-                  1.0
-                ],
-                "group_angle_0": 0.0,
-                "flow_scale": 1.0,
-                "group_angle_4": 180.0,
-                "edge_blend_width": 0.05,
-                "displacement_falloff": 0.2,
-                "group_angle_7": 315.0,
-                "group_speed_1": 1.0,
                 "group_speed_7": 1.0,
-                "palette_1": [
-                  0.0,
-                  0.5,
-                  1.0,
-                  1.0
-                ],
-                "color_preservation": 1.0,
-                "group_speed_3": 1.0,
-                "palette_0": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  1.0
-                ],
-                "group_angle_5": 225.0,
-                "group_angle_6": 270.0,
-                "palette_6": [
-                  1.0,
-                  0.5,
-                  0.0,
-                  1.0
-                ],
-                "flow_type": 0.0,
                 "group_speed_4": 1.0,
                 "palette_5": [
                   0.0,
@@ -361,14 +345,30 @@
                   1.0,
                   1.0
                 ],
-                "palette_mode": false,
-                "displacement_amount": 0.1,
+                "group_speed_3": 1.0,
+                "group_speed_0": 1.0,
+                "group_angle_6": 270.0,
+                "group_angle_5": 225.0,
                 "background_fill": [
                   0.0,
                   0.0,
                   0.0,
                   0.0
-                ]
+                ],
+                "snap_hardness": 0.7,
+                "palette_1": [
+                  0.0,
+                  0.5,
+                  1.0,
+                  1.0
+                ],
+                "palette_6": [
+                  1.0,
+                  0.5,
+                  0.0,
+                  1.0
+                ],
+                "flow_speed": 0.5
               }
             }
           ],
@@ -385,26 +385,26 @@
             "type": "Shader",
             "path": "shaders/tas_psychedelic.fs",
             "params": {
-              "slither_freq": 1.0,
-              "snake_length": 0.6,
+              "snake_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "move_speed": 1.0,
               "move_range": 1.0,
               "slither_amp": 1.0,
+              "anim_speed": 0.5,
+              "slither_freq": 1.0,
               "bg_color": [
                 0.0,
                 0.0,
                 0.0,
                 0.0
               ],
-              "move_speed": 1.0,
               "snake_thickness": 0.02,
               "snake_density": 8.0,
-              "anim_speed": 0.5,
-              "snake_color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ]
+              "snake_length": 0.6
             }
           },
           "effects": [
@@ -413,11 +413,11 @@
               "path": "shaders/kaleidoscope.fs",
               "enabled": true,
               "params": {
-                "center_y": 0.5,
-                "zoom": 0.65,
-                "segments": 2.0,
                 "rotation": 0.0,
-                "center_x": 0.5
+                "segments": 2.0,
+                "center_y": 0.5,
+                "center_x": 0.5,
+                "zoom": 0.65
               }
             }
           ],
@@ -433,7 +433,7 @@
     {
       "uuid": "3ca2171d",
       "name": "Ch 3",
-      "opacity": 0.0,
+      "opacity": 0.36,
       "blend_mode": "normal",
       "decks": [
         {
@@ -449,9 +449,9 @@
               "path": "shaders/zoom.fs",
               "enabled": true,
               "params": {
-                "center_y": 0.5,
                 "zoom_amount": 1.5,
-                "center_x": 0.5
+                "center_x": 0.5,
+                "center_y": 0.5
               }
             },
             {
@@ -459,10 +459,10 @@
               "path": "shaders/hue_shift.fs",
               "enabled": true,
               "params": {
+                "saturation": 1.0,
                 "hue_shift": 0.5,
-                "cycle_speed": 0.5,
                 "auto_cycle": false,
-                "saturation": 1.0
+                "cycle_speed": 0.5
               }
             }
           ],
@@ -488,11 +488,7 @@
             "type": "Shader",
             "path": "shaders/dark_matter.fs",
             "params": {
-              "zoom": 0.9,
-              "speed": 0.7,
-              "rotation": 0.01,
-              "web_scale": 8.0,
-              "brightness": 0.6,
+              "contrast": 3.6,
               "seed": 0.0,
               "bg_color": [
                 0.0,
@@ -500,22 +496,26 @@
                 0.0,
                 1.0
               ],
-              "node_glow": 2.6,
-              "color_filament": [
-                0.7,
-                0.3,
-                0.9,
-                1.0
-              ],
               "warp": 0.5,
-              "contrast": 3.6,
+              "node_glow": 2.6,
+              "rotation": 0.01,
               "color_node": [
                 1.0,
                 0.7,
                 0.15,
                 1.0
               ],
-              "scale_mult": 1.2
+              "color_filament": [
+                0.7,
+                0.3,
+                0.9,
+                1.0
+              ],
+              "brightness": 0.6,
+              "speed": 0.7,
+              "scale_mult": 1.2,
+              "zoom": 0.9,
+              "web_scale": 8.0
             }
           },
           "effects": [
@@ -524,11 +524,11 @@
               "path": "shaders/kaleidoscope.fs",
               "enabled": true,
               "params": {
-                "center_x": 0.5,
-                "center_y": 0.5,
+                "zoom": 1.0,
                 "rotation": 0.0,
                 "segments": 2.0,
-                "zoom": 1.0
+                "center_x": 0.5,
+                "center_y": 0.5
               }
             }
           ],
@@ -554,11 +554,9 @@
             "type": "Shader",
             "path": "shaders/graph_network.fs",
             "params": {
-              "edge_width": 0.003,
-              "node_size": 0.013,
-              "stickiness": 0.5,
-              "connect_dist": 0.5,
+              "max_connections": 5.0,
               "node_count": 28.0,
+              "tracking": 0.28,
               "bg_color": [
                 0.0,
                 0.0,
@@ -566,18 +564,20 @@
                 0.0
               ],
               "hue_shift": 0.0,
-              "tracking": 0.28,
-              "speed": 0.5,
-              "zoom": 0.3,
+              "node_size": 0.013,
+              "stickiness": 0.5,
+              "rotation": 0.0,
+              "connect_dist": 0.5,
               "color_base": [
                 0.9767008,
                 0.9767008,
                 0.9767008,
                 1.0
               ],
+              "zoom": 0.3,
+              "edge_width": 0.003,
               "attraction": 0.5,
-              "max_connections": 5.0,
-              "rotation": 0.0
+              "speed": 0.5
             }
           },
           "effects": [],
@@ -667,78 +667,24 @@
       }
     ],
     "assignments": {
-      "deck_ddde6acd:crystal_dist": [],
-      "fx_5e20c625:hue_shift": [
+      "deck_ddde6acd:cloud_density": [],
+      "deck_40c44853:sim_speed": [
         {
-          "source_id": "cd9211c8",
+          "source_id": "3a0109d3",
           "amount": 0.5,
           "component": null
         },
         {
-          "source_id": "cd9211c8",
+          "source_id": "3a0109d3",
           "amount": 0.5,
           "component": null
         }
       ],
-      "deck_3acc92df:shell_radius": [
-        {
-          "source_id": "174e91c7",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_e7ab541a:fx1:bg_mode": [],
-      "deck_6ba53879:fx0:shadow_g": [],
-      "deck_6ba53879:fx0:shadow_r": [],
-      "deck_2fb377fc:grid_density": [],
-      "deck_e7ab541a:grid_size": [],
-      "deck_ddde6acd:streak_thin": [],
       "deck_4c523e98:glow_amount": [],
-      "deck_9d226b11:fx0:group_speed_3": [],
-      "deck_4c523e98:pattern": [],
-      "deck_4c523e98:layers": [],
-      "deck_1ea42b09:char_set": [
-        {
-          "source_id": "4a49268c",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_ddde6acd:pulse_rate": [],
+      "deck_9d226b11:fx2:hue_shift": [],
+      "deck_ddde6acd:camera_speed": [],
+      "deck_e7ab541a:speed_variation": [],
       "deck_9d226b11:fx0:group_speed_5": [],
-      "deck_d34acfbd:anim_speed": [],
-      "fx_88ed3d1e:hue_shift": [
-        {
-          "source_id": "4a49268c",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "cd9211c8",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_9d226b11:fx1:hue_shift": [],
-      "deck_275c7eda:edge_width": [
-        {
-          "source_id": "3a0109d3",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "3a0109d3",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_3acc92df:camera_speed": [
-        {
-          "source_id": "3a0109d3",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
       "deck_275c7eda:anim_speed": [
         {
           "source_id": "3a0109d3",
@@ -751,10 +697,22 @@
           "component": null
         }
       ],
-      "deck_9d226b11:fx3:rg": [],
-      "deck_ddde6acd:cloud_density": [],
-      "deck_ddde6acd:camera_speed": [],
-      "deck_9d226b11:fx2:hue_shift": [],
+      "deck_9d226b11:fx0:group_speed_4": [],
+      "deck_9d226b11:fx3:rb": [],
+      "deck_9d226b11:fx1:drip_speed": [],
+      "deck_d34acfbd:anim_speed": [],
+      "deck_1ea42b09:char_set": [
+        {
+          "source_id": "4a49268c",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_ddde6acd:streak_thin": [],
+      "deck_9d226b11:fx0:group_speed_3": [],
+      "deck_9d226b11:fx3:gr": [],
+      "deck_ddde6acd:spin_speed": [],
+      "deck_9d226b11:fx1:hue_shift": [],
       "deck_40c44853:perturbation": [
         {
           "source_id": "4a49268c",
@@ -777,10 +735,30 @@
           "component": null
         }
       ],
-      "deck_9d226b11:fx1:drip_speed": [],
-      "deck_9d226b11:fx3:rb": [],
-      "deck_e7ab541a:speed_variation": [],
-      "deck_40c44853:sim_speed": [
+      "deck_e7ab541a:fx1:bg_mode": [],
+      "deck_4c523e98:pattern": [],
+      "fx_88ed3d1e:hue_shift": [
+        {
+          "source_id": "4a49268c",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "cd9211c8",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_2fb377fc:grid_density": [],
+      "deck_e7ab541a:char_set": [],
+      "deck_3acc92df:shell_radius": [
+        {
+          "source_id": "174e91c7",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_275c7eda:edge_width": [
         {
           "source_id": "3a0109d3",
           "amount": 0.5,
@@ -792,11 +770,33 @@
           "component": null
         }
       ],
-      "deck_e7ab541a:char_set": [],
-      "deck_ddde6acd:spin_speed": [],
-      "deck_9d226b11:fx0:group_speed_4": [],
+      "deck_e7ab541a:grid_size": [],
+      "deck_4c523e98:layers": [],
+      "deck_3acc92df:camera_speed": [
+        {
+          "source_id": "3a0109d3",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
       "deck_6ba53879:membrane_amp": [],
-      "deck_9d226b11:fx3:gr": []
+      "deck_6ba53879:fx0:shadow_g": [],
+      "deck_6ba53879:fx0:shadow_r": [],
+      "fx_5e20c625:hue_shift": [
+        {
+          "source_id": "cd9211c8",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "cd9211c8",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_ddde6acd:pulse_rate": [],
+      "deck_ddde6acd:crystal_dist": [],
+      "deck_9d226b11:fx3:rg": []
     }
   },
   "transition_sequences": [

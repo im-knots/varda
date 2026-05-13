@@ -3,9 +3,9 @@
   "snap": false,
   "library_panel_open": true,
   "right_panel_open": true,
-  "stage_editor_open": true,
+  "stage_editor_open": false,
   "dome_preview_open": true,
-  "dome_mode_active": true,
+  "dome_mode_active": false,
   "dome_preset": "Triple",
   "dome_geometry": {
     "radius": 1.98,
@@ -11981,21 +11981,15 @@
   },
   "outputs": [
     {
-      "uuid": "9e1ac039",
+      "uuid": "615d3ec8",
       "name": "Output 1",
       "target": {
-        "type": "windowed"
+        "type": "srt_stream",
+        "url": "srt://0.0.0.0:9002",
+        "codec": "H.264"
       },
       "surface_assignments": [],
-      "window_position": [
-        1080,
-        170
-      ],
-      "window_size": [
-        1280,
-        720
-      ],
-      "edge_blend_mode": "Auto",
+      "edge_blend_mode": "Manual",
       "edge_blend": {
         "left": {
           "enabled": false,

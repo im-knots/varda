@@ -43,6 +43,8 @@ struct ActiveCamera {
     frame_data: Arc<Mutex<Option<Vec<u8>>>>,
     /// Signal to stop the capture thread.
     stop_flag: Arc<AtomicBool>,
+    /// Whether the camera is actively producing frames.
+    connected: Arc<AtomicBool>,
     /// Capture thread handle.
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -163,6 +165,8 @@ impl CameraManager {
         let frame_data_tx = Arc::clone(&frame_data);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop_flag);
+        let connected = Arc::new(AtomicBool::new(false));
+        let connected_clone = Arc::clone(&connected);
         let cam_id = id;
         let cam_w = width;
         let cam_h = height;
@@ -170,13 +174,13 @@ impl CameraManager {
         let thread = std::thread::Builder::new()
             .name(format!("camera-{}", cam_id))
             .spawn(move || {
-                Self::capture_loop(camera, cam_id, cam_w, cam_h, frame_data_tx, stop_clone);
+                Self::capture_loop(camera, cam_id, cam_w, cam_h, frame_data_tx, stop_clone, connected_clone);
             })
             .map_err(|e| anyhow::anyhow!("Failed to spawn camera thread: {}", e))?;
 
         self.active.insert(id, ActiveCamera {
             texture, texture_view, width, height, ref_count: 1,
-            frame_data, stop_flag, thread: Some(thread),
+            frame_data, stop_flag, connected, thread: Some(thread),
         });
 
         Ok((width, height))
@@ -190,11 +194,16 @@ impl CameraManager {
         h: u32,
         frame_data: Arc<Mutex<Option<Vec<u8>>>>,
         stop: Arc<AtomicBool>,
+        connected: Arc<AtomicBool>,
     ) {
         let expected_rgba = (w * h * 4) as usize;
         // Pre-allocated decode buffer — never freed, reused every frame
         let mut rgba_buf = vec![0u8; expected_rgba];
         let mut frame_count: u64 = 0;
+        let mut consecutive_errors: u64 = 0;
+        let mut backoff_us: u64 = 500; // 500µs initial backoff
+        const MAX_BACKOFF_US: u64 = 500_000; // 500ms cap
+        const ERROR_THRESHOLD: u64 = 100;
         let start = std::time::Instant::now();
 
         log::info!("Camera {} capture thread started ({}x{})", cam_id, w, h);
@@ -203,7 +212,13 @@ impl CameraManager {
             let buf = match camera.frame() {
                 Ok(b) => b,
                 Err(_) => {
-                    std::thread::sleep(std::time::Duration::from_micros(500));
+                    consecutive_errors += 1;
+                    if consecutive_errors == ERROR_THRESHOLD {
+                        log::warn!("Camera {}: {} consecutive frame errors — marking disconnected", cam_id, ERROR_THRESHOLD);
+                        connected.store(false, Ordering::SeqCst);
+                    }
+                    std::thread::sleep(std::time::Duration::from_micros(backoff_us));
+                    backoff_us = (backoff_us * 2).min(MAX_BACKOFF_US);
                     continue;
                 }
             };
@@ -260,6 +275,10 @@ impl CameraManager {
             };
 
             if ok {
+                consecutive_errors = 0;
+                backoff_us = 500;
+                connected.store(true, Ordering::SeqCst);
+
                 // Swap decoded frame into shared slot (fast — just pointer swap)
                 if let Ok(mut lock) = frame_data.lock() {
                     let new_buf = std::mem::replace(&mut rgba_buf, Vec::new());
@@ -278,6 +297,14 @@ impl CameraManager {
                     log::debug!("Camera {}: {:.1} fps ({} frames in {:.1}s, fmt={:?})",
                         cam_id, fps, frame_count, elapsed, fmt);
                 }
+            } else {
+                consecutive_errors += 1;
+                if consecutive_errors == ERROR_THRESHOLD {
+                    log::warn!("Camera {}: {} consecutive decode errors — marking disconnected", cam_id, ERROR_THRESHOLD);
+                    connected.store(false, Ordering::SeqCst);
+                }
+                std::thread::sleep(std::time::Duration::from_micros(backoff_us));
+                backoff_us = (backoff_us * 2).min(MAX_BACKOFF_US);
             }
         }
 
@@ -311,6 +338,15 @@ impl CameraManager {
     /// Get the resolution of an active camera.
     pub fn resolution(&self, id: CameraId) -> Option<(u32, u32)> {
         self.active.get(&id).map(|a| (a.width, a.height))
+    }
+
+    /// Check if a camera is currently connected and producing frames.
+    /// Returns `false` if the camera is not active or is experiencing errors.
+    pub fn is_connected(&self, id: CameraId) -> bool {
+        self.active
+            .get(&id)
+            .map(|a| a.connected.load(Ordering::SeqCst))
+            .unwrap_or(false)
     }
 
     /// Upload latest camera frames to GPU. Non-blocking — just grabs whatever

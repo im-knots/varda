@@ -8,7 +8,7 @@
         {"NAME": "rotation",       "TYPE": "float", "DEFAULT": 0.0,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Rotation"},
         {"NAME": "zoom",           "TYPE": "float", "DEFAULT": 1.0,  "MIN": 0.3,  "MAX": 3.0,  "LABEL": "Zoom"},
         {"NAME": "tracking",       "TYPE": "float", "DEFAULT": 0.0,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Cluster Tracking"},
-        {"NAME": "node_count",     "TYPE": "float", "DEFAULT": 32.0, "MIN": 3.0,  "MAX": 64.0, "LABEL": "Node Count"},
+        {"NAME": "node_count",     "TYPE": "float", "DEFAULT": 32.0, "MIN": 3.0,  "MAX": 48.0, "LABEL": "Node Count"},
         {"NAME": "connect_dist",   "TYPE": "float", "DEFAULT": 0.5,  "MIN": 0.1,  "MAX": 1.5,  "LABEL": "Connect Distance"},
         {"NAME": "max_connections","TYPE": "float", "DEFAULT": 6.0,  "MIN": 1.0,  "MAX": 20.0, "LABEL": "Max Connections"},
         {"NAME": "stickiness",     "TYPE": "float", "DEFAULT": 0.5,  "MIN": 0.0,  "MAX": 1.0,  "LABEL": "Stickiness"},
@@ -125,7 +125,7 @@ float pairRestLen(int i, int j) {
     return connect_dist * mix(0.7, 0.1 + 0.3 * h, stickiness);
 }
 
-const int MAX_NODES = 64;
+const int MAX_NODES = 48;
 
 void main() {
     // Uniform guard — keep all ISF uniforms alive
@@ -301,16 +301,30 @@ void main() {
         int connCounts[MAX_NODES];
         for (int i = 0; i < MAX_NODES; i++) connCounts[i] = 0;
 
+        // Visible radius: edge line vanishes beyond edge_width*1.5,
+        // glow exp(-de*200)*0.06 < 0.001 when de > 0.03
+        float edgeCutoff = max(edge_width * 1.5, 0.03);
+
         for (int i = 0; i < MAX_NODES; i++) {
             if (i >= numNodes) break;
             for (int j = i + 1; j < MAX_NODES; j++) {
                 if (j >= numNodes) break;
+
+                // AABB early-out: skip if pixel is far from both endpoints
+                vec2 mn = min(positions[i], positions[j]) - edgeCutoff;
+                vec2 mx = max(positions[i], positions[j]) + edgeCutoff;
+                if (p.x < mn.x || p.x > mx.x || p.y < mn.y || p.y > mx.y) continue;
+
                 float dist = length(positions[i] - positions[j]);
                 if (dist > connect_dist) continue;
                 if (connCounts[i] >= maxConn || connCounts[j] >= maxConn) continue;
 
                 connCounts[i]++;
                 connCounts[j]++;
+
+                // Distance to line segment — skip color math if too far
+                float de = dSegment(p, positions[i], positions[j]);
+                if (de > edgeCutoff) continue;
 
                 float edgeFade = 1.0 - dist / connect_dist;
                 edgeFade *= edgeFade;
@@ -319,7 +333,6 @@ void main() {
                 float h = fract(baseHue + eh * hue_shift * 5.0);
                 vec3 edgeCol = hsv2rgb(vec3(h, baseHSV.y, baseHSV.z));
 
-                float de = dSegment(p, positions[i], positions[j]);
                 float edgeLine = smoothstep(edge_width * 1.5, edge_width * 0.3, de) * edgeFade * 0.7;
                 float edgeGlow = exp(-de * 200.0) * edgeFade * 0.06;
                 col += edgeCol * (edgeLine + edgeGlow);
@@ -327,13 +340,19 @@ void main() {
         }
 
         // --- Nodes ---
+        // Glow becomes negligible beyond ~3x node_size
+        float nodeCutoff = node_size * 4.0;
+        float nodeCutoffSq = nodeCutoff * nodeCutoff;
         for (int i = 0; i < MAX_NODES; i++) {
             if (i >= numNodes) break;
-            float nd = length(p - positions[i]);
+            vec2 diff = p - positions[i];
+            float ndSq = dot(diff, diff);
+            if (ndSq > nodeCutoffSq) continue;
+            float nd = sqrt(ndSq);
             float h = fract(baseHue + float(i) * hue_shift);
             vec3 nodeCol = hsv2rgb(vec3(h, baseHSV.y, baseHSV.z));
             float core = smoothstep(node_size * 0.5, node_size * 0.1, nd);
-            float glow = exp(-nd * nd / (node_size * node_size * 3.0)) * 0.3;
+            float glow = exp(-ndSq / (node_size * node_size * 3.0)) * 0.3;
             col += nodeCol * (core + glow);
         }
 
