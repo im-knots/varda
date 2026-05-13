@@ -9,6 +9,19 @@ use utoipa::ToSchema;
 use crate::engine::{CommandResult, EngineCommand};
 use crate::usecases::api::{SharedState, command_response};
 
+/// Strip `..` components from a path to prevent directory traversal attacks.
+/// If the path can be canonicalized (i.e. it exists), use the canonical form;
+/// otherwise strip `..` components manually and return the cleaned path.
+fn sanitize_path(p: std::path::PathBuf) -> std::path::PathBuf {
+    if let Ok(canonical) = p.canonicalize() {
+        return canonical;
+    }
+    // File doesn't exist yet or can't be resolved — strip traversal components
+    p.components()
+        .filter(|c| !matches!(c, std::path::Component::ParentDir))
+        .collect()
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct AddShaderDeckBody {
     /// Name of the shader to load into the new deck.
@@ -188,7 +201,8 @@ pub async fn add_image_deck(
     Path(ch_idx): Path<usize>,
     Json(body): Json<AddImageDeckBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::AddImageDeck { channel_idx: ch_idx, path: body.path }).await {
+    let path = sanitize_path(body.path);
+    match state.send_command(EngineCommand::AddImageDeck { channel_idx: ch_idx, path }).await {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -200,7 +214,8 @@ pub async fn add_video_deck(
     Path(ch_idx): Path<usize>,
     Json(body): Json<AddVideoDeckBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::AddVideoDeck { channel_idx: ch_idx, path: body.path }).await {
+    let path = sanitize_path(body.path);
+    match state.send_command(EngineCommand::AddVideoDeck { channel_idx: ch_idx, path }).await {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }

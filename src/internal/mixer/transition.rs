@@ -161,7 +161,7 @@ pub struct TransitionEffect {
 impl Mixer {
     /// Start a timed auto-crossfade to the target value
     pub fn start_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing) {
-        let target = target.clamp(0.0, 1.0);
+        let target = if target.is_finite() { target.clamp(0.0, 1.0) } else { 0.5 };
         if (self.crossfader - target).abs() < 0.001 {
             return;
         }
@@ -173,7 +173,7 @@ impl Mixer {
 
     /// Start a beat-synced crossfade (waits for next beat boundary, then transitions over N beats)
     pub fn start_beat_crossfade(&mut self, target: f32, beats: f32) {
-        let target = target.clamp(0.0, 1.0);
+        let target = if target.is_finite() { target.clamp(0.0, 1.0) } else { 0.5 };
         self.auto_crossfade = None;
         self.beat_sync_crossfade = Some(BeatSyncCrossfade {
             to: target,
@@ -186,7 +186,7 @@ impl Mixer {
 
     /// Snap crossfader to a value immediately (cancels any in-progress transitions)
     pub fn snap_crossfader(&mut self, value: f32) {
-        self.crossfader = value.clamp(0.0, 1.0);
+        self.crossfader = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.5 };
         self.auto_crossfade = None;
         self.beat_sync_crossfade = None;
     }
@@ -314,10 +314,14 @@ impl Mixer {
                 }
                 StepKind::GoTo { step_index } => {
                     let target = *step_index;
-                    if target < num_steps {
+                    if target < num_steps && target != seq.state.current_step {
                         seq.state.current_step = target;
                         seq.state.step_elapsed = 0.0;
                     } else {
+                        // Self-referencing GoTo or out-of-bounds → stop to prevent infinite loop
+                        if target == seq.state.current_step {
+                            log::warn!("Transition sequence {}: GoTo step {} references itself, stopping", seq_idx, target);
+                        }
                         seq.state.playing = false;
                     }
                     None
@@ -326,9 +330,11 @@ impl Mixer {
 
             if let Some((from, to, eased, completed)) = mutation {
                 if channel_count == 2 {
-                    let from_val = if from == 0 { 0.0f32 } else { 1.0f32 };
-                    let to_val = if to == 0 { 0.0f32 } else { 1.0f32 };
-                    self.crossfader = if completed { to_val } else { from_val + (to_val - from_val) * eased };
+                    if from < channel_count && to < channel_count {
+                        let from_val = if from == 0 { 0.0f32 } else { 1.0f32 };
+                        let to_val = if to == 0 { 0.0f32 } else { 1.0f32 };
+                        self.crossfader = if completed { to_val } else { from_val + (to_val - from_val) * eased };
+                    }
                 } else {
                     if completed {
                         if from < channel_count { self.channels[from].opacity = 0.0; }

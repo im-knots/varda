@@ -98,6 +98,9 @@ impl VardaApp {
 
         // Store dome setup on surface manager
         self.surface_manager.dome_setup = Some(setup.clone());
+
+        // Ensure the domemaster renderer is created and enabled
+        self.ensure_domemaster();
     }
 }
 
@@ -110,7 +113,11 @@ fn convex_hull_of_uvs(mesh: &crate::renderer::warp::WarpMesh) -> Vec<[f32; 2]> {
     }
 
     // Andrew's monotone chain convex hull algorithm
-    points.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap().then(a[1].partial_cmp(&b[1]).unwrap()));
+    points.sort_by(|a, b| {
+        a[0].partial_cmp(&b[0])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a[1].partial_cmp(&b[1]).unwrap_or(std::cmp::Ordering::Equal))
+    });
     points.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
 
     if points.len() < 3 {
@@ -195,5 +202,52 @@ mod tests {
         };
         let hull = convex_hull_of_uvs(&mesh);
         assert_eq!(hull.len(), 2);
+    }
+
+    // ── Offensive: NaN float sort must not panic ──────────────────────
+
+    #[test]
+    fn convex_hull_nan_uv_does_not_panic() {
+        let mesh = WarpMesh {
+            cols: 3, rows: 2,
+            points: vec![
+                MeshPoint { position: [0.0, 0.0], uv: [f32::NAN, 0.0] },
+                MeshPoint { position: [1.0, 0.0], uv: [0.5, f32::NAN] },
+                MeshPoint { position: [0.0, 1.0], uv: [0.0, 1.0] },
+                MeshPoint { position: [1.0, 1.0], uv: [1.0, 1.0] },
+                MeshPoint { position: [0.5, 0.5], uv: [f32::NAN, f32::NAN] },
+                MeshPoint { position: [0.5, 0.0], uv: [0.3, 0.7] },
+            ],
+        };
+        // Must not panic — NaN comparisons fall back to Equal
+        let _hull = convex_hull_of_uvs(&mesh);
+    }
+
+    #[test]
+    fn convex_hull_all_nan_does_not_panic() {
+        let mesh = WarpMesh {
+            cols: 2, rows: 2,
+            points: vec![
+                MeshPoint { position: [0.0, 0.0], uv: [f32::NAN, f32::NAN] },
+                MeshPoint { position: [1.0, 0.0], uv: [f32::NAN, f32::NAN] },
+                MeshPoint { position: [0.0, 1.0], uv: [f32::NAN, f32::NAN] },
+                MeshPoint { position: [1.0, 1.0], uv: [f32::NAN, f32::NAN] },
+            ],
+        };
+        let _hull = convex_hull_of_uvs(&mesh);
+    }
+
+    #[test]
+    fn convex_hull_infinity_uv_does_not_panic() {
+        let mesh = WarpMesh {
+            cols: 2, rows: 2,
+            points: vec![
+                MeshPoint { position: [0.0, 0.0], uv: [f32::INFINITY, 0.0] },
+                MeshPoint { position: [1.0, 0.0], uv: [f32::NEG_INFINITY, 1.0] },
+                MeshPoint { position: [0.0, 1.0], uv: [0.0, f32::INFINITY] },
+                MeshPoint { position: [1.0, 1.0], uv: [1.0, 1.0] },
+            ],
+        };
+        let _hull = convex_hull_of_uvs(&mesh);
     }
 }

@@ -96,6 +96,13 @@ impl VardaApp {
                     }
                     log::info!("Loaded stage with {} surfaces, {} outputs",
                         self.surface_manager.surfaces.len(), prefs.outputs.len());
+
+                    // If any surface uses Domemaster source, ensure the renderer exists
+                    let has_dome_surfaces = self.surface_manager.surfaces.iter()
+                        .any(|s| matches!(s.source, crate::renderer::context::OutputSource::Domemaster));
+                    if has_dome_surfaces {
+                        self.ensure_domemaster();
+                    }
                 }
                 Err(e) => log::warn!("Failed to load stage: {}", e),
             }

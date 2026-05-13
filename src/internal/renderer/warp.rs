@@ -202,7 +202,7 @@ fn gauss_solve_8x8(a: &mut [[f64; 8]; 8], b: &mut [f64; 8]) -> [f64; 8] {
 
         let pivot = a[col][col];
         if pivot.abs() < 1e-12 {
-            // Degenerate — return identity
+            log::warn!("Degenerate homography: pivot near zero at column {col}, returning identity warp");
             return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
         }
 
@@ -278,6 +278,9 @@ impl WarpMesh {
         let rows = dims[1];
         if cols < 2 || rows < 2 {
             anyhow::bail!("XYUV CSV: mesh dimensions must be ≥ 2, got {}×{}", cols, rows);
+        }
+        if cols > 10_000 || rows > 10_000 {
+            anyhow::bail!("XYUV CSV: mesh dimensions too large (max 10000×10000), got {}×{}", cols, rows);
         }
 
         let expected = (cols * rows) as usize;
@@ -572,5 +575,78 @@ mod tests {
     fn format_detection_unknown() {
         assert_eq!(MeshFormat::from_extension(std::path::Path::new("mesh.png")), None);
         assert_eq!(MeshFormat::from_extension(std::path::Path::new("noext")), None);
+    }
+
+    // ── Chaos Tests Round 2: NaN/Inf warp mesh coordinates ──────────────
+
+    #[test]
+    fn chaos_csv_nan_coordinates_parse_successfully() {
+        // NaN parses as f32 via .parse() — filter_map drops it
+        let csv = "2 2\nNaN NaN NaN NaN 1.0\n1.0 0.0 1.0 0.0 1.0\n0.0 1.0 0.0 1.0 1.0\n1.0 1.0 1.0 1.0 1.0\n";
+        let result = WarpMesh::from_xyuv_csv(csv);
+        // "NaN" parses as f32::NAN via .parse::<f32>() — filter_map keeps it!
+        // But the mesh point count should still match
+        match result {
+            Ok(mesh) => {
+                assert_eq!(mesh.points.len(), 4);
+                // First point has NaN coords — verify they exist
+                assert!(mesh.points[0].position[0].is_nan() || mesh.points[0].position[0] == 0.0);
+            }
+            Err(_) => {
+                // If NaN lines are dropped (vals.len() < 4 after filter_map), count mismatch is OK
+            }
+        }
+    }
+
+    #[test]
+    fn chaos_csv_infinity_coordinates() {
+        let csv = "2 2\ninf inf inf inf 1.0\n1.0 0.0 1.0 0.0 1.0\n0.0 1.0 0.0 1.0 1.0\n1.0 1.0 1.0 1.0 1.0\n";
+        let result = WarpMesh::from_xyuv_csv(csv);
+        match result {
+            Ok(mesh) => {
+                assert_eq!(mesh.points.len(), 4);
+            }
+            Err(_) => {} // count mismatch is acceptable
+        }
+    }
+
+    #[test]
+    fn chaos_csv_all_garbage_lines() {
+        let csv = "2 2\nhello world foo bar\ngarbage in garbage out\nmore junk here\ntotally invalid\n";
+        let result = WarpMesh::from_xyuv_csv(csv);
+        assert!(result.is_err(), "all-garbage CSV should fail point count check");
+    }
+
+    #[test]
+    fn chaos_csv_partial_fields() {
+        // Lines with fewer than 4 parseable floats should be skipped
+        let csv = "2 2\n0.0 0.0\n1.0\n0.0 0.0 0.0\n1.0 1.0 1.0 1.0 1.0\n";
+        let result = WarpMesh::from_xyuv_csv(csv);
+        assert!(result.is_err(), "partial fields should result in count mismatch");
+    }
+
+    #[test]
+    fn chaos_csv_huge_dimensions() {
+        let csv = "1000000 1000000\n0.0 0.0 0.0 0.0 1.0\n";
+        let result = WarpMesh::from_xyuv_csv(csv);
+        assert!(result.is_err(), "huge dimensions should be rejected (overflow protection)");
+    }
+
+    #[test]
+    fn chaos_csv_zero_dimensions() {
+        let csv = "0 0\n";
+        let result = WarpMesh::from_xyuv_csv(csv);
+        assert!(result.is_err(), "zero dimensions should be rejected");
+    }
+
+    #[test]
+    fn chaos_csv_mixed_valid_invalid() {
+        let csv = "2 2\n0.0 0.0 0.0 0.0 1.0\nNaN 0.0 NaN 0.0 1.0\n0.0 1.0 0.0 1.0 1.0\n1.0 1.0 1.0 1.0 1.0\n";
+        let result = WarpMesh::from_xyuv_csv(csv);
+        // NaN parses fine as f32, so all 4 points should be present
+        match result {
+            Ok(mesh) => assert_eq!(mesh.points.len(), 4),
+            Err(_) => {} // if NaN fields are dropped, count mismatch
+        }
     }
 }

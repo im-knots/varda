@@ -793,6 +793,14 @@ impl UIRunner {
         let _ = context.device.poll(wgpu::PollType::Poll);
         let output = match win_surface.surface.get_current_texture() {
             Ok(o) => o,
+            Err(wgpu::SurfaceError::Outdated) => {
+                log::warn!("UI surface outdated, reconfiguring");
+                win_surface.surface.configure(&context.device, &win_surface.surface_config);
+                match win_surface.surface.get_current_texture() {
+                    Ok(o) => o,
+                    Err(e) => { log::error!("Failed to get surface texture after reconfigure: {}", e); return; }
+                }
+            }
             Err(e) => { log::error!("Failed to get surface texture: {}", e); return; }
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());

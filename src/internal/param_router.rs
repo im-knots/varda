@@ -19,7 +19,8 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         }
         ["deck", uuid, "opacity"] => {
             if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                mixer.channels_mut()[ch].decks[dk].opacity = value.clamp(0.0, 1.0);
+                let v = if value.is_finite() { value.clamp(0.0, 1.0) } else { 1.0 };
+                mixer.channels_mut()[ch].decks[dk].opacity = v;
                 return true;
             }
             false
@@ -98,7 +99,8 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         }
         ["ch", ch_uuid, "opacity"] => {
             if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
-                mixer.channels_mut()[ch].opacity = value.clamp(0.0, 1.0);
+                let v = if value.is_finite() { value.clamp(0.0, 1.0) } else { 1.0 };
+                mixer.channels_mut()[ch].opacity = v;
                 return true;
             }
             false

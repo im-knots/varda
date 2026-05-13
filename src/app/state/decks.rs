@@ -19,6 +19,14 @@ impl VardaApp {
 
         // Remove deck if requested
         if let Some((ch_idx, deck_idx)) = actions.deck_to_remove {
+            // Capture UUIDs before removal for modulation cleanup
+            let deck_uuid = mixer.channels().get(ch_idx)
+                .and_then(|ch| ch.decks.get(deck_idx))
+                .map(|slot| slot.deck.uuid().to_string());
+            let effect_uuids: Vec<String> = mixer.channels().get(ch_idx)
+                .and_then(|ch| ch.decks.get(deck_idx))
+                .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
+                .unwrap_or_default();
             // Release external resources before removal
             if let Some(ch) = mixer.channels().get(ch_idx) {
                 if let Some(slot) = ch.decks.get(deck_idx) {
@@ -28,11 +36,20 @@ impl VardaApp {
                     if let Some(idx) = slot.deck.srt_receiver_idx() {
                         self.stream_manager.stop_receive(idx);
                     }
+                    if let Some(idx) = slot.deck.ndi_receiver_idx() {
+                        self.ndi_manager.stop_receive(idx);
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let Some(idx) = slot.deck.syphon_client_idx() {
+                        self.syphon_manager.stop_receive(idx);
+                    }
                 }
             }
+            let mut did_remove = false;
             if let Some(ch) = mixer.channel_mut(ch_idx) {
                 if deck_idx < ch.decks.len() {
                     ch.remove_deck(deck_idx);
+                    did_remove = true;
                     log::info!("Removed deck {} from channel {}", deck_idx, ch_idx);
 
                     let keys_to_remove: Vec<_> = deck_preview_textures.keys()
@@ -52,6 +69,15 @@ impl VardaApp {
                         );
                         deck_preview_textures.insert((ch_idx, new_idx), texture_id);
                     }
+                }
+            }
+            // Clean up orphaned modulation assignments (outside channel borrow)
+            if did_remove {
+                if let Some(ref uuid) = deck_uuid {
+                    mixer.modulation_mut().remove_assignments_with_prefix(&format!("deck_{}:", uuid));
+                }
+                for fx_uuid in &effect_uuids {
+                    mixer.modulation_mut().remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
                 }
             }
         }

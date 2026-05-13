@@ -701,8 +701,7 @@ impl MidiConfig {
         }
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize MIDI config")?;
-        std::fs::write(path.as_ref(), content)
-            .with_context(|| format!("Failed to write MIDI config: {}", path.as_ref().display()))?;
+        crate::persistence::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }

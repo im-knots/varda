@@ -794,4 +794,221 @@ mod tests {
         // No assignment should have been created
         assert!(!engine.has_modulation("some_param"));
     }
+
+    // ── Chaos Tests Round 2: LFO edge values ────────────────────────────
+
+    #[test]
+    fn chaos_lfo_zero_frequency_does_not_nan() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Sine, frequency: 0.0, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        for i in 0..100 {
+            let val = lfo.calculate(i as f32 * 0.01, 0.01, &audio, 0.0);
+            assert!(val.is_finite(), "LFO freq=0 produced non-finite: {val}");
+        }
+    }
+
+    #[test]
+    fn chaos_lfo_infinity_frequency_does_not_panic() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Sine, frequency: f32::INFINITY, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
+        // (Inf * 1.0 + 0.0) % 1.0 = NaN — document this
+        let _ = val; // must not panic
+    }
+
+    #[test]
+    fn chaos_lfo_nan_frequency_does_not_panic() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Sine, frequency: f32::NAN, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
+        let _ = val; // must not panic
+    }
+
+    #[test]
+    fn chaos_lfo_nan_amplitude_does_not_panic() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Triangle, frequency: 1.0, phase: 0.0,
+            amplitude: f32::NAN, bipolar: false,
+        };
+        let audio = empty_audio();
+        let val = lfo.calculate(0.5, 0.01, &audio, 0.0);
+        let _ = val; // must not panic
+    }
+
+    #[test]
+    fn chaos_lfo_negative_frequency_does_not_panic() {
+        let mut lfo = ModulationSource::LFO {
+            waveform: LFOWaveform::Sawtooth, frequency: -10.0, phase: 0.0,
+            amplitude: 1.0, bipolar: true,
+        };
+        let audio = empty_audio();
+        let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
+        assert!(val.is_finite(), "negative freq should produce finite: {val}");
+    }
+
+    #[test]
+    fn chaos_lfo_all_waveforms_at_extreme_time() {
+        let audio = empty_audio();
+        for waveform in [LFOWaveform::Sine, LFOWaveform::Square, LFOWaveform::Triangle,
+                         LFOWaveform::Sawtooth, LFOWaveform::Random] {
+            let mut lfo = ModulationSource::LFO {
+                waveform, frequency: 1e6, phase: 0.0,
+                amplitude: 1.0, bipolar: true,
+            };
+            let val = lfo.calculate(1e10, 0.01, &audio, 0.0);
+            let _ = val; // must not panic
+        }
+    }
+
+    // ── Chaos Tests Round 2: Step Sequencer edge cases ───────────────────
+
+    #[test]
+    fn chaos_step_sequencer_single_step() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![0.75],
+            rate: 1.0,
+            interpolation: StepInterpolation::Linear,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        let val = seq.calculate(0.5, 0.01, &audio, 0.0);
+        assert!(val.is_finite(), "single step produced non-finite: {val}");
+    }
+
+    #[test]
+    fn chaos_step_sequencer_nan_rate_does_not_panic() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![0.0, 0.5, 1.0],
+            rate: f32::NAN,
+            interpolation: StepInterpolation::None,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        let val = seq.calculate(1.0, 0.01, &audio, 0.0);
+        let _ = val; // must not panic
+    }
+
+    #[test]
+    fn chaos_step_sequencer_infinity_rate_does_not_panic() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![0.0, 1.0],
+            rate: f32::INFINITY,
+            interpolation: StepInterpolation::Smooth,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        let val = seq.calculate(1.0, 0.01, &audio, 0.0);
+        let _ = val; // must not panic
+    }
+
+    #[test]
+    fn chaos_step_sequencer_zero_rate() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![0.2, 0.8],
+            rate: 0.0,
+            interpolation: StepInterpolation::Linear,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        let val = seq.calculate(1.0, 0.01, &audio, 0.0);
+        assert!(val.is_finite(), "zero rate produced non-finite: {val}");
+    }
+
+    #[test]
+    fn chaos_step_sequencer_nan_step_values() {
+        let mut seq = ModulationSource::StepSequencer {
+            steps: vec![f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.5],
+            rate: 1.0,
+            interpolation: StepInterpolation::Linear,
+            bipolar: false,
+        };
+        let audio = empty_audio();
+        for i in 0..20 {
+            let val = seq.calculate(i as f32 * 0.25, 0.01, &audio, 0.0);
+            let _ = val; // must not panic
+        }
+    }
+
+    // ── Chaos Tests Round 2: ADSR edge cases ────────────────────────────
+
+    #[test]
+    fn chaos_adsr_zero_all_times() {
+        let mut adsr = ModulationSource::adsr(0.0, 0.0, 0.5, 0.0);
+        adsr.gate_on();
+        let audio = empty_audio();
+        let mut val = 0.0;
+        for _ in 0..50 {
+            val = adsr.calculate(0.0, 0.016, &audio, val);
+            assert!(val.is_finite(), "zero-time ADSR produced non-finite: {val}");
+        }
+        adsr.gate_off();
+        for _ in 0..50 {
+            val = adsr.calculate(0.0, 0.016, &audio, val);
+            assert!(val.is_finite(), "zero-time ADSR release non-finite: {val}");
+        }
+    }
+
+    #[test]
+    fn chaos_adsr_nan_attack_does_not_panic() {
+        let mut adsr = ModulationSource::ADSR {
+            attack: f32::NAN, decay: 0.1, sustain: 0.5, release: 0.1,
+            stage: ADSRStage::Idle, stage_time: 0.0, gate: false, current_level: 0.0,
+        };
+        adsr.gate_on();
+        let audio = empty_audio();
+        let mut val = 0.0;
+        for _ in 0..20 {
+            val = adsr.calculate(0.0, 0.016, &audio, val);
+        }
+        // must not panic
+    }
+
+    #[test]
+    fn chaos_adsr_negative_sustain() {
+        let mut adsr = ModulationSource::adsr(0.01, 0.01, -1.0, 0.01);
+        adsr.gate_on();
+        let audio = empty_audio();
+        let mut val = 0.0;
+        for _ in 0..100 {
+            val = adsr.calculate(0.0, 0.016, &audio, val);
+        }
+        // Sustain = -1.0 may produce negative values — document, must not panic
+    }
+
+    #[test]
+    fn chaos_adsr_infinity_release() {
+        let mut adsr = ModulationSource::adsr(0.01, 0.01, 0.5, f32::INFINITY);
+        adsr.gate_on();
+        let audio = empty_audio();
+        let mut val = 0.0;
+        for _ in 0..50 { val = adsr.calculate(0.0, 0.016, &audio, val); }
+        adsr.gate_off();
+        for _ in 0..50 {
+            val = adsr.calculate(0.0, 0.016, &audio, val);
+            // progress = stage_time / INFINITY = 0 — never completes release
+        }
+        // must not panic
+    }
+
+    #[test]
+    fn chaos_adsr_rapid_gate_toggle() {
+        let mut adsr = ModulationSource::adsr(0.1, 0.1, 0.5, 0.1);
+        let audio = empty_audio();
+        let mut val = 0.0;
+        for i in 0..100 {
+            if i % 3 == 0 { adsr.gate_on(); }
+            if i % 5 == 0 { adsr.gate_off(); }
+            val = adsr.calculate(0.0, 0.001, &audio, val);
+            assert!(val.is_finite(), "rapid gate toggle produced non-finite at step {i}: {val}");
+        }
+    }
 }

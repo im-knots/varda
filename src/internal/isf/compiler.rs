@@ -57,6 +57,10 @@ uniform float TIMEDELTA;
 uniform int FRAMEINDEX;
 uniform vec2 RENDERSIZE;
 uniform vec4 DATE;
+uniform float PHASE_TIME_0;
+uniform float PHASE_TIME_1;
+uniform float PHASE_TIME_2;
+uniform float PHASE_TIME_3;
 
 // ISF automatic varying (normalized fragment coordinates)
 varying vec2 isf_FragNormCoord;

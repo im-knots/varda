@@ -274,3 +274,375 @@ fn move_deck_between_channels() {
     assert_eq!(state.mixer.channels[0].decks.len(), before_ch0 - 1);
     assert_eq!(state.mixer.channels[1].decks.len(), before_ch1 + 1);
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Chaos Tests Round 3: GPU Headless — adversarial engine commands
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ── G: Adversarial scene values ──────────────────────────────────────
+
+#[test]
+fn chaos_oob_channel_index_does_not_panic() {
+    let Some(mut app) = headless_app() else { return; };
+    // Add deck to non-existent channel
+    let r = send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 999, color: [1.0, 0.0, 0.0, 1.0] });
+    assert!(matches!(r, CommandResult::Err { .. }), "OOB channel should error gracefully");
+    // Remove deck from non-existent channel
+    let r = send_cmd(&mut app, EngineCommand::RemoveDeck { channel_idx: 999, deck_idx: 0 });
+    assert!(matches!(r, CommandResult::Err { .. }));
+    // Set opacity on non-existent channel
+    fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: 999, opacity: 0.5 });
+    // Set deck opacity on non-existent deck
+    fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 999, opacity: 0.5 });
+    // Render should still work
+    app.update_frame_timing();
+    app.render_mixer_frame();
+}
+
+#[test]
+fn chaos_oob_deck_index_does_not_panic() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    // Remove deck at index far beyond count — silent no-op (returns Ok)
+    let r = send_cmd(&mut app, EngineCommand::RemoveDeck { channel_idx: 0, deck_idx: 100 });
+    assert!(matches!(r, CommandResult::Ok));
+    // Move deck from invalid source — silent no-op
+    let r = send_cmd(&mut app, EngineCommand::MoveDeck { src_ch: 0, src_deck: 100, dst_ch: 1 });
+    assert!(matches!(r, CommandResult::Ok));
+    // Move deck to invalid destination channel — silent no-op
+    let r = send_cmd(&mut app, EngineCommand::MoveDeck { src_ch: 0, src_deck: 0, dst_ch: 999 });
+    assert!(matches!(r, CommandResult::Ok));
+    // Deck should still be present (none of the above should have touched it)
+    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 1);
+    app.update_frame_timing();
+    app.render_mixer_frame();
+}
+
+#[test]
+fn chaos_nan_crossfader_via_command() {
+    let Some(mut app) = headless_app() else { return; };
+    fire(&mut app, EngineCommand::SetCrossfader(f32::NAN));
+    // NaN propagates but must not crash the render
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    fire(&mut app, EngineCommand::SetCrossfader(f32::INFINITY));
+    app.render_mixer_frame();
+    fire(&mut app, EngineCommand::SetCrossfader(f32::NEG_INFINITY));
+    app.render_mixer_frame();
+    // Restore sane value
+    fire(&mut app, EngineCommand::SetCrossfader(0.5));
+    app.render_mixer_frame();
+}
+
+#[test]
+fn chaos_nan_opacity_via_command() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: f32::NAN });
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: f32::INFINITY });
+    app.render_mixer_frame();
+    fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: f32::NEG_INFINITY });
+    app.render_mixer_frame();
+}
+
+#[test]
+fn chaos_extreme_render_resolution() {
+    let Some(mut app) = headless_app() else { return; };
+    // Tiny resolution
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 1, height: 1 });
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    // Asymmetric ultra-wide
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 4096, height: 1 });
+    app.render_mixer_frame();
+    // Restore normal
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 1920, height: 1080 });
+    app.render_mixer_frame();
+}
+
+#[test]
+fn chaos_zero_render_resolution() {
+    let Some(mut app) = headless_app() else { return; };
+    // Zero dimensions — should be clamped or rejected, not crash
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 0, height: 0 });
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 0, height: 1080 });
+    app.render_mixer_frame();
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 1920, height: 0 });
+    app.render_mixer_frame();
+}
+
+// ── H: Deck lifecycle churn ──────────────────────────────────────────
+
+#[test]
+fn chaos_rapid_deck_add_remove_cycle() {
+    let Some(mut app) = headless_app() else { return; };
+    for i in 0..20 {
+        let color = [(i as f32) / 20.0, 0.0, 0.0, 1.0];
+        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color });
+    }
+    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 20);
+    // Remove all in reverse order
+    for i in (0..20).rev() {
+        let r = send_cmd(&mut app, EngineCommand::RemoveDeck { channel_idx: 0, deck_idx: i });
+        assert!(matches!(r, CommandResult::Ok), "Remove deck {i} failed: {r:?}");
+    }
+    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 0);
+    // Render with empty channel
+    app.update_frame_timing();
+    app.render_mixer_frame();
+}
+
+#[test]
+fn chaos_rapid_channel_add_remove_cycle() {
+    let Some(mut app) = headless_app() else { return; };
+    let initial = app.build_engine_state().mixer.channels.len();
+    // Add 10 channels
+    for _ in 0..10 {
+        let r = send_cmd(&mut app, EngineCommand::AddChannel);
+        assert!(matches!(r, CommandResult::Ok));
+    }
+    assert_eq!(app.build_engine_state().mixer.channels.len(), initial + 10);
+    // Render with many channels
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    // Remove channels (from end to avoid index shifting)
+    for i in (initial..initial + 10).rev() {
+        let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: i });
+        assert!(matches!(r, CommandResult::Ok), "Remove channel {i} failed: {r:?}");
+    }
+    assert_eq!(app.build_engine_state().mixer.channels.len(), initial);
+    app.render_mixer_frame();
+}
+
+#[test]
+fn chaos_interleaved_add_remove_render() {
+    let Some(mut app) = headless_app() else { return; };
+    // Add deck, render, remove, render — 10 cycles
+    for _ in 0..10 {
+        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 1.0, 1.0, 1.0] });
+        app.update_frame_timing();
+        app.render_mixer_frame();
+        send_cmd(&mut app, EngineCommand::RemoveDeck { channel_idx: 0, deck_idx: 0 });
+        app.render_mixer_frame();
+    }
+    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 0);
+}
+
+#[test]
+fn chaos_remove_last_channels_rejected() {
+    let Some(mut app) = headless_app() else { return; };
+    // Mixer enforces minimum 2 channels — add extras then remove down to 2
+    send_cmd(&mut app, EngineCommand::AddChannel);
+    send_cmd(&mut app, EngineCommand::AddChannel);
+    assert_eq!(app.build_engine_state().mixer.channels.len(), 4);
+    // Remove extras (from end to avoid index shift)
+    while app.build_engine_state().mixer.channels.len() > 2 {
+        let idx = app.build_engine_state().mixer.channels.len() - 1;
+        let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: idx });
+        assert!(matches!(r, CommandResult::Ok));
+    }
+    assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
+    // Removing either of the last 2 should fail (minimum 2 enforced)
+    let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 0 });
+    assert!(matches!(r, CommandResult::Err { .. }), "Should not remove below minimum");
+    let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 1 });
+    assert!(matches!(r, CommandResult::Err { .. }), "Should not remove below minimum");
+    assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
+    app.update_frame_timing();
+    app.render_mixer_frame();
+}
+
+// ── I: Command storm ─────────────────────────────────────────────────
+
+#[test]
+fn chaos_command_storm_crossfader_sweep() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 1, color: [0.0, 0.0, 1.0, 1.0] });
+    // Sweep crossfader through 100 steps while rendering
+    for i in 0..=100 {
+        let val = i as f32 / 100.0;
+        fire(&mut app, EngineCommand::SetCrossfader(val));
+    }
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    let state = app.build_engine_state();
+    assert!((state.mixer.crossfader - 1.0).abs() < 1e-4, "Final crossfader should be 1.0");
+}
+
+#[test]
+fn chaos_command_storm_opacity_sweep() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    // Sweep deck opacity 0→1→0 rapidly
+    for i in 0..=100 {
+        let val = i as f32 / 100.0;
+        fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: val });
+    }
+    for i in (0..=100).rev() {
+        let val = i as f32 / 100.0;
+        fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: val });
+    }
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    let state = app.build_engine_state();
+    assert!((state.mixer.channels[0].decks[0].opacity - 0.0).abs() < 1e-4);
+}
+
+#[test]
+fn chaos_command_storm_mixed_mutations() {
+    let Some(mut app) = headless_app() else { return; };
+    // Fire 50 rapid mixed commands without rendering between them
+    let tx = app.command_sender();
+    for i in 0..50 {
+        let cmd = match i % 5 {
+            0 => EngineCommand::SetCrossfader(i as f32 / 50.0),
+            1 => EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: (50 - i) as f32 / 50.0 },
+            2 => EngineCommand::AddSolidColorDeck { channel_idx: i % 2, color: [1.0, 1.0, 1.0, 1.0] },
+            3 => EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: i as f32 / 50.0 },
+            _ => EngineCommand::SetCrossfader(0.5),
+        };
+        tx.send((cmd, None)).unwrap();
+    }
+    // Process all at once
+    app.process_commands();
+    // Render after burst
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    // State should be consistent
+    let state = app.build_engine_state();
+    assert!(!state.mixer.channels.is_empty());
+}
+
+#[test]
+fn chaos_render_many_frames_with_content() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 1, color: [0.0, 1.0, 0.0, 1.0] });
+    // Render 100 frames — looking for GPU resource leaks or accumulation bugs
+    for _ in 0..100 {
+        app.update_frame_timing();
+        app.render_mixer_frame();
+    }
+}
+
+// ── K: Mixer bounds ──────────────────────────────────────────────────
+
+#[test]
+fn chaos_crossfader_extremes_render() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 1, color: [0.0, 0.0, 1.0, 1.0] });
+    for &val in &[0.0, 1.0, -1.0, 2.0, -100.0, 100.0, f32::MIN, f32::MAX] {
+        fire(&mut app, EngineCommand::SetCrossfader(val));
+        app.update_frame_timing();
+        app.render_mixer_frame();
+    }
+}
+
+#[test]
+fn chaos_opacity_extremes_render() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    for &val in &[0.0, 1.0, -1.0, 2.0, -100.0, 100.0, f32::MIN, f32::MAX, f32::NAN, f32::INFINITY] {
+        fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: val });
+        app.update_frame_timing();
+        app.render_mixer_frame();
+    }
+    for &val in &[0.0, 1.0, -1.0, 2.0, f32::NAN, f32::INFINITY] {
+        fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: val });
+        app.render_mixer_frame();
+    }
+}
+
+#[test]
+fn chaos_resolution_change_during_render() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    // Change resolution and render immediately
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 640, height: 480 });
+    app.render_mixer_frame();
+    // Change again rapidly
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 3840, height: 2160 });
+    app.render_mixer_frame();
+    fire(&mut app, EngineCommand::SetRenderResolution { width: 1920, height: 1080 });
+    app.render_mixer_frame();
+    assert_eq!(app.render_width(), 1920);
+    assert_eq!(app.render_height(), 1080);
+}
+
+#[test]
+fn chaos_blend_mode_rapid_cycling() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [0.0, 1.0, 0.0, 1.0] });
+    let modes = [
+        BlendMode::Normal, BlendMode::Add, BlendMode::Multiply,
+        BlendMode::Screen, BlendMode::Overlay,
+    ];
+    for mode in modes {
+        fire(&mut app, EngineCommand::SetDeckBlendMode { channel_idx: 0, deck_idx: 1, mode });
+        app.update_frame_timing();
+        app.render_mixer_frame();
+    }
+}
+
+#[test]
+fn chaos_solo_mute_all_decks() {
+    let Some(mut app) = headless_app() else { return; };
+    // Add 5 decks to channel 0
+    for i in 0..5 {
+        let c = i as f32 / 5.0;
+        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [c, c, c, 1.0] });
+    }
+    // Mute all
+    for i in 0..5 {
+        fire(&mut app, EngineCommand::SetDeckMute { channel_idx: 0, deck_idx: i, mute: true });
+    }
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    // Solo one
+    fire(&mut app, EngineCommand::SetDeckSolo { channel_idx: 0, deck_idx: 2, solo: true });
+    app.render_mixer_frame();
+    // Unmute all, unsolo
+    for i in 0..5 {
+        fire(&mut app, EngineCommand::SetDeckMute { channel_idx: 0, deck_idx: i, mute: false });
+    }
+    fire(&mut app, EngineCommand::SetDeckSolo { channel_idx: 0, deck_idx: 2, solo: false });
+    app.render_mixer_frame();
+}
+
+#[test]
+fn chaos_state_consistency_after_storm() {
+    let Some(mut app) = headless_app() else { return; };
+    // Setup: 3 channels with 2 decks each
+    send_cmd(&mut app, EngineCommand::AddChannel);
+    for ch in 0..3 {
+        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: ch, color: [1.0, 0.0, 0.0, 1.0] });
+        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: ch, color: [0.0, 1.0, 0.0, 1.0] });
+    }
+    // Storm: 200 parameter mutations
+    for i in 0..200 {
+        let ch = i % 3;
+        let deck = i % 2;
+        fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: ch, deck_idx: deck, opacity: (i as f32 / 200.0) });
+        fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: ch, opacity: 1.0 - (i as f32 / 200.0) });
+    }
+    fire(&mut app, EngineCommand::SetCrossfader(0.75));
+    // Render to exercise the full pipeline
+    app.update_frame_timing();
+    app.render_mixer_frame();
+    // Verify state is self-consistent
+    let state = app.build_engine_state();
+    assert_eq!(state.mixer.channels.len(), 3);
+    for ch in &state.mixer.channels {
+        assert_eq!(ch.decks.len(), 2);
+    }
+    assert!((state.mixer.crossfader - 0.75).abs() < 1e-4);
+}

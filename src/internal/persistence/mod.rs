@@ -12,6 +12,18 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Atomic file write: writes to a `.tmp` sibling then renames into place.
+/// Prevents data loss if the process crashes mid-write.
+pub fn atomic_write<P: AsRef<Path>>(path: P, content: &str) -> Result<()> {
+    let path = path.as_ref();
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, content)
+        .with_context(|| format!("Failed to write temp file: {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("Failed to rename {} → {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
 /// Stage configuration persisted in `.varda/stage.json`.
 /// Contains venue-specific data: surfaces, outputs, and editor preferences.
 /// Kept separate from scene.json so users can share deck layouts without stage geometry.
@@ -118,8 +130,7 @@ impl StagePrefs {
         }
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize stage prefs")?;
-        std::fs::write(path.as_ref(), content)
-            .with_context(|| format!("Failed to write stage prefs: {}", path.as_ref().display()))?;
+        atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }
@@ -875,7 +886,11 @@ pub(crate) fn restore_deck(
         SourceConfig::Srt { url, mode } => {
             let srt_mode = match mode.as_str() {
                 "listener" => crate::stream::SrtMode::Listener,
-                _ => crate::stream::SrtMode::Caller,
+                "caller" => crate::stream::SrtMode::Caller,
+                other => {
+                    log::warn!("Unknown SRT mode '{}', defaulting to Caller", other);
+                    crate::stream::SrtMode::Caller
+                }
             };
             match stream_manager.start_srt_receive(url, srt_mode, &context.device) {
                 Some(receiver_idx) => {

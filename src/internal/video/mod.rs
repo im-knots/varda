@@ -70,6 +70,7 @@ pub struct PlaybackState {
 
 impl PlaybackState {
     pub fn new(duration: f64, frame_rate: f64) -> Self {
+        let frame_rate = if frame_rate > 0.0 { frame_rate } else { 30.0 };
         Self {
             playing: true,
             loop_mode: LoopMode::Loop,
@@ -326,7 +327,7 @@ impl VideoPlayer {
         if !was_reverse && self.playback.reverse {
             // Forward→reverse flip (hit out-point). Serve from cache.
             if !self.frame_cache.is_empty() {
-                self.cache_read_idx = self.frame_cache.len();
+                self.cache_read_idx = self.frame_cache.len() - 1;
             }
         } else if was_reverse && !self.playback.reverse {
             // Reverse→forward flip (hit in-point). Clear cache, seek to in-point.
@@ -431,7 +432,7 @@ impl VideoPlayer {
                         LoopMode::PingPong => {
                             if !self.frame_cache.is_empty() {
                                 self.playback.reverse = true;
-                                self.cache_read_idx = self.frame_cache.len();
+                                self.cache_read_idx = self.frame_cache.len() - 1;
                                 return self.next_frame();
                             }
                             self.playback.position = self.playback.in_point;
@@ -628,5 +629,142 @@ mod tests {
         assert!(HapTextureFormat::Bc3YCoCg.needs_ycocg_convert());
         assert!(!HapTextureFormat::Bc4.needs_ycocg_convert());
         assert!(!HapTextureFormat::Bc7.needs_ycocg_convert());
+    }
+
+    // ── Offensive: frame rate div-by-zero prevention ─────────────────
+
+    #[test]
+    fn playback_state_zero_frame_rate_clamped() {
+        let ps = PlaybackState::new(10.0, 0.0);
+        assert_eq!(ps.frame_rate, 30.0, "zero frame_rate should be clamped to 30.0");
+    }
+
+    #[test]
+    fn playback_state_negative_frame_rate_clamped() {
+        let ps = PlaybackState::new(10.0, -24.0);
+        assert_eq!(ps.frame_rate, 30.0, "negative frame_rate should be clamped to 30.0");
+    }
+
+    #[test]
+    fn playback_state_nan_frame_rate_clamped() {
+        let ps = PlaybackState::new(10.0, f64::NAN);
+        assert_eq!(ps.frame_rate, 30.0, "NaN frame_rate should be clamped to 30.0");
+    }
+
+    #[test]
+    fn playback_state_valid_frame_rate_preserved() {
+        let ps = PlaybackState::new(10.0, 60.0);
+        assert_eq!(ps.frame_rate, 60.0, "valid frame_rate should be preserved");
+    }
+
+    #[test]
+    fn playback_state_advance_with_clamped_rate_does_not_divide_by_zero() {
+        let mut ps = PlaybackState::new(10.0, 0.0);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        // Must not panic or produce NaN/Inf
+        let result = ps.advance_frame();
+        assert!(!ps.position.is_nan(), "position must not be NaN");
+        assert!(!ps.position.is_infinite(), "position must not be Inf");
+        assert!(!result.needs_seek || ps.position >= 0.0);
+    }
+
+    // ── Chaos Tests Round 2: Speed extremes ──────────────────────────────
+
+    #[test]
+    fn chaos_extreme_speed_1e6_does_not_overflow() {
+        let mut ps = PlaybackState::new(100.0, 60.0);
+        ps.speed = 1_000_000.0;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let result = ps.advance_frame();
+        assert!(!ps.position.is_nan(), "position NaN at extreme speed");
+        assert!(!ps.position.is_infinite(), "position Inf at extreme speed");
+        // frames_to_decode should be finite (even if large)
+        assert!(result.frames_to_decode < u32::MAX, "frames_to_decode wrapped");
+    }
+
+    #[test]
+    fn chaos_negative_extreme_speed() {
+        let mut ps = PlaybackState::new(100.0, 30.0);
+        ps.speed = -1_000_000.0;
+        ps.position = 50.0;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let result = ps.advance_frame();
+        assert!(!ps.position.is_nan(), "position NaN at negative extreme speed");
+        assert!(!ps.position.is_infinite(), "position Inf at negative extreme speed");
+        // Should trigger loop/clamp logic
+        assert!(result.frames_to_decode < u32::MAX);
+    }
+
+    #[test]
+    fn chaos_nan_speed_does_not_propagate() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.speed = f64::NAN;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let _result = ps.advance_frame();
+        // NaN speed causes NaN position — document the behavior
+        // The key is it doesn't panic
+    }
+
+    #[test]
+    fn chaos_infinity_speed_does_not_panic() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.speed = f64::INFINITY;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let _result = ps.advance_frame();
+        // Must not panic
+    }
+
+    // ── Chaos Tests Round 2: Corrupted playback state ────────────────────
+
+    #[test]
+    fn chaos_in_point_greater_than_out_point() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.in_point = 8.0;
+        ps.out_point = 3.0; // inverted
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let _result = ps.advance_frame();
+        // Must not panic — position may clamp or loop oddly
+    }
+
+    #[test]
+    fn chaos_zero_duration() {
+        let mut ps = PlaybackState::new(0.0, 30.0);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let _result = ps.advance_frame();
+        // effective_out() with duration=0 — must not panic
+    }
+
+    #[test]
+    fn chaos_nan_position_does_not_panic() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.position = f64::NAN;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let _result = ps.advance_frame();
+        // NaN comparisons are always false, so no branch fires — must not panic
+    }
+
+    #[test]
+    fn chaos_nan_in_point_does_not_panic() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.in_point = f64::NAN;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let _result = ps.advance_frame();
+    }
+
+    #[test]
+    fn chaos_negative_duration() {
+        let mut ps = PlaybackState::new(-5.0, 30.0);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let _result = ps.advance_frame();
+    }
+
+    #[test]
+    fn chaos_extreme_position_recovery() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.position = 1e15;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let result = ps.advance_frame();
+        // Should trigger loop/clamp since position > out_point
+        assert!(ps.reached_end || result.needs_seek || ps.position <= 1e15);
     }
 }

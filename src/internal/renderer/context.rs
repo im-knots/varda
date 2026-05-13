@@ -497,6 +497,17 @@ impl OutputWindow {
     pub fn render_surfaces(&self, context: &GpuContext, surfaces: &[SurfaceRenderInfo<'_>]) {
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
+            Err(wgpu::SurfaceError::Outdated) => {
+                log::warn!("Output '{}': surface outdated, reconfiguring", self.name);
+                self.surface.configure(&context.device, &self.surface_config);
+                match self.surface.get_current_texture() {
+                    Ok(output) => output,
+                    Err(e) => {
+                        log::error!("Output '{}': failed to get surface texture after reconfigure: {}", self.name, e);
+                        return;
+                    }
+                }
+            }
             Err(e) => {
                 log::error!("Output '{}': failed to get surface texture: {}", self.name, e);
                 return;

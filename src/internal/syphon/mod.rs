@@ -157,6 +157,9 @@ impl SyphonManager {
 
 impl Drop for SyphonManager {
     fn drop(&mut self) {
-        for c in &mut self.clients { c.stop_flag.store(true, Ordering::SeqCst); }
+        for c in &mut self.clients {
+            c.stop_flag.store(true, Ordering::SeqCst);
+            if let Some(t) = c._thread.take() { let _ = t.join(); }
+        }
     }
 }

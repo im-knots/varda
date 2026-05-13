@@ -355,8 +355,12 @@ impl AudioManager {
                     let onset_threshold = {
                         let mut sorted = flux_history.clone();
                         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                        sorted[sorted.len() / 2] * ONSET_THRESHOLD_MULTIPLIER
-                            + ONSET_THRESHOLD_OFFSET
+                        if sorted.is_empty() {
+                            ONSET_THRESHOLD_OFFSET
+                        } else {
+                            sorted[sorted.len() / 2] * ONSET_THRESHOLD_MULTIPLIER
+                                + ONSET_THRESHOLD_OFFSET
+                        }
                     };
 
                     let now = Instant::now();
@@ -712,5 +716,138 @@ mod tests {
             energy_high < 1e-6,
             "Should detect no energy in 5k-10kHz range"
         );
+    }
+
+    // ── Chaos Tests Round 2: Audio frequency edge cases ─────────────────
+
+    #[test]
+    fn chaos_energy_in_range_nan_freq_low() {
+        let data = AudioData {
+            waveform: vec![0.0; 128],
+            fft: vec![0.5; 1024],
+            level: 0.5,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 48000.0,
+        };
+        let val = data.energy_in_range(f32::NAN, 1000.0);
+        // NaN / bw → NaN, floor as usize → 0 (saturating), .min(len-1) → 0
+        // Must not panic
+        assert!(val.is_finite() || val == 0.0, "NaN freq_low should not crash");
+    }
+
+    #[test]
+    fn chaos_energy_in_range_nan_freq_high() {
+        let data = AudioData {
+            waveform: vec![0.0; 128],
+            fft: vec![0.5; 1024],
+            level: 0.5,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 48000.0,
+        };
+        let val = data.energy_in_range(100.0, f32::NAN);
+        let _ = val; // must not panic
+    }
+
+    #[test]
+    fn chaos_energy_in_range_both_nan() {
+        let data = AudioData {
+            waveform: vec![0.0; 128],
+            fft: vec![0.5; 1024],
+            level: 0.5,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 48000.0,
+        };
+        let val = data.energy_in_range(f32::NAN, f32::NAN);
+        let _ = val; // must not panic
+    }
+
+    #[test]
+    fn chaos_energy_in_range_negative_frequencies() {
+        let data = AudioData {
+            waveform: vec![0.0; 128],
+            fft: vec![0.5; 1024],
+            level: 0.5,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 48000.0,
+        };
+        let val = data.energy_in_range(-1000.0, -500.0);
+        // Negative / bw → negative, floor as usize → 0 (saturating)
+        assert!(val >= 0.0, "negative freq should not produce negative energy");
+    }
+
+    #[test]
+    fn chaos_energy_in_range_infinity() {
+        let data = AudioData {
+            waveform: vec![0.0; 128],
+            fft: vec![0.5; 1024],
+            level: 0.5,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 48000.0,
+        };
+        let val = data.energy_in_range(0.0, f32::INFINITY);
+        let _ = val; // must not panic
+    }
+
+    #[test]
+    fn chaos_energy_in_range_inverted_range() {
+        let data = AudioData {
+            waveform: vec![0.0; 128],
+            fft: vec![0.5; 1024],
+            level: 0.5,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 48000.0,
+        };
+        let val = data.energy_in_range(5000.0, 100.0);
+        assert_eq!(val, 0.0, "inverted range should return 0.0");
+    }
+
+    #[test]
+    fn chaos_energy_in_range_zero_sample_rate() {
+        let data = AudioData {
+            waveform: vec![0.0; 128],
+            fft: vec![0.5; 1024],
+            level: 0.5,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 0.0,
+        };
+        let val = data.energy_in_range(100.0, 1000.0);
+        // bin_width = 0 / 2048 = 0, guarded by bw <= 0.0 check
+        assert_eq!(val, 0.0, "zero sample rate should return 0.0");
+    }
+
+    #[test]
+    fn chaos_energy_in_range_empty_fft() {
+        let data = AudioData {
+            waveform: vec![],
+            fft: vec![],
+            level: 0.0,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 48000.0,
+        };
+        let val = data.energy_in_range(20.0, 20000.0);
+        assert_eq!(val, 0.0, "empty FFT should return 0.0");
+    }
+
+    #[test]
+    fn chaos_energy_in_range_single_bin_fft() {
+        let data = AudioData {
+            waveform: vec![0.0; 2],
+            fft: vec![1.0],
+            level: 1.0,
+            bpm: None,
+            time_since_beat: 0.0,
+            sample_rate: 48000.0,
+        };
+        let val = data.energy_in_range(0.0, 48000.0);
+        // single bin FFT — should not panic
+        assert!(val.is_finite());
     }
 }

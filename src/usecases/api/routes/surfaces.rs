@@ -82,6 +82,10 @@ pub async fn add_rect(State(s): State<SharedState>, Json(b): Json<AddRectSurface
 
 #[utoipa::path(post, path = "/api/surfaces/polygon", request_body = AddPolygonSurfaceBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
 pub async fn add_polygon(State(s): State<SharedState>, Json(b): Json<AddPolygonSurfaceBody>) -> impl IntoResponse {
+    const MAX_VERTICES: usize = 10_000;
+    if b.vertices.len() > MAX_VERTICES {
+        return (axum::http::StatusCode::BAD_REQUEST, format!("Too many vertices: {} (max {MAX_VERTICES})", b.vertices.len())).into_response();
+    }
     match s.send_command(EngineCommand::AddPolygonSurface { name: b.name, vertices: b.vertices, source: b.source }).await {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
@@ -234,6 +238,10 @@ pub async fn convert_to_polygon(State(s): State<SharedState>, Path(uuid): Path<S
 }
 #[utoipa::path(post, path = "/api/surfaces/combine", request_body = CombineBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
 pub async fn combine(State(s): State<SharedState>, Json(b): Json<CombineBody>) -> impl IntoResponse {
+    const MAX_UUIDS: usize = 256;
+    if b.uuids.len() > MAX_UUIDS {
+        return (axum::http::StatusCode::BAD_REQUEST, format!("Too many UUIDs: {} (max {MAX_UUIDS})", b.uuids.len())).into_response();
+    }
     match s.send_command(EngineCommand::CombineSurfaces { uuids: b.uuids }).await {
         Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
@@ -246,6 +254,10 @@ pub async fn move_surface(State(s): State<SharedState>, Path(uuid): Path<String>
 }
 #[utoipa::path(put, path = "/api/surfaces/{uuid}/contour-vertices", params(("uuid" = String, Path, description = "Surface UUID")), request_body = ContourVerticesBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
 pub async fn update_contour_vertices(State(s): State<SharedState>, Path(uuid): Path<String>, Json(b): Json<ContourVerticesBody>) -> impl IntoResponse {
+    const MAX_VERTICES: usize = 10_000;
+    if b.vertices.len() > MAX_VERTICES {
+        return (axum::http::StatusCode::BAD_REQUEST, format!("Too many vertices: {} (max {MAX_VERTICES})", b.vertices.len())).into_response();
+    }
     match s.send_command(EngineCommand::UpdateSurfaceContourVertices { uuid, contour: b.contour, vertices: b.vertices }).await {
         Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }

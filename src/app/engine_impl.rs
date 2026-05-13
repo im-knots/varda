@@ -8,8 +8,16 @@ use crate::modulation::ModulationSource;
 
 use anyhow::{Context as _, Result};
 
+/// Sanitize a float to the 0.0..=1.0 range with a fallback for NaN/Inf.
+/// Used at every command boundary that accepts a unit-range float.
+#[inline]
+fn sanitize_unit(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value.clamp(0.0, 1.0) } else { fallback }
+}
+
 impl MixerCommands for VardaApp {
     fn set_crossfader(&mut self, position: f32) {
+        let position = sanitize_unit(position, 0.5);
         self.mixer.snap_crossfader(position);
         if let Some(ref sender) = self.osc_feedback {
             sender.send_param("crossfader", position);
@@ -17,10 +25,12 @@ impl MixerCommands for VardaApp {
     }
 
     fn start_auto_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing) {
+        let target = sanitize_unit(target, 0.5);
         self.mixer.start_crossfade(target, duration_secs, easing);
     }
 
     fn start_beat_crossfade(&mut self, target: f32, beats: f32) {
+        let target = sanitize_unit(target, 0.5);
         self.mixer.start_beat_crossfade(target, beats);
     }
 
@@ -77,6 +87,10 @@ impl MixerCommands for VardaApp {
     }
 
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()> {
+        // Capture deck UUID before removal for modulation cleanup
+        let deck_uuid = self.mixer.channels().get(channel_idx)
+            .and_then(|ch| ch.decks.get(deck_idx))
+            .map(|slot| slot.deck.uuid().to_string());
         // Release external resources before removal
         if let Some(ch) = self.mixer.channels().get(channel_idx) {
             if let Some(slot) = ch.decks.get(deck_idx) {
@@ -86,12 +100,29 @@ impl MixerCommands for VardaApp {
                 if let Some(idx) = slot.deck.srt_receiver_idx() {
                     self.stream_manager.stop_receive(idx);
                 }
+                if let Some(idx) = slot.deck.ndi_receiver_idx() {
+                    self.ndi_manager.stop_receive(idx);
+                }
+                #[cfg(target_os = "macos")]
+                if let Some(idx) = slot.deck.syphon_client_idx() {
+                    self.syphon_manager.stop_receive(idx);
+                }
             }
         }
         let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
         if deck_idx < ch.decks.len() {
+            // Also capture effect UUIDs for modulation cleanup
+            let effect_uuids: Vec<String> = ch.decks[deck_idx].deck.effects
+                .iter().map(|e| e.uuid.clone()).collect();
             ch.remove_deck(deck_idx);
             log::info!("Removed deck {} from channel {}", deck_idx, channel_idx);
+            // Clean up orphaned modulation assignments
+            if let Some(uuid) = deck_uuid {
+                self.mixer.modulation_mut().remove_assignments_with_prefix(&format!("deck_{}:", uuid));
+            }
+            for fx_uuid in &effect_uuids {
+                self.mixer.modulation_mut().remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
+            }
         }
         Ok(())
     }
@@ -120,6 +151,7 @@ impl MixerCommands for VardaApp {
     }
 
     fn set_deck_opacity(&mut self, channel_idx: usize, deck_idx: usize, opacity: f32) {
+        let opacity = sanitize_unit(opacity, 1.0);
         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
             if deck_idx < ch.decks.len() {
                 ch.decks[deck_idx].opacity = opacity;
@@ -156,8 +188,9 @@ impl MixerCommands for VardaApp {
     }
 
     fn set_channel_opacity(&mut self, channel_idx: usize, opacity: f32) {
+        let opacity = sanitize_unit(opacity, 1.0);
         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            ch.opacity = opacity.clamp(0.0, 1.0);
+            ch.opacity = opacity;
         }
     }
 

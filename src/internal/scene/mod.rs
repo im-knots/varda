@@ -618,8 +618,7 @@ impl SceneConfig {
         }
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize scene")?;
-        std::fs::write(path.as_ref(), content)
-            .with_context(|| format!("Failed to write scene file: {}", path.as_ref().display()))?;
+        crate::persistence::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }

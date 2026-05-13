@@ -623,6 +623,11 @@ impl VardaApp {
             }
             EngineCommand::RemoveSurface { uuid } => {
                 self.remove_surface(&uuid);
+                // Purge dangling surface assignments from all outputs
+                for output in &mut self.outputs {
+                    output.surface_assignments_mut().retain(|a| a.surface_uuid != uuid);
+                }
+                self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
             EngineCommand::SetSurfaceSource { uuid, source } => {
@@ -722,6 +727,13 @@ impl VardaApp {
             }
             EngineCommand::CombineSurfaces { uuids } => {
                 if let Some(new_uuid) = self.surface_manager.combine_surfaces(&uuids) {
+                    // Purge dangling assignments for combined (removed) surfaces
+                    for output in &mut self.outputs {
+                        output.surface_assignments_mut().retain(|a| {
+                            !uuids.contains(&a.surface_uuid) || a.surface_uuid == new_uuid
+                        });
+                    }
+                    self.recompute_auto_edge_blend();
                     CommandResult::OkWithId { uuid: new_uuid }
                 } else {
                     CommandResult::Err { code: ErrorCode::InvalidInput, message: "Failed to combine surfaces".into() }
@@ -1835,6 +1847,30 @@ impl VardaApp {
     /// Read-only access to the domemaster renderer output view (if enabled).
     pub fn domemaster_view(&self) -> Option<&wgpu::TextureView> {
         self.domemaster.as_ref().map(|d| d.output_view())
+    }
+
+    /// Ensure the domemaster renderer exists and is enabled.
+    /// Creates it lazily on first call; subsequent calls just ensure `enabled = true`.
+    pub fn ensure_domemaster(&mut self) {
+        if let Some(dome) = &mut self.domemaster {
+            dome.enabled = true;
+        } else {
+            let config = crate::renderer::dome::DomemasterConfig::default();
+            match crate::renderer::dome::DomemasterRenderer::new(
+                &self.context.device,
+                self.context.texture_format,
+                config,
+            ) {
+                Ok(mut dome) => {
+                    dome.enabled = true;
+                    self.domemaster = Some(dome);
+                    log::info!("Domemaster renderer created and enabled");
+                }
+                Err(e) => {
+                    log::error!("Failed to create domemaster renderer: {}", e);
+                }
+            }
+        }
     }
 
     /// Set domemaster content rotation (azimuth, elevation, roll) in radians.

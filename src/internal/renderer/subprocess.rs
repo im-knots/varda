@@ -70,8 +70,11 @@ pub struct FfmpegSubprocess {
     writer_thread: Option<std::thread::JoinHandle<()>>,
     /// Shared frame counter (updated by writer thread)
     frames_written: Arc<AtomicU64>,
-    /// Writer thread error flag (set when write fails)
+    /// Writer thread error flag (set when write fails during normal operation)
     write_failed: Arc<AtomicBool>,
+    /// Set by stop() before killing ffmpeg — tells the writer thread that a
+    /// broken pipe is expected and should not be logged as ERROR.
+    shutting_down: Arc<AtomicBool>,
     /// Human-readable label (path or URL)
     label: String,
     /// Start time (for duration display)
@@ -91,6 +94,7 @@ impl FfmpegSubprocess {
         rx: mpsc::Receiver<Vec<u8>>,
         frames_written: Arc<AtomicU64>,
         write_failed: Arc<AtomicBool>,
+        shutting_down: Arc<AtomicBool>,
         label: String,
     ) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new()
@@ -98,8 +102,12 @@ impl FfmpegSubprocess {
             .spawn(move || {
                 for frame in rx {
                     if let Err(e) = stdin.write_all(&frame) {
-                        log::error!("ffmpeg write error for '{}': {}", label, e);
-                        write_failed.store(true, Ordering::SeqCst);
+                        if shutting_down.load(Ordering::SeqCst) {
+                            log::debug!("ffmpeg pipe closed during shutdown for '{}': {}", label, e);
+                        } else {
+                            log::error!("ffmpeg write error for '{}': {}", label, e);
+                            write_failed.store(true, Ordering::SeqCst);
+                        }
                         return;
                     }
                     frames_written.fetch_add(1, Ordering::Relaxed);
@@ -152,9 +160,10 @@ impl FfmpegSubprocess {
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
         let write_failed = Arc::new(AtomicBool::new(false));
+        let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), path.to_string(),
+            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), path.to_string(),
         );
 
         Ok(Self {
@@ -163,6 +172,7 @@ impl FfmpegSubprocess {
             writer_thread: Some(writer_thread),
             frames_written,
             write_failed,
+            shutting_down,
             label: path.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
@@ -217,9 +227,10 @@ impl FfmpegSubprocess {
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
         let write_failed = Arc::new(AtomicBool::new(false));
+        let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), url.to_string(),
+            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), url.to_string(),
         );
 
         Ok(Self {
@@ -228,6 +239,7 @@ impl FfmpegSubprocess {
             writer_thread: Some(writer_thread),
             frames_written,
             write_failed,
+            shutting_down,
             label: url.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
@@ -295,9 +307,10 @@ impl FfmpegSubprocess {
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
         let write_failed = Arc::new(AtomicBool::new(false));
+        let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), name.to_string(),
+            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), name.to_string(),
         );
 
         Ok(Self {
@@ -306,6 +319,7 @@ impl FfmpegSubprocess {
             writer_thread: Some(writer_thread),
             frames_written,
             write_failed,
+            shutting_down,
             label: name.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
@@ -359,9 +373,10 @@ impl FfmpegSubprocess {
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
         let write_failed = Arc::new(AtomicBool::new(false));
+        let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), name.to_string(),
+            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), name.to_string(),
         );
 
         Ok(Self {
@@ -370,6 +385,7 @@ impl FfmpegSubprocess {
             writer_thread: Some(writer_thread),
             frames_written,
             write_failed,
+            shutting_down,
             label: name.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
@@ -445,22 +461,25 @@ impl FfmpegSubprocess {
 
         let duration = self.start_time.elapsed();
 
-        // 1. Drop the sender to close the channel — no more frames queued
+        // 1. Signal shutdown so the writer thread knows a broken pipe is expected
+        self.shutting_down.store(true, Ordering::SeqCst);
+
+        // 2. Drop the sender to close the channel — no more frames queued
         drop(self.frame_tx.take());
 
-        // 2. Kill ffmpeg BEFORE joining the writer thread. The writer thread
+        // 3. Kill ffmpeg BEFORE joining the writer thread. The writer thread
         //    may be blocked on stdin.write_all() (e.g. SRT listener with a
         //    full pipe buffer). Killing the child breaks the pipe, which
         //    unblocks the write and lets the thread exit.
         let _ = self.child.kill();
 
-        // 3. Now safe to join — the writer thread will see a broken pipe or
+        // 4. Now safe to join — the writer thread will see a broken pipe or
         //    a closed channel and exit promptly.
         if let Some(handle) = self.writer_thread.take() {
             let _ = handle.join();
         }
 
-        // 4. Reap the child process
+        // 5. Reap the child process
         let frames = self.frames_written.load(Ordering::Relaxed);
         match self.child.wait() {
             Ok(_status) => {

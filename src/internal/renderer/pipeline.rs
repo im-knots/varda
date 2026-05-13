@@ -148,7 +148,9 @@ impl UnifiedPipeline {
 
         // Sampler (only if shader uses textures)
         let sampler = if has_textures {
-            // Use NonFiltering for float texture compatibility when pass buffers are present
+            // NOTE: When pass buffers are present we must use NonFiltering because float
+            // textures are not filterable in WebGPU. This also forces Nearest on input
+            // textures. A dual-sampler approach would fix this but requires shader changes.
             let sampler_type = if num_pass_buffers > 0 {
                 wgpu::SamplerBindingType::NonFiltering
             } else {

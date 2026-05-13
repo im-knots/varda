@@ -55,11 +55,18 @@ impl VardaApp {
             let h = render_height;
             counter.fetch_add(1, Ordering::Relaxed);
             std::thread::spawn(move || {
-                let name = path.file_name()
-                    .and_then(|f| f.to_str())
-                    .unwrap_or("image")
-                    .to_string();
-                let deck = Deck::new_from_image(&ctx, &path, w, h);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let name = path.file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or("image")
+                        .to_string();
+                    let deck = Deck::new_from_image(&ctx, &path, w, h);
+                    (name, deck)
+                }));
+                let (name, deck) = match result {
+                    Ok((name, deck)) => (name, deck),
+                    Err(_) => ("image".to_string(), Err(anyhow::anyhow!("panic loading image deck"))),
+                };
                 let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
                 counter.fetch_sub(1, Ordering::Relaxed);
             });
@@ -73,11 +80,18 @@ impl VardaApp {
             let h = render_height;
             counter.fetch_add(1, Ordering::Relaxed);
             std::thread::spawn(move || {
-                let name = path.file_name()
-                    .and_then(|f| f.to_str())
-                    .unwrap_or("video")
-                    .to_string();
-                let deck = Deck::new_from_video(&ctx, &path, w, h);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let name = path.file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or("video")
+                        .to_string();
+                    let deck = Deck::new_from_video(&ctx, &path, w, h);
+                    (name, deck)
+                }));
+                let (name, deck) = match result {
+                    Ok((name, deck)) => (name, deck),
+                    Err(_) => ("video".to_string(), Err(anyhow::anyhow!("panic loading video deck"))),
+                };
                 let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
                 counter.fetch_sub(1, Ordering::Relaxed);
             });
@@ -91,8 +105,15 @@ impl VardaApp {
             let h = render_height;
             counter.fetch_add(1, Ordering::Relaxed);
             std::thread::spawn(move || {
-                let name = shader.name();
-                let deck = Deck::new(&ctx, shader, w, h);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let name = shader.name();
+                    let deck = Deck::new(&ctx, shader, w, h);
+                    (name, deck)
+                }));
+                let (name, deck) = match result {
+                    Ok((name, deck)) => (name, deck),
+                    Err(_) => ("shader".to_string(), Err(anyhow::anyhow!("panic loading shader deck"))),
+                };
                 let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
                 counter.fetch_sub(1, Ordering::Relaxed);
             });
@@ -685,5 +706,37 @@ mod tests {
             }
         }
         assert_eq!(app.fps_history.len(), 60, "Window should cap at 60 entries");
+    }
+
+    // ── Offensive: catch_unwind pattern delivers error through channel ──
+
+    #[test]
+    fn catch_unwind_delivers_error_on_panic() {
+        let (tx, rx) = std::sync::mpsc::channel::<DeckLoadResult>();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let c = counter.clone();
+        c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> (String, anyhow::Result<crate::deck::Deck>) {
+                panic!("simulated loader panic");
+            }));
+            let (name, deck) = match result {
+                Ok((name, deck)) => (name, deck),
+                Err(_) => ("panicked".to_string(), Err(anyhow::anyhow!("panic in loader"))),
+            };
+            let _ = tx.send(DeckLoadResult { ch_idx: 0, deck, name });
+            c.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        });
+
+        let msg = rx.recv_timeout(std::time::Duration::from_secs(2))
+            .expect("should receive result even after panic");
+        assert!(msg.deck.is_err(), "deck should be an error after panic");
+        assert_eq!(msg.name, "panicked");
+        // Counter should be back to zero (cleanup ran)
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 0,
+            "counter must decrement even after panic");
     }
 }

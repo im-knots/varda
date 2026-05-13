@@ -292,7 +292,7 @@ impl Mixer {
 
     /// Set the crossfader position directly (used by persistence restore).
     pub fn set_crossfader(&mut self, value: f32) {
-        self.crossfader = value.clamp(0.0, 1.0);
+        self.crossfader = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.5 };
     }
 
     /// Replace the modulation engine (used by persistence restore).
@@ -534,5 +534,42 @@ mod tests {
         let e = effects.remove(2);
         effects.insert(0, e);
         assert_eq!(effects, vec!["master_feedback", "master_blur", "master_color"]);
+    }
+
+    // ── Chaos Tests Round 2: Crossfader/opacity arithmetic ──────────────
+
+    #[test]
+    fn chaos_crossfader_opacity_arithmetic_oob() {
+        // Simulate the opacity calculation from composite_sub_mix
+        let crossfader = 1.5_f32;
+        let opacities = [0.8_f32, 0.9];
+        let op_a = (1.0 - crossfader) * opacities[0]; // -0.5 * 0.8 = -0.4
+        let op_b = crossfader * opacities[1]; // 1.5 * 0.9 = 1.35
+        assert!(op_a.is_finite() && op_b.is_finite());
+    }
+
+    #[test]
+    fn chaos_crossfader_nan_arithmetic() {
+        let crossfader = f32::NAN;
+        let opacity = 0.8_f32;
+        let result = (1.0 - crossfader) * opacity;
+        // NaN propagates — document this behavior
+        assert!(result.is_nan(), "NaN crossfader should propagate NaN");
+    }
+
+    #[test]
+    fn chaos_crossfader_infinity_arithmetic() {
+        let crossfader = f32::INFINITY;
+        let opacity = 0.8_f32;
+        let result = (1.0 - crossfader) * opacity;
+        assert!(result.is_infinite(), "Inf crossfader produces Inf opacity");
+    }
+
+    #[test]
+    fn chaos_opacity_nan_does_not_panic() {
+        let opacity = f32::NAN;
+        let crossfader = 0.5_f32;
+        let result = crossfader * opacity;
+        assert!(result.is_nan());
     }
 }

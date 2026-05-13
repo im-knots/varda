@@ -104,10 +104,16 @@ pub enum DurationSpec {
 }
 
 impl DurationSpec {
-    /// Resolve to seconds given the current BPM (falls back to 120 if unknown).
+    /// Resolve to seconds given the current BPM (falls back to 120 if unknown/invalid).
     pub fn to_seconds(&self, bpm: Option<f64>) -> f64 {
         match self {
-            DurationSpec::Beats(b) => b * 60.0 / bpm.unwrap_or(120.0),
+            DurationSpec::Beats(b) => {
+                let safe_bpm = match bpm {
+                    Some(v) if v.is_finite() && v > 0.0 => v,
+                    _ => 120.0,
+                };
+                b * 60.0 / safe_bpm
+            }
             DurationSpec::Seconds(s) => *s,
             DurationSpec::Minutes(m) => m * 60.0,
             DurationSpec::Hours(h) => h * 3600.0,
@@ -712,7 +718,10 @@ impl Channel {
                 };
 
                 let fx_prefix = format!("fx_{}", effect.uuid);
-                effect.apply_with_modulation(context, input_view, output_view, &uniforms, Some(modulation), Some(&fx_prefix), &mut fx_cmd_buffers)?;
+                if let Err(e) = effect.apply_with_modulation(context, input_view, output_view, &uniforms, Some(modulation), Some(&fx_prefix), &mut fx_cmd_buffers) {
+                    log::warn!("Effect {} failed, skipping: {}", _eff_idx, e);
+                    continue;
+                }
                 read_from_composite = !read_from_composite;
             }
 
@@ -774,7 +783,7 @@ impl Channel {
     /// Set deck opacity
     pub fn set_deck_opacity(&mut self, index: usize, opacity: f32) {
         if let Some(slot) = self.decks.get_mut(index) {
-            slot.opacity = opacity.clamp(0.0, 1.0);
+            slot.opacity = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
         }
     }
 

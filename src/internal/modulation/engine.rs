@@ -77,6 +77,17 @@ impl ModulationEngine {
         }
     }
 
+    /// Remove all assignments whose key starts with the given prefix.
+    /// Used to clean up orphaned assignments when a deck or effect is removed.
+    pub fn remove_assignments_with_prefix(&mut self, prefix: &str) {
+        let before = self.assignments.len();
+        self.assignments.retain(|k, _| !k.starts_with(prefix));
+        let removed = before - self.assignments.len();
+        if removed > 0 {
+            log::info!("Removed {} orphaned modulation assignments with prefix '{}'", removed, prefix);
+        }
+    }
+
     pub fn assign(&mut self, param_name: &str, source_id: &str, amount: f32, component: Option<usize>) {
         if !self.uuid_to_idx.contains_key(source_id) {
             self.ensure_index();

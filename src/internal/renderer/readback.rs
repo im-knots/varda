@@ -115,7 +115,22 @@ impl ReadbackBuffer {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let poll_start = std::time::Instant::now();
+        loop {
+            match device.poll(wgpu::PollType::Poll) {
+                Ok(status) if status.is_queue_empty() => break,
+                Err(e) => {
+                    log::warn!("GPU poll error during readback: {}", e);
+                    return None;
+                }
+                _ => {}
+            }
+            if poll_start.elapsed() > std::time::Duration::from_millis(16) {
+                log::warn!("GPU readback timeout, skipping frame");
+                return None;
+            }
+            std::thread::yield_now();
+        }
 
         match rx.recv() {
             Ok(Ok(())) => {

@@ -185,23 +185,22 @@ impl AutoMapEngine {
                 return;
             }
 
-            // Grid note → tap/hold for mute/solo
+            // Grid note → tap/hold for mute/solo (only if we saw the note-on)
             if state.is_grid_note(note) {
-                let duration = state.press_times.remove(&note)
-                    .map(|t| t.elapsed())
-                    .unwrap_or(Duration::ZERO);
+                if let Some(press_time) = state.press_times.remove(&note) {
+                    let duration = press_time.elapsed();
+                    let threshold = Duration::from_millis(state.config.tap_hold_threshold_ms);
+                    let (ch_idx, dk_idx) = grid_note_to_channel_deck(
+                        note, state.page_offset, state.config.columns,
+                    );
 
-                let threshold = Duration::from_millis(state.config.tap_hold_threshold_ms);
-                let (ch_idx, dk_idx) = grid_note_to_channel_deck(
-                    note, state.page_offset, state.config.columns,
-                );
-
-                if duration < threshold {
-                    // Tap → mute/solo based on tap_action
-                    Self::apply_action(&state.config.tap_action, mixer, ch_idx, dk_idx);
-                } else {
-                    // Hold → mute/solo based on hold_action
-                    Self::apply_action(&state.config.hold_action, mixer, ch_idx, dk_idx);
+                    if duration < threshold {
+                        // Tap → mute/solo based on tap_action
+                        Self::apply_action(&state.config.tap_action, mixer, ch_idx, dk_idx);
+                    } else {
+                        // Hold → mute/solo based on hold_action
+                        Self::apply_action(&state.config.hold_action, mixer, ch_idx, dk_idx);
+                    }
                 }
             }
         }

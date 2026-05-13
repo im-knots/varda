@@ -6,6 +6,12 @@ fn main() -> anyhow::Result<()> {
         .filter_module("egui_wgpu", log::LevelFilter::Error)
         .init();
 
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("PANIC: {}", info);
+        default_hook(info);
+    }));
+
     let config = varda::app::AppConfig::parse();
 
     log::info!("Varda VJ Software - Starting up...");

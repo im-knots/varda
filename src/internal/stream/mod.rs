@@ -300,7 +300,12 @@ fn stream_receive_thread(
                         None
                     })?;
 
-                let codec_params = ctx.stream(stream_idx).unwrap().parameters();
+                let codec_params = ctx.stream(stream_idx)
+                    .or_else(|| {
+                        log::warn!("Stream '{}': stream index {} not found, retrying in {}ms...", url_display, stream_idx, backoff_ms);
+                        None
+                    })?
+                    .parameters();
                 let codec_ctx = ffmpeg_next::codec::Context::from_parameters(codec_params)
                     .map_err(|e| log::warn!("Stream '{}': failed to create codec context: {}, retrying in {}ms...", url_display, e, backoff_ms))
                     .ok()?;

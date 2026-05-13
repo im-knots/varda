@@ -563,6 +563,10 @@ impl PolygonBlitPipeline {
         let cols = mesh.cols as usize;
         let rows = mesh.rows as usize;
         if cols < 2 || rows < 2 || mesh.points.len() != cols * rows {
+            log::warn!(
+                "Invalid mesh: cols={cols}, rows={rows}, points={} (expected {}). Returning empty mesh.",
+                mesh.points.len(), cols * rows
+            );
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Mesh Warp Vertex Buffer (empty)"),
                 contents: &[],

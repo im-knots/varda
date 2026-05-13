@@ -658,6 +658,8 @@ impl Deck {
 
     /// Resize the deck's render targets
     pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
+        let width = width.max(1);
+        let height = height.max(1);
         self.texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Deck Texture (Linear)"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -835,5 +837,30 @@ mod tests {
         let params = ShaderParams::from_inputs(&[]);
         accumulate_phase_times(&mut accum, 0.1, None, &params);
         assert_eq!(accum, [0.0; 4]);
+    }
+
+    // ── Offensive: zero-size texture guard on resize ─────────────────
+
+    #[test]
+    fn deck_resize_zero_dimensions_does_not_panic() {
+        let gpu = crate::renderer::GpuContext::new_headless();
+        let Ok(gpu) = gpu else {
+            eprintln!("Skipping: no headless GPU available");
+            return;
+        };
+        let mut deck = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64)
+            .expect("solid color deck creation should succeed");
+
+        // Zero width — must not panic (clamped to 1)
+        deck.resize(&gpu, 0, 64);
+
+        // Zero height — must not panic (clamped to 1)
+        deck.resize(&gpu, 64, 0);
+
+        // Both zero — must not panic (clamped to 1x1)
+        deck.resize(&gpu, 0, 0);
+
+        // Normal resize still works
+        deck.resize(&gpu, 128, 128);
     }
 }

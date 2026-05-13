@@ -170,6 +170,8 @@ impl NdiManager {
             return None;
         }
 
+        let width = width.max(1);
+        let height = height.max(1);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("NDI Receive: {}", source_name)),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -288,6 +290,8 @@ impl NdiManager {
                     continue;
                 }
                 // Recreate texture if dimensions changed
+                let fw = fw.max(1);
+                let fh = fh.max(1);
                 if fw != self.receivers[i].width || fh != self.receivers[i].height {
                     log::info!("NDI receiver {}: resolution changed {}×{} → {}×{}", i, self.receivers[i].width, self.receivers[i].height, fw, fh);
                     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -370,7 +374,12 @@ impl NdiManager {
             log::info!("NDI sender created: '{}'", sender_name);
         }
 
-        let sender = self.senders.get_mut(sender_name).unwrap();
+        let sender = if let Some(s) = self.senders.get_mut(sender_name) {
+            s
+        } else {
+            log::error!("NDI sender '{}' not found after creation", sender_name);
+            return;
+        };
 
         // Convert RGBA → UYVY
         let uyvy_size = (width as usize) * (height as usize) * 2;
@@ -417,9 +426,10 @@ impl NdiManager {
 
 impl Drop for NdiManager {
     fn drop(&mut self) {
-        // Stop all receivers
+        // Stop all receivers and join their threads before SDK cleanup
         for r in &mut self.receivers {
             r.stop_flag.store(true, Ordering::SeqCst);
+            if let Some(t) = r._thread.take() { let _ = t.join(); }
         }
         // Destroy all senders
         let sender_names: Vec<String> = self.senders.keys().cloned().collect();

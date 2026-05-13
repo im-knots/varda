@@ -362,6 +362,7 @@ pub fn build_router(shared: SharedState) -> Router {
         // ── OpenAPI / Swagger UI ─────────────────────────────────
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
         // ── Middleware ───────────────────────────────────────────
+        .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)) // 16 MB
         .layer(cors)
         .with_state(shared)
 }
@@ -406,34 +407,47 @@ pub fn start(
     drop(test_bind);
 
     let thread_handle = std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create tokio runtime for API server");
-
-        rt.block_on(async move {
-            let app = build_router(shared);
-            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-            let listener = match tokio::net::TcpListener::bind(addr).await {
-                Ok(l) => l,
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let rt = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
                 Err(e) => {
-                    log::error!("Failed to bind API server on port {}: {}", port, e);
+                    log::error!("Failed to create tokio runtime for API server: {}", e);
                     return;
                 }
             };
-            let local_addr = listener.local_addr().unwrap();
-            log::info!("HTTP API server listening on http://{}", local_addr);
 
-            let mut shutdown_rx = shutdown_rx;
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.wait_for(|&v| v).await;
-                    log::info!("API server shutting down...");
-                })
-                .await
-                .expect("API server error");
-            log::info!("API server stopped");
-        });
+            rt.block_on(async move {
+                let app = build_router(shared);
+                let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+                let listener = match tokio::net::TcpListener::bind(addr).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        log::error!("Failed to bind API server on port {}: {}", port, e);
+                        return;
+                    }
+                };
+                let local_addr = listener.local_addr().unwrap();
+                log::info!("HTTP API server listening on http://{}", local_addr);
+
+                let mut shutdown_rx = shutdown_rx;
+                if let Err(e) = axum::serve(listener, app)
+                    .with_graceful_shutdown(async move {
+                        let _ = shutdown_rx.wait_for(|&v| v).await;
+                        log::info!("API server shutting down...");
+                    })
+                    .await
+                {
+                    log::error!("API server error: {}", e);
+                }
+                log::info!("API server stopped");
+            });
+        }));
+        if let Err(_) = result {
+            log::error!("API server thread panicked");
+        }
     });
 
     Some(ApiServerHandle { shutdown_tx, thread_handle })
@@ -481,5 +495,21 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(resp.headers().contains_key("access-control-allow-origin"));
+    }
+
+    // ── Offensive: catch_unwind wrapping thread panics ────────────────
+
+    #[test]
+    fn api_thread_catch_unwind_pattern_works() {
+        let handle = std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                panic!("simulated API server panic");
+            }));
+            if let Err(_) = result {
+                log::error!("API server thread panicked");
+            }
+        });
+        // Thread must complete without propagating the panic
+        handle.join().expect("thread should join cleanly after catch_unwind");
     }
 }

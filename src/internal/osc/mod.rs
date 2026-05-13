@@ -57,8 +57,7 @@ impl OscConfig {
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content = serde_json::to_string_pretty(self)
             .context("Failed to serialize OSC config")?;
-        std::fs::write(path.as_ref(), content)
-            .with_context(|| format!("Failed to write OSC config: {}", path.as_ref().display()))?;
+        crate::persistence::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }
@@ -185,7 +184,9 @@ impl OscReceiver {
         match packet {
             OscPacket::Message(msg) => {
                 let input = parse_osc_message(&msg.addr, &msg.args);
-                let _ = sender.send(input);
+                if let Err(e) = sender.send(input) {
+                    log::warn!("OSC input dropped: {}", e);
+                }
             }
             OscPacket::Bundle(bundle) => {
                 for p in bundle.content {
@@ -452,5 +453,45 @@ mod tests {
         // Adding same target again is a no-op
         sender.add_target("127.0.0.1:9001").unwrap();
         assert_eq!(sender.targets.len(), 1);
+    }
+
+    // ── Offensive: handle_packet with dropped receiver must not panic ─
+
+    #[test]
+    fn handle_packet_dropped_receiver_does_not_panic() {
+        let (tx, rx) = std::sync::mpsc::channel::<OscInput>();
+        // Drop the receiver so send() will fail
+        drop(rx);
+
+        let packet = OscPacket::Message(rosc::OscMessage {
+            addr: "/varda/crossfader".to_string(),
+            args: vec![OscType::Float(0.5)],
+        });
+
+        // Must not panic — the error is logged, not unwrapped
+        OscReceiver::handle_packet(packet, &tx);
+    }
+
+    #[test]
+    fn handle_packet_bundle_with_dropped_receiver_does_not_panic() {
+        let (tx, rx) = std::sync::mpsc::channel::<OscInput>();
+        drop(rx);
+
+        let bundle = OscPacket::Bundle(rosc::OscBundle {
+            timetag: (0, 0).into(),
+            content: vec![
+                OscPacket::Message(rosc::OscMessage {
+                    addr: "/varda/channel/0/opacity".to_string(),
+                    args: vec![OscType::Float(1.0)],
+                }),
+                OscPacket::Message(rosc::OscMessage {
+                    addr: "/varda/crossfader".to_string(),
+                    args: vec![OscType::Float(0.0)],
+                }),
+            ],
+        });
+
+        // Must not panic even with multiple messages in a bundle
+        OscReceiver::handle_packet(bundle, &tx);
     }
 }

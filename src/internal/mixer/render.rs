@@ -85,13 +85,16 @@ impl Mixer {
         }
 
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
-            if effective_opacities[ch_idx] < 0.001 {
+            if effective_opacities.get(ch_idx).copied().unwrap_or(0.0) < 0.001 {
                 // Reset stats so culled channels don't show stale render metrics
                 channel.render_time_ms = 0.0;
                 channel.active_deck_count = 0;
                 continue;
             }
-            channel.render(context, audio_data, &self.modulation, ch_idx, time, dt)?;
+            if let Err(e) = channel.render(context, audio_data, &self.modulation, ch_idx, time, dt) {
+                log::error!("Channel {} render failed, skipping: {}", ch_idx, e);
+                continue;
+            }
         }
 
         self.sync_transition_progress();
@@ -263,7 +266,7 @@ impl Mixer {
         for &ch_idx in indices {
             if ch_idx >= self.channels.len() { continue; }
             let channel = &self.channels[ch_idx];
-            let opacity = opacities[ch_idx];
+            let opacity = opacities.get(ch_idx).copied().unwrap_or(0.0);
             if opacity <= 0.0 { continue; }
 
             let blend_mode = channel.blend_mode;

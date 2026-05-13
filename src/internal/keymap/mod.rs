@@ -287,8 +287,7 @@ impl KeymapConfig {
         }
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| anyhow::anyhow!("Failed to serialize keymap config: {}", e))?;
-        std::fs::write(path.as_ref(), content)
-            .map_err(|e| anyhow::anyhow!("Failed to write keymap config: {}", e))?;
+        crate::persistence::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }

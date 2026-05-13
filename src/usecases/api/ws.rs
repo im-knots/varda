@@ -37,6 +37,7 @@ struct WsCommandResponse {
 enum WsResultPayload {
     Ok { status: &'static str },
     OkWithId { status: &'static str, uuid: String },
+    OkWithData { status: &'static str, data: serde_json::Value },
     Err { error: &'static str, message: String },
 }
 
@@ -45,7 +46,7 @@ impl From<CommandResult> for WsResultPayload {
         match r {
             CommandResult::Ok => WsResultPayload::Ok { status: "ok" },
             CommandResult::OkWithId { uuid } => WsResultPayload::OkWithId { status: "ok", uuid },
-            CommandResult::OkWithData { .. } => WsResultPayload::Ok { status: "ok" },
+            CommandResult::OkWithData { data } => WsResultPayload::OkWithData { status: "ok", data },
             CommandResult::Err { code, message } => {
                 let error = match code {
                     crate::engine::ErrorCode::NotFound => "not_found",

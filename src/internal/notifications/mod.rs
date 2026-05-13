@@ -85,6 +85,9 @@ impl NotificationSystem {
         );
 
         self.history.push(notification.clone());
+        if self.history.len() > 1000 {
+            self.history.drain(..self.history.len() - 1000);
+        }
         self.active.insert(0, notification);
     }
 
@@ -264,5 +267,33 @@ mod tests {
         let mut ns3 = NotificationSystem::new();
         ns3.error("e");
         assert_eq!(ns3.visible()[0].duration, Duration::from_secs(8));
+    }
+
+    // ── Offensive: history must be capped at 1000 ────────────────────
+
+    #[test]
+    fn notification_history_capped_at_1000() {
+        let mut ns = NotificationSystem::new();
+        for i in 0..1100 {
+            ns.info(format!("msg {}", i));
+        }
+        assert!(ns.history.len() <= 1000,
+            "history should be capped at 1000, got {}", ns.history.len());
+        // Oldest messages should have been evicted
+        assert!(ns.history[0].message != "msg 0",
+            "oldest message should have been evicted");
+    }
+
+    #[test]
+    fn notification_history_at_boundary() {
+        let mut ns = NotificationSystem::new();
+        for i in 0..1000 {
+            ns.info(format!("msg {}", i));
+        }
+        assert_eq!(ns.history.len(), 1000);
+        // Adding one more should still cap at 1000
+        ns.info("overflow");
+        assert_eq!(ns.history.len(), 1000);
+        assert_eq!(ns.history.last().unwrap().message, "overflow");
     }
 }

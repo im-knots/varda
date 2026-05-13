@@ -47,8 +47,7 @@ impl PresetLibrary {
         let path = workspace.deck_presets_dir().join(&filename);
         let json = serde_json::to_string_pretty(config)
             .context("Failed to serialize deck preset")?;
-        std::fs::write(&path, json)
-            .with_context(|| format!("Failed to write deck preset: {}", path.display()))?;
+        super::atomic_write(&path, &json)?;
         log::info!("Saved deck preset '{}' to {}", name, path.display());
         Ok(())
     }
@@ -64,8 +63,7 @@ impl PresetLibrary {
         let path = workspace.channel_presets_dir().join(&filename);
         let json = serde_json::to_string_pretty(config)
             .context("Failed to serialize channel preset")?;
-        std::fs::write(&path, json)
-            .with_context(|| format!("Failed to write channel preset: {}", path.display()))?;
+        super::atomic_write(&path, &json)?;
         log::info!("Saved channel preset '{}' to {}", name, path.display());
         Ok(())
     }
