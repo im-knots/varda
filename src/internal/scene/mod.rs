@@ -321,6 +321,11 @@ pub enum SourceConfig {
     Dash {
         url: String,
     },
+    /// RTMP stream source (reconnected on restore)
+    Rtmp {
+        url: String,
+        mode: String,
+    },
 }
 
 // ── Effect ─────────────────────────────────────────────────────────
@@ -355,6 +360,7 @@ pub enum OutputTargetConfig {
     SrtStream { url: String, #[serde(default)] codec: String },
     HlsStream { name: String, #[serde(default)] codec: String, #[serde(default)] low_latency: bool },
     DashStream { name: String, #[serde(default)] codec: String },
+    RtmpStream { url: String, #[serde(default)] codec: String },
     NdiSend { sender_name: String },
     SyphonServer { server_name: String },
 }
@@ -550,6 +556,11 @@ impl SourceConfig {
             SourceConfig::Dash { url } => {
                 if url.trim().is_empty() {
                     errors.push(format!("{}: DASH url is empty", prefix));
+                }
+            }
+            SourceConfig::Rtmp { url, .. } => {
+                if url.trim().is_empty() {
+                    errors.push(format!("{}: RTMP url is empty", prefix));
                 }
             }
         }
@@ -1046,5 +1057,33 @@ mod tests {
         let fx = EffectConfig { uuid: "test0001".into(), path: "".into(), enabled: true, params: HashMap::new() };
         let errors = fx.validate("fx[0]");
         assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn scene_config_roundtrip_rtmp_source() {
+        let source = SourceConfig::Rtmp { url: "rtmp://live.example.com/app/stream".to_string(), mode: "pull".to_string() };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Rtmp { url, mode } => {
+                assert_eq!(url, "rtmp://live.example.com/app/stream");
+                assert_eq!(mode, "pull");
+            }
+            _ => panic!("Expected Rtmp source"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_rtmp_output() {
+        let target = OutputTargetConfig::RtmpStream { url: "rtmp://live.twitch.tv/app/key".to_string(), codec: "H.264".to_string() };
+        let json = serde_json::to_string(&target).unwrap();
+        let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            OutputTargetConfig::RtmpStream { url, codec } => {
+                assert_eq!(url, "rtmp://live.twitch.tv/app/key");
+                assert_eq!(codec, "H.264");
+            }
+            _ => panic!("Expected RtmpStream target"),
+        }
     }
 }

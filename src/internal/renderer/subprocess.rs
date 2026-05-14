@@ -87,6 +87,19 @@ pub struct FfmpegSubprocess {
 /// to stay one frame ahead without accumulating unbounded latency.
 const FRAME_CHANNEL_CAPACITY: usize = 2;
 
+/// Compute video/buffer bitrate in kbps for RTMP output based on resolution and frame rate.
+fn compute_rtmp_bitrate(width: u32, height: u32, fps: u32) -> (u32, u32) {
+    let pixels = width * height;
+    let base = match pixels {
+        p if p <= 921_600 => 3000,    // ≤720p
+        p if p <= 2_073_600 => 6000,  // ≤1080p
+        p if p <= 3_686_400 => 9000,  // ≤1440p
+        _ => 15000,                    // 4K+
+    };
+    let maxrate = if fps > 30 { base * 3 / 2 } else { base };
+    (maxrate, maxrate * 2)
+}
+
 impl FfmpegSubprocess {
     /// Start the background writer thread that drains the channel into ffmpeg stdin.
     fn start_writer_thread(
@@ -322,6 +335,71 @@ impl FfmpegSubprocess {
             write_failed,
             shutting_down,
             label: name.to_string(),
+            start_time: std::time::Instant::now(),
+            stopped: false,
+        })
+    }
+
+    /// Spawn an ffmpeg RTMP output subprocess.
+    pub fn spawn_rtmp(
+        url: &str,
+        codec: &super::context::StreamingCodec,
+        width: u32,
+        height: u32,
+        fps: u32,
+    ) -> anyhow::Result<Self> {
+        let (encoder, extra): (&str, Vec<&str>) = match codec {
+            super::context::StreamingCodec::H264 => ("libx264", vec!["-preset", "ultrafast", "-tune", "zerolatency"]),
+            super::context::StreamingCodec::H265 => ("libx265", vec!["-preset", "ultrafast", "-vtag", "hvc1"]),
+            super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
+        };
+
+        let (maxrate, bufsize) = compute_rtmp_bitrate(width, height, fps);
+        let gop = fps * 2;
+
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-y")
+            .args(["-f", "rawvideo"])
+            .args(["-pix_fmt", "rgba"])
+            .args(["-s", &format!("{}x{}", width, height)])
+            .args(["-r", &fps.to_string()])
+            .args(["-i", "-"])
+            .args(["-c:v", encoder])
+            .args(&extra)
+            .args(["-pix_fmt", "yuv420p"])
+            .args(["-b:v", &format!("{}k", maxrate)])
+            .args(["-maxrate", &format!("{}k", maxrate)])
+            .args(["-bufsize", &format!("{}k", bufsize)])
+            .args(["-g", &gop.to_string()])
+            .args(["-f", "flv"])
+            .arg(url)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg for RTMP: {}. Is ffmpeg installed?", e))?;
+
+        log::info!("RTMP output started: {} ({}x{} @ {}fps, {}kbps)", url, width, height, fps, maxrate);
+
+        let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
+        let frames_written = Arc::new(AtomicU64::new(0));
+        let write_failed = Arc::new(AtomicBool::new(false));
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
+        let label = url.to_string();
+        let writer_thread = Self::start_writer_thread(
+            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), label.clone(),
+        );
+
+        Ok(Self {
+            child,
+            frame_tx: Some(tx),
+            writer_thread: Some(writer_thread),
+            frames_written,
+            write_failed,
+            shutting_down,
+            label,
             start_time: std::time::Instant::now(),
             stopped: false,
         })
@@ -716,5 +794,33 @@ mod tests {
     fn frame_channel_capacity_is_bounded() {
         // Verify the channel capacity constant
         assert_eq!(FRAME_CHANNEL_CAPACITY, 2);
+    }
+
+    #[test]
+    fn compute_rtmp_bitrate_720p() {
+        let (maxrate, bufsize) = compute_rtmp_bitrate(1280, 720, 30);
+        assert_eq!(maxrate, 3000);
+        assert_eq!(bufsize, 6000);
+    }
+
+    #[test]
+    fn compute_rtmp_bitrate_1080p() {
+        let (maxrate, bufsize) = compute_rtmp_bitrate(1920, 1080, 30);
+        assert_eq!(maxrate, 6000);
+        assert_eq!(bufsize, 12000);
+    }
+
+    #[test]
+    fn compute_rtmp_bitrate_1080p60() {
+        let (maxrate, bufsize) = compute_rtmp_bitrate(1920, 1080, 60);
+        assert_eq!(maxrate, 9000);
+        assert_eq!(bufsize, 18000);
+    }
+
+    #[test]
+    fn compute_rtmp_bitrate_4k() {
+        let (maxrate, bufsize) = compute_rtmp_bitrate(3840, 2160, 30);
+        assert_eq!(maxrate, 15000);
+        assert_eq!(bufsize, 30000);
     }
 }

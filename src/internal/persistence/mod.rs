@@ -362,6 +362,12 @@ pub fn snapshot_scene(
                         .to_string();
                     SourceConfig::Dash { url }
                 }
+                "rtmp" => {
+                    let url = slot.deck.source_name()
+                        .trim_start_matches("📺 ")
+                        .to_string();
+                    SourceConfig::Rtmp { url, mode: "pull".to_string() }
+                }
                 _ => return None,
             };
 
@@ -490,6 +496,9 @@ fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
         OutputTarget::SrtStream { url, codec } => OutputTargetConfig::SrtStream { url: url.clone(), codec: codec.to_string() },
         OutputTarget::HlsStream { name, codec, low_latency } => OutputTargetConfig::HlsStream { name: name.clone(), codec: codec.to_string(), low_latency: *low_latency },
         OutputTarget::DashStream { name, codec } => OutputTargetConfig::DashStream { name: name.clone(), codec: codec.to_string() },
+        OutputTarget::RtmpStream { url, codec } => OutputTargetConfig::RtmpStream {
+            url: url.clone(), codec: codec.to_string(),
+        },
         OutputTarget::NdiSend { sender_name } => OutputTargetConfig::NdiSend { sender_name: sender_name.clone() },
         OutputTarget::SyphonServer { server_name } => OutputTargetConfig::SyphonServer { server_name: server_name.clone() },
     }
@@ -538,6 +547,14 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
         },
         OutputTargetConfig::DashStream { name, codec } => OutputTarget::DashStream {
             name: name.clone(),
+            codec: match codec.as_str() {
+                "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
+                "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
+                _ => crate::renderer::context::StreamingCodec::H264,
+            },
+        },
+        OutputTargetConfig::RtmpStream { url, codec } => OutputTarget::RtmpStream {
+            url: url.clone(),
             codec: match codec.as_str() {
                 "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
                 "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
@@ -932,6 +949,21 @@ pub(crate) fn restore_deck(
                 }
             }
         }
+        SourceConfig::Rtmp { url, mode } => {
+            let rtmp_mode = match mode.as_str() {
+                "listen" | "Listen" => crate::stream::RtmpMode::Listen,
+                _ => crate::stream::RtmpMode::Pull,
+            };
+            match stream_manager.start_rtmp_receive(url, rtmp_mode, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    Deck::new_from_rtmp(context, receiver_idx, url, src_w, src_h, render_width, render_height)?
+                }
+                None => {
+                    return Err(anyhow::anyhow!("RTMP source '{}' not available for restore", url));
+                }
+            }
+        }
     };
 
     // Restore UUID from config
@@ -992,6 +1024,9 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
         }
         ("dash", SourceConfig::Dash { url }) => {
             deck.source_name().trim_start_matches("📡 ") == url
+        }
+        ("rtmp", SourceConfig::Rtmp { url, .. }) => {
+            deck.source_name().trim_start_matches("📺 ") == url
         }
         _ => false,
     }

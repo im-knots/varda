@@ -26,6 +26,8 @@ pub enum StreamProtocol {
     Hls,
     /// DASH (Dynamic Adaptive Streaming over HTTP) — reads `.mpd` manifest.
     Dash,
+    /// RTMP stream source with connection mode.
+    Rtmp { mode: RtmpMode },
 }
 
 /// SRT connection mode — listener waits for connections, caller connects out.
@@ -42,6 +44,24 @@ impl std::fmt::Display for SrtMode {
         match self {
             SrtMode::Listener => write!(f, "Listener"),
             SrtMode::Caller => write!(f, "Caller"),
+        }
+    }
+}
+
+/// RTMP connection mode: pull from a remote server or listen for incoming pushes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub enum RtmpMode {
+    /// Connect to a remote RTMP server and pull the stream.
+    Pull,
+    /// Listen on a local RTMP port for incoming pushes (e.g. from OBS).
+    Listen,
+}
+
+impl std::fmt::Display for RtmpMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RtmpMode::Pull => write!(f, "Pull"),
+            RtmpMode::Listen => write!(f, "Listen"),
         }
     }
 }
@@ -94,12 +114,14 @@ impl StreamManager {
         let full_url = match &protocol {
             StreamProtocol::Srt { mode } => build_srt_url(url, *mode),
             StreamProtocol::Hls | StreamProtocol::Dash => url.to_string(),
+            StreamProtocol::Rtmp { mode } => build_rtmp_url(url, *mode),
         };
 
         let label = match &protocol {
             StreamProtocol::Srt { .. } => format!("SRT Receive: {}", url),
             StreamProtocol::Hls => format!("HLS Receive: {}", url),
             StreamProtocol::Dash => format!("DASH Receive: {}", url),
+            StreamProtocol::Rtmp { .. } => format!("RTMP Receive: {}", url),
         };
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -123,6 +145,7 @@ impl StreamManager {
             StreamProtocol::Srt { .. } => format!("srt-recv-{}", url),
             StreamProtocol::Hls => format!("hls-recv-{}", url),
             StreamProtocol::Dash => format!("dash-recv-{}", url),
+            StreamProtocol::Rtmp { .. } => format!("rtmp-recv-{}", url),
         };
 
         let thread = std::thread::Builder::new()
@@ -156,6 +179,11 @@ impl StreamManager {
     /// Start receiving from an SRT URL (convenience wrapper).
     pub fn start_srt_receive(&mut self, url: &str, mode: SrtMode, device: &wgpu::Device) -> Option<usize> {
         self.start_receive(url, StreamProtocol::Srt { mode }, device)
+    }
+
+    /// Start receiving from an RTMP URL (convenience wrapper).
+    pub fn start_rtmp_receive(&mut self, url: &str, mode: RtmpMode, device: &wgpu::Device) -> Option<usize> {
+        self.start_receive(url, StreamProtocol::Rtmp { mode }, device)
     }
 
     /// Upload latest frames from all receivers to GPU.
@@ -221,6 +249,14 @@ impl StreamManager {
         })
     }
 
+    /// Get RTMP mode of receiver at index (convenience for RTMP receivers).
+    pub fn receiver_rtmp_mode(&self, idx: usize) -> Option<RtmpMode> {
+        self.receivers.get(idx).and_then(|r| match &r.protocol {
+            StreamProtocol::Rtmp { mode } => Some(*mode),
+            _ => None,
+        })
+    }
+
     pub fn stop_receive(&mut self, idx: usize) {
         if let Some(r) = self.receivers.get_mut(idx) {
             r.stop_flag.store(true, Ordering::SeqCst);
@@ -255,8 +291,22 @@ fn build_srt_url(url: &str, mode: SrtMode) -> String {
     }
 }
 
+/// Build an RTMP URL, appending `listen=1` for Listen mode.
+fn build_rtmp_url(url: &str, mode: RtmpMode) -> String {
+    match mode {
+        RtmpMode::Pull => url.to_string(),
+        RtmpMode::Listen => {
+            if url.contains('?') {
+                format!("{}&listen=1", url)
+            } else {
+                format!("{}?listen=1", url)
+            }
+        }
+    }
+}
+
 /// Background thread: decode stream via ffmpeg_next into RGBA frames.
-/// Protocol-agnostic — ffmpeg handles SRT, HLS, and DASH URLs natively.
+/// Protocol-agnostic — ffmpeg handles SRT, HLS, DASH, and RTMP URLs natively.
 fn stream_receive_thread(
     url: String,
     url_display: String,
@@ -599,5 +649,29 @@ mod tests {
     fn build_srt_url_multiple_existing_params() {
         let url = build_srt_url("srt://host:9000?latency=0&passphrase=test", SrtMode::Listener);
         assert_eq!(url, "srt://host:9000?latency=0&passphrase=test&mode=listener");
+    }
+
+    #[test]
+    fn stream_protocol_rtmp_serialization() {
+        let protocol = StreamProtocol::Rtmp { mode: RtmpMode::Pull };
+        let json = serde_json::to_string(&protocol).unwrap();
+        let deserialized: StreamProtocol = serde_json::from_str(&json).unwrap();
+        assert_eq!(protocol, deserialized);
+    }
+
+    #[test]
+    fn rtmp_mode_display() {
+        assert_eq!(RtmpMode::Pull.to_string(), "Pull");
+        assert_eq!(RtmpMode::Listen.to_string(), "Listen");
+    }
+
+    #[test]
+    fn rtmp_mode_serialization_roundtrip() {
+        let pull = RtmpMode::Pull;
+        let listen = RtmpMode::Listen;
+        let pull_json = serde_json::to_string(&pull).unwrap();
+        let listen_json = serde_json::to_string(&listen).unwrap();
+        assert_eq!(serde_json::from_str::<RtmpMode>(&pull_json).unwrap(), pull);
+        assert_eq!(serde_json::from_str::<RtmpMode>(&listen_json).unwrap(), listen);
     }
 }

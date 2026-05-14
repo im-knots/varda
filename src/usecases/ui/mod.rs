@@ -436,6 +436,14 @@ pub struct DashLibraryEntry {
     pub connected: bool,
 }
 
+/// RTMP source entry for the library panel
+#[derive(Clone)]
+pub struct RtmpLibraryEntry {
+    pub url: String,
+    pub mode: crate::stream::RtmpMode,
+    pub connected: bool,
+}
+
 /// All collected data needed to render the UI
 pub struct UIData {
     pub generators: Vec<(String, usize)>,
@@ -533,6 +541,8 @@ pub struct UIData {
     pub hls_library_configs: Vec<HlsLibraryEntry>,
     /// DASH library source configs
     pub dash_library_configs: Vec<DashLibraryEntry>,
+    /// RTMP library source configs
+    pub rtmp_library_configs: Vec<RtmpLibraryEntry>,
     // Recording/SRT state is now per-output (see OutputUI.is_active, active_duration)
     /// Transition sequences (multiple named sequences)
     pub sequences: Vec<SequenceUIData>,
@@ -830,8 +840,7 @@ pub struct UIActions {
     pub videos_to_add: Vec<(usize, std::path::PathBuf)>,
     /// Channel index to open a video file dialog for (deferred to outside egui frame)
     pub open_video_dialog_for_channel: Option<usize>,
-    /// (ch_idx, color_rgba) — add a solid color deck to channel
-    pub solid_color_to_add: Option<(usize, [f32; 4])>,
+
     /// (ch_idx, deck_idx) — remove deck from channel
     pub deck_to_remove: Option<(usize, usize)>,
     /// (ch_idx, deck_idx, opacity, blend_mode, solo, mute)
@@ -959,6 +968,12 @@ pub struct UIActions {
     pub hls_library_remove: Option<String>,
     /// DASH URL to remove from library
     pub dash_library_remove: Option<String>,
+    /// (ch_idx, url, mode) — add an RTMP source as a new deck to channel
+    pub rtmp_to_add: Option<(usize, String, crate::stream::RtmpMode)>,
+    /// RTMP URL to add to library (url, mode)
+    pub rtmp_library_add: Option<(String, crate::stream::RtmpMode)>,
+    /// RTMP URL to remove from library
+    pub rtmp_library_remove: Option<String>,
     // Recording/SRT start/stop is now via OutputAction::Start/Stop per output
     /// Rescan for audio input devices
     pub audio_rescan: bool,
@@ -1080,7 +1095,6 @@ impl UIActions {
             open_image_dialog_for_channel: None,
             videos_to_add: Vec::new(),
             open_video_dialog_for_channel: None,
-            solid_color_to_add: None,
             deck_to_remove: None,
             deck_updates: Vec::new(),
             scaling_mode_updates: Vec::new(),
@@ -1148,6 +1162,9 @@ impl UIActions {
             dash_library_add: None,
             hls_library_remove: None,
             dash_library_remove: None,
+            rtmp_to_add: None,
+            rtmp_library_add: None,
+            rtmp_library_remove: None,
             audio_rescan: false,
             audio_source_toggles: Vec::new(),
             video_actions: Vec::new(),
@@ -1171,7 +1188,7 @@ impl UIActions {
         self.shader_to_add.is_some()
             || !self.images_to_add.is_empty()
             || !self.videos_to_add.is_empty()
-            || self.solid_color_to_add.is_some()
+
             || self.deck_to_remove.is_some()
             || !self.deck_updates.is_empty()
             || !self.scaling_mode_updates.is_empty()
@@ -1201,6 +1218,7 @@ impl UIActions {
             || self.srt_to_add.is_some()
             || self.hls_to_add.is_some()
             || self.dash_to_add.is_some()
+            || self.rtmp_to_add.is_some()
             || !self.auto_transition_actions.is_empty()
             || !self.sequence_actions.is_empty()
             || self.deck_preset_to_add.is_some()
@@ -1227,6 +1245,8 @@ pub enum LibraryDrag {
     Hls(String),
     /// DASH stream source (url)
     Dash(String),
+    /// RTMP stream source (url, mode)
+    Rtmp(String, crate::stream::RtmpMode),
     /// Deck preset from library (index into preset_library.deck_presets)
     DeckPreset(usize),
     /// Channel preset from library (index into preset_library.channel_presets)
@@ -1485,6 +1505,7 @@ impl UIData {
             srt_library_configs: vec![],
             hls_library_configs: vec![],
             dash_library_configs: vec![],
+            rtmp_library_configs: vec![],
 
             sequences: vec![],
             channel_count: 2,

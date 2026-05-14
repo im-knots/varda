@@ -208,25 +208,6 @@ impl VardaApp {
             }
         }
 
-        // Add solid color deck if requested
-        if let Some((ch_idx, color)) = actions.solid_color_to_add.take() {
-            match Deck::new_solid_color(context, color, self.render_width, self.render_height) {
-                Ok(deck) => {
-                    if let Some(ch) = mixer.channel_mut(ch_idx) {
-                        let name = deck.source_name().to_string();
-                        let idx = ch.add_deck(deck);
-                        log::info!("Added solid color deck {} to channel {}: {}", idx, ch_idx, name);
-                        let texture_id = egui_renderer.register_native_texture(
-                            &context.device,
-                            &ch.decks[idx].deck.texture_view,
-                            wgpu::FilterMode::Linear,
-                        );
-                        deck_preview_textures.insert((ch_idx, idx), texture_id);
-                    }
-                }
-                Err(e) => log::error!("Failed to create solid color deck: {}", e),
-            }
-        }
 
         // Add NDI source deck if requested
         if let Some((ch_idx, ndi_name)) = actions.ndi_to_add.take() {
@@ -370,6 +351,38 @@ impl VardaApp {
             }
         }
 
+        // Add RTMP source deck if requested
+        if let Some((ch_idx, url, mode)) = actions.rtmp_to_add.take() {
+            match self.stream_manager.start_rtmp_receive(&url, mode, &context.device) {
+                Some(receiver_idx) => {
+                    let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    match Deck::new_from_rtmp(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                        Ok(deck) => {
+                            if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                let idx = ch.add_deck(deck);
+                                log::info!("Added RTMP deck {} to channel {}: {} ({})", idx, ch_idx, url, mode);
+                                let texture_id = egui_renderer.register_native_texture(
+                                    &context.device,
+                                    &ch.decks[idx].deck.texture_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                deck_preview_textures.insert((ch_idx, idx), texture_id);
+                                self.notifications.info(format!("📺 RTMP '{}' added to Ch {}", url, ch_idx + 1));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create RTMP deck: {}", e);
+                            self.notifications.error(format!("Failed to create RTMP deck: {}", e));
+                        }
+                    }
+                }
+                None => {
+                    log::error!("Failed to start RTMP receive for '{}'", url);
+                    self.notifications.error(format!("Failed to receive RTMP source '{}'", url));
+                }
+            }
+        }
+
         // Add/remove HLS library entries
         if let Some(url) = actions.hls_library_add.take() {
             if !self.hls_library.contains(&url) {
@@ -392,6 +405,18 @@ impl VardaApp {
         if let Some(url) = actions.dash_library_remove.take() {
             self.dash_library.retain(|u| u != &url);
             log::info!("Removed DASH source from library: {}", url);
+        }
+
+        // Add/remove RTMP library entries
+        if let Some((url, mode)) = actions.rtmp_library_add.take() {
+            if !self.rtmp_library.iter().any(|(u, _)| u == &url) {
+                log::info!("Added RTMP source to library: {} ({})", url, mode);
+                self.rtmp_library.push((url, mode));
+            }
+        }
+        if let Some(url) = actions.rtmp_library_remove.take() {
+            self.rtmp_library.retain(|(u, _)| u != &url);
+            log::info!("Removed RTMP source from library: {}", url);
         }
 
         // Add Syphon server deck if requested

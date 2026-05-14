@@ -309,7 +309,8 @@ impl Deck {
             }
             DeckSource::Srt { blit_pipeline, source_width, source_height, scaling_mode, .. }
             | DeckSource::Hls { blit_pipeline, source_width, source_height, scaling_mode, .. }
-            | DeckSource::Dash { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
+            | DeckSource::Dash { blit_pipeline, source_width, source_height, scaling_mode, .. }
+            | DeckSource::Rtmp { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
                 if let Some(srt_view) = &self.srt_source_view {
                     Self::blit_external_source(context, blit_pipeline, srt_view,
                         *source_width, *source_height, self.texture.width(), self.texture.height(),

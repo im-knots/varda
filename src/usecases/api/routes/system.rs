@@ -266,6 +266,32 @@ pub async fn remove_dash_library_entry(State(state): State<SharedState>, Json(b)
     }
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct RtmpLibraryBody {
+    /// RTMP stream URL.
+    pub url: String,
+    /// Connection mode (Pull or Listen).
+    pub mode: crate::stream::RtmpMode,
+}
+#[utoipa::path(post, path = "/api/streams/rtmp/library", request_body = RtmpLibraryBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
+pub async fn add_rtmp_library_entry(State(state): State<SharedState>, Json(b): Json<RtmpLibraryBody>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::AddRtmpLibraryEntry { url: b.url, mode: b.mode }).await {
+        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct RemoveRtmpBody {
+    /// RTMP stream URL to remove.
+    pub url: String,
+}
+#[utoipa::path(delete, path = "/api/streams/rtmp/library", request_body = RemoveRtmpBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
+pub async fn remove_rtmp_library_entry(State(state): State<SharedState>, Json(b): Json<RemoveRtmpBody>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::RemoveRtmpLibraryEntry { url: b.url }).await {
+        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

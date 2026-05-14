@@ -302,6 +302,8 @@ pub enum OutputTarget {
     HlsStream { name: String, codec: StreamingCodec, low_latency: bool },
     /// Stream frames as DASH segments via ffmpeg
     DashStream { name: String, codec: StreamingCodec },
+    /// Push frames to an RTMP/RTMPS ingest endpoint via ffmpeg
+    RtmpStream { url: String, codec: StreamingCodec },
     /// Send frames over NDI network protocol
     NdiSend { sender_name: String },
     /// Publish frames via Syphon (macOS inter-app sharing)
@@ -332,6 +334,7 @@ impl std::fmt::Display for OutputTarget {
                 else { write!(f, "HLS [{}]: {}", codec, name) }
             }
             OutputTarget::DashStream { name, codec } => write!(f, "DASH [{}]: {}", codec, name),
+            OutputTarget::RtmpStream { url, codec } => write!(f, "RTMP [{}]: {}", codec, url),
             OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {}", sender_name),
             OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {}", server_name),
         }

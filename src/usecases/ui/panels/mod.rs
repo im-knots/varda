@@ -472,6 +472,12 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     actions.dash_to_add = Some((ch_idx, url));
                 }
 
+                let rtmp_key = egui::Id::new("__lib_dnd_rtmp_config");
+                if let Some((url, mode)) = ctx.memory(|mem| mem.data.get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)) {
+                    log::info!("Library drop (deferred): RTMP '{}' ({}) -> ch{}", url, mode, ch_idx);
+                    actions.rtmp_to_add = Some((ch_idx, url, mode));
+                }
+
                 // Deck preset dropped on a channel
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
                 let deck_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(deck_preset_key));
@@ -524,6 +530,12 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
                     log::info!("Library drop (deferred): DASH '{}' -> new ch{}", url, new_ch_idx);
                     actions.dash_to_add = Some((new_ch_idx, url));
+                }
+
+                let rtmp_key = egui::Id::new("__lib_dnd_rtmp_config");
+                if let Some((url, mode)) = ctx.memory(|mem| mem.data.get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)) {
+                    log::info!("Library drop (deferred): RTMP '{}' ({}) -> new ch{}", url, mode, new_ch_idx);
+                    actions.rtmp_to_add = Some((new_ch_idx, url, mode));
                 }
 
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
@@ -581,6 +593,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 mem.data.remove::<(String, crate::stream::SrtMode)>(egui::Id::new("__lib_dnd_srt_config"));
                 mem.data.remove::<String>(egui::Id::new("__lib_dnd_hls_url"));
                 mem.data.remove::<String>(egui::Id::new("__lib_dnd_dash_url"));
+                mem.data.remove::<(String, crate::stream::RtmpMode)>(egui::Id::new("__lib_dnd_rtmp_config"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_deck_preset_idx"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_ch_preset_idx"));
             });

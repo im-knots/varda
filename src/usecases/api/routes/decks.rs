@@ -513,6 +513,20 @@ pub async fn add_dash_deck(State(s): State<SharedState>, Path(ch): Path<usize>, 
     }
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct RtmpSourceBody {
+    /// RTMP stream URL.
+    pub url: String,
+    /// Connection mode (Pull or Listen).
+    pub mode: crate::stream::RtmpMode,
+}
+#[utoipa::path(post, path = "/api/channels/{ch}/decks/rtmp", params(("ch" = usize, Path, description = "Channel index")), request_body = RtmpSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn add_rtmp_deck(State(s): State<SharedState>, Path(ch): Path<usize>, Json(b): Json<RtmpSourceBody>) -> impl IntoResponse {
+    match s.send_command(EngineCommand::AddRtmpDeck { channel_idx: ch, url: b.url, mode: b.mode }).await {
+        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
 // ── Missing Parity Routes ─────────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]

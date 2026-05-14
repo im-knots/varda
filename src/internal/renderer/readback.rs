@@ -18,6 +18,9 @@ pub struct ReadbackBuffer {
     padded_bytes_per_row: u32,
     /// Whether we've done at least one copy (so the read buffer has valid data)
     has_previous: bool,
+    /// Track which buffers may be mapped so we can unmap before reuse.
+    /// [buffer_a_mapped, buffer_b_mapped]
+    mapped: [bool; 2],
 }
 
 impl ReadbackBuffer {
@@ -51,6 +54,7 @@ impl ReadbackBuffer {
             height,
             padded_bytes_per_row,
             has_previous: false,
+            mapped: [false; 2],
         }
     }
 
@@ -67,6 +71,11 @@ impl ReadbackBuffer {
     /// Enqueue a texture→buffer copy for this frame. Call during command encoding.
     /// The source texture must have `COPY_SRC` usage.
     pub fn begin_readback(&mut self, encoder: &mut wgpu::CommandEncoder, source_texture: &wgpu::Texture) {
+        // Defensively unmap if a previous map_async completed or timed out
+        if self.mapped[self.write_idx] {
+            self.buffers[self.write_idx].unmap();
+            self.mapped[self.write_idx] = false;
+        }
         let buffer = &self.buffers[self.write_idx];
 
         encoder.copy_texture_to_buffer(
@@ -101,7 +110,7 @@ impl ReadbackBuffer {
     ///
     /// This maps the buffer synchronously with `poll(Wait)`. For the output thread
     /// this is acceptable since we're 1 frame behind.
-    pub fn try_read(&self, device: &wgpu::Device) -> Option<Vec<u8>> {
+    pub fn try_read(&mut self, device: &wgpu::Device) -> Option<Vec<u8>> {
         if !self.has_previous {
             return None;
         }
@@ -110,23 +119,36 @@ impl ReadbackBuffer {
         let read_idx = self.write_idx; // after swap, write_idx points to what was previously read
         let buffer = &self.buffers[read_idx];
 
+        // If already mapped from a previous timed-out attempt, unmap first
+        if self.mapped[read_idx] {
+            buffer.unmap();
+            self.mapped[read_idx] = false;
+        }
+
         let slice = buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
+        // Mark mapped so we can clean up on timeout or next call
+        self.mapped[read_idx] = true;
+
         let poll_start = std::time::Instant::now();
         loop {
             match device.poll(wgpu::PollType::Poll) {
                 Ok(status) if status.is_queue_empty() => break,
                 Err(e) => {
                     log::warn!("GPU poll error during readback: {}", e);
+                    // Buffer may or may not have completed mapping; leave mapped flag
+                    // set so begin_readback or next try_read will unmap defensively.
                     return None;
                 }
                 _ => {}
             }
             if poll_start.elapsed() > std::time::Duration::from_millis(16) {
                 log::warn!("GPU readback timeout, skipping frame");
+                // map_async callback may fire later; mapped flag stays true
+                // so begin_readback will unmap before reusing this buffer.
                 return None;
             }
             std::thread::yield_now();
@@ -153,9 +175,15 @@ impl ReadbackBuffer {
 
                 drop(data);
                 buffer.unmap();
+                self.mapped[read_idx] = false;
                 Some(result)
             }
-            _ => None,
+            _ => {
+                // Map failed — unmap defensively
+                buffer.unmap();
+                self.mapped[read_idx] = false;
+                None
+            }
         }
     }
 }

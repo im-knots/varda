@@ -87,17 +87,6 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 
         ui.add_space(4.0);
 
-        // === SOLID COLOR ===
-        let color_header = egui::RichText::new("🎨 Solid Color").strong();
-        egui::CollapsingHeader::new(color_header).default_open(false).show(ui, |ui| {
-            for ch in &data.channels {
-                if ui.button(format!("Add to {}", ch.name)).clicked() {
-                    actions.solid_color_to_add = Some((ch.ch_idx, [0.0, 0.0, 0.0, 1.0]));
-                }
-            }
-        });
-
-        ui.add_space(4.0);
 
         // === CAMERAS ===
         let cam_header = egui::RichText::new(format!("📹 Cameras ({})", data.cameras.len())).strong();
@@ -123,9 +112,18 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 
         ui.add_space(4.0);
 
-        // === NDI SOURCES ===
+        // === STREAM SOURCES (grouped) ===
         {
-            let ndi_header = egui::RichText::new(format!("📡 NDI Sources ({})", data.ndi_sources.len())).strong();
+            let total_streams = data.ndi_sources.len()
+                + data.srt_library_configs.len()
+                + data.hls_library_configs.len()
+                + data.dash_library_configs.len()
+                + data.rtmp_library_configs.len();
+            let stream_header = egui::RichText::new(format!("📡 Stream Sources ({})", total_streams)).strong();
+            egui::CollapsingHeader::new(stream_header).id_salt("lib_streams").default_open(false).show(ui, |ui| {
+
+            // — NDI —
+            let ndi_header = egui::RichText::new(format!("NDI ({})", data.ndi_sources.len())).strong();
             egui::CollapsingHeader::new(ndi_header).id_salt("lib_ndi").default_open(false).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.small_button("🔄 Rescan").clicked() {
@@ -152,11 +150,9 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             });
 
             ui.add_space(4.0);
-        }
 
-        // === SRT SOURCES ===
-        {
-            let srt_header = egui::RichText::new(format!("📺 SRT Sources ({})", data.srt_library_configs.len())).strong();
+            // — SRT —
+            let srt_header = egui::RichText::new(format!("SRT ({})", data.srt_library_configs.len())).strong();
             egui::CollapsingHeader::new(srt_header).id_salt("lib_srt").default_open(false).show(ui, |ui| {
                 // "+ Add SRT" button with inline config
                 let adding_id = ui.id().with("srt_adding");
@@ -232,11 +228,9 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             });
 
             ui.add_space(4.0);
-        }
 
-        // === HLS SOURCES ===
-        {
-            let hls_header = egui::RichText::new(format!("📡 HLS Sources ({})", data.hls_library_configs.len())).strong();
+            // — HLS —
+            let hls_header = egui::RichText::new(format!("HLS ({})", data.hls_library_configs.len())).strong();
             egui::CollapsingHeader::new(hls_header).id_salt("lib_hls").default_open(false).show(ui, |ui| {
                 let adding_id = ui.id().with("hls_adding");
                 let url_id = ui.id().with("hls_url_input");
@@ -292,11 +286,9 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             });
 
             ui.add_space(4.0);
-        }
 
-        // === DASH SOURCES ===
-        {
-            let dash_header = egui::RichText::new(format!("📡 DASH Sources ({})", data.dash_library_configs.len())).strong();
+            // — DASH —
+            let dash_header = egui::RichText::new(format!("DASH ({})", data.dash_library_configs.len())).strong();
             egui::CollapsingHeader::new(dash_header).id_salt("lib_dash").default_open(false).show(ui, |ui| {
                 let adding_id = ui.id().with("dash_adding");
                 let url_id = ui.id().with("dash_url_input");
@@ -350,6 +342,101 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     }
                 }
             });
+
+            ui.add_space(4.0);
+
+            // — RTMP —
+            let rtmp_header = egui::RichText::new(format!("RTMP ({})", data.rtmp_library_configs.len())).strong();
+            egui::CollapsingHeader::new(rtmp_header).id_salt("lib_rtmp").default_open(false).show(ui, |ui| {
+                let adding_id = ui.id().with("rtmp_adding");
+                let url_id = ui.id().with("rtmp_url_input");
+                let mode_id = ui.id().with("rtmp_mode_input");
+                let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                if is_adding {
+                    let mut mode: crate::stream::RtmpMode = ui.data(|d| d.get_temp(mode_id)).unwrap_or(crate::stream::RtmpMode::Pull);
+                    let prev_mode: crate::stream::RtmpMode = ui.data(|d| d.get_temp(ui.id().with("rtmp_prev_mode"))).unwrap_or(crate::stream::RtmpMode::Pull);
+                    let listen_port = 1935 + data.rtmp_library_configs.len();
+                    let auto_listen_url = format!("rtmp://0.0.0.0:{}/live/stream", listen_port);
+                    let mut url: String = ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| {
+                        if mode == crate::stream::RtmpMode::Listen { auto_listen_url.clone() } else { "rtmp://".to_string() }
+                    });
+                    // Auto-update URL when mode changes
+                    if mode != prev_mode {
+                        if mode == crate::stream::RtmpMode::Listen {
+                            url = auto_listen_url.clone();
+                        } else if prev_mode == crate::stream::RtmpMode::Listen {
+                            url = "rtmp://".to_string();
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Mode:");
+                        egui::ComboBox::from_id_salt("rtmp_mode_combo")
+                            .selected_text(mode.to_string())
+                            .width(80.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(mode == crate::stream::RtmpMode::Pull, "Pull").clicked() {
+                                    mode = crate::stream::RtmpMode::Pull;
+                                }
+                                if ui.selectable_label(mode == crate::stream::RtmpMode::Listen, "Listen").clicked() {
+                                    mode = crate::stream::RtmpMode::Listen;
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("URL:");
+                        ui.add(egui::TextEdit::singleline(&mut url).desired_width(200.0));
+                    });
+                    if mode == crate::stream::RtmpMode::Listen {
+                        ui.label(egui::RichText::new("OBS → rtmp://YOUR_IP:PORT/live/stream").weak().small());
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                            actions.rtmp_library_add = Some((url.clone(), mode));
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                        if ui.small_button("✕ Cancel").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, false));
+                        }
+                    });
+                    ui.data_mut(|d| {
+                        d.insert_temp(url_id, url);
+                        d.insert_temp(mode_id, mode);
+                        d.insert_temp(ui.id().with("rtmp_prev_mode"), mode);
+                    });
+                } else if ui.small_button("+ Add RTMP").clicked() {
+                    ui.data_mut(|d| d.insert_temp(adding_id, true));
+                }
+
+                for (i, entry) in data.rtmp_library_configs.iter().enumerate() {
+                    let item_id = egui::Id::new(("lib_rtmp", i));
+                    let status_color = if entry.connected {
+                        egui::Color32::from_rgb(100, 220, 100)
+                    } else {
+                        egui::Color32::from_rgb(180, 180, 180)
+                    };
+                    let url = entry.url.clone();
+                    let mode = entry.mode;
+                    ui.horizontal(|ui| {
+                        ui.dnd_drag_source(item_id, LibraryDrag::Rtmp(url.clone(), mode), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("●").color(status_color));
+                                ui.label(egui::RichText::new(format!("📺 {} ({})", url, mode)).size(12.0));
+                            });
+                        }).response;
+                        if ui.small_button("✕").on_hover_text("Remove from library").clicked() {
+                            actions.rtmp_library_remove = Some(url.clone());
+                        }
+                    });
+                    if ui.ctx().is_being_dragged(item_id) {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.data.insert_temp(egui::Id::new("__lib_dnd_rtmp_config"), (url, mode));
+                        });
+                    }
+                }
+            });
+
+            }); // end Stream Sources
 
             ui.add_space(4.0);
         }

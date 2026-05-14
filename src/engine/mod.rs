@@ -114,6 +114,7 @@ pub enum EngineCommand {
     AddSrtDeck { channel_idx: usize, url: String, mode: crate::stream::SrtMode },
     AddHlsDeck { channel_idx: usize, url: String },
     AddDashDeck { channel_idx: usize, url: String },
+    AddRtmpDeck { channel_idx: usize, url: String, mode: crate::stream::RtmpMode },
 
     // ── Transition Sequences ───────────────────────────────────
     CreateSequence,
@@ -143,6 +144,8 @@ pub enum EngineCommand {
     RemoveHlsLibraryEntry { url: String },
     AddDashLibraryEntry { url: String },
     RemoveDashLibraryEntry { url: String },
+    AddRtmpLibraryEntry { url: String, mode: crate::stream::RtmpMode },
+    RemoveRtmpLibraryEntry { url: String },
 
     // ── Output ─────────────────────────────────────────────────
     CreateOutput,

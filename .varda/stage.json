@@ -96,20 +96,14 @@
   },
   "outputs": [
     {
-      "uuid": "5bcf1a1b",
+      "uuid": "2dc7ac81",
       "name": "Output 1",
       "target": {
-        "type": "windowed"
+        "type": "rtmp_stream",
+        "url": "rtmp://",
+        "codec": "H.264"
       },
       "surface_assignments": [],
-      "window_position": [
-        123,
-        529
-      ],
-      "window_size": [
-        3440,
-        1298
-      ],
       "edge_blend_mode": "Manual",
       "edge_blend": {
         "left": {

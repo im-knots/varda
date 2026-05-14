@@ -35,6 +35,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::system::add_stream_library_entry, routes::system::remove_stream_library_entry,
         routes::system::add_hls_library_entry, routes::system::remove_hls_library_entry,
         routes::system::add_dash_library_entry, routes::system::remove_dash_library_entry,
+        routes::system::add_rtmp_library_entry, routes::system::remove_rtmp_library_entry,
         // Mixer
         routes::mixer::set_crossfader, routes::mixer::auto_crossfade,
         routes::mixer::beat_crossfade,
@@ -50,7 +51,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::move_deck, routes::decks::reorder_deck, routes::decks::set_scaling_mode,
         routes::decks::set_transition, routes::decks::set_param,
         routes::decks::add_ndi_deck, routes::decks::add_syphon_deck,
-        routes::decks::add_srt_deck, routes::decks::add_hls_deck, routes::decks::add_dash_deck,
+        routes::decks::add_srt_deck, routes::decks::add_hls_deck, routes::decks::add_dash_deck, routes::decks::add_rtmp_deck,
         routes::decks::reset_generator_params,
         // Video
         routes::decks::video_toggle_play, routes::decks::video_seek,
@@ -260,6 +261,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/channels/{ch}/decks/srt", axum::routing::post(routes::decks::add_srt_deck))
         .route("/api/channels/{ch}/decks/hls", axum::routing::post(routes::decks::add_hls_deck))
         .route("/api/channels/{ch}/decks/dash", axum::routing::post(routes::decks::add_dash_deck))
+        .route("/api/channels/{ch}/decks/rtmp", axum::routing::post(routes::decks::add_rtmp_deck))
         // ── Write: Modulation Updates ────────────────────────────
         .route("/api/modulation/{uuid}/lfo/frequency", axum::routing::put(routes::modulation::update_lfo_frequency))
         .route("/api/modulation/{uuid}/lfo/waveform", axum::routing::put(routes::modulation::update_lfo_waveform))
@@ -349,6 +351,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/streams/library", axum::routing::post(routes::system::add_stream_library_entry).delete(routes::system::remove_stream_library_entry))
         .route("/api/streams/hls/library", axum::routing::post(routes::system::add_hls_library_entry).delete(routes::system::remove_hls_library_entry))
         .route("/api/streams/dash/library", axum::routing::post(routes::system::add_dash_library_entry).delete(routes::system::remove_dash_library_entry))
+        .route("/api/streams/rtmp/library", axum::routing::post(routes::system::add_rtmp_library_entry).delete(routes::system::remove_rtmp_library_entry))
         // ── Write: Mixer extras ────────────────────────────────
         .route("/api/mixer/transition", axum::routing::put(routes::decks::set_transition))
         // ── Write: Params ──────────────────────────────────────

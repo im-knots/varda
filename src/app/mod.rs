@@ -172,6 +172,8 @@ pub struct VardaApp {
     hls_library: Vec<String>,
     /// Configured DASH input sources in the library (urls).
     dash_library: Vec<String>,
+    /// Configured RTMP input sources in the library (url + mode).
+    rtmp_library: Vec<(String, crate::stream::RtmpMode)>,
 
     // ── Presets ─────────────────────────────────────────────────
     preset_library: crate::persistence::presets::PresetLibrary,
@@ -333,6 +335,7 @@ impl VardaApp {
             stream_library: Vec::new(),
             hls_library: Vec::new(),
             dash_library: Vec::new(),
+            rtmp_library: Vec::new(),
             preset_library,
             history: history::HistoryManager::new(),
             midi_pending_undo: false,
@@ -1077,6 +1080,25 @@ impl VardaApp {
                     None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start DASH receive for '{}'", url) },
                 }
             }
+            EngineCommand::AddRtmpDeck { channel_idx, url, mode } => {
+                match self.stream_manager.start_rtmp_receive(&url, mode, &self.context.device) {
+                    Some(receiver_idx) => {
+                        let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        match crate::deck::Deck::new_from_rtmp(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                            Ok(deck) => {
+                                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
+                                    ch.add_deck(deck);
+                                    CommandResult::Ok
+                                } else {
+                                    CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
+                                }
+                            }
+                            Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
+                        }
+                    }
+                    None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start RTMP receive for '{}'", url) },
+                }
+            }
 
             // ── Transition Sequences ──────────────────────────
             EngineCommand::CreateSequence => {
@@ -1336,6 +1358,17 @@ impl VardaApp {
                 self.dash_library.retain(|u| u != &url);
                 CommandResult::Ok
             }
+            EngineCommand::AddRtmpLibraryEntry { url, mode } => {
+                if !self.rtmp_library.iter().any(|(u, _)| u == &url) {
+                    log::info!("Added RTMP source to library via API: {} ({})", url, mode);
+                    self.rtmp_library.push((url, mode));
+                }
+                CommandResult::Ok
+            }
+            EngineCommand::RemoveRtmpLibraryEntry { url } => {
+                self.rtmp_library.retain(|(u, _)| u != &url);
+                CommandResult::Ok
+            }
 
             // ── Output Management ─────────────────────────────────
             EngineCommand::CreateHeadlessOutput { target } => {
@@ -1375,6 +1408,12 @@ impl VardaApp {
                             }
                             OutputTarget::DashStream { name, codec } => {
                                 match crate::renderer::FfmpegSubprocess::spawn_dash(name, codec, h.width, h.height, 30) {
+                                    Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
+                                    Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
+                                }
+                            }
+                            OutputTarget::RtmpStream { url, codec } => {
+                                match crate::renderer::FfmpegSubprocess::spawn_rtmp(url, codec, h.width, h.height, 30) {
                                     Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
                                     Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
                                 }

@@ -589,6 +589,14 @@ pub(crate) fn build_ui_data(
                     .any(|i| app.stream_manager.receiver_url(i) == Some(url.as_str()) && app.stream_manager.is_connected(i)),
             }
         }).collect(),
+        rtmp_library_configs: app.rtmp_library.iter().map(|(url, mode)| {
+            crate::usecases::ui::RtmpLibraryEntry {
+                url: url.clone(),
+                mode: *mode,
+                connected: (0..app.stream_manager.receiver_count())
+                    .any(|i| app.stream_manager.receiver_url(i) == Some(url.as_str()) && app.stream_manager.is_connected(i)),
+            }
+        }).collect(),
 
         sequences,
         channel_count: engine.mixer.channels.len(),

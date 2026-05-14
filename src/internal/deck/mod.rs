@@ -179,6 +179,15 @@ pub enum DeckSource {
         source_height: u32,
         scaling_mode: ScalingMode,
     },
+    /// RTMP stream input (reads shared texture from StreamManager)
+    Rtmp {
+        /// Index into StreamManager's receiver list
+        receiver_idx: usize,
+        blit_pipeline: BlitPipeline,
+        source_width: u32,
+        source_height: u32,
+        scaling_mode: ScalingMode,
+    },
 }
 
 /// An effect in the deck's effect chain (ISF filter)
@@ -327,6 +336,7 @@ impl Deck {
             DeckSource::Srt { .. } => "srt",
             DeckSource::Hls { .. } => "hls",
             DeckSource::Dash { .. } => "dash",
+            DeckSource::Rtmp { .. } => "rtmp",
         }
     }
 
@@ -381,7 +391,8 @@ impl Deck {
             | DeckSource::Syphon { scaling_mode, .. }
             | DeckSource::Srt { scaling_mode, .. }
             | DeckSource::Hls { scaling_mode, .. }
-            | DeckSource::Dash { scaling_mode, .. } => Some(*scaling_mode),
+            | DeckSource::Dash { scaling_mode, .. }
+            | DeckSource::Rtmp { scaling_mode, .. } => Some(*scaling_mode),
             _ => None,
         }
     }
@@ -395,7 +406,8 @@ impl Deck {
             | DeckSource::Syphon { scaling_mode, .. }
             | DeckSource::Srt { scaling_mode, .. }
             | DeckSource::Hls { scaling_mode, .. }
-            | DeckSource::Dash { scaling_mode, .. } => *scaling_mode = mode,
+            | DeckSource::Dash { scaling_mode, .. }
+            | DeckSource::Rtmp { scaling_mode, .. } => *scaling_mode = mode,
             _ => {}
         }
     }
@@ -421,7 +433,8 @@ impl Deck {
         match &self.source {
             DeckSource::Srt { receiver_idx, .. }
             | DeckSource::Hls { receiver_idx, .. }
-            | DeckSource::Dash { receiver_idx, .. } => Some(*receiver_idx),
+            | DeckSource::Dash { receiver_idx, .. }
+            | DeckSource::Rtmp { receiver_idx, .. } => Some(*receiver_idx),
             _ => None,
         }
     }

@@ -572,7 +572,8 @@ impl VardaApp {
                         }
                     }
                     crate::renderer::context::OutputTarget::HlsStream { .. } |
-                    crate::renderer::context::OutputTarget::DashStream { .. } => {
+                    crate::renderer::context::OutputTarget::DashStream { .. } |
+                    crate::renderer::context::OutputTarget::RtmpStream { .. } => {
                         if let Some(sub) = &mut h.subprocess {
                             if !sub.feed_frame(&frame_data) {
                                 log::error!("Stream subprocess write failed for '{}', stopping", h.name);

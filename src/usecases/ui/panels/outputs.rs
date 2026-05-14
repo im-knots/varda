@@ -216,7 +216,8 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
     // Unified stream config (SRT, HLS, DASH, NDI)
     let is_stream = matches!(output.target,
         OutputTarget::SrtStream { .. } | OutputTarget::HlsStream { .. } |
-        OutputTarget::DashStream { .. } | OutputTarget::NdiSend { .. }
+        OutputTarget::DashStream { .. } | OutputTarget::RtmpStream { .. } |
+        OutputTarget::NdiSend { .. }
     );
     if is_stream {
         render_stream_config(ui, idx, output, actions);
@@ -282,6 +283,7 @@ fn render_stream_config(ui: &mut egui::Ui, idx: usize, output: &super::super::Ou
         OutputTarget::SrtStream { .. } => "SRT",
         OutputTarget::HlsStream { .. } => "HLS",
         OutputTarget::DashStream { .. } => "DASH",
+        OutputTarget::RtmpStream { .. } => "RTMP",
         OutputTarget::NdiSend { .. } => "NDI",
         _ => return,
     };
@@ -306,6 +308,10 @@ fn render_stream_config(ui: &mut egui::Ui, idx: usize, output: &super::super::Ou
                         }),
                         ("DASH", OutputTarget::DashStream {
                             name: "live".to_string(),
+                            codec: StreamingCodec::default(),
+                        }),
+                        ("RTMP", OutputTarget::RtmpStream {
+                            url: "rtmp://".to_string(),
                             codec: StreamingCodec::default(),
                         }),
                         ("NDI", OutputTarget::NdiSend {
@@ -393,6 +399,46 @@ fn render_stream_config(ui: &mut egui::Ui, idx: usize, output: &super::super::Ou
             let manifest_url = format!("http://localhost:8080/streams/{}/manifest.mpd", name);
             render_copyable_url(ui, "▶", &player_url, 10.0, actions);
             render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
+        }
+        OutputTarget::RtmpStream { ref url, ref codec } => {
+            if !output.is_active {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Codec:").small());
+                    egui::ComboBox::from_id_salt(format!("rtmp_codec_{}", idx))
+                        .selected_text(egui::RichText::new(codec.to_string()).small())
+                        .width(120.0)
+                        .show_ui(ui, |ui| {
+                            for c in &[StreamingCodec::H264, StreamingCodec::H265, StreamingCodec::AV1] {
+                                if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
+                                    actions.output_actions.push(OutputAction::SetTarget {
+                                        idx,
+                                        target: OutputTarget::RtmpStream { url: url.clone(), codec: c.clone() },
+                                    });
+                                }
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("URL:").small());
+                    let url_id = egui::Id::new(format!("rtmp_url_{}", idx));
+                    let mut current_url: String = ui.data(|d| d.get_temp(url_id))
+                        .unwrap_or_else(|| url.clone());
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut current_url)
+                            .desired_width(180.0)
+                            .font(egui::TextStyle::Small)
+                    );
+                    if response.lost_focus() || response.changed() {
+                        ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
+                        if response.lost_focus() {
+                            actions.output_actions.push(OutputAction::SetTarget {
+                                idx,
+                                target: OutputTarget::RtmpStream { url: current_url, codec: codec.clone() },
+                            });
+                        }
+                    }
+                });
+            }
         }
         OutputTarget::NdiSend { ref sender_name } => {
             if !output.is_active {

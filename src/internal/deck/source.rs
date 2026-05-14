@@ -742,6 +742,30 @@ impl Deck {
 
         Self::build_media_deck(context, source_name_str, None, source, width, height)
     }
+
+    /// Create a new deck from an RTMP stream source.
+    pub fn new_from_rtmp(
+        context: &GpuContext,
+        receiver_idx: usize,
+        url: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name_str = format!("📺 {}", url);
+        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+        let source = DeckSource::Rtmp {
+            receiver_idx,
+            blit_pipeline,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        Self::build_media_deck(context, source_name_str, None, source, width, height)
+    }
 }
 
 #[cfg(test)]
