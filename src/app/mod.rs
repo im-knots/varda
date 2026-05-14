@@ -599,36 +599,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::SetOutputTarget { idx, target } => {
-                use crate::renderer::context::{UnifiedOutput, OutputTarget};
-                if let Some(output) = self.output.outputs.get_mut(idx) {
-                    match output {
-                        UnifiedOutput::Window(w) => {
-                            if target.is_windowed() {
-                                let monitor = match &target {
-                                    OutputTarget::Display { monitor_index, .. } => {
-                                        self.output.cached_monitors.get(*monitor_index).map(|(_, h)| h.clone())
-                                    }
-                                    _ => None,
-                                };
-                                w.set_target(target, monitor);
-                            }
-                            CommandResult::Ok
-                        }
-                        UnifiedOutput::Headless(h) => {
-                            if target.is_headless() {
-                                if h.active {
-                                    if let Some(mut sub) = h.subprocess.take() { sub.stop(); }
-                                    h.active = false;
-                                    h.started_at = None;
-                                }
-                                h.target = target;
-                            }
-                            CommandResult::Ok
-                        }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
-                }
+                self.cmd_set_output_target(idx, target)
             }
 
             // ── Surfaces ────────────────────────────────────
@@ -645,13 +616,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::RemoveSurface { uuid } => {
-                self.remove_surface(&uuid);
-                // Purge dangling surface assignments from all outputs
-                for output in &mut self.output.outputs {
-                    output.surface_assignments_mut().retain(|a| a.surface_uuid != uuid);
-                }
-                self.recompute_auto_edge_blend();
-                CommandResult::Ok
+                self.cmd_remove_surface(&uuid)
             }
             EngineCommand::SetSurfaceSource { uuid, source } => {
                 self.set_surface_source(&uuid, source);
@@ -671,132 +636,17 @@ impl VardaApp {
                 self.rename_surface(&uuid, &name);
                 CommandResult::Ok
             }
-            EngineCommand::UpdateSurfaceVertices { uuid, vertices } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    surface.vertices = vertices;
-                    self.recompute_auto_edge_blend();
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::DuplicateSurface { uuid } => {
-                if let Some(new_uuid) = self.output.surface_manager.duplicate_surface(&uuid) {
-                    CommandResult::OkWithId { uuid: new_uuid }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::FlipSurfaceHorizontal { uuid } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    for v in &mut surface.vertices {
-                        v[0] = 1.0 - v[0];
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::FlipSurfaceVertical { uuid } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    for v in &mut surface.vertices {
-                        v[1] = 1.0 - v[1];
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::InsertSurfaceVertex { uuid, after_vert_idx, position } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    surface.convert_to_polygon();
-                    if after_vert_idx < surface.vertices.len() {
-                        surface.vertices.insert(after_vert_idx + 1, position);
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::SetCircleRadius { uuid, radius } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    if let Some(ref mut hint) = surface.circle_hint {
-                        hint.radius = radius;
-                        surface.vertices = hint.generate_vertices();
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::SetCircleSides { uuid, sides } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    if let Some(ref mut hint) = surface.circle_hint {
-                        hint.sides = sides;
-                        surface.vertices = hint.generate_vertices();
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::ConvertSurfaceToPolygon { uuid } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    surface.convert_to_polygon();
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::CombineSurfaces { uuids } => {
-                if let Some(new_uuid) = self.output.surface_manager.combine_surfaces(&uuids) {
-                    // Purge dangling assignments for combined (removed) surfaces
-                    for output in &mut self.output.outputs {
-                        output.surface_assignments_mut().retain(|a| {
-                            !uuids.contains(&a.surface_uuid) || a.surface_uuid == new_uuid
-                        });
-                    }
-                    self.recompute_auto_edge_blend();
-                    CommandResult::OkWithId { uuid: new_uuid }
-                } else {
-                    CommandResult::Err { code: ErrorCode::InvalidInput, message: "Failed to combine surfaces".into() }
-                }
-            }
-            EngineCommand::MoveSurface { uuid, dx, dy } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    surface.translate(dx, dy);
-                    if let Some(ref mut hint) = surface.circle_hint {
-                        let n = surface.vertices.len().max(1) as f32;
-                        let sum = surface.vertices.iter().fold([0.0f32, 0.0], |acc, v| {
-                            [acc[0] + v[0], acc[1] + v[1]]
-                        });
-                        hint.center = [sum[0] / n, sum[1] / n];
-                    }
-                    self.recompute_auto_edge_blend();
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
-            EngineCommand::UpdateSurfaceContourVertices { uuid, contour, vertices } => {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                    if contour == 0 {
-                        if let Some(ref mut hint) = surface.circle_hint {
-                            let n = vertices.len().max(1) as f32;
-                            let sum = vertices.iter().fold([0.0f32, 0.0], |acc, v| {
-                                [acc[0] + v[0], acc[1] + v[1]]
-                            });
-                            hint.center = [sum[0] / n, sum[1] / n];
-                        }
-                        surface.vertices = vertices;
-                    } else if let Some(c) = surface.extra_contours.get_mut(contour - 1) {
-                        *c = vertices;
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
-                }
-            }
+            EngineCommand::UpdateSurfaceVertices { uuid, vertices } => self.cmd_update_surface_vertices(&uuid, vertices),
+            EngineCommand::DuplicateSurface { uuid } => self.cmd_duplicate_surface(&uuid),
+            EngineCommand::FlipSurfaceHorizontal { uuid } => self.cmd_flip_surface_horizontal(&uuid),
+            EngineCommand::FlipSurfaceVertical { uuid } => self.cmd_flip_surface_vertical(&uuid),
+            EngineCommand::InsertSurfaceVertex { uuid, after_vert_idx, position } => self.cmd_insert_surface_vertex(&uuid, after_vert_idx, position),
+            EngineCommand::SetCircleRadius { uuid, radius } => self.cmd_set_circle_radius(&uuid, radius),
+            EngineCommand::SetCircleSides { uuid, sides } => self.cmd_set_circle_sides(&uuid, sides),
+            EngineCommand::ConvertSurfaceToPolygon { uuid } => self.cmd_convert_surface_to_polygon(&uuid),
+            EngineCommand::CombineSurfaces { uuids } => self.cmd_combine_surfaces(&uuids),
+            EngineCommand::MoveSurface { uuid, dx, dy } => self.cmd_move_surface(&uuid, dx, dy),
+            EngineCommand::UpdateSurfaceContourVertices { uuid, contour, vertices } => self.cmd_update_surface_contour_vertices(&uuid, contour, vertices),
             EngineCommand::AssignSurfaceToOutput { output_uuid, surface_uuid } => {
                 self.assign_surface_to_output(&output_uuid, &surface_uuid);
                 self.recompute_auto_edge_blend();
@@ -807,41 +657,8 @@ impl VardaApp {
                 self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
-            EngineCommand::AssignSurfaceToOutputByIdx { output_idx, surface_uuid } => {
-                if let Some(output) = self.output.outputs.get_mut(output_idx) {
-                    let assignments = output.surface_assignments_mut();
-                    if !assignments.iter().any(|a| a.surface_uuid == surface_uuid) {
-                        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(&surface_uuid) {
-                            let bb = surface.bounding_box();
-                            let assignment = crate::renderer::context::SurfaceAssignment {
-                                surface_uuid,
-                                warp_mode: crate::renderer::warp::WarpMode::identity_corners(
-                                    [bb.x, bb.y, bb.width, bb.height]
-                                ),
-                                enabled: true,
-                                overlap_zones: Default::default(),
-                            };
-                            assignments.push(assignment);
-                        }
-                    }
-                    self.recompute_auto_edge_blend();
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
-                }
-            }
-            EngineCommand::UnassignSurfaceFromOutputByIdx { output_idx, assignment_idx } => {
-                if let Some(output) = self.output.outputs.get_mut(output_idx) {
-                    let assignments = output.surface_assignments_mut();
-                    if assignment_idx < assignments.len() {
-                        assignments.remove(assignment_idx);
-                    }
-                    self.recompute_auto_edge_blend();
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
-                }
-            }
+            EngineCommand::AssignSurfaceToOutputByIdx { output_idx, surface_uuid } => self.cmd_assign_surface_to_output_by_idx(output_idx, &surface_uuid),
+            EngineCommand::UnassignSurfaceFromOutputByIdx { output_idx, assignment_idx } => self.cmd_unassign_surface_from_output_by_idx(output_idx, assignment_idx),
 
             // ── Video Playback ────────────────────────────────
             EngineCommand::VideoTogglePlay { channel_idx, deck_idx } => {
@@ -992,546 +809,53 @@ impl VardaApp {
             }
 
             // ── External I/O Deck Sources ─────────────────────
-            EngineCommand::AddNdiDeck { channel_idx, source_name } => {
-                match self.external_io.ndi_manager.start_receive(&source_name, &self.context.device) {
-                    Some(receiver_idx) => {
-                        let (src_w, src_h) = self.external_io.ndi_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                        match crate::deck::Deck::new_from_ndi(&self.context, receiver_idx, &source_name, src_w, src_h, self.render_width, self.render_height) {
-                            Ok(deck) => {
-                                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                                    ch.add_deck(deck);
-                                    CommandResult::Ok
-                                } else {
-                                    CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
-                                }
-                            }
-                            Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                        }
-                    }
-                    None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start NDI receive for '{}'", source_name) },
-                }
-            }
-            EngineCommand::AddSyphonDeck { channel_idx, server_name } => {
-                #[cfg(target_os = "macos")]
-                {
-                    match self.external_io.syphon_manager.start_receive(&server_name, &self.context.device) {
-                        Some(client_idx) => {
-                            let (src_w, src_h) = self.external_io.syphon_manager.client_dimensions(client_idx).unwrap_or((1920, 1080));
-                            match crate::deck::Deck::new_from_syphon(&self.context, client_idx, &server_name, src_w, src_h, self.render_width, self.render_height) {
-                                Ok(deck) => {
-                                    if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                                        ch.add_deck(deck);
-                                        CommandResult::Ok
-                                    } else {
-                                        CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
-                                    }
-                                }
-                                Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                            }
-                        }
-                        None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start Syphon receive for '{}'", server_name) },
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let _ = (channel_idx, server_name);
-                    CommandResult::Err { code: ErrorCode::Unavailable, message: "Syphon is only available on macOS".into() }
-                }
-            }
-            EngineCommand::AddSrtDeck { channel_idx, url, mode } => {
-                match self.external_io.stream_manager.start_srt_receive(&url, mode, &self.context.device) {
-                    Some(receiver_idx) => {
-                        let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                        match crate::deck::Deck::new_from_srt(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
-                            Ok(deck) => {
-                                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                                    ch.add_deck(deck);
-                                    CommandResult::Ok
-                                } else {
-                                    CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
-                                }
-                            }
-                            Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                        }
-                    }
-                    None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start SRT receive for '{}'", url) },
-                }
-            }
-
-            EngineCommand::AddHlsDeck { channel_idx, url } => {
-                match self.external_io.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Hls, &self.context.device) {
-                    Some(receiver_idx) => {
-                        let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                        match crate::deck::Deck::new_from_hls(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
-                            Ok(deck) => {
-                                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                                    ch.add_deck(deck);
-                                    CommandResult::Ok
-                                } else {
-                                    CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
-                                }
-                            }
-                            Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                        }
-                    }
-                    None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start HLS receive for '{}'", url) },
-                }
-            }
-            EngineCommand::AddDashDeck { channel_idx, url } => {
-                match self.external_io.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Dash, &self.context.device) {
-                    Some(receiver_idx) => {
-                        let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                        match crate::deck::Deck::new_from_dash(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
-                            Ok(deck) => {
-                                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                                    ch.add_deck(deck);
-                                    CommandResult::Ok
-                                } else {
-                                    CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
-                                }
-                            }
-                            Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                        }
-                    }
-                    None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start DASH receive for '{}'", url) },
-                }
-            }
-            EngineCommand::AddRtmpDeck { channel_idx, url, mode } => {
-                match self.external_io.stream_manager.start_rtmp_receive(&url, mode, &self.context.device) {
-                    Some(receiver_idx) => {
-                        let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                        match crate::deck::Deck::new_from_rtmp(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
-                            Ok(deck) => {
-                                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                                    ch.add_deck(deck);
-                                    CommandResult::Ok
-                                } else {
-                                    CommandResult::Err { code: ErrorCode::NotFound, message: "Channel not found".into() }
-                                }
-                            }
-                            Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                        }
-                    }
-                    None => CommandResult::Err { code: ErrorCode::InvalidInput, message: format!("Failed to start RTMP receive for '{}'", url) },
-                }
-            }
+            EngineCommand::AddNdiDeck { channel_idx, source_name } => self.cmd_add_ndi_deck(channel_idx, source_name),
+            EngineCommand::AddSyphonDeck { channel_idx, server_name } => self.cmd_add_syphon_deck(channel_idx, server_name),
+            EngineCommand::AddSrtDeck { channel_idx, url, mode } => self.cmd_add_srt_deck(channel_idx, url, mode),
+            EngineCommand::AddHlsDeck { channel_idx, url } => self.cmd_add_hls_deck(channel_idx, url),
+            EngineCommand::AddDashDeck { channel_idx, url } => self.cmd_add_dash_deck(channel_idx, url),
+            EngineCommand::AddRtmpDeck { channel_idx, url, mode } => self.cmd_add_rtmp_deck(channel_idx, url, mode),
 
             // ── Transition Sequences ──────────────────────────
-            EngineCommand::CreateSequence => {
-                let n = self.mixer.transition_sequences().len() + 1;
-                self.mixer.transition_sequences_mut().push(
-                    crate::mixer::TransitionSequence::new(format!("Sequence {}", n))
-                );
-                CommandResult::Ok
-            }
-            EngineCommand::DeleteSequence { idx } => {
-                if idx < self.mixer.transition_sequences().len() {
-                    self.mixer.transition_sequences_mut().remove(idx);
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::PlaySequence { idx } => {
-                self.mixer.start_sequence(idx);
-                CommandResult::Ok
-            }
-            EngineCommand::StopSequence { idx } => {
-                self.mixer.stop_sequence(idx);
-                CommandResult::Ok
-            }
-            EngineCommand::ToggleSequence { idx } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(idx) {
-                    seq.enabled = !seq.enabled;
-                    if !seq.enabled { seq.state.reset(); }
-                }
-                CommandResult::Ok
-            }
-            EngineCommand::AddFadeStep { seq_idx, from_ch, to_ch } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    seq.steps.push(crate::mixer::TransitionStep { kind: crate::mixer::StepKind::Fade {
-                        from_ch, to_ch,
-                        duration: crate::channel::DurationSpec::Seconds(2.0),
-                        easing: crate::mixer::CrossfadeEasing::EaseInOut,
-                        transition_shader: None,
-                    }});
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::AddWaitStep { seq_idx } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    seq.steps.push(crate::mixer::TransitionStep { kind: crate::mixer::StepKind::Wait {
-                        duration: crate::channel::DurationSpec::Seconds(2.0),
-                    }});
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::AddGoToStep { seq_idx, step_index } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    seq.steps.push(crate::mixer::TransitionStep { kind: crate::mixer::StepKind::GoTo { step_index } });
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::RemoveStep { seq_idx, step_idx } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if step_idx < seq.steps.len() {
-                        seq.steps.remove(step_idx);
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::SetStepDuration { seq_idx, step_idx, value, unit } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        match &mut step.kind {
-                            crate::mixer::StepKind::Fade { duration, .. } | crate::mixer::StepKind::Wait { duration } => {
-                                *duration = crate::channel::DurationSpec::from_value_unit(value, unit);
-                            }
-                            _ => {}
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::SetStepEasing { seq_idx, step_idx, easing } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        if let crate::mixer::StepKind::Fade { easing: e, .. } = &mut step.kind {
-                            *e = match easing.as_str() {
-                                "Linear" => crate::mixer::CrossfadeEasing::Linear,
-                                "EaseIn" => crate::mixer::CrossfadeEasing::EaseIn,
-                                "EaseOut" => crate::mixer::CrossfadeEasing::EaseOut,
-                                _ => crate::mixer::CrossfadeEasing::EaseInOut,
-                            };
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::SetStepTransitionShader { seq_idx, step_idx, shader_name } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        if let crate::mixer::StepKind::Fade { transition_shader, .. } = &mut step.kind {
-                            *transition_shader = shader_name;
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-
-            EngineCommand::MoveStep { seq_idx, from, to } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if from < seq.steps.len() && to < seq.steps.len() && from != to {
-                        let step = seq.steps.remove(from);
-                        seq.steps.insert(to, step);
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::SetStepDurationUnit { seq_idx, step_idx, unit } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        match &mut step.kind {
-                            crate::mixer::StepKind::Fade { duration, .. } | crate::mixer::StepKind::Wait { duration } => {
-                                *duration = crate::channel::DurationSpec::from_value_unit(duration.value(), unit);
-                            }
-                            _ => {}
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::ToggleStepDurationUnit { seq_idx, step_idx } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        match &mut step.kind {
-                            crate::mixer::StepKind::Fade { duration, .. } | crate::mixer::StepKind::Wait { duration } => {
-                                let next_unit = duration.unit().next();
-                                *duration = crate::channel::DurationSpec::from_value_unit(duration.value(), next_unit);
-                            }
-                            _ => {}
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::SetStepDurationValue { seq_idx, step_idx, value } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        match &mut step.kind {
-                            crate::mixer::StepKind::Fade { duration, .. } | crate::mixer::StepKind::Wait { duration } => {
-                                duration.set_value(value);
-                            }
-                            _ => {}
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::SetStepFromCh { seq_idx, step_idx, ch } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        if let crate::mixer::StepKind::Fade { from_ch, .. } = &mut step.kind { *from_ch = ch; }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::SetStepToCh { seq_idx, step_idx, ch } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        if let crate::mixer::StepKind::Fade { to_ch, .. } = &mut step.kind { *to_ch = ch; }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
-            EngineCommand::SetGoToTarget { seq_idx, step_idx, target } => {
-                if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
-                    if let Some(step) = seq.steps.get_mut(step_idx) {
-                        if let crate::mixer::StepKind::GoTo { step_index } = &mut step.kind { *step_index = target; }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
-                }
-            }
+            EngineCommand::CreateSequence => self.cmd_create_sequence(),
+            EngineCommand::DeleteSequence { idx } => self.cmd_delete_sequence(idx),
+            EngineCommand::PlaySequence { idx } => self.cmd_play_sequence(idx),
+            EngineCommand::StopSequence { idx } => self.cmd_stop_sequence(idx),
+            EngineCommand::ToggleSequence { idx } => self.cmd_toggle_sequence(idx),
+            EngineCommand::AddFadeStep { seq_idx, from_ch, to_ch } => self.cmd_add_fade_step(seq_idx, from_ch, to_ch),
+            EngineCommand::AddWaitStep { seq_idx } => self.cmd_add_wait_step(seq_idx),
+            EngineCommand::AddGoToStep { seq_idx, step_index } => self.cmd_add_goto_step(seq_idx, step_index),
+            EngineCommand::RemoveStep { seq_idx, step_idx } => self.cmd_remove_step(seq_idx, step_idx),
+            EngineCommand::SetStepDuration { seq_idx, step_idx, value, unit } => self.cmd_set_step_duration(seq_idx, step_idx, value, unit),
+            EngineCommand::SetStepEasing { seq_idx, step_idx, easing } => self.cmd_set_step_easing(seq_idx, step_idx, easing),
+            EngineCommand::SetStepTransitionShader { seq_idx, step_idx, shader_name } => self.cmd_set_step_transition_shader(seq_idx, step_idx, shader_name),
+            EngineCommand::MoveStep { seq_idx, from, to } => self.cmd_move_step(seq_idx, from, to),
+            EngineCommand::SetStepDurationUnit { seq_idx, step_idx, unit } => self.cmd_set_step_duration_unit(seq_idx, step_idx, unit),
+            EngineCommand::ToggleStepDurationUnit { seq_idx, step_idx } => self.cmd_toggle_step_duration_unit(seq_idx, step_idx),
+            EngineCommand::SetStepDurationValue { seq_idx, step_idx, value } => self.cmd_set_step_duration_value(seq_idx, step_idx, value),
+            EngineCommand::SetStepFromCh { seq_idx, step_idx, ch } => self.cmd_set_step_from_ch(seq_idx, step_idx, ch),
+            EngineCommand::SetStepToCh { seq_idx, step_idx, ch } => self.cmd_set_step_to_ch(seq_idx, step_idx, ch),
+            EngineCommand::SetGoToTarget { seq_idx, step_idx, target } => self.cmd_set_goto_target(seq_idx, step_idx, target),
 
             // ── Stream Library ─────────────────────────────────
-            EngineCommand::AddStreamLibraryEntry { url, mode } => {
-                if !self.external_io.stream_library.iter().any(|(u, _)| u == &url) {
-                    self.external_io.stream_library.push((url, mode));
-                }
-                CommandResult::Ok
-            }
-            EngineCommand::RemoveStreamLibraryEntry { url } => {
-                self.external_io.stream_library.retain(|(u, _)| u != &url);
-                CommandResult::Ok
-            }
-            EngineCommand::AddHlsLibraryEntry { url } => {
-                if !self.external_io.hls_library.contains(&url) {
-                    log::info!("Added HLS source to library via API: {}", url);
-                    self.external_io.hls_library.push(url);
-                }
-                CommandResult::Ok
-            }
-            EngineCommand::RemoveHlsLibraryEntry { url } => {
-                self.external_io.hls_library.retain(|u| u != &url);
-                CommandResult::Ok
-            }
-            EngineCommand::AddDashLibraryEntry { url } => {
-                if !self.external_io.dash_library.contains(&url) {
-                    log::info!("Added DASH source to library via API: {}", url);
-                    self.external_io.dash_library.push(url);
-                }
-                CommandResult::Ok
-            }
-            EngineCommand::RemoveDashLibraryEntry { url } => {
-                self.external_io.dash_library.retain(|u| u != &url);
-                CommandResult::Ok
-            }
-            EngineCommand::AddRtmpLibraryEntry { url, mode } => {
-                if !self.external_io.rtmp_library.iter().any(|(u, _)| u == &url) {
-                    log::info!("Added RTMP source to library via API: {} ({})", url, mode);
-                    self.external_io.rtmp_library.push((url, mode));
-                }
-                CommandResult::Ok
-            }
-            EngineCommand::RemoveRtmpLibraryEntry { url } => {
-                self.external_io.rtmp_library.retain(|(u, _)| u != &url);
-                CommandResult::Ok
-            }
+            EngineCommand::AddStreamLibraryEntry { url, mode } => self.cmd_add_stream_library_entry(url, mode),
+            EngineCommand::RemoveStreamLibraryEntry { url } => self.cmd_remove_stream_library_entry(url),
+            EngineCommand::AddHlsLibraryEntry { url } => self.cmd_add_hls_library_entry(url),
+            EngineCommand::RemoveHlsLibraryEntry { url } => self.cmd_remove_hls_library_entry(url),
+            EngineCommand::AddDashLibraryEntry { url } => self.cmd_add_dash_library_entry(url),
+            EngineCommand::RemoveDashLibraryEntry { url } => self.cmd_remove_dash_library_entry(url),
+            EngineCommand::AddRtmpLibraryEntry { url, mode } => self.cmd_add_rtmp_library_entry(url, mode),
+            EngineCommand::RemoveRtmpLibraryEntry { url } => self.cmd_remove_rtmp_library_entry(url),
 
             // ── Output Management ─────────────────────────────────
-            EngineCommand::CreateHeadlessOutput { target } => {
-                use crate::renderer::context::{HeadlessOutput, UnifiedOutput, OutputSource};
-                let idx = self.output.outputs.len() + 1;
-                let name = format!("Output {}", idx);
-                let headless = HeadlessOutput::new(
-                    &self.context.device, name.clone(), OutputSource::Master,
-                    target, self.render_width, self.render_height,
-                );
-                log::info!("Created headless output '{}'", name);
-                self.output.outputs.push(UnifiedOutput::Headless(headless));
-                CommandResult::Ok
-            }
-            EngineCommand::StartOutput { idx } => {
-                use crate::renderer::context::{UnifiedOutput, OutputTarget};
-                if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
-                    if !h.active {
-                        match &h.target {
-                            OutputTarget::SrtStream { url, codec } => {
-                                match crate::renderer::FfmpegSubprocess::spawn_srt(url, codec, h.width, h.height, 30) {
-                                    Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
-                                    Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                                }
-                            }
-                            OutputTarget::Recording { path, codec } => {
-                                match crate::renderer::FfmpegSubprocess::spawn_recording(path, codec, h.width, h.height, 30) {
-                                    Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
-                                    Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                                }
-                            }
-                            OutputTarget::HlsStream { name, codec, low_latency } => {
-                                match crate::renderer::FfmpegSubprocess::spawn_hls(name, codec, h.width, h.height, 30, *low_latency) {
-                                    Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
-                                    Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                                }
-                            }
-                            OutputTarget::DashStream { name, codec } => {
-                                match crate::renderer::FfmpegSubprocess::spawn_dash(name, codec, h.width, h.height, 30) {
-                                    Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
-                                    Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                                }
-                            }
-                            OutputTarget::RtmpStream { url, codec } => {
-                                match crate::renderer::FfmpegSubprocess::spawn_rtmp(url, codec, h.width, h.height, 30) {
-                                    Ok(sub) => { h.subprocess = Some(sub); h.active = true; }
-                                    Err(e) => return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                                }
-                            }
-                            OutputTarget::NdiSend { .. } | OutputTarget::SyphonServer { .. } => {
-                                h.active = true;
-                                h.started_at = Some(std::time::Instant::now());
-                            }
-                            _ => return CommandResult::Err { code: ErrorCode::InvalidInput, message: "Cannot start windowed target".into() },
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Ok // already active
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found or not headless".into() }
-                }
-            }
-            EngineCommand::StopOutput { idx } => {
-                use crate::renderer::context::UnifiedOutput;
-                if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
-                    if h.active {
-                        if let Some(mut sub) = h.subprocess.take() { sub.stop(); }
-                        h.active = false;
-                        h.started_at = None;
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found or not headless".into() }
-                }
-            }
-            EngineCommand::ToggleCalibration { idx } => {
-                use crate::renderer::context::UnifiedOutput;
-                if let Some(UnifiedOutput::Window(w)) = self.output.outputs.get_mut(idx) {
-                    w.calibration_mode = !w.calibration_mode;
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found or not windowed".into() }
-                }
-            }
-            EngineCommand::SetWarpCorner { output_idx, assignment_idx, corner_idx, position } => {
-                use crate::renderer::context::UnifiedOutput;
-                if let Some(UnifiedOutput::Window(w)) = self.output.outputs.get_mut(output_idx) {
-                    if let Some(a) = w.surface_assignments.get_mut(assignment_idx) {
-                        if let Some(corners) = a.warp_mode.corners_mut() {
-                            if corner_idx < 4 { corners[corner_idx] = position; }
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Assignment not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
-                }
-            }
-            EngineCommand::ResetWarp { output_idx, assignment_idx } => {
-                if let Some(output) = self.output.outputs.get_mut(output_idx) {
-                    let assignments = output.surface_assignments_mut();
-                    if let Some(a) = assignments.get_mut(assignment_idx) {
-                        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(&a.surface_uuid) {
-                            let bb = surface.bounding_box();
-                            a.warp_mode = crate::renderer::warp::WarpMode::identity_corners(
-                                [bb.x, bb.y, bb.width, bb.height]
-                            );
-                        }
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err { code: ErrorCode::NotFound, message: "Assignment not found".into() }
-                    }
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
-                }
-            }
-
-            EngineCommand::SetEdgeBlend { output_idx, config } => {
-                use crate::renderer::context::UnifiedOutput;
-                if let Some(output) = self.output.outputs.get_mut(output_idx) {
-                    match output {
-                        UnifiedOutput::Window(w) => { w.edge_blend = config; }
-                        UnifiedOutput::Headless(h) => { h.edge_blend = config; }
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
-                }
-            }
-            EngineCommand::SetEdgeBlendMode { output_idx, mode } => {
-                use crate::renderer::context::UnifiedOutput;
-                use crate::renderer::edge_blend::EdgeBlendMode;
-                if let Some(output) = self.output.outputs.get_mut(output_idx) {
-                    match output {
-                        UnifiedOutput::Window(w) => { w.edge_blend_mode = mode; }
-                        UnifiedOutput::Headless(h) => { h.edge_blend_mode = mode; }
-                    }
-                    if mode == EdgeBlendMode::Auto {
-                        self.recompute_auto_edge_blend();
-                    }
-                    CommandResult::Ok
-                } else {
-                    CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
-                }
-            }
+            EngineCommand::CreateHeadlessOutput { target } => self.cmd_create_headless_output(target),
+            EngineCommand::StartOutput { idx } => self.cmd_start_output(idx),
+            EngineCommand::StopOutput { idx } => self.cmd_stop_output(idx),
+            EngineCommand::ToggleCalibration { idx } => self.cmd_toggle_calibration(idx),
+            EngineCommand::SetWarpCorner { output_idx, assignment_idx, corner_idx, position } => self.cmd_set_warp_corner(output_idx, assignment_idx, corner_idx, position),
+            EngineCommand::ResetWarp { output_idx, assignment_idx } => self.cmd_reset_warp(output_idx, assignment_idx),
+            EngineCommand::SetEdgeBlend { output_idx, config } => self.cmd_set_edge_blend(output_idx, config),
+            EngineCommand::SetEdgeBlendMode { output_idx, mode } => self.cmd_set_edge_blend_mode(output_idx, mode),
 
             // ── Modulation Updates ────────────────────────────────
             EngineCommand::UpdateLfoFrequency { uuid, frequency } => {
