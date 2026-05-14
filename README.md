@@ -1,4 +1,4 @@
-# Varda
+# Varda VJ
 
 Open-source visual performance tool with broadcast-style routing for VJs and installation artists.
 
