@@ -94,92 +94,96 @@ use crate::notifications::NotificationSystem;
 
 use crate::engine::{CommandEnvelope, CommandResult, ErrorCode, EngineCommand, EngineState};
 
+// ── Domain sub-structs ──────────────────────────────────────────
+
+/// Input subsystem: OSC, MIDI, keyboard shortcuts, clock.
+pub(crate) struct InputSubsystem {
+    pub osc_receiver: Option<OscReceiver>,
+    pub osc_feedback: Option<OscFeedbackSender>,
+    pub osc_config: OscConfig,
+    pub midi_devices: Option<midi::MidiDeviceManager>,
+    pub midi_mappings: midi::MidiMappingStore,
+    pub controller_led_mgr: midi::ControllerLedManager,
+    pub auto_map_engine: midi::AutoMapEngine,
+    pub keymap: KeymapStore,
+    pub clock_manager: crate::clock::ClockManager,
+}
+
+/// Output and surface subsystem: windows, headless outputs, surface layout, dome.
+pub(crate) struct OutputSubsystem {
+    pub outputs: Vec<UnifiedOutput>,
+    pub surface_manager: SurfaceManager,
+    pub calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
+    pub domemaster: Option<crate::renderer::dome::DomemasterRenderer>,
+    pub pending_output_creates: Vec<crate::scene::OutputConfig>,
+    pub cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
+}
+
+/// External I/O managers: NDI, Syphon, SRT/HLS/DASH/RTMP streams.
+pub(crate) struct ExternalIO {
+    pub ndi_manager: crate::ndi::NdiManager,
+    #[cfg(target_os = "macos")]
+    pub syphon_manager: crate::syphon::SyphonManager,
+    pub stream_manager: crate::stream::StreamManager,
+    pub stream_library: Vec<(String, crate::stream::SrtMode)>,
+    pub hls_library: Vec<String>,
+    pub dash_library: Vec<String>,
+    pub rtmp_library: Vec<(String, crate::stream::RtmpMode)>,
+}
+
+/// Frame timing and system monitoring.
+pub(crate) struct FrameStats {
+    pub last_frame_instant: std::time::Instant,
+    pub fps_history: std::collections::VecDeque<f32>,
+    pub fps_smoothed: f32,
+    pub frame_count: u64,
+    pub system_monitor: crate::sysmon::SystemMonitor,
+}
+
+/// Session persistence: workspace, presets, undo/redo, notifications.
+pub(crate) struct SessionState {
+    pub workspace: Workspace,
+    pub preset_library: crate::persistence::presets::PresetLibrary,
+    pub history: history::HistoryManager,
+    pub notifications: NotificationSystem,
+}
+
+/// Cross-thread message passing.
+pub(crate) struct MessageBus {
+    pub command_rx: tokio::sync::mpsc::UnboundedReceiver<CommandEnvelope>,
+    pub command_tx: tokio::sync::mpsc::UnboundedSender<CommandEnvelope>,
+    pub state_tx: std::sync::Arc<std::sync::RwLock<Option<EngineState>>>,
+}
+
+// ── Main application struct ─────────────────────────────────────
+
 /// Core engine application. Owns all subsystems except window/egui.
 ///
 /// Implements all engine traits (MixerCommands, AudioCommands, etc.)
 /// for direct same-thread access. Also processes EngineCommands from
 /// cross-thread consumers via mpsc channel.
 pub struct VardaApp {
-    // ── Engine subsystems (always present after construction) ──
+    // ── Engine core ──────────────────────────────────────────────
     mixer: Mixer,
     audio_manager: AudioManager,
     camera_manager: CameraManager,
     registry: ShaderRegistry,
     context: GpuContext,
 
-    // ── Keyboard shortcuts ────────────────────────────────────
-    keymap: KeymapStore,
-
-    // ── Control subsystems ─────────────────────────────────────
-    osc_receiver: Option<OscReceiver>,
-    osc_feedback: Option<OscFeedbackSender>,
-    osc_config: OscConfig,
-    midi_devices: Option<midi::MidiDeviceManager>,
-    midi_mappings: midi::MidiMappingStore,
-    controller_led_mgr: midi::ControllerLedManager,
-    auto_map_engine: midi::AutoMapEngine,
-    clock_manager: crate::clock::ClockManager,
-
-    // ── Output & surfaces ──────────────────────────────────────
-    outputs: Vec<UnifiedOutput>,
-    surface_manager: SurfaceManager,
-    calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
-
-    // ── Dome projection ────────────────────────────────────────
-    domemaster: Option<crate::renderer::dome::DomemasterRenderer>,
-
-    // ── Notifications ──────────────────────────────────────────
-    notifications: NotificationSystem,
-
-    // ── Persistence ────────────────────────────────────────────
-    workspace: Workspace,
-
-    // ── Pending actions (deferred to event loop) ───────────────
-    pending_output_creates: Vec<crate::scene::OutputConfig>,
-    cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
+    // ── Domain sub-structs ───────────────────────────────────────
+    pub(crate) input: InputSubsystem,
+    pub(crate) output: OutputSubsystem,
+    pub(crate) external_io: ExternalIO,
+    pub(crate) frame_stats: FrameStats,
+    pub(crate) session: SessionState,
+    pub(crate) bus: MessageBus,
 
     // ── Audio textures (GPU resource, owned here) ──────────────
     audio_textures: crate::audio::AudioTextures,
 
-    // ── Message passing (cross-thread consumers) ───────────────
-    command_rx: tokio::sync::mpsc::UnboundedReceiver<CommandEnvelope>,
-    command_tx: tokio::sync::mpsc::UnboundedSender<CommandEnvelope>,
-
-    // ── State distribution ─────────────────────────────────────
-    state_tx: std::sync::Arc<std::sync::RwLock<Option<EngineState>>>,
-
-    // ── Frame timing ───────────────────────────────────────────
-    last_frame_instant: std::time::Instant,
-    fps_history: std::collections::VecDeque<f32>,
-    fps_smoothed: f32,
-    frame_count: u64,
-
-    // ── System monitoring (CPU / RAM) ────────────────────────
-    system_monitor: crate::sysmon::SystemMonitor,
-
     // ── Render resolution (configurable, scene-level) ───────
     render_width: u32,
     render_height: u32,
-
-    // ── External I/O (input/discovery only — output is per-UnifiedOutput) ──
-    ndi_manager: crate::ndi::NdiManager,
-    #[cfg(target_os = "macos")]
-    syphon_manager: crate::syphon::SyphonManager,
-    stream_manager: crate::stream::StreamManager,
-    /// Configured SRT input sources in the library (url, mode).
-    stream_library: Vec<(String, crate::stream::SrtMode)>,
-    /// Configured HLS input sources in the library (urls).
-    hls_library: Vec<String>,
-    /// Configured DASH input sources in the library (urls).
-    dash_library: Vec<String>,
-    /// Configured RTMP input sources in the library (url + mode).
-    rtmp_library: Vec<(String, crate::stream::RtmpMode)>,
-
-    // ── Presets ─────────────────────────────────────────────────
-    preset_library: crate::persistence::presets::PresetLibrary,
-
-    // ── History (undo/redo) ─────────────────────────────────────
-    pub(crate) history: history::HistoryManager,
 
     // ── Pending MIDI-triggered actions (consumed by runner) ──
     pub(crate) midi_pending_undo: bool,
@@ -290,54 +294,66 @@ impl VardaApp {
             camera_manager: CameraManager::new(),
             registry,
             context: gpu,
-            osc_receiver,
-            osc_feedback,
-            osc_config,
-            midi_devices,
-            keymap: KeymapStore::with_defaults(),
-            midi_mappings: midi::MidiMappingStore::new(),
-            controller_led_mgr,
-            auto_map_engine,
-            clock_manager: crate::clock::ClockManager::new(),
-            outputs: Vec::new(),
-            surface_manager: SurfaceManager::new(),
-            calibration_textures,
-            domemaster: None,
-            notifications: NotificationSystem::new(),
-            workspace,
-            pending_output_creates: Vec::new(),
-            cached_monitors: Vec::new(),
+            input: InputSubsystem {
+                osc_receiver,
+                osc_feedback,
+                osc_config,
+                midi_devices,
+                keymap: KeymapStore::with_defaults(),
+                midi_mappings: midi::MidiMappingStore::new(),
+                controller_led_mgr,
+                auto_map_engine,
+                clock_manager: crate::clock::ClockManager::new(),
+            },
+            output: OutputSubsystem {
+                outputs: Vec::new(),
+                surface_manager: SurfaceManager::new(),
+                calibration_textures,
+                domemaster: None,
+                pending_output_creates: Vec::new(),
+                cached_monitors: Vec::new(),
+            },
+            external_io: ExternalIO {
+                ndi_manager: if config.ndi_disabled {
+                    log::info!("NDI disabled by CLI flag");
+                    crate::ndi::NdiManager::new_disabled()
+                } else {
+                    crate::ndi::NdiManager::new()
+                },
+                #[cfg(target_os = "macos")]
+                syphon_manager: if config.syphon_disabled {
+                    log::info!("Syphon disabled by CLI flag");
+                    crate::syphon::SyphonManager::new_disabled()
+                } else {
+                    crate::syphon::SyphonManager::new()
+                },
+                stream_manager: crate::stream::StreamManager::new(),
+                stream_library: Vec::new(),
+                hls_library: Vec::new(),
+                dash_library: Vec::new(),
+                rtmp_library: Vec::new(),
+            },
+            frame_stats: FrameStats {
+                last_frame_instant: std::time::Instant::now(),
+                fps_history: std::collections::VecDeque::with_capacity(60),
+                fps_smoothed: 0.0,
+                frame_count: 0,
+                system_monitor: crate::sysmon::SystemMonitor::new(),
+            },
+            session: SessionState {
+                workspace,
+                preset_library,
+                history: history::HistoryManager::new(),
+                notifications: NotificationSystem::new(),
+            },
+            bus: MessageBus {
+                command_rx,
+                command_tx,
+                state_tx,
+            },
             audio_textures,
-            command_rx,
-            command_tx,
-            state_tx,
-            last_frame_instant: std::time::Instant::now(),
-            fps_history: std::collections::VecDeque::with_capacity(60),
-            fps_smoothed: 0.0,
-            frame_count: 0,
-            system_monitor: crate::sysmon::SystemMonitor::new(),
             render_width: DEFAULT_RENDER_WIDTH,
             render_height: DEFAULT_RENDER_HEIGHT,
-            ndi_manager: if config.ndi_disabled {
-                log::info!("NDI disabled by CLI flag");
-                crate::ndi::NdiManager::new_disabled()
-            } else {
-                crate::ndi::NdiManager::new()
-            },
-            #[cfg(target_os = "macos")]
-            syphon_manager: if config.syphon_disabled {
-                log::info!("Syphon disabled by CLI flag");
-                crate::syphon::SyphonManager::new_disabled()
-            } else {
-                crate::syphon::SyphonManager::new()
-            },
-            stream_manager: crate::stream::StreamManager::new(),
-            stream_library: Vec::new(),
-            hls_library: Vec::new(),
-            dash_library: Vec::new(),
-            rtmp_library: Vec::new(),
-            preset_library,
-            history: history::HistoryManager::new(),
             midi_pending_undo: false,
             midi_pending_redo: false,
             midi_pending_save: false,
@@ -347,12 +363,12 @@ impl VardaApp {
 
     /// Get a command sender for cross-thread consumers (HTTP API, CLI).
     pub fn command_sender(&self) -> tokio::sync::mpsc::UnboundedSender<CommandEnvelope> {
-        self.command_tx.clone()
+        self.bus.command_tx.clone()
     }
 
     /// Get a shared reference to the latest engine state (for cross-thread consumers).
     pub fn state_reader(&self) -> std::sync::Arc<std::sync::RwLock<Option<EngineState>>> {
-        self.state_tx.clone()
+        self.bus.state_tx.clone()
     }
 
     /// Process all queued cross-thread commands. Called once per frame.
@@ -360,7 +376,7 @@ impl VardaApp {
     /// Exhaustive match — the compiler enforces that every EngineCommand variant
     /// is handled. Adding a new variant requires wiring it here.
     pub fn process_commands(&mut self) {
-        while let Ok((cmd, reply_tx)) = self.command_rx.try_recv() {
+        while let Ok((cmd, reply_tx)) = self.bus.command_rx.try_recv() {
             let result = self.execute_command(cmd);
             if let Some(tx) = reply_tx {
                 let _ = tx.send(result);
@@ -584,13 +600,13 @@ impl VardaApp {
             }
             EngineCommand::SetOutputTarget { idx, target } => {
                 use crate::renderer::context::{UnifiedOutput, OutputTarget};
-                if let Some(output) = self.outputs.get_mut(idx) {
+                if let Some(output) = self.output.outputs.get_mut(idx) {
                     match output {
                         UnifiedOutput::Window(w) => {
                             if target.is_windowed() {
                                 let monitor = match &target {
                                     OutputTarget::Display { monitor_index, .. } => {
-                                        self.cached_monitors.get(*monitor_index).map(|(_, h)| h.clone())
+                                        self.output.cached_monitors.get(*monitor_index).map(|(_, h)| h.clone())
                                     }
                                     _ => None,
                                 };
@@ -631,7 +647,7 @@ impl VardaApp {
             EngineCommand::RemoveSurface { uuid } => {
                 self.remove_surface(&uuid);
                 // Purge dangling surface assignments from all outputs
-                for output in &mut self.outputs {
+                for output in &mut self.output.outputs {
                     output.surface_assignments_mut().retain(|a| a.surface_uuid != uuid);
                 }
                 self.recompute_auto_edge_blend();
@@ -656,7 +672,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::UpdateSurfaceVertices { uuid, vertices } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     surface.vertices = vertices;
                     self.recompute_auto_edge_blend();
                     CommandResult::Ok
@@ -665,14 +681,14 @@ impl VardaApp {
                 }
             }
             EngineCommand::DuplicateSurface { uuid } => {
-                if let Some(new_uuid) = self.surface_manager.duplicate_surface(&uuid) {
+                if let Some(new_uuid) = self.output.surface_manager.duplicate_surface(&uuid) {
                     CommandResult::OkWithId { uuid: new_uuid }
                 } else {
                     CommandResult::Err { code: ErrorCode::NotFound, message: format!("Surface {} not found", uuid) }
                 }
             }
             EngineCommand::FlipSurfaceHorizontal { uuid } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     for v in &mut surface.vertices {
                         v[0] = 1.0 - v[0];
                     }
@@ -682,7 +698,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::FlipSurfaceVertical { uuid } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     for v in &mut surface.vertices {
                         v[1] = 1.0 - v[1];
                     }
@@ -692,7 +708,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::InsertSurfaceVertex { uuid, after_vert_idx, position } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     surface.convert_to_polygon();
                     if after_vert_idx < surface.vertices.len() {
                         surface.vertices.insert(after_vert_idx + 1, position);
@@ -703,7 +719,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::SetCircleRadius { uuid, radius } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     if let Some(ref mut hint) = surface.circle_hint {
                         hint.radius = radius;
                         surface.vertices = hint.generate_vertices();
@@ -714,7 +730,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::SetCircleSides { uuid, sides } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     if let Some(ref mut hint) = surface.circle_hint {
                         hint.sides = sides;
                         surface.vertices = hint.generate_vertices();
@@ -725,7 +741,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::ConvertSurfaceToPolygon { uuid } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     surface.convert_to_polygon();
                     CommandResult::Ok
                 } else {
@@ -733,9 +749,9 @@ impl VardaApp {
                 }
             }
             EngineCommand::CombineSurfaces { uuids } => {
-                if let Some(new_uuid) = self.surface_manager.combine_surfaces(&uuids) {
+                if let Some(new_uuid) = self.output.surface_manager.combine_surfaces(&uuids) {
                     // Purge dangling assignments for combined (removed) surfaces
-                    for output in &mut self.outputs {
+                    for output in &mut self.output.outputs {
                         output.surface_assignments_mut().retain(|a| {
                             !uuids.contains(&a.surface_uuid) || a.surface_uuid == new_uuid
                         });
@@ -747,7 +763,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::MoveSurface { uuid, dx, dy } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     surface.translate(dx, dy);
                     if let Some(ref mut hint) = surface.circle_hint {
                         let n = surface.vertices.len().max(1) as f32;
@@ -763,7 +779,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::UpdateSurfaceContourVertices { uuid, contour, vertices } => {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                     if contour == 0 {
                         if let Some(ref mut hint) = surface.circle_hint {
                             let n = vertices.len().max(1) as f32;
@@ -792,10 +808,10 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AssignSurfaceToOutputByIdx { output_idx, surface_uuid } => {
-                if let Some(output) = self.outputs.get_mut(output_idx) {
+                if let Some(output) = self.output.outputs.get_mut(output_idx) {
                     let assignments = output.surface_assignments_mut();
                     if !assignments.iter().any(|a| a.surface_uuid == surface_uuid) {
-                        if let Some((_, surface)) = self.surface_manager.find_by_uuid(&surface_uuid) {
+                        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(&surface_uuid) {
                             let bb = surface.bounding_box();
                             let assignment = crate::renderer::context::SurfaceAssignment {
                                 surface_uuid,
@@ -815,7 +831,7 @@ impl VardaApp {
                 }
             }
             EngineCommand::UnassignSurfaceFromOutputByIdx { output_idx, assignment_idx } => {
-                if let Some(output) = self.outputs.get_mut(output_idx) {
+                if let Some(output) = self.output.outputs.get_mut(output_idx) {
                     let assignments = output.surface_assignments_mut();
                     if assignment_idx < assignments.len() {
                         assignments.remove(assignment_idx);
@@ -977,9 +993,9 @@ impl VardaApp {
 
             // ── External I/O Deck Sources ─────────────────────
             EngineCommand::AddNdiDeck { channel_idx, source_name } => {
-                match self.ndi_manager.start_receive(&source_name, &self.context.device) {
+                match self.external_io.ndi_manager.start_receive(&source_name, &self.context.device) {
                     Some(receiver_idx) => {
-                        let (src_w, src_h) = self.ndi_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        let (src_w, src_h) = self.external_io.ndi_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                         match crate::deck::Deck::new_from_ndi(&self.context, receiver_idx, &source_name, src_w, src_h, self.render_width, self.render_height) {
                             Ok(deck) => {
                                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -998,9 +1014,9 @@ impl VardaApp {
             EngineCommand::AddSyphonDeck { channel_idx, server_name } => {
                 #[cfg(target_os = "macos")]
                 {
-                    match self.syphon_manager.start_receive(&server_name, &self.context.device) {
+                    match self.external_io.syphon_manager.start_receive(&server_name, &self.context.device) {
                         Some(client_idx) => {
-                            let (src_w, src_h) = self.syphon_manager.client_dimensions(client_idx).unwrap_or((1920, 1080));
+                            let (src_w, src_h) = self.external_io.syphon_manager.client_dimensions(client_idx).unwrap_or((1920, 1080));
                             match crate::deck::Deck::new_from_syphon(&self.context, client_idx, &server_name, src_w, src_h, self.render_width, self.render_height) {
                                 Ok(deck) => {
                                     if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -1023,9 +1039,9 @@ impl VardaApp {
                 }
             }
             EngineCommand::AddSrtDeck { channel_idx, url, mode } => {
-                match self.stream_manager.start_srt_receive(&url, mode, &self.context.device) {
+                match self.external_io.stream_manager.start_srt_receive(&url, mode, &self.context.device) {
                     Some(receiver_idx) => {
-                        let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                         match crate::deck::Deck::new_from_srt(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                             Ok(deck) => {
                                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -1043,9 +1059,9 @@ impl VardaApp {
             }
 
             EngineCommand::AddHlsDeck { channel_idx, url } => {
-                match self.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Hls, &self.context.device) {
+                match self.external_io.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Hls, &self.context.device) {
                     Some(receiver_idx) => {
-                        let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                         match crate::deck::Deck::new_from_hls(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                             Ok(deck) => {
                                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -1062,9 +1078,9 @@ impl VardaApp {
                 }
             }
             EngineCommand::AddDashDeck { channel_idx, url } => {
-                match self.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Dash, &self.context.device) {
+                match self.external_io.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Dash, &self.context.device) {
                     Some(receiver_idx) => {
-                        let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                         match crate::deck::Deck::new_from_dash(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                             Ok(deck) => {
                                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -1081,9 +1097,9 @@ impl VardaApp {
                 }
             }
             EngineCommand::AddRtmpDeck { channel_idx, url, mode } => {
-                match self.stream_manager.start_rtmp_receive(&url, mode, &self.context.device) {
+                match self.external_io.stream_manager.start_rtmp_receive(&url, mode, &self.context.device) {
                     Some(receiver_idx) => {
-                        let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                        let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                         match crate::deck::Deck::new_from_rtmp(&self.context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                             Ok(deck) => {
                                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -1327,65 +1343,65 @@ impl VardaApp {
 
             // ── Stream Library ─────────────────────────────────
             EngineCommand::AddStreamLibraryEntry { url, mode } => {
-                if !self.stream_library.iter().any(|(u, _)| u == &url) {
-                    self.stream_library.push((url, mode));
+                if !self.external_io.stream_library.iter().any(|(u, _)| u == &url) {
+                    self.external_io.stream_library.push((url, mode));
                 }
                 CommandResult::Ok
             }
             EngineCommand::RemoveStreamLibraryEntry { url } => {
-                self.stream_library.retain(|(u, _)| u != &url);
+                self.external_io.stream_library.retain(|(u, _)| u != &url);
                 CommandResult::Ok
             }
             EngineCommand::AddHlsLibraryEntry { url } => {
-                if !self.hls_library.contains(&url) {
+                if !self.external_io.hls_library.contains(&url) {
                     log::info!("Added HLS source to library via API: {}", url);
-                    self.hls_library.push(url);
+                    self.external_io.hls_library.push(url);
                 }
                 CommandResult::Ok
             }
             EngineCommand::RemoveHlsLibraryEntry { url } => {
-                self.hls_library.retain(|u| u != &url);
+                self.external_io.hls_library.retain(|u| u != &url);
                 CommandResult::Ok
             }
             EngineCommand::AddDashLibraryEntry { url } => {
-                if !self.dash_library.contains(&url) {
+                if !self.external_io.dash_library.contains(&url) {
                     log::info!("Added DASH source to library via API: {}", url);
-                    self.dash_library.push(url);
+                    self.external_io.dash_library.push(url);
                 }
                 CommandResult::Ok
             }
             EngineCommand::RemoveDashLibraryEntry { url } => {
-                self.dash_library.retain(|u| u != &url);
+                self.external_io.dash_library.retain(|u| u != &url);
                 CommandResult::Ok
             }
             EngineCommand::AddRtmpLibraryEntry { url, mode } => {
-                if !self.rtmp_library.iter().any(|(u, _)| u == &url) {
+                if !self.external_io.rtmp_library.iter().any(|(u, _)| u == &url) {
                     log::info!("Added RTMP source to library via API: {} ({})", url, mode);
-                    self.rtmp_library.push((url, mode));
+                    self.external_io.rtmp_library.push((url, mode));
                 }
                 CommandResult::Ok
             }
             EngineCommand::RemoveRtmpLibraryEntry { url } => {
-                self.rtmp_library.retain(|(u, _)| u != &url);
+                self.external_io.rtmp_library.retain(|(u, _)| u != &url);
                 CommandResult::Ok
             }
 
             // ── Output Management ─────────────────────────────────
             EngineCommand::CreateHeadlessOutput { target } => {
                 use crate::renderer::context::{HeadlessOutput, UnifiedOutput, OutputSource};
-                let idx = self.outputs.len() + 1;
+                let idx = self.output.outputs.len() + 1;
                 let name = format!("Output {}", idx);
                 let headless = HeadlessOutput::new(
                     &self.context.device, name.clone(), OutputSource::Master,
                     target, self.render_width, self.render_height,
                 );
                 log::info!("Created headless output '{}'", name);
-                self.outputs.push(UnifiedOutput::Headless(headless));
+                self.output.outputs.push(UnifiedOutput::Headless(headless));
                 CommandResult::Ok
             }
             EngineCommand::StartOutput { idx } => {
                 use crate::renderer::context::{UnifiedOutput, OutputTarget};
-                if let Some(UnifiedOutput::Headless(h)) = self.outputs.get_mut(idx) {
+                if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
                     if !h.active {
                         match &h.target {
                             OutputTarget::SrtStream { url, codec } => {
@@ -1434,7 +1450,7 @@ impl VardaApp {
             }
             EngineCommand::StopOutput { idx } => {
                 use crate::renderer::context::UnifiedOutput;
-                if let Some(UnifiedOutput::Headless(h)) = self.outputs.get_mut(idx) {
+                if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
                     if h.active {
                         if let Some(mut sub) = h.subprocess.take() { sub.stop(); }
                         h.active = false;
@@ -1447,7 +1463,7 @@ impl VardaApp {
             }
             EngineCommand::ToggleCalibration { idx } => {
                 use crate::renderer::context::UnifiedOutput;
-                if let Some(UnifiedOutput::Window(w)) = self.outputs.get_mut(idx) {
+                if let Some(UnifiedOutput::Window(w)) = self.output.outputs.get_mut(idx) {
                     w.calibration_mode = !w.calibration_mode;
                     CommandResult::Ok
                 } else {
@@ -1456,7 +1472,7 @@ impl VardaApp {
             }
             EngineCommand::SetWarpCorner { output_idx, assignment_idx, corner_idx, position } => {
                 use crate::renderer::context::UnifiedOutput;
-                if let Some(UnifiedOutput::Window(w)) = self.outputs.get_mut(output_idx) {
+                if let Some(UnifiedOutput::Window(w)) = self.output.outputs.get_mut(output_idx) {
                     if let Some(a) = w.surface_assignments.get_mut(assignment_idx) {
                         if let Some(corners) = a.warp_mode.corners_mut() {
                             if corner_idx < 4 { corners[corner_idx] = position; }
@@ -1470,10 +1486,10 @@ impl VardaApp {
                 }
             }
             EngineCommand::ResetWarp { output_idx, assignment_idx } => {
-                if let Some(output) = self.outputs.get_mut(output_idx) {
+                if let Some(output) = self.output.outputs.get_mut(output_idx) {
                     let assignments = output.surface_assignments_mut();
                     if let Some(a) = assignments.get_mut(assignment_idx) {
-                        if let Some((_, surface)) = self.surface_manager.find_by_uuid(&a.surface_uuid) {
+                        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(&a.surface_uuid) {
                             let bb = surface.bounding_box();
                             a.warp_mode = crate::renderer::warp::WarpMode::identity_corners(
                                 [bb.x, bb.y, bb.width, bb.height]
@@ -1490,7 +1506,7 @@ impl VardaApp {
 
             EngineCommand::SetEdgeBlend { output_idx, config } => {
                 use crate::renderer::context::UnifiedOutput;
-                if let Some(output) = self.outputs.get_mut(output_idx) {
+                if let Some(output) = self.output.outputs.get_mut(output_idx) {
                     match output {
                         UnifiedOutput::Window(w) => { w.edge_blend = config; }
                         UnifiedOutput::Headless(h) => { h.edge_blend = config; }
@@ -1503,7 +1519,7 @@ impl VardaApp {
             EngineCommand::SetEdgeBlendMode { output_idx, mode } => {
                 use crate::renderer::context::UnifiedOutput;
                 use crate::renderer::edge_blend::EdgeBlendMode;
-                if let Some(output) = self.outputs.get_mut(output_idx) {
+                if let Some(output) = self.output.outputs.get_mut(output_idx) {
                     match output {
                         UnifiedOutput::Window(w) => { w.edge_blend_mode = mode; }
                         UnifiedOutput::Headless(h) => { h.edge_blend_mode = mode; }
@@ -1661,12 +1677,12 @@ impl VardaApp {
 
             // ── Device Scanning ───────────────────────────────────
             EngineCommand::RescanNdi => {
-                self.ndi_manager.discover();
+                self.external_io.ndi_manager.discover();
                 CommandResult::Ok
             }
             EngineCommand::RescanSyphon => {
                 #[cfg(target_os = "macos")]
-                self.syphon_manager.discover();
+                self.external_io.syphon_manager.discover();
                 CommandResult::Ok
             }
             EngineCommand::RescanCameras => {
@@ -1674,13 +1690,13 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::RescanMidi => {
-                if let Some(ref mut midi) = self.midi_devices {
-                    midi.load_user_profiles(&self.workspace.controller_profiles_dir());
+                if let Some(ref mut midi) = self.input.midi_devices {
+                    midi.load_user_profiles(&self.session.workspace.controller_profiles_dir());
                     if let Err(e) = midi.scan_devices() {
                         return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() };
                     }
-                    self.controller_led_mgr.sync_devices(midi);
-                    self.auto_map_engine.sync_devices(midi);
+                    self.input.controller_led_mgr.sync_devices(midi);
+                    self.input.auto_map_engine.sync_devices(midi);
                 }
                 CommandResult::Ok
             }
@@ -1700,7 +1716,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::SetMidiDeviceEnabled { device_id, enabled } => {
-                if let Some(ref mut midi) = self.midi_devices {
+                if let Some(ref mut midi) = self.input.midi_devices {
                     midi.set_device_enabled(device_id, enabled);
                 }
                 CommandResult::Ok
@@ -1708,21 +1724,21 @@ impl VardaApp {
 
             // ── MIDI Mappings ─────────────────────────────────────
             EngineCommand::ClearMidiMappings => {
-                self.midi_mappings.clear_all();
+                self.input.midi_mappings.clear_all();
                 CommandResult::Ok
             }
             EngineCommand::RemoveMidiMapping { key } => {
-                self.midi_mappings.remove(&key);
+                self.input.midi_mappings.remove(&key);
                 CommandResult::Ok
             }
 
             // ── Clock ─────────────────────────────────────────────
             EngineCommand::SetClockPreference { preference } => {
-                self.clock_manager.set_preference(preference);
+                self.input.clock_manager.set_preference(preference);
                 CommandResult::Ok
             }
             EngineCommand::SetManualBpm { bpm } => {
-                self.clock_manager.set_preference(crate::clock::ClockPreference::ForceManual { bpm });
+                self.input.clock_manager.set_preference(crate::clock::ClockPreference::ForceManual { bpm });
                 CommandResult::Ok
             }
 
@@ -1791,7 +1807,7 @@ impl VardaApp {
                 let current = crate::persistence::snapshot_scene(
                     &self.mixer, self.render_width, self.render_height,
                 );
-                if let Some(config) = self.history.undo(current) {
+                if let Some(config) = self.session.history.undo(current) {
                     let rw = self.render_width;
                     let rh = self.render_height;
                     let (warnings, _) = self.apply_scene_diff(&config, rw, rh);
@@ -1806,7 +1822,7 @@ impl VardaApp {
                 let current = crate::persistence::snapshot_scene(
                     &self.mixer, self.render_width, self.render_height,
                 );
-                if let Some(config) = self.history.redo(current) {
+                if let Some(config) = self.session.history.redo(current) {
                     let rw = self.render_width;
                     let rh = self.render_height;
                     let (warnings, _) = self.apply_scene_diff(&config, rw, rh);
@@ -1848,7 +1864,7 @@ impl VardaApp {
     /// Publish the latest engine state for cross-thread consumers.
     pub fn publish_state(&self) {
         let state = self.build_engine_state();
-        if let Ok(mut guard) = self.state_tx.write() {
+        if let Ok(mut guard) = self.bus.state_tx.write() {
             *guard = Some(state);
         }
     }
@@ -1881,7 +1897,7 @@ impl VardaApp {
 
     /// Read-only access to the outputs.
     pub fn outputs_ref(&self) -> &[crate::renderer::context::UnifiedOutput] {
-        &self.outputs
+        &self.output.outputs
     }
 
     /// Mutable access to the mixer (for deck insertion from background loads).
@@ -1891,13 +1907,13 @@ impl VardaApp {
 
     /// Read-only access to the domemaster renderer output view (if enabled).
     pub fn domemaster_view(&self) -> Option<&wgpu::TextureView> {
-        self.domemaster.as_ref().map(|d| d.output_view())
+        self.output.domemaster.as_ref().map(|d| d.output_view())
     }
 
     /// Ensure the domemaster renderer exists and is enabled.
     /// Creates it lazily on first call; subsequent calls just ensure `enabled = true`.
     pub fn ensure_domemaster(&mut self) {
-        if let Some(dome) = &mut self.domemaster {
+        if let Some(dome) = &mut self.output.domemaster {
             dome.enabled = true;
         } else {
             let config = crate::renderer::dome::DomemasterConfig::default();
@@ -1908,7 +1924,7 @@ impl VardaApp {
             ) {
                 Ok(mut dome) => {
                     dome.enabled = true;
-                    self.domemaster = Some(dome);
+                    self.output.domemaster = Some(dome);
                     log::info!("Domemaster renderer created and enabled");
                 }
                 Err(e) => {
@@ -1922,7 +1938,7 @@ impl VardaApp {
     /// Called each frame from the UI layer so content rotation is applied
     /// in real-time by the domemaster shader, not baked into warp meshes.
     pub fn set_domemaster_content_rotation(&mut self, az: f32, el: f32, roll: f32) {
-        if let Some(dome) = &mut self.domemaster {
+        if let Some(dome) = &mut self.output.domemaster {
             dome.set_content_rotation(az, el, roll);
         }
     }
@@ -1940,21 +1956,21 @@ impl VardaApp {
 
     /// Tick notification expiry timers.
     pub fn update_notifications(&mut self) {
-        self.notifications.update();
+        self.session.notifications.update();
     }
 
     /// Push an info-level notification.
     pub fn notify_info(&mut self, message: impl Into<String>) {
-        self.notifications.info(message);
+        self.session.notifications.info(message);
     }
 
     /// Close an output window by its winit WindowId. Returns the name if found.
     pub fn close_output_window_by_id(&mut self, window_id: winit::window::WindowId) -> Option<String> {
-        if let Some(idx) = self.outputs.iter().position(|o| {
+        if let Some(idx) = self.output.outputs.iter().position(|o| {
             if let UnifiedOutput::Window(w) = o { w.window.id() == window_id } else { false }
         }) {
-            let name = self.outputs[idx].name().to_string();
-            if let UnifiedOutput::Window(w) = self.outputs.remove(idx) {
+            let name = self.output.outputs[idx].name().to_string();
+            if let UnifiedOutput::Window(w) = self.output.outputs.remove(idx) {
                 w.destroy();
             }
             Some(name)
@@ -1969,7 +1985,7 @@ impl VardaApp {
         window_id: winit::window::WindowId,
         new_size: winit::dpi::PhysicalSize<u32>,
     ) {
-        for o in &mut self.outputs {
+        for o in &mut self.output.outputs {
             if let UnifiedOutput::Window(w) = o {
                 if w.window.id() == window_id {
                     w.resize(&self.context.device, new_size);
@@ -2004,7 +2020,7 @@ impl VardaApp {
         self.mixer.resize(&self.context, width, height);
         // Clear sub-mix cache since textures were recreated
         self.mixer.clear_sub_mix_cache();
-        self.notifications.info(format!("📐 Resolution changed to {}×{}", width, height));
+        self.session.notifications.info(format!("📐 Resolution changed to {}×{}", width, height));
     }
 }
 

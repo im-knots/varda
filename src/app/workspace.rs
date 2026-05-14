@@ -18,43 +18,43 @@ impl VardaApp {
     /// Save the entire workspace to `.varda/`.
     /// `layout` is UI-consumer-owned state persisted in stage.json.
     pub fn save_workspace(&self, layout: &UILayoutState) {
-        if let Err(e) = self.workspace.ensure_dir() {
+        if let Err(e) = self.session.workspace.ensure_dir() {
             log::error!("Failed to create .varda directory: {}", e);
             return;
         }
         {
             let scene = crate::persistence::snapshot_scene(&self.mixer, self.render_width, self.render_height);
-            match scene.save(self.workspace.scene_path()) {
-                Ok(()) => log::info!("Saved scene to {}", self.workspace.scene_path().display()),
+            match scene.save(self.session.workspace.scene_path()) {
+                Ok(()) => log::info!("Saved scene to {}", self.session.workspace.scene_path().display()),
                 Err(e) => log::error!("Failed to save scene: {}", e),
             }
         }
-        if let Some(midi) = &self.midi_devices {
-            let midi_config = self.midi_mappings.to_config(&midi.devices, &self.auto_map_engine);
-            match midi_config.save(self.workspace.midi_path()) {
-                Ok(()) => log::info!("Saved MIDI mappings to {}", self.workspace.midi_path().display()),
+        if let Some(midi) = &self.input.midi_devices {
+            let midi_config = self.input.midi_mappings.to_config(&midi.devices, &self.input.auto_map_engine);
+            match midi_config.save(self.session.workspace.midi_path()) {
+                Ok(()) => log::info!("Saved MIDI mappings to {}", self.session.workspace.midi_path().display()),
                 Err(e) => log::error!("Failed to save MIDI config: {}", e),
             }
         }
         let stage = crate::persistence::snapshot_stage(
-            &self.surface_manager, &self.outputs,
+            &self.output.surface_manager, &self.output.outputs,
             layout.stage_editor_grid_size, layout.stage_editor_snap,
             layout.library_panel_open, layout.right_panel_open, layout.stage_editor_open, layout.dome_preview_open,
             layout.dome_mode_active, layout.dome_preset, layout.dome_geometry,
         );
-        match stage.save(self.workspace.stage_path()) {
-            Ok(()) => log::info!("Saved stage to {}", self.workspace.stage_path().display()),
+        match stage.save(self.session.workspace.stage_path()) {
+            Ok(()) => log::info!("Saved stage to {}", self.session.workspace.stage_path().display()),
             Err(e) => log::error!("Failed to save stage: {}", e),
         }
         // Save keyboard shortcuts
-        let keymap_config = self.keymap.to_config();
-        match keymap_config.save(self.workspace.keymap_path()) {
-            Ok(()) => log::info!("Saved keymap to {}", self.workspace.keymap_path().display()),
+        let keymap_config = self.input.keymap.to_config();
+        match keymap_config.save(self.session.workspace.keymap_path()) {
+            Ok(()) => log::info!("Saved keymap to {}", self.session.workspace.keymap_path().display()),
             Err(e) => log::error!("Failed to save keymap: {}", e),
         }
         // Save OSC config
-        match self.osc_config.save(self.workspace.osc_path()) {
-            Ok(()) => log::info!("Saved OSC config to {}", self.workspace.osc_path().display()),
+        match self.input.osc_config.save(self.session.workspace.osc_path()) {
+            Ok(()) => log::info!("Saved OSC config to {}", self.session.workspace.osc_path().display()),
             Err(e) => log::error!("Failed to save OSC config: {}", e),
         }
     }
@@ -63,13 +63,13 @@ impl VardaApp {
     /// If a scene is found, replaces the default mixer with the restored one.
     /// Returns layout preferences loaded from stage.json (if any).
     pub fn load_workspace(&mut self) -> Option<UILayoutState> {
-        if !self.workspace.exists() {
+        if !self.session.workspace.exists() {
             log::info!("No .varda/ directory found, starting fresh");
             return None;
         }
         let mut loaded_layout: Option<UILayoutState> = None;
-        if self.workspace.has_stage() {
-            match crate::persistence::StagePrefs::load(self.workspace.stage_path()) {
+        if self.session.workspace.has_stage() {
+            match crate::persistence::StagePrefs::load(self.session.workspace.stage_path()) {
                 Ok(prefs) => {
                     loaded_layout = Some(UILayoutState {
                         stage_editor_grid_size: prefs.grid_size,
@@ -83,7 +83,7 @@ impl VardaApp {
                         dome_geometry: prefs.dome_geometry,
                         ..UILayoutState::default()
                     });
-                    self.surface_manager = prefs.surfaces;
+                    self.output.surface_manager = prefs.surfaces;
                     for output_config in &prefs.outputs {
                         // Migrate legacy target_display field to new target config
                         let mut config = output_config.clone();
@@ -92,13 +92,13 @@ impl VardaApp {
                                 config.target = crate::scene::OutputTargetConfig::Display { name: display_name.clone() };
                             }
                         }
-                        self.pending_output_creates.push(config);
+                        self.output.pending_output_creates.push(config);
                     }
                     log::info!("Loaded stage with {} surfaces, {} outputs",
-                        self.surface_manager.surfaces.len(), prefs.outputs.len());
+                        self.output.surface_manager.surfaces.len(), prefs.outputs.len());
 
                     // If any surface uses Domemaster source, ensure the renderer exists
-                    let has_dome_surfaces = self.surface_manager.surfaces.iter()
+                    let has_dome_surfaces = self.output.surface_manager.surfaces.iter()
                         .any(|s| matches!(s.source, crate::renderer::context::OutputSource::Domemaster));
                     if has_dome_surfaces {
                         self.ensure_domemaster();
@@ -107,8 +107,8 @@ impl VardaApp {
                 Err(e) => log::warn!("Failed to load stage: {}", e),
             }
         }
-        if self.workspace.has_scene() {
-            match crate::scene::SceneConfig::load(self.workspace.scene_path()) {
+        if self.session.workspace.has_scene() {
+            match crate::scene::SceneConfig::load(self.session.workspace.scene_path()) {
                 Ok(scene_config) => {
                     // Apply render resolution from scene if present
                     if let (Some(w), Some(h)) = (scene_config.render_width, scene_config.render_height) {
@@ -118,31 +118,31 @@ impl VardaApp {
                             log::info!("Scene render resolution: {}×{}", w, h);
                         }
                     }
-                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager, self.render_width, self.render_height) {
+                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager, self.render_width, self.render_height) {
                         Ok(result) => {
                             self.mixer = result.mixer;
                             for warn in &result.warnings {
-                                self.notifications.warn(warn.clone());
+                                self.session.notifications.warn(warn.clone());
                             }
                             log::info!("Loaded scene with {} channels", scene_config.channels.len());
                         }
                         Err(e) => {
                             log::error!("Failed to restore scene: {}", e);
-                            self.notifications.error(format!("Failed to load scene: {}", e));
+                            self.session.notifications.error(format!("Failed to load scene: {}", e));
                         }
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to load scene file: {}", e);
-                    self.notifications.warn(format!("Failed to load scene: {}", e));
+                    self.session.notifications.warn(format!("Failed to load scene: {}", e));
                 }
             }
         }
-        if self.workspace.has_midi() {
-            match crate::midi::MidiConfig::load(self.workspace.midi_path()) {
+        if self.session.workspace.has_midi() {
+            match crate::midi::MidiConfig::load(self.session.workspace.midi_path()) {
                 Ok(midi_config) => {
-                    if let Some(midi) = &self.midi_devices {
-                        self.midi_mappings.load_from_config(&midi_config, &midi.devices);
+                    if let Some(midi) = &self.input.midi_devices {
+                        self.input.midi_mappings.load_from_config(&midi_config, &midi.devices);
                         log::info!("Loaded {} MIDI mappings", midi_config.mappings.len());
                     } else {
                         log::info!("MIDI config found but no MIDI devices connected, mappings deferred");
@@ -152,31 +152,31 @@ impl VardaApp {
             }
         }
         // Load keyboard shortcuts
-        if self.workspace.has_keymap() {
-            match crate::keymap::KeymapConfig::load(self.workspace.keymap_path()) {
+        if self.session.workspace.has_keymap() {
+            match crate::keymap::KeymapConfig::load(self.session.workspace.keymap_path()) {
                 Ok(keymap_config) => {
-                    self.keymap.load_config(&keymap_config);
+                    self.input.keymap.load_config(&keymap_config);
                     log::info!("Loaded {} keyboard shortcuts", keymap_config.bindings.len());
                 }
                 Err(e) => log::warn!("Failed to load keymap config: {}", e),
             }
         }
         // Load OSC config (already loaded in new(), but refresh feedback targets on workspace load)
-        if self.workspace.has_osc() {
-            match crate::osc::OscConfig::load(self.workspace.osc_path()) {
+        if self.session.workspace.has_osc() {
+            match crate::osc::OscConfig::load(self.session.workspace.osc_path()) {
                 Ok(config) => {
                     // Update feedback targets
-                    if let Some(ref mut sender) = self.osc_feedback {
+                    if let Some(ref mut sender) = self.input.osc_feedback {
                         for target in &config.feedback_targets {
                             if let Err(e) = sender.add_target(target) {
                                 log::warn!("Failed to add OSC feedback target '{}': {}", target, e);
                             }
                         }
                     }
-                    self.osc_config = config;
+                    self.input.osc_config = config;
                     log::info!("Loaded OSC config: port={}, enabled={}, {} feedback target(s)",
-                        self.osc_config.in_port, self.osc_config.enabled,
-                        self.osc_config.feedback_targets.len());
+                        self.input.osc_config.in_port, self.input.osc_config.enabled,
+                        self.input.osc_config.feedback_targets.len());
                 }
                 Err(e) => log::warn!("Failed to load OSC config: {}", e),
             }
@@ -254,7 +254,7 @@ impl VardaApp {
                     // Different source — rebuild just this deck
                     match crate::persistence::restore_deck(
                         deck_config, &self.context, &self.registry,
-                        &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager, rw, rh,
+                        &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager, rw, rh,
                     ) {
                         Ok(deck) => {
                             let mut slot = crate::channel::DeckSlot::new(deck);
@@ -280,7 +280,7 @@ impl VardaApp {
                 let deck_config = &ch_config.decks[d_idx];
                 match crate::persistence::restore_deck(
                     deck_config, &self.context, &self.registry,
-                    &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager, rw, rh,
+                    &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager, rw, rh,
                 ) {
                     Ok(deck) => {
                         let mut slot = crate::channel::DeckSlot::new(deck);
@@ -317,7 +317,7 @@ impl VardaApp {
                     for deck_config in &ch_config.decks {
                         match crate::persistence::restore_deck(
                             deck_config, &self.context, &self.registry,
-                            &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager, rw, rh,
+                            &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager, rw, rh,
                         ) {
                             Ok(deck) => {
                                 let mut slot = crate::channel::DeckSlot::new(deck);

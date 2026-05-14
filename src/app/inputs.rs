@@ -17,15 +17,15 @@ impl VardaApp {
             match event {
                 crate::registry::ShaderEvent::Changed(path) => {
                     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
-                    self.notifications.info(format!("Shader reloaded: {}", name));
+                    self.session.notifications.info(format!("Shader reloaded: {}", name));
                 }
                 crate::registry::ShaderEvent::Removed(path) => {
                     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
-                    self.notifications.warn(format!("Shader removed: {}", name));
+                    self.session.notifications.warn(format!("Shader removed: {}", name));
                 }
                 crate::registry::ShaderEvent::Error(path, err) => {
                     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
-                    self.notifications.error(format!("Shader error in {}: {}", name, err));
+                    self.session.notifications.error(format!("Shader error in {}: {}", name, err));
                 }
             }
         }
@@ -52,7 +52,7 @@ impl VardaApp {
         }
 
         // Process OSC messages via shared param router
-        if let Some(osc) = &self.osc_receiver {
+        if let Some(osc) = &self.input.osc_receiver {
             while let Some(input) = osc.try_recv() {
                 match input {
                     crate::osc::OscInput::Param { ref path, value } => {
@@ -68,10 +68,10 @@ impl VardaApp {
                         }
                     }
                     crate::osc::OscInput::ClockBpm(bpm) => {
-                        self.clock_manager.process_osc_bpm(bpm);
+                        self.input.clock_manager.process_osc_bpm(bpm);
                     }
                     crate::osc::OscInput::ClockBeat(phase) => {
-                        self.clock_manager.process_osc_beat(phase);
+                        self.input.clock_manager.process_osc_beat(phase);
                     }
                     crate::osc::OscInput::Unknown(addr) => {
                         log::debug!("Unknown OSC address: {}", addr);
@@ -81,26 +81,26 @@ impl VardaApp {
         }
 
         // Process MIDI messages → apply to mixer via mapping store, forward clock to ClockManager
-        if let Some(midi) = &self.midi_devices {
+        if let Some(midi) = &self.input.midi_devices {
             while let Some(msg) = midi.try_recv() {
                 // Forward clock messages to ClockManager
                 match &msg {
                     crate::midi::MidiMessage::ClockTick { device_id } => {
                         let dev_name = midi.device(*device_id)
                             .map(|d| d.name.as_str()).unwrap_or("Unknown");
-                        self.clock_manager.process_midi_tick(*device_id, dev_name);
+                        self.input.clock_manager.process_midi_tick(*device_id, dev_name);
                         continue;
                     }
                     crate::midi::MidiMessage::ClockStart { .. } => {
-                        self.clock_manager.process_midi_start();
+                        self.input.clock_manager.process_midi_start();
                         continue;
                     }
                     crate::midi::MidiMessage::ClockContinue { .. } => {
-                        self.clock_manager.process_midi_continue();
+                        self.input.clock_manager.process_midi_continue();
                         continue;
                     }
                     crate::midi::MidiMessage::ClockStop { .. } => {
-                        self.clock_manager.process_midi_stop();
+                        self.input.clock_manager.process_midi_stop();
                         continue;
                     }
                     _ => {}
@@ -112,20 +112,20 @@ impl VardaApp {
                 };
 
                 // Auto-map: intercept keys owned by auto-mapping before normal lookup
-                if self.auto_map_engine.handles_key(msg.device_id(), &key) {
+                if self.input.auto_map_engine.handles_key(msg.device_id(), &key) {
                     match &msg {
                         crate::midi::MidiMessage::NoteOn { device_id, note, velocity, channel, .. } => {
                             if *velocity > 0 {
-                                self.auto_map_engine.process_note_on(*device_id, *note, *channel);
+                                self.input.auto_map_engine.process_note_on(*device_id, *note, *channel);
                             } else {
-                                self.auto_map_engine.process_note_off(*device_id, *note, *channel, &mut self.mixer);
+                                self.input.auto_map_engine.process_note_off(*device_id, *note, *channel, &mut self.mixer);
                             }
                         }
                         crate::midi::MidiMessage::NoteOff { device_id, note, channel, .. } => {
-                            self.auto_map_engine.process_note_off(*device_id, *note, *channel, &mut self.mixer);
+                            self.input.auto_map_engine.process_note_off(*device_id, *note, *channel, &mut self.mixer);
                         }
                         crate::midi::MidiMessage::ControlChange { device_id, cc, value, .. } => {
-                            self.auto_map_engine.process_cc(*device_id, *cc, *value, &mut self.mixer);
+                            self.input.auto_map_engine.process_cc(*device_id, *cc, *value, &mut self.mixer);
                         }
                         _ => {}
                     }
@@ -135,19 +135,19 @@ impl VardaApp {
                 let value = msg.normalized_value();
 
                 // Learn mode: map next MIDI input to the learn target
-                if self.midi_mappings.learn_mode {
-                    self.midi_mappings.process_learn(key);
+                if self.input.midi_mappings.learn_mode {
+                    self.input.midi_mappings.process_learn(key);
                 }
 
                 // Apply mapped value to mixer, clock, or global actions
-                if let Some(path) = self.midi_mappings.get(&key).cloned() {
+                if let Some(path) = self.input.midi_mappings.get(&key).cloned() {
                     if path == "clock/bpm" {
                         // Map normalized 0.0–1.0 → 20–300 BPM range
                         let bpm = 20.0 + value * 280.0;
-                        if !matches!(self.clock_manager.preference(), crate::clock::ClockPreference::ForceManual { .. }) {
-                            self.clock_manager.set_preference(crate::clock::ClockPreference::ForceManual { bpm });
+                        if !matches!(self.input.clock_manager.preference(), crate::clock::ClockPreference::ForceManual { .. }) {
+                            self.input.clock_manager.set_preference(crate::clock::ClockPreference::ForceManual { bpm });
                         } else {
-                            self.clock_manager.set_manual_bpm(bpm);
+                            self.input.clock_manager.set_manual_bpm(bpm);
                         }
                     } else if path.starts_with("action/") && value > 0.5 {
                         // Global actions — trigger on note-on / CC > 50%
@@ -162,7 +162,7 @@ impl VardaApp {
                             changed_params.push((path.clone(), value));
                         }
                     }
-                } else if !self.midi_mappings.learn_mode {
+                } else if !self.input.midi_mappings.learn_mode {
                     log::debug!("Unmapped MIDI: {} value={:.2}", key, value);
                 }
             }
@@ -171,15 +171,15 @@ impl VardaApp {
         // Feed audio BPM to ClockManager
         {
             let primary = self.audio_manager.get_primary_data();
-            self.clock_manager.update_audio(primary.bpm, primary.beat_phase());
+            self.input.clock_manager.update_audio(primary.bpm, primary.beat_phase());
         }
 
         // Resolve clock priority
-        self.clock_manager.update();
+        self.input.clock_manager.update();
 
         // Broadcast changed parameters to OSC feedback targets
         if !changed_params.is_empty() {
-            if let Some(ref sender) = self.osc_feedback {
+            if let Some(ref sender) = self.input.osc_feedback {
                 if sender.has_targets() {
                     for (path, value) in &changed_params {
                         sender.send_param(path, *value);

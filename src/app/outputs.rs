@@ -42,9 +42,9 @@ impl VardaApp {
     pub fn create_pending_outputs(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         use winit::window::Window;
 
-        let pending: Vec<crate::scene::OutputConfig> = self.pending_output_creates.drain(..).collect();
+        let pending: Vec<crate::scene::OutputConfig> = self.output.pending_output_creates.drain(..).collect();
         for config in pending {
-            let idx = self.outputs.len() + 1;
+            let idx = self.output.outputs.len() + 1;
             let name = if config.name.is_empty() { format!("Output {}", idx) } else { config.name.clone() };
             let target = crate::persistence::config_to_target_pub(&config.target);
 
@@ -94,7 +94,7 @@ impl VardaApp {
                                 // If Display target, set fullscreen — or fall back to
                                 // Windowed if the target monitor is no longer connected.
                                 if let OutputTarget::Display { ref name, .. } = target {
-                                    if let Some((_, handle)) = self.cached_monitors.iter()
+                                    if let Some((_, handle)) = self.output.cached_monitors.iter()
                                         .find(|(n, _)| n == name)
                                     {
                                         output.set_target(target.clone(), Some(handle.clone()));
@@ -103,7 +103,7 @@ impl VardaApp {
                                             "Monitor '{}' not available for output '{}' — falling back to windowed",
                                             name, output.name,
                                         );
-                                        self.notifications.warn(format!(
+                                        self.session.notifications.warn(format!(
                                             "Monitor '{}' not connected — output '{}' opened as window",
                                             name, output.name,
                                         ));
@@ -111,17 +111,17 @@ impl VardaApp {
                                     }
                                 }
                                 log::info!("Created output window '{}'", output.name);
-                                self.outputs.push(UnifiedOutput::Window(output));
+                                self.output.outputs.push(UnifiedOutput::Window(output));
                             }
                             Err(e) => {
                                 log::error!("Failed to create output window: {}", e);
-                                self.notifications.error(format!("Failed to create output: {}", e));
+                                self.session.notifications.error(format!("Failed to create output: {}", e));
                             }
                         }
                     }
                     Err(e) => {
                         log::error!("Failed to create output window: {}", e);
-                        self.notifications.error(format!("Failed to create window: {}", e));
+                        self.session.notifications.error(format!("Failed to create window: {}", e));
                     }
                 }
             } else {
@@ -147,7 +147,7 @@ impl VardaApp {
                 headless.edge_blend_mode = config.edge_blend_mode;
                 headless.edge_blend = config.edge_blend;
                 log::info!("Created headless output '{}'", name);
-                self.outputs.push(UnifiedOutput::Headless(headless));
+                self.output.outputs.push(UnifiedOutput::Headless(headless));
             }
         }
     }
@@ -157,17 +157,17 @@ impl VardaApp {
         use crate::renderer::edge_blend::{EdgeBlendMode, OutputSurfaceInfo, MappedRegion, SurfaceOverlapZones, compute_auto_edge_blend};
 
         // Check if any output is in Auto mode — early exit if none.
-        let auto_count = self.outputs.iter().filter(|o| o.edge_blend_mode() == EdgeBlendMode::Auto).count();
+        let auto_count = self.output.outputs.iter().filter(|o| o.edge_blend_mode() == EdgeBlendMode::Auto).count();
         if auto_count == 0 {
             return;
         }
         log::debug!("[edge-blend] recompute_auto: {} outputs in Auto mode", auto_count);
 
         // Build OutputSurfaceInfo for each output (include surface_uuid in MappedRegion).
-        let infos: Vec<OutputSurfaceInfo> = self.outputs.iter().enumerate().map(|(idx, output)| {
+        let infos: Vec<OutputSurfaceInfo> = self.output.outputs.iter().enumerate().map(|(idx, output)| {
             let mut regions = Vec::new();
             for assignment in output.surface_assignments() {
-                if let Some((_, surface)) = self.surface_manager.find_by_uuid(&assignment.surface_uuid) {
+                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(&assignment.surface_uuid) {
                     let bb = surface.bounding_box();
                     regions.push(MappedRegion {
                         source_key: format!("{:?}", surface.source),
@@ -188,7 +188,7 @@ impl VardaApp {
         }).collect();
 
         // Clear overlap zones on all Auto-mode assignments before applying new results.
-        for output in self.outputs.iter_mut() {
+        for output in self.output.outputs.iter_mut() {
             if output.edge_blend_mode() == EdgeBlendMode::Auto {
                 for assignment in output.surface_assignments_mut() {
                     assignment.overlap_zones = SurfaceOverlapZones::default();
@@ -207,7 +207,7 @@ impl VardaApp {
             );
         }
         for result in results {
-            let output = &mut self.outputs[result.output_idx];
+            let output = &mut self.output.outputs[result.output_idx];
             for assignment in output.surface_assignments_mut() {
                 if assignment.surface_uuid == result.surface_uuid {
                     assignment.overlap_zones = result.overlap_zones;

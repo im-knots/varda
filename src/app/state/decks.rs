@@ -34,14 +34,14 @@ impl VardaApp {
                         self.camera_manager.release_camera(cam_id);
                     }
                     if let Some(idx) = slot.deck.srt_receiver_idx() {
-                        self.stream_manager.stop_receive(idx);
+                        self.external_io.stream_manager.stop_receive(idx);
                     }
                     if let Some(idx) = slot.deck.ndi_receiver_idx() {
-                        self.ndi_manager.stop_receive(idx);
+                        self.external_io.ndi_manager.stop_receive(idx);
                     }
                     #[cfg(target_os = "macos")]
                     if let Some(idx) = slot.deck.syphon_client_idx() {
-                        self.syphon_manager.stop_receive(idx);
+                        self.external_io.syphon_manager.stop_receive(idx);
                     }
                 }
             }
@@ -211,9 +211,9 @@ impl VardaApp {
 
         // Add NDI source deck if requested
         if let Some((ch_idx, ndi_name)) = actions.ndi_to_add.take() {
-            match self.ndi_manager.start_receive(&ndi_name, &context.device) {
+            match self.external_io.ndi_manager.start_receive(&ndi_name, &context.device) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.ndi_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    let (src_w, src_h) = self.external_io.ndi_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                     match Deck::new_from_ndi(context, receiver_idx, &ndi_name, src_w, src_h, self.render_width, self.render_height) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -225,27 +225,27 @@ impl VardaApp {
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.notifications.info(format!("📡 NDI '{}' added to Ch {}", ndi_name, ch_idx + 1));
+                                self.session.notifications.info(format!("📡 NDI '{}' added to Ch {}", ndi_name, ch_idx + 1));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create NDI deck: {}", e);
-                            self.notifications.error(format!("Failed to create NDI deck: {}", e));
+                            self.session.notifications.error(format!("Failed to create NDI deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start NDI receive for '{}'", ndi_name);
-                    self.notifications.error(format!("Failed to receive NDI source '{}'", ndi_name));
+                    self.session.notifications.error(format!("Failed to receive NDI source '{}'", ndi_name));
                 }
             }
         }
 
         // Add SRT source deck if requested
         if let Some((ch_idx, url, mode)) = actions.srt_to_add.take() {
-            match self.stream_manager.start_srt_receive(&url, mode, &context.device) {
+            match self.external_io.stream_manager.start_srt_receive(&url, mode, &context.device) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                     match Deck::new_from_srt(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -257,41 +257,41 @@ impl VardaApp {
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.notifications.info(format!("📺 SRT '{}' added to Ch {}", url, ch_idx + 1));
+                                self.session.notifications.info(format!("📺 SRT '{}' added to Ch {}", url, ch_idx + 1));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create SRT deck: {}", e);
-                            self.notifications.error(format!("Failed to create SRT deck: {}", e));
+                            self.session.notifications.error(format!("Failed to create SRT deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start SRT receive for '{}'", url);
-                    self.notifications.error(format!("Failed to receive SRT source '{}'", url));
+                    self.session.notifications.error(format!("Failed to receive SRT source '{}'", url));
                 }
             }
         }
 
         // Add stream source to library (no deck created — user drags to channel)
         if let Some((url, mode)) = actions.srt_library_add.take() {
-            if !self.stream_library.iter().any(|(u, _)| u == &url) {
+            if !self.external_io.stream_library.iter().any(|(u, _)| u == &url) {
                 log::info!("Added stream source to library: {} ({})", url, mode);
-                self.stream_library.push((url, mode));
+                self.external_io.stream_library.push((url, mode));
             }
         }
 
         // Remove stream source from library
         if let Some(url) = actions.srt_library_remove.take() {
-            self.stream_library.retain(|(u, _)| u != &url);
+            self.external_io.stream_library.retain(|(u, _)| u != &url);
             log::info!("Removed SRT source from library: {}", url);
         }
 
         // Add HLS source deck if requested
         if let Some((ch_idx, url)) = actions.hls_to_add.take() {
-            match self.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Hls, &context.device) {
+            match self.external_io.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Hls, &context.device) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                     match Deck::new_from_hls(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -303,27 +303,27 @@ impl VardaApp {
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.notifications.info(format!("📡 HLS '{}' added to Ch {}", url, ch_idx + 1));
+                                self.session.notifications.info(format!("📡 HLS '{}' added to Ch {}", url, ch_idx + 1));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create HLS deck: {}", e);
-                            self.notifications.error(format!("Failed to create HLS deck: {}", e));
+                            self.session.notifications.error(format!("Failed to create HLS deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start HLS receive for '{}'", url);
-                    self.notifications.error(format!("Failed to receive HLS source '{}'", url));
+                    self.session.notifications.error(format!("Failed to receive HLS source '{}'", url));
                 }
             }
         }
 
         // Add DASH source deck if requested
         if let Some((ch_idx, url)) = actions.dash_to_add.take() {
-            match self.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Dash, &context.device) {
+            match self.external_io.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Dash, &context.device) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                     match Deck::new_from_dash(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -335,27 +335,27 @@ impl VardaApp {
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.notifications.info(format!("📡 DASH '{}' added to Ch {}", url, ch_idx + 1));
+                                self.session.notifications.info(format!("📡 DASH '{}' added to Ch {}", url, ch_idx + 1));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create DASH deck: {}", e);
-                            self.notifications.error(format!("Failed to create DASH deck: {}", e));
+                            self.session.notifications.error(format!("Failed to create DASH deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start DASH receive for '{}'", url);
-                    self.notifications.error(format!("Failed to receive DASH source '{}'", url));
+                    self.session.notifications.error(format!("Failed to receive DASH source '{}'", url));
                 }
             }
         }
 
         // Add RTMP source deck if requested
         if let Some((ch_idx, url, mode)) = actions.rtmp_to_add.take() {
-            match self.stream_manager.start_rtmp_receive(&url, mode, &context.device) {
+            match self.external_io.stream_manager.start_rtmp_receive(&url, mode, &context.device) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
+                    let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
                     match Deck::new_from_rtmp(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -367,64 +367,64 @@ impl VardaApp {
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.notifications.info(format!("📺 RTMP '{}' added to Ch {}", url, ch_idx + 1));
+                                self.session.notifications.info(format!("📺 RTMP '{}' added to Ch {}", url, ch_idx + 1));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create RTMP deck: {}", e);
-                            self.notifications.error(format!("Failed to create RTMP deck: {}", e));
+                            self.session.notifications.error(format!("Failed to create RTMP deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start RTMP receive for '{}'", url);
-                    self.notifications.error(format!("Failed to receive RTMP source '{}'", url));
+                    self.session.notifications.error(format!("Failed to receive RTMP source '{}'", url));
                 }
             }
         }
 
         // Add/remove HLS library entries
         if let Some(url) = actions.hls_library_add.take() {
-            if !self.hls_library.contains(&url) {
+            if !self.external_io.hls_library.contains(&url) {
                 log::info!("Added HLS source to library: {}", url);
-                self.hls_library.push(url);
+                self.external_io.hls_library.push(url);
             }
         }
         if let Some(url) = actions.hls_library_remove.take() {
-            self.hls_library.retain(|u| u != &url);
+            self.external_io.hls_library.retain(|u| u != &url);
             log::info!("Removed HLS source from library: {}", url);
         }
 
         // Add/remove DASH library entries
         if let Some(url) = actions.dash_library_add.take() {
-            if !self.dash_library.contains(&url) {
+            if !self.external_io.dash_library.contains(&url) {
                 log::info!("Added DASH source to library: {}", url);
-                self.dash_library.push(url);
+                self.external_io.dash_library.push(url);
             }
         }
         if let Some(url) = actions.dash_library_remove.take() {
-            self.dash_library.retain(|u| u != &url);
+            self.external_io.dash_library.retain(|u| u != &url);
             log::info!("Removed DASH source from library: {}", url);
         }
 
         // Add/remove RTMP library entries
         if let Some((url, mode)) = actions.rtmp_library_add.take() {
-            if !self.rtmp_library.iter().any(|(u, _)| u == &url) {
+            if !self.external_io.rtmp_library.iter().any(|(u, _)| u == &url) {
                 log::info!("Added RTMP source to library: {} ({})", url, mode);
-                self.rtmp_library.push((url, mode));
+                self.external_io.rtmp_library.push((url, mode));
             }
         }
         if let Some(url) = actions.rtmp_library_remove.take() {
-            self.rtmp_library.retain(|(u, _)| u != &url);
+            self.external_io.rtmp_library.retain(|(u, _)| u != &url);
             log::info!("Removed RTMP source from library: {}", url);
         }
 
         // Add Syphon server deck if requested
         #[cfg(target_os = "macos")]
         if let Some((ch_idx, syph_name)) = actions.syphon_to_add.take() {
-            match self.syphon_manager.start_receive(&syph_name, &context.device) {
+            match self.external_io.syphon_manager.start_receive(&syph_name, &context.device) {
                 Some(client_idx) => {
-                    let (src_w, src_h) = self.syphon_manager.client_dimensions(client_idx).unwrap_or((1920, 1080));
+                    let (src_w, src_h) = self.external_io.syphon_manager.client_dimensions(client_idx).unwrap_or((1920, 1080));
                     match Deck::new_from_syphon(context, client_idx, &syph_name, src_w, src_h, self.render_width, self.render_height) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -436,36 +436,36 @@ impl VardaApp {
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.notifications.info(format!("🔗 Syphon '{}' added to Ch {}", syph_name, ch_idx + 1));
+                                self.session.notifications.info(format!("🔗 Syphon '{}' added to Ch {}", syph_name, ch_idx + 1));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create Syphon deck: {}", e);
-                            self.notifications.error(format!("Failed to create Syphon deck: {}", e));
+                            self.session.notifications.error(format!("Failed to create Syphon deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start Syphon receive for '{}'", syph_name);
-                    self.notifications.error(format!("Failed to receive Syphon server '{}'", syph_name));
+                    self.session.notifications.error(format!("Failed to receive Syphon server '{}'", syph_name));
                 }
             }
         }
 
         // Load deck preset into a channel
         if let Some((ch_idx, preset_idx)) = actions.deck_preset_to_add.take() {
-            if preset_idx < self.preset_library.deck_presets.len() {
-                let preset = self.preset_library.deck_presets[preset_idx].clone();
+            if preset_idx < self.session.preset_library.deck_presets.len() {
+                let preset = self.session.preset_library.deck_presets[preset_idx].clone();
                 match Self::restore_deck_into_channel(
                     &preset.config, ch_idx, context, &self.registry,
-                    &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager,
+                    &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager,
                     self.render_width, self.render_height,
                     mixer, egui_renderer, deck_preview_textures,
                 ) {
-                    Ok(()) => self.notifications.info(format!("💾 Loaded deck preset '{}'", preset.name)),
+                    Ok(()) => self.session.notifications.info(format!("💾 Loaded deck preset '{}'", preset.name)),
                     Err(e) => {
                         log::warn!("Failed to load deck preset '{}': {}", preset.name, e);
-                        self.notifications.warn(format!("Failed to load preset '{}': {}", preset.name, e));
+                        self.session.notifications.warn(format!("Failed to load preset '{}': {}", preset.name, e));
                     }
                 }
             }
@@ -473,8 +473,8 @@ impl VardaApp {
 
         // Load channel preset: fill into existing channel or create a new one
         if let Some((target_ch, preset_idx)) = actions.channel_preset_to_add.take() {
-            if preset_idx < self.preset_library.channel_presets.len() {
-                let preset = self.preset_library.channel_presets[preset_idx].clone();
+            if preset_idx < self.session.preset_library.channel_presets.len() {
+                let preset = self.session.preset_library.channel_presets[preset_idx].clone();
 
                 // Only fill into the target channel if it's empty (no decks);
                 // otherwise create a new channel to avoid clobbering existing content.
@@ -505,7 +505,7 @@ impl VardaApp {
                         }
                         Err(e) => {
                             log::error!("Failed to create channel for preset: {}", e);
-                            self.notifications.error(format!("Failed to load channel preset: {}", e));
+                            self.session.notifications.error(format!("Failed to load channel preset: {}", e));
                             None
                         }
                     }
@@ -536,7 +536,7 @@ impl VardaApp {
                 for deck_config in &preset.config.decks {
                     if let Err(e) = Self::restore_deck_into_channel(
                         deck_config, ch_idx, context, &self.registry,
-                        &mut self.camera_manager, &mut self.ndi_manager, &mut self.stream_manager,
+                        &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager,
                         self.render_width, self.render_height,
                         mixer, egui_renderer, deck_preview_textures,
                     ) {
@@ -551,7 +551,7 @@ impl VardaApp {
                 } else {
                     format!("💾 Loaded channel preset '{}' into {}", preset.name, target_desc)
                 };
-                self.notifications.info(msg);
+                self.session.notifications.info(msg);
                 }
             }
         }
@@ -574,7 +574,7 @@ impl VardaApp {
                     let prefix = format!("deck_{}", deck_uuid);
                     preset_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
                     match crate::persistence::presets::PresetLibrary::save_deck_preset(
-                        &self.workspace, &name, &preset_config,
+                        &self.session.workspace, &name, &preset_config,
                     ) {
                         Ok(()) => {
                             // Update the deck's display name to match the saved preset name
@@ -583,12 +583,12 @@ impl VardaApp {
                                     slot.deck.set_source_name(name.clone());
                                 }
                             }
-                            self.preset_library.refresh(&self.workspace);
-                            self.notifications.info(format!("💾 Saved deck preset '{}'", name));
+                            self.session.preset_library.refresh(&self.session.workspace);
+                            self.session.notifications.info(format!("💾 Saved deck preset '{}'", name));
                         }
                         Err(e) => {
                             log::error!("Failed to save deck preset: {}", e);
-                            self.notifications.error(format!("Failed to save preset: {}", e));
+                            self.session.notifications.error(format!("Failed to save preset: {}", e));
                         }
                     }
                 }
@@ -613,15 +613,15 @@ impl VardaApp {
                     deck_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
                 }
                 match crate::persistence::presets::PresetLibrary::save_channel_preset(
-                    &self.workspace, &name, &preset_ch_config,
+                    &self.session.workspace, &name, &preset_ch_config,
                 ) {
                     Ok(()) => {
-                        self.preset_library.refresh(&self.workspace);
-                        self.notifications.info(format!("💾 Saved channel preset '{}'", name));
+                        self.session.preset_library.refresh(&self.session.workspace);
+                        self.session.notifications.info(format!("💾 Saved channel preset '{}'", name));
                     }
                     Err(e) => {
                         log::error!("Failed to save channel preset: {}", e);
-                        self.notifications.error(format!("Failed to save preset: {}", e));
+                        self.session.notifications.error(format!("Failed to save preset: {}", e));
                     }
                 }
             }

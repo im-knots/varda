@@ -123,17 +123,17 @@ impl VardaApp {
     /// Update frame timing (FPS measurement) and system stats. Call once per frame before any work.
     pub fn update_frame_timing(&mut self) {
         let now = std::time::Instant::now();
-        let dt = now.duration_since(self.last_frame_instant).as_secs_f32();
-        self.last_frame_instant = now;
+        let dt = now.duration_since(self.frame_stats.last_frame_instant).as_secs_f32();
+        self.frame_stats.last_frame_instant = now;
         if dt > 0.0 {
             let instant_fps = 1.0 / dt;
-            self.fps_history.push_back(instant_fps);
-            if self.fps_history.len() > 60 {
-                self.fps_history.pop_front();
+            self.frame_stats.fps_history.push_back(instant_fps);
+            if self.frame_stats.fps_history.len() > 60 {
+                self.frame_stats.fps_history.pop_front();
             }
-            self.fps_smoothed = self.fps_history.iter().sum::<f32>() / self.fps_history.len() as f32;
+            self.frame_stats.fps_smoothed = self.frame_stats.fps_history.iter().sum::<f32>() / self.frame_stats.fps_history.len() as f32;
         }
-        self.system_monitor.update();
+        self.frame_stats.system_monitor.update();
     }
 
     /// Render the mixer frame: update cameras, NDI, Syphon, collect audio, render mixer.
@@ -169,14 +169,14 @@ impl VardaApp {
         self.camera_manager.update_selective(&self.context.queue, &needed_camera_ids);
 
         // Update NDI receiver frames
-        self.ndi_manager.update(&self.context.device, &self.context.queue);
+        self.external_io.ndi_manager.update(&self.context.device, &self.context.queue);
 
         // Update Syphon client frames
         #[cfg(target_os = "macos")]
-        self.syphon_manager.update(&self.context.queue);
+        self.external_io.syphon_manager.update(&self.context.queue);
 
         // Update stream receiver frames
-        self.stream_manager.update(&self.context.queue);
+        self.external_io.stream_manager.update(&self.context.queue);
 
         for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
@@ -187,11 +187,11 @@ impl VardaApp {
                             self.camera_manager.texture_view(cam_id).cloned()
                         }
                         ExternalSourceKind::Ndi(idx) => {
-                            self.ndi_manager.texture_view(idx).cloned()
+                            self.external_io.ndi_manager.texture_view(idx).cloned()
                         }
                         #[cfg(target_os = "macos")]
                         ExternalSourceKind::Syphon(idx) => {
-                            self.syphon_manager.texture_view(idx).cloned()
+                            self.external_io.syphon_manager.texture_view(idx).cloned()
                         }
                         #[cfg(not(target_os = "macos"))]
                         ExternalSourceKind::Syphon(_) => None,
@@ -199,7 +199,7 @@ impl VardaApp {
                         | ExternalSourceKind::Hls(idx)
                         | ExternalSourceKind::Dash(idx)
                         | ExternalSourceKind::Rtmp(idx) => {
-                            self.stream_manager.texture_view(idx).cloned()
+                            self.external_io.stream_manager.texture_view(idx).cloned()
                         }
                     };
                 }
@@ -224,7 +224,7 @@ impl VardaApp {
         let mut primary_audio = self.audio_manager.get_primary_data().clone();
 
         // Override audio BPM/beat with clock-resolved values (MIDI > OSC > Audio)
-        let clock = self.clock_manager.state();
+        let clock = self.input.clock_manager.state();
         if clock.active {
             primary_audio.bpm = Some(clock.bpm);
             primary_audio.time_since_beat = clock.beat_phase * (60.0 / clock.bpm);
@@ -242,7 +242,7 @@ impl VardaApp {
         // Prepare sub-mixes for any Channels(...) sources
         {
             let mut sub_mix_sources: Vec<Vec<usize>> = Vec::new();
-            for surface in &self.surface_manager.surfaces {
+            for surface in &self.output.surface_manager.surfaces {
                 if let OutputSource::Channels(indices) = &surface.source {
                     let mut sorted = indices.clone();
                     sorted.sort();
@@ -258,7 +258,7 @@ impl VardaApp {
         let mixer = &self.mixer;
 
         // Run domemaster renderer if enabled (content rotation is updated each frame via set_content_rotation)
-        let domemaster_view = if let Some(dome) = &self.domemaster {
+        let domemaster_view = if let Some(dome) = &self.output.domemaster {
             if dome.enabled {
                 dome.update_params(&self.context.queue);
                 dome.render(&self.context.device, &self.context.queue, mixer.composite_view());
@@ -270,10 +270,10 @@ impl VardaApp {
             None
         };
 
-        for output in &self.outputs {
+        for output in &self.output.outputs {
             match output {
                 crate::renderer::context::UnifiedOutput::Window(output) => {
-                    Self::render_window_output(output, context, mixer, &self.surface_manager, &self.calibration_textures, domemaster_view);
+                    Self::render_window_output(output, context, mixer, &self.output.surface_manager, &self.output.calibration_textures, domemaster_view);
                 }
                 crate::renderer::context::UnifiedOutput::Headless(_) => {
                     // Headless rendering handled separately (needs &mut for subprocess)
@@ -283,11 +283,11 @@ impl VardaApp {
 
         // Render headless outputs (needs &mut self for subprocess feeding)
         Self::render_headless_outputs_inner(
-            &mut self.outputs, context, mixer,
-            &self.surface_manager,
-            &mut self.ndi_manager,
+            &mut self.output.outputs, context, mixer,
+            &self.output.surface_manager,
+            &mut self.external_io.ndi_manager,
             #[cfg(target_os = "macos")]
-            &mut self.syphon_manager,
+            &mut self.external_io.syphon_manager,
             domemaster_view,
         );
     }
@@ -394,7 +394,7 @@ impl VardaApp {
 
     /// Refresh monitors from the event loop.
     pub fn refresh_monitors(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.cached_monitors = event_loop.available_monitors()
+        self.output.cached_monitors = event_loop.available_monitors()
             .map(|m| {
                 let name = m.name().unwrap_or_else(|| "Unknown".to_string());
                 (name, m)
@@ -627,12 +627,12 @@ mod tests {
             return;
         };
         // Seed with 60 identical FPS values
-        app.fps_history.clear();
+        app.frame_stats.fps_history.clear();
         for _ in 0..60 {
-            app.fps_history.push_back(60.0);
+            app.frame_stats.fps_history.push_back(60.0);
         }
-        app.fps_smoothed = app.fps_history.iter().sum::<f32>() / app.fps_history.len() as f32;
-        assert!((app.fps_smoothed - 60.0).abs() < 0.01);
+        app.frame_stats.fps_smoothed = app.frame_stats.fps_history.iter().sum::<f32>() / app.frame_stats.fps_history.len() as f32;
+        assert!((app.frame_stats.fps_smoothed - 60.0).abs() < 0.01);
     }
 
     #[test]
@@ -652,14 +652,14 @@ mod tests {
             return;
         };
         // Push more than 60 entries
-        app.fps_history.clear();
+        app.frame_stats.fps_history.clear();
         for _ in 0..100 {
-            app.fps_history.push_back(30.0);
-            if app.fps_history.len() > 60 {
-                app.fps_history.pop_front();
+            app.frame_stats.fps_history.push_back(30.0);
+            if app.frame_stats.fps_history.len() > 60 {
+                app.frame_stats.fps_history.pop_front();
             }
         }
-        assert_eq!(app.fps_history.len(), 60, "Window should cap at 60 entries");
+        assert_eq!(app.frame_stats.fps_history.len(), 60, "Window should cap at 60 entries");
     }
 
     // ── Offensive: catch_unwind pattern delivers error through channel ──

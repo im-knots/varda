@@ -210,7 +210,7 @@ pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
 
 /// Build a MidiSnapshot from the current VardaApp state.
 pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
-    let devices = app.midi_devices.as_ref().map(|mgr| {
+    let devices = app.input.midi_devices.as_ref().map(|mgr| {
         mgr.device_list().iter().map(|d| MidiDeviceSnapshot {
             id: d.id, name: d.name.clone(), enabled: d.enabled,
             has_output: d.has_output, profile: d.profile_name().to_string(),
@@ -218,9 +218,9 @@ pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
     }).unwrap_or_default();
 
     let mappings = {
-        let sorted = app.midi_mappings.sorted_mappings();
+        let sorted = app.input.midi_mappings.sorted_mappings();
         sorted.iter().map(|(key, path)| {
-            let dev_name = app.midi_devices.as_ref()
+            let dev_name = app.input.midi_devices.as_ref()
                 .and_then(|mgr| mgr.device(key.device_id()))
                 .map(|d| d.name.clone())
                 .unwrap_or_else(|| format!("Device {}", key.device_id()));
@@ -231,8 +231,8 @@ pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
     MidiSnapshot {
         devices,
         mappings,
-        learn_active: app.midi_mappings.learn_mode,
-        learn_target: app.midi_mappings.learn_target.clone(),
+        learn_active: app.input.midi_mappings.learn_mode,
+        learn_target: app.input.midi_mappings.learn_target.clone(),
     }
 }
 
@@ -248,7 +248,7 @@ pub(crate) fn build_camera_snapshot(app: &VardaApp) -> CameraSnapshot {
 pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
     use crate::engine::types::DetectedClockSourceSnapshot;
 
-    let clock = app.clock_manager.state();
+    let clock = app.input.clock_manager.state();
     let (source_label, device_name) = match &clock.source {
         crate::clock::ClockSource::Audio => ("Audio".to_string(), None),
         crate::clock::ClockSource::MidiClock { device_name, .. } => {
@@ -258,7 +258,7 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
         crate::clock::ClockSource::Manual => ("Manual".to_string(), None),
     };
 
-    let detected_midi_sources = app.clock_manager.detected_midi_sources()
+    let detected_midi_sources = app.input.clock_manager.detected_midi_sources()
         .into_iter()
         .map(|s| DetectedClockSourceSnapshot {
             device_id: s.device_id,
@@ -267,7 +267,7 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
         })
         .collect();
 
-    let preference = app.clock_manager.preference();
+    let preference = app.input.clock_manager.preference();
     let (preference_label, preference_force_device_id) = match preference {
         crate::clock::ClockPreference::Auto => ("Auto".to_string(), None),
         crate::clock::ClockPreference::ForceMidi { device_id } => {
@@ -285,8 +285,8 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
         device_name,
         active: clock.active,
         detected_midi_sources,
-        osc_active: app.clock_manager.osc_active(),
-        osc_bpm: app.clock_manager.osc_bpm(),
+        osc_active: app.input.clock_manager.osc_active(),
+        osc_bpm: app.input.clock_manager.osc_bpm(),
         audio_bpm: if clock.active && matches!(clock.source, crate::clock::ClockSource::Audio) {
             Some(clock.bpm)
         } else {
@@ -294,7 +294,7 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
         },
         preference_label,
         preference_force_device_id,
-        manual_bpm: app.clock_manager.manual_bpm(),
+        manual_bpm: app.input.clock_manager.manual_bpm(),
     }
 }
 
@@ -310,14 +310,14 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         midi: build_midi_snapshot(app),
         cameras: build_camera_snapshot(app),
         clock: build_clock_snapshot(app),
-        fps: app.fps_smoothed,
-        frame_count: app.frame_count,
-        ndi_sources: app.ndi_manager.discovered_sources(),
-        ndi_available: app.ndi_manager.is_available(),
+        fps: app.frame_stats.fps_smoothed,
+        frame_count: app.frame_stats.frame_count,
+        ndi_sources: app.external_io.ndi_manager.discovered_sources(),
+        ndi_available: app.external_io.ndi_manager.is_available(),
         #[cfg(target_os = "macos")]
-        syphon_sources: app.syphon_manager.discovered_sources(),
+        syphon_sources: app.external_io.syphon_manager.discovered_sources(),
         #[cfg(target_os = "macos")]
-        syphon_available: app.syphon_manager.is_available(),
+        syphon_available: app.external_io.syphon_manager.is_available(),
         #[cfg(not(target_os = "macos"))]
         syphon_sources: vec![],
         #[cfg(not(target_os = "macos"))]
@@ -331,11 +331,11 @@ fn build_stream_receiver_snapshots(app: &VardaApp) -> Vec<crate::engine::types::
     let mut result: Vec<crate::engine::types::StreamReceiverSnapshot> = Vec::new();
 
     // Add library entries (configured but possibly not connected)
-    for (url, mode) in &app.stream_library {
-        let connected = (0..app.stream_manager.receiver_count())
+    for (url, mode) in &app.external_io.stream_library {
+        let connected = (0..app.external_io.stream_manager.receiver_count())
             .any(|i| {
-                app.stream_manager.receiver_url(i) == Some(url.as_str())
-                    && app.stream_manager.is_connected(i)
+                app.external_io.stream_manager.receiver_url(i) == Some(url.as_str())
+                    && app.external_io.stream_manager.is_connected(i)
             });
         result.push(crate::engine::types::StreamReceiverSnapshot {
             url: url.clone(),
@@ -345,13 +345,13 @@ fn build_stream_receiver_snapshots(app: &VardaApp) -> Vec<crate::engine::types::
     }
 
     // Add active receivers not already in the library (e.g. restored from scene)
-    for i in 0..app.stream_manager.receiver_count() {
-        if let (Some(url), Some(mode)) = (app.stream_manager.receiver_url(i), app.stream_manager.receiver_mode(i)) {
+    for i in 0..app.external_io.stream_manager.receiver_count() {
+        if let (Some(url), Some(mode)) = (app.external_io.stream_manager.receiver_url(i), app.external_io.stream_manager.receiver_mode(i)) {
             if !result.iter().any(|r| r.url == url) {
                 result.push(crate::engine::types::StreamReceiverSnapshot {
                     url: url.to_string(),
                     mode: format!("{}", mode).to_lowercase(),
-                    connected: app.stream_manager.is_connected(i),
+                    connected: app.external_io.stream_manager.is_connected(i),
                 });
             }
         }
@@ -446,11 +446,11 @@ pub(crate) fn build_ui_data(
     };
 
     // Outputs: build unified OutputUI list from VardaApp's outputs
-    let outputs: Vec<OutputUI> = app.outputs.iter().map(|o| {
+    let outputs: Vec<OutputUI> = app.output.outputs.iter().map(|o| {
         let (target, target_label, is_windowed, is_active, active_duration, surface_assignments, calibration_mode) = match o {
             crate::renderer::context::UnifiedOutput::Window(w) => {
                 let sa = w.surface_assignments.iter().map(|a| {
-                    let surface_name = app.surface_manager.find_by_uuid(&a.surface_uuid)
+                    let surface_name = app.output.surface_manager.find_by_uuid(&a.surface_uuid)
                         .map(|(_, s)| s.name.clone())
                         .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
                     SurfaceAssignmentUI {
@@ -465,7 +465,7 @@ pub(crate) fn build_ui_data(
                 let sa = h.surface_assignments.iter().map(|a| {
                     SurfaceAssignmentUI {
                         surface_uuid: a.surface_uuid.clone(),
-                        surface_name: app.surface_manager.find_by_uuid(&a.surface_uuid)
+                        surface_name: app.output.surface_manager.find_by_uuid(&a.surface_uuid)
                             .map(|(_, s)| s.name.clone()).unwrap_or_else(|| format!("Surface {}", a.surface_uuid)),
                         warp_mode: a.warp_mode.clone(), enabled: a.enabled,
                         overlap_zones: a.overlap_zones.clone(),
@@ -522,7 +522,7 @@ pub(crate) fn build_ui_data(
     }).collect();
 
     // Notifications — UI-only, not in EngineState
-    let notifications = app.notifications.visible().iter().map(|n| NotificationUI {
+    let notifications = app.session.notifications.visible().iter().map(|n| NotificationUI {
         level: n.level, message: n.message.clone(), progress: n.progress(),
     }).collect();
 
@@ -540,9 +540,9 @@ pub(crate) fn build_ui_data(
         auto_crossfade_progress: engine.mixer.auto_crossfade_progress,
         midi_learn_active: engine.midi.learn_active,
         midi_learn_target: engine.midi.learn_target,
-        keyboard_learn_active: app.keymap.learn_mode,
-        keyboard_learn_target: app.keymap.learn_target.as_ref().map(|t| format!("{}", t)),
-        keymap_bindings: app.keymap.bindings.clone(),
+        keyboard_learn_active: app.input.keymap.learn_mode,
+        keyboard_learn_target: app.input.keymap.learn_target.as_ref().map(|t| format!("{}", t)),
+        keymap_bindings: app.input.keymap.bindings.clone(),
         transition_names: engine.mixer.transition_names,
         active_transition_name: engine.mixer.active_transition_name,
         // UI layout/selection state — owned by the UI consumer, not the engine
@@ -575,26 +575,26 @@ pub(crate) fn build_ui_data(
                 connected: r.connected,
             }
         }).collect(),
-        hls_library_configs: app.hls_library.iter().map(|url| {
+        hls_library_configs: app.external_io.hls_library.iter().map(|url| {
             crate::usecases::ui::HlsLibraryEntry {
                 url: url.clone(),
-                connected: (0..app.stream_manager.receiver_count())
-                    .any(|i| app.stream_manager.receiver_url(i) == Some(url.as_str()) && app.stream_manager.is_connected(i)),
+                connected: (0..app.external_io.stream_manager.receiver_count())
+                    .any(|i| app.external_io.stream_manager.receiver_url(i) == Some(url.as_str()) && app.external_io.stream_manager.is_connected(i)),
             }
         }).collect(),
-        dash_library_configs: app.dash_library.iter().map(|url| {
+        dash_library_configs: app.external_io.dash_library.iter().map(|url| {
             crate::usecases::ui::DashLibraryEntry {
                 url: url.clone(),
-                connected: (0..app.stream_manager.receiver_count())
-                    .any(|i| app.stream_manager.receiver_url(i) == Some(url.as_str()) && app.stream_manager.is_connected(i)),
+                connected: (0..app.external_io.stream_manager.receiver_count())
+                    .any(|i| app.external_io.stream_manager.receiver_url(i) == Some(url.as_str()) && app.external_io.stream_manager.is_connected(i)),
             }
         }).collect(),
-        rtmp_library_configs: app.rtmp_library.iter().map(|(url, mode)| {
+        rtmp_library_configs: app.external_io.rtmp_library.iter().map(|(url, mode)| {
             crate::usecases::ui::RtmpLibraryEntry {
                 url: url.clone(),
                 mode: *mode,
-                connected: (0..app.stream_manager.receiver_count())
-                    .any(|i| app.stream_manager.receiver_url(i) == Some(url.as_str()) && app.stream_manager.is_connected(i)),
+                connected: (0..app.external_io.stream_manager.receiver_count())
+                    .any(|i| app.external_io.stream_manager.receiver_url(i) == Some(url.as_str()) && app.external_io.stream_manager.is_connected(i)),
             }
         }).collect(),
 
@@ -602,7 +602,7 @@ pub(crate) fn build_ui_data(
         channel_count: engine.mixer.channels.len(),
         channel_names: engine.mixer.channels.iter().map(|c| c.name.clone()).collect(),
         channel_render_stats: {
-            let frame_fps = app.fps_smoothed;
+            let frame_fps = app.frame_stats.fps_smoothed;
             let stats: Vec<crate::usecases::ui::ChannelRenderStats> = engine.mixer.channels.iter()
                 .map(|ch| {
                     // Use wall-clock frame rate when channel has active decks
@@ -618,7 +618,7 @@ pub(crate) fn build_ui_data(
             stats
         },
         // Wall-clock frame rate (smoothed over 60 frames)
-        fps: app.fps_smoothed,
+        fps: app.frame_stats.fps_smoothed,
         gpu_device_name: {
             let info = app.context.adapter.get_info();
             info.name
@@ -627,9 +627,9 @@ pub(crate) fn build_ui_data(
         gpu_driver: app.context.adapter.get_info().driver,
         gpu_driver_info: app.context.adapter.get_info().driver_info,
         gpu_device_type: format!("{:?}", app.context.adapter.get_info().device_type),
-        cpu_usage: app.system_monitor.cpu_usage(),
-        ram_used: app.system_monitor.ram_used(),
-        ram_total: app.system_monitor.ram_total(),
+        cpu_usage: app.frame_stats.system_monitor.cpu_usage(),
+        ram_used: app.frame_stats.system_monitor.ram_used(),
+        ram_total: app.frame_stats.system_monitor.ram_total(),
         clock_source: engine.clock.source_label,
         clock_bpm: engine.clock.bpm,
         clock_active: engine.clock.active,
@@ -647,8 +647,8 @@ pub(crate) fn build_ui_data(
         can_undo: false,
         can_redo: false,
         pending_deck_loads: 0,
-        deck_presets: app.preset_library.deck_presets.iter().map(|p| p.name.clone()).collect(),
-        channel_presets: app.preset_library.channel_presets.iter().map(|p| p.name.clone()).collect(),
+        deck_presets: app.session.preset_library.deck_presets.iter().map(|p| p.name.clone()).collect(),
+        channel_presets: app.session.preset_library.channel_presets.iter().map(|p| p.name.clone()).collect(),
     }
 }
 

@@ -15,29 +15,29 @@ impl VardaApp {
     pub fn apply_ui_actions(&mut self, ui_actions: &ui::UIActions) {
         // MIDI learn
         if ui_actions.midi_learn_toggle {
-            self.midi_mappings.toggle_learn();
+            self.input.midi_mappings.toggle_learn();
             // Mutually exclusive: exit keyboard learn when entering MIDI learn
-            if self.midi_mappings.learn_mode {
-                self.keymap.cancel_learn();
+            if self.input.midi_mappings.learn_mode {
+                self.input.keymap.cancel_learn();
             }
         }
         if let Some(ref path) = ui_actions.midi_learn_select {
-            self.midi_mappings.select_learn_target(path.clone());
+            self.input.midi_mappings.select_learn_target(path.clone());
         }
 
         // Keyboard learn
         if ui_actions.keyboard_learn_toggle {
-            self.keymap.toggle_learn();
+            self.input.keymap.toggle_learn();
             // Mutually exclusive: exit MIDI learn when entering keyboard learn
-            if self.keymap.learn_mode {
-                self.midi_mappings.cancel_learn();
+            if self.input.keymap.learn_mode {
+                self.input.midi_mappings.cancel_learn();
             }
         }
         if let Some(ref target) = ui_actions.keyboard_learn_select {
-            self.keymap.select_learn_target(target.clone());
+            self.input.keymap.select_learn_target(target.clone());
         }
         if let Some(ref combo) = ui_actions.keyboard_learn_bind {
-            self.keymap.process_learn(combo.clone());
+            self.input.keymap.process_learn(combo.clone());
         }
 
         // Keyboard param toggle
@@ -48,11 +48,11 @@ impl VardaApp {
         let mut dismissals = ui_actions.notifications_to_dismiss.clone();
         dismissals.sort_unstable_by(|a, b| b.cmp(a));
         for idx in dismissals {
-            self.notifications.dismiss(idx);
+            self.session.notifications.dismiss(idx);
         }
 
         for msg in &ui_actions.info_notifications {
-            self.notifications.info(msg);
+            self.session.notifications.info(msg);
         }
     }
 
@@ -165,18 +165,18 @@ impl VardaApp {
                                 wgpu::FilterMode::Linear,
                             );
                             deck_preview_textures.insert((ch_idx, idx), texture_id);
-                            self.notifications.info(format!("📹 Camera '{}' added to Ch {}", cam_name, ch_idx + 1));
+                            self.session.notifications.info(format!("📹 Camera '{}' added to Ch {}", cam_name, ch_idx + 1));
                         }
                     }
                     Err(e) => {
                         log::error!("Failed to create camera deck: {}", e);
-                        self.notifications.error(format!("Failed to create camera deck: {}", e));
+                        self.session.notifications.error(format!("Failed to create camera deck: {}", e));
                     }
                 }
             }
             Err(e) => {
                 log::error!("Failed to open camera '{}': {}", cam_name, e);
-                self.notifications.error(format!("Failed to open camera '{}': {}", cam_name, e));
+                self.session.notifications.error(format!("Failed to open camera '{}': {}", cam_name, e));
             }
         }
     }
@@ -250,15 +250,15 @@ impl VardaApp {
 
     /// Update controller LEDs based on current state.
     pub fn update_controller_leds(&mut self) {
-        if let Some(mgr) = &self.midi_devices {
-            self.controller_led_mgr.update_leds(
+        if let Some(mgr) = &self.input.midi_devices {
+            self.input.controller_led_mgr.update_leds(
                 mgr,
-                &self.midi_mappings,
+                &self.input.midi_mappings,
                 &self.mixer,
-                self.midi_mappings.learn_mode,
-                self.midi_mappings.learn_target.as_deref(),
+                self.input.midi_mappings.learn_mode,
+                self.input.midi_mappings.learn_target.as_deref(),
             );
-            self.auto_map_engine.update_leds(mgr, &self.mixer);
+            self.input.auto_map_engine.update_leds(mgr, &self.mixer);
         }
     }
 }

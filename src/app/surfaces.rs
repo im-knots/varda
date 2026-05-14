@@ -39,7 +39,7 @@ impl VardaApp {
                     // Move the duplicate by grid_size offset
                     // DuplicateSurface returns OkWithId but we don't have the new UUID here,
                     // so we apply the offset using the last surface (just added)
-                    if let Some(new_surface) = self.surface_manager.surfaces.last() {
+                    if let Some(new_surface) = self.output.surface_manager.surfaces.last() {
                         let new_uuid = new_surface.uuid.clone();
                         self.execute_command(EngineCommand::MoveSurface { uuid: new_uuid, dx: grid_size, dy: grid_size });
                     }
@@ -69,7 +69,7 @@ impl VardaApp {
     /// create new surfaces with pre-computed WarpMesh per projector.
     fn generate_dome_slices(&mut self, setup: &crate::renderer::slicer::DomeSetup) {
         // Remove existing dome-generated surfaces (named "Dome P*")
-        let dome_uuids: Vec<String> = self.surface_manager.surfaces.iter()
+        let dome_uuids: Vec<String> = self.output.surface_manager.surfaces.iter()
             .filter(|s| s.name.starts_with("Dome P"))
             .map(|s| s.uuid.clone())
             .collect();
@@ -85,11 +85,11 @@ impl VardaApp {
             let name = format!("Dome P{}", i + 1);
             // Compute the convex hull of the warp mesh UVs as the 2D surface polygon
             let vertices = convex_hull_of_uvs(&mesh);
-            let uuid = self.surface_manager.add_polygon_surface(
+            let uuid = self.output.surface_manager.add_polygon_surface(
                 name.clone(), vertices, OutputSource::Domemaster,
             );
             // Store the default warp mesh on the surface for auto-assignment
-            if let Some((_, surface)) = self.surface_manager.find_by_uuid_mut(&uuid) {
+            if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                 surface.default_warp = Some(WarpMode::Mesh(mesh.clone()));
             }
             log::info!("Created dome surface '{}' (uuid {}) with {}x{} warp mesh",
@@ -97,7 +97,7 @@ impl VardaApp {
         }
 
         // Store dome setup on surface manager
-        self.surface_manager.dome_setup = Some(setup.clone());
+        self.output.surface_manager.dome_setup = Some(setup.clone());
 
         // Ensure the domemaster renderer is created and enabled
         self.ensure_domemaster();
