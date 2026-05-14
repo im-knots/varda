@@ -150,7 +150,7 @@ pub struct VardaApp {
 
     // ── Frame timing ───────────────────────────────────────────
     last_frame_instant: std::time::Instant,
-    fps_history: Vec<f32>,
+    fps_history: std::collections::VecDeque<f32>,
     fps_smoothed: f32,
     frame_count: u64,
 
@@ -312,7 +312,7 @@ impl VardaApp {
             command_tx,
             state_tx,
             last_frame_instant: std::time::Instant::now(),
-            fps_history: Vec::with_capacity(60),
+            fps_history: std::collections::VecDeque::with_capacity(60),
             fps_smoothed: 0.0,
             frame_count: 0,
             system_monitor: crate::sysmon::SystemMonitor::new(),

@@ -127,9 +127,9 @@ impl VardaApp {
         self.last_frame_instant = now;
         if dt > 0.0 {
             let instant_fps = 1.0 / dt;
-            self.fps_history.push(instant_fps);
+            self.fps_history.push_back(instant_fps);
             if self.fps_history.len() > 60 {
-                self.fps_history.remove(0);
+                self.fps_history.pop_front();
             }
             self.fps_smoothed = self.fps_history.iter().sum::<f32>() / self.fps_history.len() as f32;
         }
@@ -676,7 +676,7 @@ mod tests {
         // Seed with 60 identical FPS values
         app.fps_history.clear();
         for _ in 0..60 {
-            app.fps_history.push(60.0);
+            app.fps_history.push_back(60.0);
         }
         app.fps_smoothed = app.fps_history.iter().sum::<f32>() / app.fps_history.len() as f32;
         assert!((app.fps_smoothed - 60.0).abs() < 0.01);
@@ -701,9 +701,9 @@ mod tests {
         // Push more than 60 entries
         app.fps_history.clear();
         for _ in 0..100 {
-            app.fps_history.push(30.0);
+            app.fps_history.push_back(30.0);
             if app.fps_history.len() > 60 {
-                app.fps_history.remove(0);
+                app.fps_history.pop_front();
             }
         }
         assert_eq!(app.fps_history.len(), 60, "Window should cap at 60 entries");
