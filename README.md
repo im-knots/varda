@@ -8,7 +8,7 @@ Open-source visual performance tool with broadcast-style routing for VJs and ins
 Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, streams, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). Instead of a clip-launch grid, you control what's live by adjusting opacity, blend modes, crossfaders, mute/solo, and effect chains. Zero-opacity decks and channels are automatically culled from the render pass, the same way a broadcast switcher only processes sources that are live on a bus.
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
-- **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, HLS, DASH, images, solid color
+- **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, HLS, DASH, RTMP/RTMPS, images
 - **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 6 blend modes
 - **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations. 
 - **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
@@ -17,7 +17,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine
 - **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards, edge blending (Auto with precise polygon overlap detection, Manual per-edge)
 - **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments
-- **Network I/O**: NDI, SRT, HLS, LL-HLS, and DASH send/receive
+- **Network I/O**: NDI, SRT, HLS, LL-HLS, DASH, and RTMP/RTMPS send/receive
 - **Recording**: H.264, h.265, AV1, ProRes 422, HAP Q per-output
 - **Presets**: save/load deck and channel presets with modulation recipes
 - **Persistence**: full scene/venue/MIDI state saved and restored across sessions
@@ -137,7 +137,7 @@ The simplest setup is two channels with a crossfader between them, output going 
 
 The full routing graph is: **Sources → Decks → Channels → Mixer → Surfaces → Outputs**.
 
-A **Deck** wraps a source (shader, video, image, solid color, camera, NDI stream, or SRT stream) with its own effect chain, deck specific transition settings, and parameters. Decks at zero opacity are culled from the render pass.
+A **Deck** wraps a source (shader, video, image, solid color, camera, NDI stream, SRT stream, HLS/DASH stream, or RTMP stream) with its own effect chain, deck specific transition settings, and parameters. Decks at zero opacity are culled from the render pass.
 
 **Channels** composite their decks together using per-deck opacity, blend modes, and optional auto-transitions. Channels have their own effect chain applied after compositing.
 
@@ -145,7 +145,7 @@ The **Mixer** composites channels together. With two channels you get an A/B cro
 
 **Surfaces** are optional. They define polygonal regions on a 2D stage canvas, each with its own content source (main, a channel, or a sub-mix of channels). Surfaces are how you map content onto physical screens, LED panels, or projection areas. When no surfaces are defined, outputs receive the full main mix directly.
 
-**Outputs** are where rendered frames go: a window, a fullscreen display, an NDI stream, an SRT stream, or a recording. Surfaces are assigned to outputs to complete the routing chain.
+**Outputs** are where rendered frames go: a window, a fullscreen display, an NDI stream, an SRT stream, an RTMP/RTMPS stream, or a recording. Surfaces are assigned to outputs to complete the routing chain.
 
 At every junction you can branch, split, or re-route. Two channels feeding different surfaces on the same output. The main mix on one output, a single channel isolated on another. A sub-mix of specific channels to an NDI stream while the master goes to projection. You only use the complexity you need for your use case. Be it simple A/B crossfading between two decks, or a multi-channel mixing console with dedicated FX and transitions, or a complex multi-screen setup with individual content routing.
 
@@ -181,7 +181,7 @@ The **usecases layer** is the only place that touches egui or windowed rendering
 
 This means you can drive the same engine from the GUI, the HTTP API, or a test harness without changing engine code.
 
-External I/O (NDI, SRT, HLS/DASH, and recording) uses non-blocking subprocess architecture with bounded channels to keep the render thread fast. GPU work is batched into minimal command buffer submissions. The render pass culls zero-opacity decks and channels so you only pay for what's live.
+External I/O (NDI, SRT, HLS/DASH, RTMP, and recording) uses non-blocking subprocess architecture with bounded channels to keep the render thread fast. GPU work is batched into minimal command buffer submissions. The render pass culls zero-opacity decks and channels so you only pay for what's live.
 
 ### Entity Identity & Address Scheme
 
