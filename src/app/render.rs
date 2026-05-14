@@ -535,66 +535,20 @@ impl VardaApp {
 
             // Deliver previous frame's readback data to target
             if let Some(frame_data) = h.readback.try_read(&context.device) {
-                match &mut h.target {
-                    crate::renderer::context::OutputTarget::Recording { .. } => {
-                        if let Some(sub) = &mut h.subprocess {
-                            if !sub.feed_frame(&frame_data) {
-                                log::error!("Subprocess write failed for '{}', stopping", h.name);
-                                if let Some(mut sub) = h.subprocess.take() {
-                                    sub.stop();
-                                }
-                                h.active = false;
-                            }
-                        }
-                    }
-                    crate::renderer::context::OutputTarget::SrtStream { ref url, ref codec } => {
-                        if let Some(sub) = &mut h.subprocess {
-                            if !sub.feed_frame(&frame_data) {
-                                // SRT client disconnected — auto-restart the listener
-                                log::info!("SRT client disconnected on '{}', restarting listener", h.name);
-                                if let Some(mut sub) = h.subprocess.take() {
-                                    sub.stop();
-                                }
-                                match crate::renderer::FfmpegSubprocess::spawn_srt(
-                                    url, codec, h.width, h.height, 30,
-                                ) {
-                                    Ok(new_sub) => {
-                                        h.subprocess = Some(new_sub);
-                                        // h.active stays true — ready for next client
-                                    }
-                                    Err(e) => {
-                                        log::error!("Failed to restart SRT listener: {}", e);
-                                        h.active = false;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    crate::renderer::context::OutputTarget::HlsStream { .. } |
-                    crate::renderer::context::OutputTarget::DashStream { .. } |
-                    crate::renderer::context::OutputTarget::RtmpStream { .. } => {
-                        if let Some(sub) = &mut h.subprocess {
-                            if !sub.feed_frame(&frame_data) {
-                                log::error!("Stream subprocess write failed for '{}', stopping", h.name);
-                                if let Some(mut sub) = h.subprocess.take() {
-                                    sub.stop();
-                                }
-                                h.active = false;
-                            }
-                        }
-                    }
-                    crate::renderer::context::OutputTarget::NdiSend { ref sender_name } => {
-                        ndi_manager.send_frame(sender_name, &frame_data, h.width, h.height);
-                    }
+                match h.deliver_frame(
+                    &frame_data,
+                    ndi_manager,
                     #[cfg(target_os = "macos")]
-                    crate::renderer::context::OutputTarget::SyphonServer { .. } => {
-                        syphon_manager.publish_frame(&frame_data, h.width, h.height);
+                    syphon_manager,
+                ) {
+                    crate::renderer::context::DeliveryResult::Failed(msg) => {
+                        log::error!("{}", msg);
+                        h.active = false;
                     }
-                    #[cfg(not(target_os = "macos"))]
-                    crate::renderer::context::OutputTarget::SyphonServer { .. } => {
-                        log::warn!("Syphon output not supported on this platform");
+                    crate::renderer::context::DeliveryResult::Restarted => {
+                        log::info!("SRT restarted for '{}'", h.name);
                     }
-                    _ => {} // Windowed/Display targets don't appear on headless outputs
+                    _ => {}
                 }
             }
         }

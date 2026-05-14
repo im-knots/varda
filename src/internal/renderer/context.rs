@@ -1016,7 +1016,89 @@ pub struct HeadlessOutput {
     pub edge_blend_texture_view: wgpu::TextureView,
 }
 
+/// Result of delivering a frame to an output target.
+pub enum DeliveryResult {
+    /// Frame delivered successfully (or no-op for unhandled targets).
+    Ok,
+    /// Subprocess write failed — output should be deactivated.
+    Failed(String),
+    /// SRT listener auto-restarted after client disconnect.
+    Restarted,
+}
+
 impl HeadlessOutput {
+    /// Deliver readback frame data to the configured output target.
+    ///
+    /// For subprocess targets (Recording, SRT, HLS, DASH, RTMP), feeds the frame to ffmpeg.
+    /// For NDI/Syphon, publishes directly through the respective manager.
+    /// Returns a `DeliveryResult` indicating what happened.
+    pub fn deliver_frame(
+        &mut self,
+        frame_data: &[u8],
+        ndi_manager: &mut crate::ndi::NdiManager,
+        #[cfg(target_os = "macos")]
+        syphon_manager: &mut crate::syphon::SyphonManager,
+    ) -> DeliveryResult {
+        match &mut self.target {
+            OutputTarget::Recording { .. }
+            | OutputTarget::HlsStream { .. }
+            | OutputTarget::DashStream { .. }
+            | OutputTarget::RtmpStream { .. } => {
+                if let Some(sub) = &mut self.subprocess {
+                    if !sub.feed_frame(frame_data) {
+                        if let Some(mut sub) = self.subprocess.take() {
+                            sub.stop();
+                        }
+                        return DeliveryResult::Failed(
+                            format!("Subprocess write failed for '{}'", self.name),
+                        );
+                    }
+                }
+                DeliveryResult::Ok
+            }
+            OutputTarget::SrtStream { ref url, ref codec } => {
+                if let Some(sub) = &mut self.subprocess {
+                    if !sub.feed_frame(frame_data) {
+                        let url = url.clone();
+                        let codec = codec.clone();
+                        if let Some(mut sub) = self.subprocess.take() {
+                            sub.stop();
+                        }
+                        match super::FfmpegSubprocess::spawn_srt(
+                            &url, &codec, self.width, self.height, 30,
+                        ) {
+                            Ok(new_sub) => {
+                                self.subprocess = Some(new_sub);
+                                return DeliveryResult::Restarted;
+                            }
+                            Err(e) => {
+                                return DeliveryResult::Failed(
+                                    format!("Failed to restart SRT listener: {}", e),
+                                );
+                            }
+                        }
+                    }
+                }
+                DeliveryResult::Ok
+            }
+            OutputTarget::NdiSend { ref sender_name } => {
+                ndi_manager.send_frame(sender_name, frame_data, self.width, self.height);
+                DeliveryResult::Ok
+            }
+            #[cfg(target_os = "macos")]
+            OutputTarget::SyphonServer { .. } => {
+                syphon_manager.publish_frame(frame_data, self.width, self.height);
+                DeliveryResult::Ok
+            }
+            #[cfg(not(target_os = "macos"))]
+            OutputTarget::SyphonServer { .. } => {
+                log::warn!("Syphon output not supported on this platform");
+                DeliveryResult::Ok
+            }
+            _ => DeliveryResult::Ok,
+        }
+    }
+
     /// Create a new headless output with the given resolution and target.
     pub fn new(
         device: &wgpu::Device,
