@@ -2,75 +2,12 @@
   "version": 1,
   "bindings": [
     {
-      "key": "S",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "ToolSelect"
-      }
-    },
-    {
       "key": "L",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
         "Action": "ToggleLibrary"
-      }
-    },
-    {
-      "key": "Escape",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "ClearDrawing"
-      }
-    },
-    {
-      "key": "C",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "ToolCircle"
-      }
-    },
-    {
-      "key": "D",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "DuplicateSurface"
-      }
-    },
-    {
-      "key": "S",
-      "command": true,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "Save"
-      }
-    },
-    {
-      "key": "V",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "FlipVertical"
-      }
-    },
-    {
-      "key": "Delete",
-      "command": false,
-      "shift": false,
-      "alt": false,
-      "target": {
-        "Action": "DeleteSurface"
       }
     },
     {
@@ -92,12 +29,39 @@
       }
     },
     {
+      "key": "C",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "ToolCircle"
+      }
+    },
+    {
       "key": "G",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
         "Action": "CombineSurfaces"
+      }
+    },
+    {
+      "key": "S",
+      "command": true,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "Save"
+      }
+    },
+    {
+      "key": "R",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "ToolRectangle"
       }
     },
     {
@@ -112,28 +76,64 @@
     {
       "key": "Z",
       "command": true,
-      "shift": false,
+      "shift": true,
       "alt": false,
       "target": {
-        "Action": "Undo"
+        "Action": "Redo"
       }
     },
     {
-      "key": "R",
+      "key": "Delete",
       "command": false,
       "shift": false,
       "alt": false,
       "target": {
-        "Action": "ToolRectangle"
+        "Action": "DeleteSurface"
+      }
+    },
+    {
+      "key": "Escape",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "ClearDrawing"
+      }
+    },
+    {
+      "key": "D",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "DuplicateSurface"
+      }
+    },
+    {
+      "key": "S",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "ToolSelect"
+      }
+    },
+    {
+      "key": "V",
+      "command": false,
+      "shift": false,
+      "alt": false,
+      "target": {
+        "Action": "FlipVertical"
       }
     },
     {
       "key": "Z",
       "command": true,
-      "shift": true,
+      "shift": false,
       "alt": false,
       "target": {
-        "Action": "Redo"
+        "Action": "Undo"
       }
     }
   ]
