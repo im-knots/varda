@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
-use super::{Deck, DeckSource, ScalingMode, PassBuffer, Effect};
+use super::{Deck, DeckSource, ExternalSourceKind, ScalingMode, PassBuffer, Effect};
 
 /// Load ISF IMPORTED images from metadata and create GPU textures.
 /// Returns (name, texture, view) sorted alphabetically by name for deterministic binding order.
@@ -281,10 +281,7 @@ impl Deck {
             start_time: now,
             frame_count: 0,
             last_frame_time: now,
-            camera_source_view: None,
-            ndi_source_view: None,
-            syphon_source_view: None,
-            srt_source_view: None,
+            external_source_view: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,
@@ -550,8 +547,8 @@ impl Deck {
         let source_name = format!("📹 {}", camera_name);
         let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
 
-        let source = DeckSource::Camera {
-            camera_id,
+        let source = DeckSource::ExternalSource {
+            kind: ExternalSourceKind::Camera(camera_id),
             blit_pipeline,
             source_width,
             source_height,
@@ -610,18 +607,37 @@ impl Deck {
             start_time: now,
             frame_count: 0,
             last_frame_time: now,
-            camera_source_view: None,
-            ndi_source_view: None,
-            syphon_source_view: None,
-            srt_source_view: None,
+            external_source_view: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs: None,
         })
     }
 
+    /// Create a new deck from an external source (NDI, Syphon, SRT, HLS, DASH, RTMP).
+    pub fn new_from_external(
+        context: &GpuContext,
+        kind: ExternalSourceKind,
+        display_name: String,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+
+        let source = DeckSource::ExternalSource {
+            kind,
+            blit_pipeline,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        Self::build_media_deck(context, display_name, None, source, width, height)
+    }
+
     /// Create a new deck from an NDI network source.
-    /// The NDI receiver is managed by NdiManager — this deck reads from the shared texture.
     pub fn new_from_ndi(
         context: &GpuContext,
         receiver_idx: usize,
@@ -631,22 +647,13 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_name_str = format!("📡 {}", source_name);
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
-
-        let source = DeckSource::Ndi {
-            receiver_idx,
-            blit_pipeline,
-            source_width,
-            source_height,
-            scaling_mode: ScalingMode::default(),
-        };
-
-        Self::build_media_deck(context, source_name_str, None, source, width, height)
+        Self::new_from_external(
+            context, ExternalSourceKind::Ndi(receiver_idx),
+            format!("📡 {}", source_name), source_width, source_height, width, height,
+        )
     }
 
     /// Create a new deck from a Syphon server (macOS inter-app sharing).
-    /// The Syphon client is managed by SyphonManager — this deck reads from the shared texture.
     pub fn new_from_syphon(
         context: &GpuContext,
         client_idx: usize,
@@ -656,22 +663,13 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_name_str = format!("🔗 {}", server_name);
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
-
-        let source = DeckSource::Syphon {
-            client_idx,
-            blit_pipeline,
-            source_width,
-            source_height,
-            scaling_mode: ScalingMode::default(),
-        };
-
-        Self::build_media_deck(context, source_name_str, None, source, width, height)
+        Self::new_from_external(
+            context, ExternalSourceKind::Syphon(client_idx),
+            format!("🔗 {}", server_name), source_width, source_height, width, height,
+        )
     }
 
     /// Create a new deck from an SRT network source.
-    /// The SRT receiver is managed by StreamManager — this deck reads from the shared texture.
     pub fn new_from_srt(
         context: &GpuContext,
         receiver_idx: usize,
@@ -681,18 +679,10 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_name_str = format!("📺 {}", url);
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
-
-        let source = DeckSource::Srt {
-            receiver_idx,
-            blit_pipeline,
-            source_width,
-            source_height,
-            scaling_mode: ScalingMode::default(),
-        };
-
-        Self::build_media_deck(context, source_name_str, None, source, width, height)
+        Self::new_from_external(
+            context, ExternalSourceKind::Srt(receiver_idx),
+            format!("📺 {}", url), source_width, source_height, width, height,
+        )
     }
 
     /// Create a new deck from an HLS stream source.
@@ -705,18 +695,10 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_name_str = format!("📡 {}", url);
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
-
-        let source = DeckSource::Hls {
-            receiver_idx,
-            blit_pipeline,
-            source_width,
-            source_height,
-            scaling_mode: ScalingMode::default(),
-        };
-
-        Self::build_media_deck(context, source_name_str, None, source, width, height)
+        Self::new_from_external(
+            context, ExternalSourceKind::Hls(receiver_idx),
+            format!("📡 {}", url), source_width, source_height, width, height,
+        )
     }
 
     /// Create a new deck from a DASH stream source.
@@ -729,18 +711,10 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_name_str = format!("📡 {}", url);
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
-
-        let source = DeckSource::Dash {
-            receiver_idx,
-            blit_pipeline,
-            source_width,
-            source_height,
-            scaling_mode: ScalingMode::default(),
-        };
-
-        Self::build_media_deck(context, source_name_str, None, source, width, height)
+        Self::new_from_external(
+            context, ExternalSourceKind::Dash(receiver_idx),
+            format!("📡 {}", url), source_width, source_height, width, height,
+        )
     }
 
     /// Create a new deck from an RTMP stream source.
@@ -753,18 +727,10 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_name_str = format!("📺 {}", url);
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
-
-        let source = DeckSource::Rtmp {
-            receiver_idx,
-            blit_pipeline,
-            source_width,
-            source_height,
-            scaling_mode: ScalingMode::default(),
-        };
-
-        Self::build_media_deck(context, source_name_str, None, source, width, height)
+        Self::new_from_external(
+            context, ExternalSourceKind::Rtmp(receiver_idx),
+            format!("📺 {}", url), source_width, source_height, width, height,
+        )
     }
 }
 

@@ -126,68 +126,51 @@ pub enum DeckSource {
     SolidColor {
         color: [f64; 4],
     },
-    /// Live camera feed (reads shared texture from CameraManager)
-    Camera {
-        camera_id: crate::camera::CameraId,
+    /// External live source (camera, NDI, Syphon, SRT, HLS, DASH, RTMP)
+    ExternalSource {
+        kind: ExternalSourceKind,
         blit_pipeline: BlitPipeline,
         source_width: u32,
         source_height: u32,
         scaling_mode: ScalingMode,
     },
-    /// NDI network video input (reads shared texture from NdiManager)
-    Ndi {
-        /// Index into NdiManager's receiver list
-        receiver_idx: usize,
-        blit_pipeline: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-    },
-    /// Syphon inter-app video input (reads shared texture from SyphonManager, macOS only)
-    Syphon {
-        /// Index into SyphonManager's client list
-        client_idx: usize,
-        blit_pipeline: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-    },
-    /// SRT network video input (reads shared texture from StreamManager)
-    Srt {
-        /// Index into StreamManager's receiver list
-        receiver_idx: usize,
-        blit_pipeline: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-    },
-    /// HLS stream input (reads shared texture from StreamManager)
-    Hls {
-        /// Index into StreamManager's receiver list
-        receiver_idx: usize,
-        blit_pipeline: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-    },
-    /// DASH stream input (reads shared texture from StreamManager)
-    Dash {
-        /// Index into StreamManager's receiver list
-        receiver_idx: usize,
-        blit_pipeline: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-    },
-    /// RTMP stream input (reads shared texture from StreamManager)
-    Rtmp {
-        /// Index into StreamManager's receiver list
-        receiver_idx: usize,
-        blit_pipeline: BlitPipeline,
-        source_width: u32,
-        source_height: u32,
-        scaling_mode: ScalingMode,
-    },
+}
+
+/// Discriminant for external source types sharing the same DeckSource layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalSourceKind {
+    Camera(crate::camera::CameraId),
+    Ndi(usize),
+    Syphon(usize),
+    Srt(usize),
+    Hls(usize),
+    Dash(usize),
+    Rtmp(usize),
+}
+
+impl ExternalSourceKind {
+    /// Get the source type string for serialization.
+    pub fn source_type(&self) -> &str {
+        match self {
+            Self::Camera(_) => "camera",
+            Self::Ndi(_) => "ndi",
+            Self::Syphon(_) => "syphon",
+            Self::Srt(_) => "srt",
+            Self::Hls(_) => "hls",
+            Self::Dash(_) => "dash",
+            Self::Rtmp(_) => "rtmp",
+        }
+    }
+
+    /// Render label for logging/debug.
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Camera(_) => "Camera",
+            Self::Ndi(_) => "NDI",
+            Self::Syphon(_) => "Syphon",
+            Self::Srt(_) | Self::Hls(_) | Self::Dash(_) | Self::Rtmp(_) => "Stream",
+        }
+    }
 }
 
 /// An effect in the deck's effect chain (ISF filter)
@@ -273,17 +256,8 @@ pub struct Deck {
     /// Last frame time
     last_frame_time: Instant,
 
-    /// Camera source texture view (set each frame for Camera decks, cloned from CameraManager)
-    pub camera_source_view: Option<wgpu::TextureView>,
-
-    /// NDI source texture view (set each frame for NDI decks, cloned from NdiManager)
-    pub ndi_source_view: Option<wgpu::TextureView>,
-
-    /// Syphon source texture view (set each frame for Syphon decks, cloned from SyphonManager)
-    pub syphon_source_view: Option<wgpu::TextureView>,
-
-    /// SRT source texture view (set each frame for SRT decks, cloned from StreamManager)
-    pub srt_source_view: Option<wgpu::TextureView>,
+    /// External source texture view (set each frame for ExternalSource decks)
+    pub external_source_view: Option<wgpu::TextureView>,
 
     /// Smoothed FPS derived from actual render pipeline timing (EMA of 1/time_delta)
     fps_smoothed: f32,
@@ -330,13 +304,7 @@ impl Deck {
             DeckSource::Video { .. } | DeckSource::HapVideo { .. } => "video",
             DeckSource::Image { .. } => "image",
             DeckSource::SolidColor { .. } => "solid_color",
-            DeckSource::Camera { .. } => "camera",
-            DeckSource::Ndi { .. } => "ndi",
-            DeckSource::Syphon { .. } => "syphon",
-            DeckSource::Srt { .. } => "srt",
-            DeckSource::Hls { .. } => "hls",
-            DeckSource::Dash { .. } => "dash",
-            DeckSource::Rtmp { .. } => "rtmp",
+            DeckSource::ExternalSource { kind, .. } => kind.source_type(),
         }
     }
 
@@ -386,36 +354,32 @@ impl Deck {
     pub fn scaling_mode(&self) -> Option<ScalingMode> {
         match &self.source {
             DeckSource::Image { scaling_mode, .. }
-            | DeckSource::Camera { scaling_mode, .. }
-            | DeckSource::Ndi { scaling_mode, .. }
-            | DeckSource::Syphon { scaling_mode, .. }
-            | DeckSource::Srt { scaling_mode, .. }
-            | DeckSource::Hls { scaling_mode, .. }
-            | DeckSource::Dash { scaling_mode, .. }
-            | DeckSource::Rtmp { scaling_mode, .. } => Some(*scaling_mode),
+            | DeckSource::ExternalSource { scaling_mode, .. } => Some(*scaling_mode),
             _ => None,
         }
     }
 
-    /// Set the scaling mode (applies to Image, Camera, NDI, and Syphon sources)
+    /// Set the scaling mode (applies to Image and ExternalSource sources)
     pub fn set_scaling_mode(&mut self, mode: ScalingMode) {
         match &mut self.source {
             DeckSource::Image { scaling_mode, .. }
-            | DeckSource::Camera { scaling_mode, .. }
-            | DeckSource::Ndi { scaling_mode, .. }
-            | DeckSource::Syphon { scaling_mode, .. }
-            | DeckSource::Srt { scaling_mode, .. }
-            | DeckSource::Hls { scaling_mode, .. }
-            | DeckSource::Dash { scaling_mode, .. }
-            | DeckSource::Rtmp { scaling_mode, .. } => *scaling_mode = mode,
+            | DeckSource::ExternalSource { scaling_mode, .. } => *scaling_mode = mode,
             _ => {}
+        }
+    }
+
+    /// Get the external source kind (if source is external)
+    pub fn external_source_kind(&self) -> Option<ExternalSourceKind> {
+        match &self.source {
+            DeckSource::ExternalSource { kind, .. } => Some(*kind),
+            _ => None,
         }
     }
 
     /// Get the NDI receiver index (if source is NDI)
     pub fn ndi_receiver_idx(&self) -> Option<usize> {
         match &self.source {
-            DeckSource::Ndi { receiver_idx, .. } => Some(*receiver_idx),
+            DeckSource::ExternalSource { kind: ExternalSourceKind::Ndi(idx), .. } => Some(*idx),
             _ => None,
         }
     }
@@ -423,18 +387,18 @@ impl Deck {
     /// Get the Syphon client index (if source is Syphon)
     pub fn syphon_client_idx(&self) -> Option<usize> {
         match &self.source {
-            DeckSource::Syphon { client_idx, .. } => Some(*client_idx),
+            DeckSource::ExternalSource { kind: ExternalSourceKind::Syphon(idx), .. } => Some(*idx),
             _ => None,
         }
     }
 
-    /// Get the SRT/HLS/DASH receiver index (if source is a stream)
+    /// Get the SRT/HLS/DASH/RTMP receiver index (if source is a stream)
     pub fn srt_receiver_idx(&self) -> Option<usize> {
         match &self.source {
-            DeckSource::Srt { receiver_idx, .. }
-            | DeckSource::Hls { receiver_idx, .. }
-            | DeckSource::Dash { receiver_idx, .. }
-            | DeckSource::Rtmp { receiver_idx, .. } => Some(*receiver_idx),
+            DeckSource::ExternalSource { kind: ExternalSourceKind::Srt(idx), .. }
+            | DeckSource::ExternalSource { kind: ExternalSourceKind::Hls(idx), .. }
+            | DeckSource::ExternalSource { kind: ExternalSourceKind::Dash(idx), .. }
+            | DeckSource::ExternalSource { kind: ExternalSourceKind::Rtmp(idx), .. } => Some(*idx),
             _ => None,
         }
     }
@@ -442,7 +406,7 @@ impl Deck {
     /// Get the camera ID (if source is a camera)
     pub fn camera_id(&self) -> Option<crate::camera::CameraId> {
         match &self.source {
-            DeckSource::Camera { camera_id, .. } => Some(*camera_id),
+            DeckSource::ExternalSource { kind: ExternalSourceKind::Camera(id), .. } => Some(*id),
             _ => None,
         }
     }

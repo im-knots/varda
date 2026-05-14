@@ -180,29 +180,28 @@ impl VardaApp {
 
         for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
-                if let Some(cam_id) = slot.deck.camera_id() {
-                    slot.deck.camera_source_view = self.camera_manager
-                        .texture_view(cam_id)
-                        .cloned();
-                }
-                // Update NDI deck texture views
-                if let Some(ndi_idx) = slot.deck.ndi_receiver_idx() {
-                    slot.deck.ndi_source_view = self.ndi_manager
-                        .texture_view(ndi_idx)
-                        .cloned();
-                }
-                // Update Syphon deck texture views
-                #[cfg(target_os = "macos")]
-                if let Some(syph_idx) = slot.deck.syphon_client_idx() {
-                    slot.deck.syphon_source_view = self.syphon_manager
-                        .texture_view(syph_idx)
-                        .cloned();
-                }
-                // Update stream deck texture views
-                if let Some(srt_idx) = slot.deck.srt_receiver_idx() {
-                    slot.deck.srt_source_view = self.stream_manager
-                        .texture_view(srt_idx)
-                        .cloned();
+                if let Some(kind) = slot.deck.external_source_kind() {
+                    use crate::deck::ExternalSourceKind;
+                    slot.deck.external_source_view = match kind {
+                        ExternalSourceKind::Camera(cam_id) => {
+                            self.camera_manager.texture_view(cam_id).cloned()
+                        }
+                        ExternalSourceKind::Ndi(idx) => {
+                            self.ndi_manager.texture_view(idx).cloned()
+                        }
+                        #[cfg(target_os = "macos")]
+                        ExternalSourceKind::Syphon(idx) => {
+                            self.syphon_manager.texture_view(idx).cloned()
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        ExternalSourceKind::Syphon(_) => None,
+                        ExternalSourceKind::Srt(idx)
+                        | ExternalSourceKind::Hls(idx)
+                        | ExternalSourceKind::Dash(idx)
+                        | ExternalSourceKind::Rtmp(idx) => {
+                            self.stream_manager.texture_view(idx).cloned()
+                        }
+                    };
                 }
             }
         }

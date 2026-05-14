@@ -286,35 +286,11 @@ impl Deck {
                 }
                 cmd_buffers.push(encoder.finish());
             }
-            DeckSource::Camera { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
-                if let Some(cam_view) = &self.camera_source_view {
-                    Self::blit_external_source(context, blit_pipeline, cam_view,
+            DeckSource::ExternalSource { kind, blit_pipeline, source_width, source_height, scaling_mode } => {
+                if let Some(ext_view) = &self.external_source_view {
+                    Self::blit_external_source(context, blit_pipeline, ext_view,
                         *source_width, *source_height, self.texture.width(), self.texture.height(),
-                        *scaling_mode, generator_target, "Camera", cmd_buffers);
-                }
-            }
-            DeckSource::Ndi { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
-                if let Some(ndi_view) = &self.ndi_source_view {
-                    Self::blit_external_source(context, blit_pipeline, ndi_view,
-                        *source_width, *source_height, self.texture.width(), self.texture.height(),
-                        *scaling_mode, generator_target, "NDI", cmd_buffers);
-                }
-            }
-            DeckSource::Syphon { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
-                if let Some(syph_view) = &self.syphon_source_view {
-                    Self::blit_external_source(context, blit_pipeline, syph_view,
-                        *source_width, *source_height, self.texture.width(), self.texture.height(),
-                        *scaling_mode, generator_target, "Syphon", cmd_buffers);
-                }
-            }
-            DeckSource::Srt { blit_pipeline, source_width, source_height, scaling_mode, .. }
-            | DeckSource::Hls { blit_pipeline, source_width, source_height, scaling_mode, .. }
-            | DeckSource::Dash { blit_pipeline, source_width, source_height, scaling_mode, .. }
-            | DeckSource::Rtmp { blit_pipeline, source_width, source_height, scaling_mode, .. } => {
-                if let Some(srt_view) = &self.srt_source_view {
-                    Self::blit_external_source(context, blit_pipeline, srt_view,
-                        *source_width, *source_height, self.texture.width(), self.texture.height(),
-                        *scaling_mode, generator_target, "Stream", cmd_buffers);
+                        *scaling_mode, generator_target, kind.label(), cmd_buffers);
                 }
             }
         }
