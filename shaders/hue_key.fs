@@ -1,13 +1,14 @@
 /*{
-    "DESCRIPTION": "Chroma Key - picks a target color and sets matching pixels to a given opacity",
+    "DESCRIPTION": "Hue Key - keys out pixels matching a target hue range, with analog simulation",
     "CREDIT": "Varda VJ",
     "ISFVSN": "2.0",
     "CATEGORIES": ["Filter", "Color"],
     "INPUTS": [
         {"NAME": "inputImage", "TYPE": "image"},
-        {"NAME": "target_color", "TYPE": "color", "DEFAULT": [0.0, 1.0, 0.0, 1.0], "LABEL": "Target Color"},
+        {"NAME": "target_hue", "LABEL": "Target Hue", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
+        {"NAME": "hue_width", "LABEL": "Hue Width", "TYPE": "float", "DEFAULT": 0.1, "MIN": 0.0, "MAX": 1.0},
+        {"NAME": "min_saturation", "LABEL": "Min Saturation", "TYPE": "float", "DEFAULT": 0.1, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "opacity", "LABEL": "Opacity", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
-        {"NAME": "tolerance", "LABEL": "Tolerance", "TYPE": "float", "DEFAULT": 0.15, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "softness", "LABEL": "Edge Softness", "TYPE": "float", "DEFAULT": 0.1, "MIN": 0.0, "MAX": 0.5},
         {"NAME": "noise", "LABEL": "Analog Noise", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "edge_blur", "LABEL": "Edge Blur", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
@@ -43,9 +44,10 @@ layout(set = 0, binding = 1) uniform sampler texSampler;
 layout(set = 0, binding = 2) uniform texture2D inputImage;
 
 layout(set = 0, binding = 3) uniform UserParams {
-    vec4 target_color;
+    float target_hue;
+    float hue_width;
+    float min_saturation;
     float opacity;
-    float tolerance;
     float softness;
     float noise;
     float edge_blur;
@@ -58,6 +60,32 @@ float hash12(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
+vec3 rgb2hsv(vec3 c) {
+    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+    float d = q.x - min(q.w, q.y);
+    float e = 1.0e-10;
+    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+// Hue distance accounting for wrap-around (0.0 and 1.0 are the same hue)
+float hue_distance(float h1, float h2) {
+    float d = abs(h1 - h2);
+    return min(d, 1.0 - d);
+}
+
+// Compute key match for a given pixel color
+float compute_hue_match(vec3 rgb, float tol_offset) {
+    vec3 hsv = rgb2hsv(rgb);
+    float hue_dist = hue_distance(hsv.x, target_hue);
+    float half_width = hue_width * 0.5 + tol_offset;
+    float hue_match = 1.0 - smoothstep(half_width, half_width + softness, hue_dist);
+    // Reject low-saturation pixels (grays have undefined hue)
+    float sat_mask = smoothstep(min_saturation * 0.5, min_saturation, hsv.y);
+    return hue_match * sat_mask;
+}
+
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
     float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
@@ -65,33 +93,31 @@ void main() {
 
     vec4 src = texture(sampler2D(inputImage, texSampler), uv);
 
-    float tol = tolerance + noise * 0.3 * (hash12(uv * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
+    // Analog noise: jitter the hue width threshold
+    float tol_offset = noise * 0.15 * (hash12(uv * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
 
-    float dist = distance(src.rgb, target_color.rgb);
-    float match_amount = 1.0 - smoothstep(tol, tol + softness, dist);
+    float match_amount = compute_hue_match(src.rgb, tol_offset);
 
+    // Analog edge blur: horizontal neighbor sampling
     if (edge_blur > 0.0) {
         float blur_radius = edge_blur * 8.0 / RENDERSIZE.x;
         float total = match_amount;
         float weight = 1.0;
         for (int i = 1; i <= 3; i++) {
             float offset = blur_radius * float(i) / 3.0;
-            vec4 left_sample = texture(sampler2D(inputImage, texSampler), uv + vec2(-offset, 0.0));
-            vec4 right_sample = texture(sampler2D(inputImage, texSampler), uv + vec2(offset, 0.0));
-            float n_left = noise * 0.3 * (hash12((uv + vec2(-offset, 0.0)) * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
-            float n_right = noise * 0.3 * (hash12((uv + vec2(offset, 0.0)) * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
-            float tol_l = tolerance + n_left;
-            float tol_r = tolerance + n_right;
-            float d_left = distance(left_sample.rgb, target_color.rgb);
-            float d_right = distance(right_sample.rgb, target_color.rgb);
+            vec4 ls = texture(sampler2D(inputImage, texSampler), uv + vec2(-offset, 0.0));
+            vec4 rs = texture(sampler2D(inputImage, texSampler), uv + vec2(offset, 0.0));
+            float n_l = noise * 0.15 * (hash12((uv + vec2(-offset, 0.0)) * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
+            float n_r = noise * 0.15 * (hash12((uv + vec2(offset, 0.0)) * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
             float w = 1.0 - float(i) / 4.0;
-            total += (1.0 - smoothstep(tol_l, tol_l + softness, d_left)) * w;
-            total += (1.0 - smoothstep(tol_r, tol_r + softness, d_right)) * w;
+            total += compute_hue_match(ls.rgb, n_l) * w;
+            total += compute_hue_match(rs.rgb, n_r) * w;
             weight += 2.0 * w;
         }
         match_amount = total / weight;
     }
 
+    // Analog color fringe: shift RGB channels at key edges
     vec3 final_rgb = src.rgb;
     if (color_fringe > 0.0 && match_amount > 0.01 && match_amount < 0.99) {
         float fringe_offset = color_fringe * 3.0 / RENDERSIZE.x;
@@ -101,6 +127,5 @@ void main() {
     }
 
     float new_alpha = mix(src.a, opacity, match_amount);
-
     fragColor = vec4(final_rgb, new_alpha);
 }

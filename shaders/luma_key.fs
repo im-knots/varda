@@ -1,14 +1,14 @@
 /*{
-    "DESCRIPTION": "Chroma Key - picks a target color and sets matching pixels to a given opacity",
+    "DESCRIPTION": "Luma Key - keys out pixels based on brightness, with analog simulation",
     "CREDIT": "Varda VJ",
     "ISFVSN": "2.0",
     "CATEGORIES": ["Filter", "Color"],
     "INPUTS": [
         {"NAME": "inputImage", "TYPE": "image"},
-        {"NAME": "target_color", "TYPE": "color", "DEFAULT": [0.0, 1.0, 0.0, 1.0], "LABEL": "Target Color"},
-        {"NAME": "opacity", "LABEL": "Opacity", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
-        {"NAME": "tolerance", "LABEL": "Tolerance", "TYPE": "float", "DEFAULT": 0.15, "MIN": 0.0, "MAX": 1.0},
+        {"NAME": "threshold", "LABEL": "Threshold", "TYPE": "float", "DEFAULT": 0.1, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "softness", "LABEL": "Edge Softness", "TYPE": "float", "DEFAULT": 0.1, "MIN": 0.0, "MAX": 0.5},
+        {"NAME": "invert", "LABEL": "Invert", "TYPE": "bool", "DEFAULT": false},
+        {"NAME": "opacity", "LABEL": "Opacity", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "noise", "LABEL": "Analog Noise", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "edge_blur", "LABEL": "Edge Blur", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0},
         {"NAME": "color_fringe", "LABEL": "Color Fringe", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0}
@@ -43,10 +43,10 @@ layout(set = 0, binding = 1) uniform sampler texSampler;
 layout(set = 0, binding = 2) uniform texture2D inputImage;
 
 layout(set = 0, binding = 3) uniform UserParams {
-    vec4 target_color;
-    float opacity;
-    float tolerance;
+    float threshold;
     float softness;
+    uint invert;
+    float opacity;
     float noise;
     float edge_blur;
     float color_fringe;
@@ -58,6 +58,21 @@ float hash12(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
+// ITU-R BT.601 luma coefficients
+float luma(vec3 rgb) {
+    return dot(rgb, vec3(0.299, 0.587, 0.114));
+}
+
+// Compute key match for a given pixel
+float compute_luma_match(vec3 rgb, float thresh) {
+    float l = luma(rgb);
+    if (invert != 0u) {
+        l = 1.0 - l;
+    }
+    // Key out pixels BELOW threshold (darks by default, brights when inverted)
+    return 1.0 - smoothstep(thresh, thresh + softness, l);
+}
+
 void main() {
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
     float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
@@ -65,33 +80,33 @@ void main() {
 
     vec4 src = texture(sampler2D(inputImage, texSampler), uv);
 
-    float tol = tolerance + noise * 0.3 * (hash12(uv * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
+    // Analog noise: jitter the threshold
+    float thresh = threshold + noise * 0.2 * (hash12(uv * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
 
-    float dist = distance(src.rgb, target_color.rgb);
-    float match_amount = 1.0 - smoothstep(tol, tol + softness, dist);
+    float match_amount = compute_luma_match(src.rgb, thresh);
 
+    // Analog edge blur: horizontal neighbor sampling
     if (edge_blur > 0.0) {
         float blur_radius = edge_blur * 8.0 / RENDERSIZE.x;
         float total = match_amount;
         float weight = 1.0;
         for (int i = 1; i <= 3; i++) {
             float offset = blur_radius * float(i) / 3.0;
-            vec4 left_sample = texture(sampler2D(inputImage, texSampler), uv + vec2(-offset, 0.0));
-            vec4 right_sample = texture(sampler2D(inputImage, texSampler), uv + vec2(offset, 0.0));
-            float n_left = noise * 0.3 * (hash12((uv + vec2(-offset, 0.0)) * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
-            float n_right = noise * 0.3 * (hash12((uv + vec2(offset, 0.0)) * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
-            float tol_l = tolerance + n_left;
-            float tol_r = tolerance + n_right;
-            float d_left = distance(left_sample.rgb, target_color.rgb);
-            float d_right = distance(right_sample.rgb, target_color.rgb);
+            vec4 ls = texture(sampler2D(inputImage, texSampler), uv + vec2(-offset, 0.0));
+            vec4 rs = texture(sampler2D(inputImage, texSampler), uv + vec2(offset, 0.0));
+            float n_l = noise * 0.2 * (hash12((uv + vec2(-offset, 0.0)) * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
+            float n_r = noise * 0.2 * (hash12((uv + vec2(offset, 0.0)) * RENDERSIZE + float(FRAMEINDEX) * 1.37) - 0.5);
+            float t_l = threshold + n_l;
+            float t_r = threshold + n_r;
             float w = 1.0 - float(i) / 4.0;
-            total += (1.0 - smoothstep(tol_l, tol_l + softness, d_left)) * w;
-            total += (1.0 - smoothstep(tol_r, tol_r + softness, d_right)) * w;
+            total += compute_luma_match(ls.rgb, t_l) * w;
+            total += compute_luma_match(rs.rgb, t_r) * w;
             weight += 2.0 * w;
         }
         match_amount = total / weight;
     }
 
+    // Analog color fringe: shift RGB channels at key edges
     vec3 final_rgb = src.rgb;
     if (color_fringe > 0.0 && match_amount > 0.01 && match_amount < 0.99) {
         float fringe_offset = color_fringe * 3.0 / RENDERSIZE.x;
@@ -101,6 +116,5 @@ void main() {
     }
 
     float new_alpha = mix(src.a, opacity, match_amount);
-
     fragColor = vec4(final_rgb, new_alpha);
 }
