@@ -334,7 +334,14 @@ fn stream_receive_thread(
         log::info!("Stream '{}' connected, decoding video", url_display);
 
         let mut last_frame_time = std::time::Instant::now();
-        let stall_timeout = std::time::Duration::from_secs(5);
+        // HLS/DASH segments can have multi-second gaps; use a longer timeout
+        let is_segment_protocol = url.contains(".m3u8") || url.contains(".mpd")
+            || url.starts_with("http://") || url.starts_with("https://");
+        let stall_timeout = if is_segment_protocol {
+            std::time::Duration::from_secs(15)
+        } else {
+            std::time::Duration::from_secs(5)
+        };
         let mut consecutive_errors: u32 = 0;
         const MAX_CONSECUTIVE_ERRORS: u32 = 50;
 

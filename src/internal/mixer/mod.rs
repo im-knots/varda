@@ -9,10 +9,10 @@ pub use transition::{
     TransitionEffect,
 };
 
-use crate::channel::{Channel, BlendMode};
+use crate::channel::Channel;
 use crate::deck::Effect;
 use crate::modulation::ModulationEngine;
-use crate::renderer::{GpuContext, BlitPipeline};
+use crate::renderer::{GpuContext, BlitPipeline, CompositeBlitPipeline};
 use anyhow::Result;
 
 /// Mixer - Top-level compositor
@@ -55,8 +55,11 @@ pub struct Mixer {
     /// Frame counter
     frame_count: u32,
 
-    /// Blit pipelines for channel compositing
-    blend_blit_pipelines: std::collections::HashMap<BlendMode, BlitPipeline>,
+    /// Shader-based composite pipeline for blending channels (all blend modes via uniform)
+    composite_pipeline: CompositeBlitPipeline,
+
+    /// Simple blit pipeline for first-channel copy
+    blit_pipeline: BlitPipeline,
 
     /// Active transition effect (replaces opacity-based crossfade when set)
     active_transition: Option<TransitionEffect>,
@@ -70,13 +73,6 @@ pub struct Mixer {
 }
 
 impl Mixer {
-    /// Get the blit pipeline for a blend mode, falling back to Normal.
-    pub(crate) fn blend_pipeline(&self, mode: &BlendMode) -> &BlitPipeline {
-        self.blend_blit_pipelines.get(mode)
-            .or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal))
-            .expect("Normal blend pipeline must always exist")
-    }
-
     /// Create a new mixer with two default channels (A and B)
     pub fn new(context: &GpuContext, width: u32, height: u32) -> Result<Self> {
         let composite_texture = context.create_render_texture(width, height);
@@ -85,17 +81,12 @@ impl Mixer {
         let effect_ping_texture = context.create_render_texture(width, height);
         let effect_ping_view = effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Create blit pipelines for channel compositing
-        let mut blend_blit_pipelines = std::collections::HashMap::new();
-        for mode in [BlendMode::Normal, BlendMode::Add, BlendMode::Multiply,
-                     BlendMode::Screen, BlendMode::Overlay, BlendMode::Difference] {
-            let pipeline = BlitPipeline::with_blend(
-                &context.device,
-                context.texture_format,
-                mode.to_blend_state(),
-            )?;
-            blend_blit_pipelines.insert(mode, pipeline);
-        }
+        let composite_pipeline = CompositeBlitPipeline::new(&context.device, context.texture_format)?;
+        let blit_pipeline = BlitPipeline::with_blend(
+            &context.device,
+            context.texture_format,
+            wgpu::BlendState::ALPHA_BLENDING,
+        )?;
 
         // Create two default channels
         let channel_0 = Channel::new("Ch 0".to_string(), context, width, height)?;
@@ -117,7 +108,8 @@ impl Mixer {
             effect_ping_view,
             master_effects: Vec::new(),
             frame_count: 0,
-            blend_blit_pipelines,
+            composite_pipeline,
+            blit_pipeline,
             active_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),

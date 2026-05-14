@@ -465,7 +465,7 @@ pub fn snapshot_scene(
     }).collect();
 
     SceneConfig {
-        version: 2,
+        version: 3,
         channels,
         crossfader: mixer.crossfader(),
         active_transition,
@@ -784,12 +784,20 @@ pub fn restore_scene(
     }
 
     // Restore transition sequences
+    let channel_count = mixer.channels().len();
     for seq_config in &config.transition_sequences {
         use crate::mixer::{TransitionSequence, TransitionStep, StepKind, SequencerState};
         use crate::scene::TransitionStepConfig;
-        let steps = seq_config.steps.iter().map(|step| {
+        let steps = seq_config.steps.iter().filter_map(|step| {
             let kind = match step {
                 TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                    if *from_ch >= channel_count || *to_ch >= channel_count {
+                        log::warn!(
+                            "Transition step references channel {} or {} but only {} channels exist; skipping",
+                            from_ch, to_ch, channel_count
+                        );
+                        return None;
+                    }
                     StepKind::Fade {
                         from_ch: *from_ch,
                         to_ch: *to_ch,
@@ -807,7 +815,7 @@ pub fn restore_scene(
                     StepKind::GoTo { step_index: *step_index }
                 }
             };
-            TransitionStep { kind }
+            Some(TransitionStep { kind })
         }).collect();
         mixer.transition_sequences_mut().push(TransitionSequence {
             name: seq_config.name.clone(),

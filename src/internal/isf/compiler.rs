@@ -63,7 +63,7 @@ uniform float PHASE_TIME_2;
 uniform float PHASE_TIME_3;
 
 // ISF automatic varying (normalized fragment coordinates)
-varying vec2 isf_FragNormCoord;
+in vec2 isf_FragNormCoord;
 "#);
 
     // Add user parameter uniforms
@@ -167,7 +167,7 @@ void main() {
         let injected = inject_isf_uniforms(glsl);
         assert!(injected.contains("uniform float TIME"));
         assert!(injected.contains("uniform vec2 RENDERSIZE"));
-        assert!(injected.contains("varying vec2 isf_FragNormCoord"));
+        assert!(injected.contains("in vec2 isf_FragNormCoord"));
     }
 
     #[test]
@@ -184,10 +184,11 @@ void main() {
         let injected = inject_isf_uniforms(glsl);
         let spirv = compile_glsl_to_spirv(&injected, "isf_test");
         
-        // This might fail because we're using varying in a modern GLSL context
-        // but it demonstrates the injection mechanism
+        // Legacy injection uses bare uniforms (not blocks) and lacks explicit
+        // locations, so Vulkan SPIR-V compilation is expected to fail here.
+        // The modern path uses the ISFUniforms block in pipeline.rs instead.
         if let Err(e) = spirv {
-            println!("Expected compilation error (varying vs in/out): {}", e);
+            println!("Expected compilation error (legacy uniforms vs Vulkan blocks): {}", e);
         }
     }
 }

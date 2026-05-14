@@ -463,28 +463,22 @@ pub(super) fn render_selected_deck_detail(ui: &mut egui::Ui, data: &UIData, acti
                             let max_h = (ui.available_height() - 8.0).max(100.0);
                             egui::ScrollArea::vertical().id_salt("deck_gen_scroll").max_height(max_h).show(ui, |ui| {
                                 // Blend mode
-                                let blend_modes = ["Norm", "Add", "Mult", "Scrn", "Ovly", "Diff"];
-                                let current_blend = match deck.blend_mode {
-                                    BlendMode::Normal => 0, BlendMode::Add => 1, BlendMode::Multiply => 2,
-                                    BlendMode::Screen => 3, BlendMode::Overlay => 4, BlendMode::Difference => 5,
-                                };
+                                let all_modes = BlendMode::all();
+                                let current_blend = all_modes.iter().position(|m| *m == deck.blend_mode).unwrap_or(0);
                                 let mut selected = current_blend;
                                 ui.horizontal(|ui| {
                                     ui.label("Blend:");
                                     egui::ComboBox::from_id_salt("sel_deck_blend")
-                                        .selected_text(blend_modes[selected])
+                                        .selected_text(all_modes[selected].short_name())
                                         .width(60.0)
                                         .show_ui(ui, |ui| {
-                                            for (i, mode_name) in blend_modes.iter().enumerate() {
-                                                ui.selectable_value(&mut selected, i, *mode_name);
+                                            for (i, mode) in all_modes.iter().enumerate() {
+                                                ui.selectable_value(&mut selected, i, mode.short_name());
                                             }
                                         });
                                 });
                                 if selected != current_blend {
-                                    let new_blend = match selected {
-                                        1 => BlendMode::Add, 2 => BlendMode::Multiply, 3 => BlendMode::Screen,
-                                        4 => BlendMode::Overlay, 5 => BlendMode::Difference, _ => BlendMode::Normal,
-                                    };
+                                    let new_blend = all_modes[selected];
                                     actions.deck_updates.push((ch_idx, deck_idx, deck.opacity, new_blend, deck.solo, deck.mute));
                                 }
 

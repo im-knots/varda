@@ -13,7 +13,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations. 
 - **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
 - **Modulation**: LFO, audio-reactive, ADSR, step sequencer, mod-on-mod chaining on any parameter
-- **Audio**: 512-bin FFT, beat detection, bass/mid/treble bands, BPM with beat phase
+- **Audio**: 2048-bin FFT, beat detection, bass/mid/treble bands, BPM with beat phase
 - **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine
 - **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards, edge blending (Auto with precise polygon overlap detection, Manual per-edge)
 - **Multi-output**: multiple windows, fullscreen on any display, headless outputs with surface assignments

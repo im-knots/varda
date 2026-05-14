@@ -289,7 +289,8 @@ impl FfmpegSubprocess {
                 .args(["-hls_segment_filename", &format!("{}/seg_%05d.m4s", dir)]);
         } else {
             cmd.args(["-hls_time", "2"])
-                .args(["-hls_list_size", "0"])
+                .args(["-hls_list_size", "30"])
+                .args(["-hls_flags", "delete_segments"])
                 .args(["-hls_segment_filename", &format!("{}/seg_%05d.ts", dir)]);
         }
 
@@ -359,7 +360,8 @@ impl FfmpegSubprocess {
             .args(["-pix_fmt", "yuv420p"])
             .args(["-f", "dash"])
             .args(["-seg_duration", "2"])
-            .args(["-window_size", "0"])
+            .args(["-window_size", "30"])
+            .args(["-extra_window_size", "5"])
             .arg(&manifest)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())

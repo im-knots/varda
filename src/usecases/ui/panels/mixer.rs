@@ -478,27 +478,21 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
                     }
 
                     // Blend mode dropdown — right-aligned in header
-                    let blend_mode_names = ["Norm", "Add", "Mult", "Scrn", "Ovly", "Diff"];
-                    let current = match ch.blend_mode {
-                        BlendMode::Normal => 0, BlendMode::Add => 1, BlendMode::Multiply => 2,
-                        BlendMode::Screen => 3, BlendMode::Overlay => 4, BlendMode::Difference => 5,
-                    };
+                    let all_modes = BlendMode::all();
+                    let current = all_modes.iter().position(|m| *m == ch.blend_mode).unwrap_or(0);
                     let mut selected = current;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         egui::ComboBox::from_id_salt(format!("ch_blend_{}", ch_idx))
-                            .selected_text(blend_mode_names[selected])
+                            .selected_text(all_modes[selected].short_name())
                             .width(50.0)
                             .show_ui(ui, |ui| {
-                                for (i, name) in blend_mode_names.iter().enumerate() {
-                                    ui.selectable_value(&mut selected, i, *name);
+                                for (i, mode) in all_modes.iter().enumerate() {
+                                    ui.selectable_value(&mut selected, i, mode.short_name());
                                 }
                             });
                     });
                     if selected != current {
-                        let new_blend = match selected {
-                            1 => BlendMode::Add, 2 => BlendMode::Multiply, 3 => BlendMode::Screen,
-                            4 => BlendMode::Overlay, 5 => BlendMode::Difference, _ => BlendMode::Normal,
-                        };
+                        let new_blend = all_modes[selected];
                         if let Some(entry) = actions.channel_updates.iter_mut().find(|e| e.0 == ch_idx) {
                             entry.2 = new_blend;
                         } else {
@@ -557,7 +551,7 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
                 }
                 if let Some(payload) = drop_resp.dnd_release_payload::<(usize, usize)>() {
                     let (src_ch, src_deck) = *payload;
-                    if src_ch != ch_idx {
+                    if src_ch != ch_idx && src_ch < data.channels.len() {
                         actions.deck_to_move = Some((src_ch, src_deck, ch_idx));
                     }
                 }

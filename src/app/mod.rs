@@ -1752,6 +1752,7 @@ impl VardaApp {
                     let rw = self.render_width;
                     let rh = self.render_height;
                     let (warnings, _) = self.apply_scene_diff(&config, rw, rh);
+                    self.mixer.clear_sub_mix_cache();
                     for w in &warnings { log::warn!("Undo warning: {}", w); }
                     CommandResult::Ok
                 } else {
@@ -1766,6 +1767,7 @@ impl VardaApp {
                     let rw = self.render_width;
                     let rh = self.render_height;
                     let (warnings, _) = self.apply_scene_diff(&config, rw, rh);
+                    self.mixer.clear_sub_mix_cache();
                     for w in &warnings { log::warn!("Redo warning: {}", w); }
                     CommandResult::Ok
                 } else {

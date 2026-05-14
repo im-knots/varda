@@ -429,10 +429,24 @@ pub enum BlendModeConfig {
     #[default]
     Normal,
     Add,
+    Subtract,
     Multiply,
     Screen,
     Overlay,
+    #[serde(rename = "softlight")]
+    SoftLight,
+    #[serde(rename = "hardlight")]
+    HardLight,
+    #[serde(rename = "colordodge")]
+    ColorDodge,
+    #[serde(rename = "colorburn")]
+    ColorBurn,
     Difference,
+    Exclusion,
+    Darken,
+    Lighten,
+    #[serde(rename = "linearburn")]
+    LinearBurn,
 }
 
 impl From<BlendMode> for BlendModeConfig {
@@ -440,10 +454,19 @@ impl From<BlendMode> for BlendModeConfig {
         match mode {
             BlendMode::Normal => BlendModeConfig::Normal,
             BlendMode::Add => BlendModeConfig::Add,
+            BlendMode::Subtract => BlendModeConfig::Subtract,
             BlendMode::Multiply => BlendModeConfig::Multiply,
             BlendMode::Screen => BlendModeConfig::Screen,
             BlendMode::Overlay => BlendModeConfig::Overlay,
+            BlendMode::SoftLight => BlendModeConfig::SoftLight,
+            BlendMode::HardLight => BlendModeConfig::HardLight,
+            BlendMode::ColorDodge => BlendModeConfig::ColorDodge,
+            BlendMode::ColorBurn => BlendModeConfig::ColorBurn,
             BlendMode::Difference => BlendModeConfig::Difference,
+            BlendMode::Exclusion => BlendModeConfig::Exclusion,
+            BlendMode::Darken => BlendModeConfig::Darken,
+            BlendMode::Lighten => BlendModeConfig::Lighten,
+            BlendMode::LinearBurn => BlendModeConfig::LinearBurn,
         }
     }
 }
@@ -453,10 +476,19 @@ impl From<BlendModeConfig> for BlendMode {
         match config {
             BlendModeConfig::Normal => BlendMode::Normal,
             BlendModeConfig::Add => BlendMode::Add,
+            BlendModeConfig::Subtract => BlendMode::Subtract,
             BlendModeConfig::Multiply => BlendMode::Multiply,
             BlendModeConfig::Screen => BlendMode::Screen,
             BlendModeConfig::Overlay => BlendMode::Overlay,
+            BlendModeConfig::SoftLight => BlendMode::SoftLight,
+            BlendModeConfig::HardLight => BlendMode::HardLight,
+            BlendModeConfig::ColorDodge => BlendMode::ColorDodge,
+            BlendModeConfig::ColorBurn => BlendMode::ColorBurn,
             BlendModeConfig::Difference => BlendMode::Difference,
+            BlendModeConfig::Exclusion => BlendMode::Exclusion,
+            BlendModeConfig::Darken => BlendMode::Darken,
+            BlendModeConfig::Lighten => BlendMode::Lighten,
+            BlendModeConfig::LinearBurn => BlendMode::LinearBurn,
         }
     }
 }
@@ -798,19 +830,10 @@ mod tests {
 
     #[test]
     fn blend_mode_config_roundtrip() {
-        let modes = [
-            (BlendMode::Normal, BlendModeConfig::Normal),
-            (BlendMode::Add, BlendModeConfig::Add),
-            (BlendMode::Multiply, BlendModeConfig::Multiply),
-            (BlendMode::Screen, BlendModeConfig::Screen),
-            (BlendMode::Overlay, BlendModeConfig::Overlay),
-            (BlendMode::Difference, BlendModeConfig::Difference),
-        ];
-        for (mode, config) in &modes {
-            let converted: BlendModeConfig = (*mode).into();
-            assert_eq!(std::mem::discriminant(&converted), std::mem::discriminant(config));
-            let back: BlendMode = converted.into();
-            assert_eq!(back, *mode);
+        for mode in BlendMode::all() {
+            let config: BlendModeConfig = (*mode).into();
+            let back: BlendMode = config.into();
+            assert_eq!(back, *mode, "Roundtrip failed for {:?}", mode);
         }
     }
 

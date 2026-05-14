@@ -1,6 +1,6 @@
 {
   "grid_size": 0.05,
-  "snap": false,
+  "snap": true,
   "library_panel_open": true,
   "right_panel_open": true,
   "stage_editor_open": false,
@@ -96,20 +96,19 @@
   },
   "outputs": [
     {
-      "uuid": "6bc4054e",
+      "uuid": "5bcf1a1b",
       "name": "Output 1",
       "target": {
-        "type": "display",
-        "name": "Monitor #41041"
+        "type": "windowed"
       },
       "surface_assignments": [],
       "window_position": [
-        6880,
-        404
+        97,
+        939
       ],
       "window_size": [
-        2992,
-        1868
+        3440,
+        1298
       ],
       "edge_blend_mode": "Manual",
       "edge_blend": {

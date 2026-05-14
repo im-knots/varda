@@ -4,7 +4,7 @@ use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
-use crate::renderer::{GpuContext, BlitPipeline, ISFUniforms, TransitionPipeline};
+use crate::renderer::{GpuContext, BlitPipeline, CompositeBlitPipeline, ISFUniforms, TransitionPipeline};
 use anyhow::{Context as _, Result};
 
 /// Blend modes for compositing decks and channels
@@ -13,51 +13,84 @@ pub enum BlendMode {
     #[default]
     Normal,
     Add,
+    Subtract,
     Multiply,
     Screen,
     Overlay,
+    SoftLight,
+    HardLight,
+    ColorDodge,
+    ColorBurn,
     Difference,
+    Exclusion,
+    Darken,
+    Lighten,
+    LinearBurn,
 }
 
 impl BlendMode {
-    /// Get wgpu blend state for this mode
-    pub fn to_blend_state(&self) -> wgpu::BlendState {
+    /// Shader uniform index for this blend mode.
+    /// Must match the constants in composite.wgsl.
+    pub fn to_index(&self) -> u32 {
         match self {
-            BlendMode::Normal => wgpu::BlendState::ALPHA_BLENDING,
-            BlendMode::Add => wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::One,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent::OVER,
-            },
-            BlendMode::Multiply => wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::Dst,
-                    dst_factor: wgpu::BlendFactor::Zero,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent::OVER,
-            },
-            BlendMode::Screen => wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrc,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent::OVER,
-            },
-            BlendMode::Overlay => wgpu::BlendState::ALPHA_BLENDING, // Requires shader
-            BlendMode::Difference => wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::One,
-                    operation: wgpu::BlendOperation::Subtract,
-                },
-                alpha: wgpu::BlendComponent::OVER,
-            },
+            BlendMode::Normal => 0,
+            BlendMode::Add => 1,
+            BlendMode::Subtract => 2,
+            BlendMode::Multiply => 3,
+            BlendMode::Screen => 4,
+            BlendMode::Overlay => 5,
+            BlendMode::SoftLight => 6,
+            BlendMode::HardLight => 7,
+            BlendMode::ColorDodge => 8,
+            BlendMode::ColorBurn => 9,
+            BlendMode::Difference => 10,
+            BlendMode::Exclusion => 11,
+            BlendMode::Darken => 12,
+            BlendMode::Lighten => 13,
+            BlendMode::LinearBurn => 14,
         }
+    }
+
+    /// Short display name for UI
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            BlendMode::Normal => "Norm",
+            BlendMode::Add => "Add",
+            BlendMode::Subtract => "Sub",
+            BlendMode::Multiply => "Mult",
+            BlendMode::Screen => "Scrn",
+            BlendMode::Overlay => "Ovly",
+            BlendMode::SoftLight => "SftL",
+            BlendMode::HardLight => "HrdL",
+            BlendMode::ColorDodge => "CDge",
+            BlendMode::ColorBurn => "CBrn",
+            BlendMode::Difference => "Diff",
+            BlendMode::Exclusion => "Excl",
+            BlendMode::Darken => "Dark",
+            BlendMode::Lighten => "Lite",
+            BlendMode::LinearBurn => "LBrn",
+        }
+    }
+
+    /// All blend mode variants in display order
+    pub fn all() -> &'static [BlendMode] {
+        &[
+            BlendMode::Normal,
+            BlendMode::Add,
+            BlendMode::Subtract,
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::SoftLight,
+            BlendMode::HardLight,
+            BlendMode::ColorDodge,
+            BlendMode::ColorBurn,
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+            BlendMode::LinearBurn,
+        ]
     }
 }
 
@@ -324,8 +357,11 @@ pub struct Channel {
     /// Frame counter for uniforms
     frame_count: u32,
 
-    /// Blit pipelines for each blend mode (for compositing decks)
-    blend_blit_pipelines: std::collections::HashMap<BlendMode, BlitPipeline>,
+    /// Shader-based composite pipeline for blending decks (all blend modes via uniform)
+    composite_pipeline: CompositeBlitPipeline,
+
+    /// Simple blit pipeline for first-deck copy (Normal mode, no blend needed)
+    blit_pipeline: BlitPipeline,
 
     /// Smoothed render time for this channel in milliseconds (EMA over recent frames)
     pub render_time_ms: f32,
@@ -352,17 +388,12 @@ impl Channel {
         let effect_ping_texture = context.create_render_texture(width, height);
         let effect_ping_view = effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Create blit pipelines for each blend mode
-        let mut blend_blit_pipelines = std::collections::HashMap::new();
-        for mode in [BlendMode::Normal, BlendMode::Add, BlendMode::Multiply,
-                     BlendMode::Screen, BlendMode::Overlay, BlendMode::Difference] {
-            let pipeline = BlitPipeline::with_blend(
-                &context.device,
-                context.texture_format,
-                mode.to_blend_state()
-            )?;
-            blend_blit_pipelines.insert(mode, pipeline);
-        }
+        let composite_pipeline = CompositeBlitPipeline::new(&context.device, context.texture_format)?;
+        let blit_pipeline = BlitPipeline::with_blend(
+            &context.device,
+            context.texture_format,
+            wgpu::BlendState::ALPHA_BLENDING,
+        )?;
 
         Ok(Self {
             uuid: crate::deck::generate_short_uuid(),
@@ -376,7 +407,8 @@ impl Channel {
             effect_ping_texture,
             effect_ping_view,
             frame_count: 0,
-            blend_blit_pipelines,
+            composite_pipeline,
+            blit_pipeline,
             render_time_ms: 0.0,
             active_deck_count: 0,
         })
@@ -583,23 +615,88 @@ impl Channel {
 
                 // Opacity fade fallback (no shader or first deck)
                 let fade_opacity = info.opacity * (1.0 - progress as f32);
-                let pipeline = self.blend_blit_pipelines.get(&info.blend_mode)
-                    .or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal))
-                    .expect("Normal blend pipeline must exist");
-                pipeline.set_opacity(&context.queue, fade_opacity);
-                let bind_group = pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
+                if i == 0 {
+                    // First deck: simple blit with alpha blending
+                    self.blit_pipeline.set_opacity(&context.queue, fade_opacity);
+                    let bind_group = self.blit_pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
+                    let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Channel Composite Encoder (AT fade first)"),
+                    });
+                    {
+                        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Channel Composite Pass (AT fade first)"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &self.composite_view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        self.blit_pipeline.render(&mut render_pass, &bind_group);
+                    }
+                    composite_cmds.push(encoder.finish());
+                } else {
+                    // Subsequent decks: snapshot + composite shader
+                    let mut copy_encoder = context.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("Composite Snapshot Copy (AT fade)") },
+                    );
+                    copy_encoder.copy_texture_to_texture(
+                        self.composite_texture.as_image_copy(),
+                        self.effect_ping_texture.as_image_copy(),
+                        self.composite_texture.size(),
+                    );
+                    composite_cmds.push(copy_encoder.finish());
 
+                    self.composite_pipeline.set_params(&context.queue, fade_opacity, info.blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
+                    let bind_group = self.composite_pipeline.create_bind_group(&context.device, &slot.deck.texture_view, &self.effect_ping_view);
+                    let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Channel Composite Encoder (AT fade)"),
+                    });
+                    {
+                        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Channel Composite Pass (AT fade)"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &self.composite_view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        self.composite_pipeline.render(&mut render_pass, &bind_group);
+                    }
+                    composite_cmds.push(encoder.finish());
+                }
+                continue;
+            }
+
+            // Normal compositing
+            if i == 0 {
+                // First deck: simple blit with alpha blending (Normal = just copy)
+                self.blit_pipeline.set_opacity(&context.queue, info.opacity);
+                let bind_group = self.blit_pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
                 let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Channel Composite Encoder (AT fade)"),
+                    label: Some("Channel Composite Encoder (first)"),
                 });
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Channel Composite Pass (AT fade)"),
+                        label: Some("Channel Composite Pass (first)"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &self.composite_view,
                             resolve_target: None,
                             ops: wgpu::Operations {
-                                load: if i == 0 { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                 store: wgpu::StoreOp::Store,
                             },
                             depth_slice: None,
@@ -608,48 +705,46 @@ impl Channel {
                         timestamp_writes: None,
                         occlusion_query_set: None,
                     });
-                    pipeline.render(&mut render_pass, &bind_group);
+                    self.blit_pipeline.render(&mut render_pass, &bind_group);
                 }
                 composite_cmds.push(encoder.finish());
-                continue;
-            }
+            } else {
+                // Subsequent decks: snapshot composite → ping, blend src + ping → composite
+                let mut copy_encoder = context.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("Composite Snapshot Copy") },
+                );
+                copy_encoder.copy_texture_to_texture(
+                    self.composite_texture.as_image_copy(),
+                    self.effect_ping_texture.as_image_copy(),
+                    self.composite_texture.size(),
+                );
+                composite_cmds.push(copy_encoder.finish());
 
-            // Normal compositing (no transition)
-            let pipeline = self.blend_blit_pipelines.get(&info.blend_mode)
-                .or_else(|| self.blend_blit_pipelines.get(&BlendMode::Normal))
-                .expect("Normal blend pipeline must exist");
-            pipeline.set_opacity(&context.queue, info.opacity);
-            let bind_group = pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
-
-            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Channel Composite Encoder"),
-            });
-
-            {
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Channel Composite Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.composite_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: if i == 0 {
-                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                            } else {
-                                wgpu::LoadOp::Load
-                            },
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
+                self.composite_pipeline.set_params(&context.queue, info.opacity, info.blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
+                let bind_group = self.composite_pipeline.create_bind_group(&context.device, &slot.deck.texture_view, &self.effect_ping_view);
+                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Channel Composite Encoder"),
                 });
-
-                pipeline.render(&mut render_pass, &bind_group);
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Channel Composite Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &self.composite_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    self.composite_pipeline.render(&mut render_pass, &bind_group);
+                }
+                composite_cmds.push(encoder.finish());
             }
-
-            composite_cmds.push(encoder.finish());
         }
 
         // If no decks, clear the composite texture to transparent
@@ -963,14 +1058,10 @@ mod tests {
     }
 
     #[test]
-    fn blend_mode_all_variants_have_blend_state() {
-        // Verify to_blend_state doesn't panic for any variant
-        let modes = [
-            BlendMode::Normal, BlendMode::Add, BlendMode::Multiply,
-            BlendMode::Screen, BlendMode::Overlay, BlendMode::Difference,
-        ];
-        for mode in &modes {
-            let _ = mode.to_blend_state();
+    fn blend_mode_all_variants_have_index() {
+        // Verify to_index doesn't panic for any variant
+        for mode in BlendMode::all() {
+            let _ = mode.to_index();
         }
     }
 
