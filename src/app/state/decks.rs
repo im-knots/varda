@@ -133,6 +133,38 @@ impl VardaApp {
             }
         }
 
+        // Reorder deck within channel if requested
+        if let Some((ch_idx, from_idx, to_idx)) = actions.deck_to_reorder {
+            if from_idx != to_idx {
+                if let Some(channel) = mixer.channel_mut(ch_idx) {
+                    if from_idx < channel.decks.len() && to_idx < channel.decks.len() {
+                        let slot = channel.decks.remove(from_idx);
+                        channel.decks.insert(to_idx, slot);
+                        log::info!("Reordered deck in ch{}: {} -> {}", ch_idx, from_idx, to_idx);
+
+                        // Re-register preview textures for the affected channel
+                        let keys: Vec<_> = deck_preview_textures.keys()
+                            .filter(|(c, _)| *c == ch_idx)
+                            .copied()
+                            .collect();
+                        for key in keys {
+                            if let Some(tex_id) = deck_preview_textures.remove(&key) {
+                                egui_renderer.free_texture(&tex_id);
+                            }
+                        }
+                        for (i, deck_slot) in mixer.channels_mut()[ch_idx].decks.iter().enumerate() {
+                            let tex_id = egui_renderer.register_native_texture(
+                                &context.device,
+                                &deck_slot.deck.texture_view,
+                                wgpu::FilterMode::Linear,
+                            );
+                            deck_preview_textures.insert((ch_idx, i), tex_id);
+                        }
+                    }
+                }
+            }
+        }
+
         // Shader deck loading is handled asynchronously via spawn_deck_loads in runner.rs.
         // The shader_to_add action is intercepted before apply_engine_actions.
 

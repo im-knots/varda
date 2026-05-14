@@ -150,6 +150,17 @@ impl MixerCommands for VardaApp {
         Ok(())
     }
 
+    fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize) {
+        if from_idx == to_idx { return; }
+        if let Some(channel) = self.mixer.channel_mut(ch) {
+            if from_idx < channel.decks.len() && to_idx < channel.decks.len() {
+                let slot = channel.decks.remove(from_idx);
+                channel.decks.insert(to_idx, slot);
+                log::info!("Reordered deck in ch{}: {} -> {}", ch, from_idx, to_idx);
+            }
+        }
+    }
+
     fn set_deck_opacity(&mut self, channel_idx: usize, deck_idx: usize, opacity: f32) {
         let opacity = sanitize_unit(opacity, 1.0);
         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -728,6 +739,31 @@ mod tests {
         let snap = app.mixer_snapshot();
         assert_eq!(snap.channels[0].decks.len(), 0);
         assert_eq!(snap.channels[1].decks.len(), 1);
+    }
+
+    #[test]
+    fn reorder_deck_within_channel() {
+        let Some(mut app) = headless_app() else { return; };
+        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        app.add_solid_color_deck(0, [0.0, 1.0, 0.0, 1.0]).unwrap();
+        app.add_solid_color_deck(0, [0.0, 0.0, 1.0, 1.0]).unwrap();
+        assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 3);
+        app.reorder_deck(0, 0, 2);
+        assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 3);
+    }
+
+    #[test]
+    fn reorder_deck_same_position_noop() {
+        let Some(mut app) = headless_app() else { return; };
+        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        app.reorder_deck(0, 0, 0);
+        assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 1);
+    }
+
+    #[test]
+    fn reorder_deck_invalid_channel() {
+        let Some(mut app) = headless_app() else { return; };
+        app.reorder_deck(99, 0, 1); // no crash
     }
 
     #[test]

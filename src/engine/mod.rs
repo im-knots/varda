@@ -57,6 +57,7 @@ pub enum EngineCommand {
     AddCameraDeck { channel_idx: usize, camera_id: CameraId },
     RemoveDeck { channel_idx: usize, deck_idx: usize },
     MoveDeck { src_ch: usize, src_deck: usize, dst_ch: usize },
+    ReorderDeck { ch: usize, from_idx: usize, to_idx: usize },
     SetDeckOpacity { channel_idx: usize, deck_idx: usize, opacity: f32 },
     SetDeckBlendMode { channel_idx: usize, deck_idx: usize, mode: BlendMode },
     SetDeckSolo { channel_idx: usize, deck_idx: usize, solo: bool },

@@ -176,6 +176,16 @@ pub struct MoveDeckBody {
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct ReorderDeckBody {
+    /// Channel index.
+    pub ch: usize,
+    /// Current deck index within the channel.
+    pub from_idx: usize,
+    /// Target deck index within the channel.
+    pub to_idx: usize,
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct DeckScalingModeBody {
     /// How the deck content is scaled to fit the output.
     pub mode: crate::internal::deck::ScalingMode,
@@ -252,6 +262,19 @@ pub async fn move_deck(
 ) -> impl IntoResponse {
     match state.send_command(EngineCommand::MoveDeck {
         src_ch: body.src_ch, src_deck: body.src_deck, dst_ch: body.dst_ch,
+    }).await {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(post, path = "/api/decks/reorder", request_body = ReorderDeckBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn reorder_deck(
+    State(state): State<SharedState>,
+    Json(body): Json<ReorderDeckBody>,
+) -> impl IntoResponse {
+    match state.send_command(EngineCommand::ReorderDeck {
+        ch: body.ch, from_idx: body.from_idx, to_idx: body.to_idx,
     }).await {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),

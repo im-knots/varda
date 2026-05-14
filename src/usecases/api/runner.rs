@@ -47,7 +47,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::set_solo, routes::decks::set_mute,
         routes::decks::add_image_deck, routes::decks::add_video_deck,
         routes::decks::add_solid_color_deck, routes::decks::add_camera_deck,
-        routes::decks::move_deck, routes::decks::set_scaling_mode,
+        routes::decks::move_deck, routes::decks::reorder_deck, routes::decks::set_scaling_mode,
         routes::decks::set_transition, routes::decks::set_param,
         routes::decks::add_ndi_deck, routes::decks::add_syphon_deck,
         routes::decks::add_srt_deck, routes::decks::add_hls_deck, routes::decks::add_dash_deck,
@@ -208,6 +208,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/channels/{ch_idx}/decks/solid", axum::routing::post(routes::decks::add_solid_color_deck))
         .route("/api/channels/{ch_idx}/decks/camera", axum::routing::post(routes::decks::add_camera_deck))
         .route("/api/decks/move", axum::routing::post(routes::decks::move_deck))
+        .route("/api/decks/reorder", axum::routing::post(routes::decks::reorder_deck))
         // ── Write: Effects ─────────────────────────────────────
         .route("/api/effects", axum::routing::post(routes::effects::add_effect).delete(routes::effects::remove_effect))
         .route("/api/effects/toggle", axum::routing::post(routes::effects::toggle_effect))

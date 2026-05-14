@@ -14,24 +14,24 @@
             "type": "Shader",
             "path": "shaders/turing_patterns.fs",
             "params": {
-              "seed": 0.26,
-              "sim_speed": 1.0,
-              "seed_size": 0.05,
-              "perturbation": 0.0,
               "kill_rate": 0.062,
-              "feed_rate": 0.055,
               "bg_color": [
                 1.0,
                 1.0,
                 1.0,
                 0.0
               ],
+              "sim_speed": 1.0,
+              "perturbation": 0.0,
+              "seed": 0.26,
+              "feed_rate": 0.055,
               "growth_color": [
                 0.0,
                 0.0,
                 0.0,
                 1.0
-              ]
+              ],
+              "seed_size": 0.05
             }
           },
           "effects": [
@@ -41,14 +41,14 @@
               "enabled": true,
               "params": {
                 "use_source_color": 0.0,
-                "sensitivity": 3.5,
-                "bg_opacity": 0.0,
                 "edge_color": [
                   1.0,
                   1.0,
                   1.0,
                   1.0
-                ]
+                ],
+                "sensitivity": 3.5,
+                "bg_opacity": 0.0
               }
             },
             {
@@ -56,12 +56,12 @@
               "path": "shaders/ripple.fs",
               "enabled": true,
               "params": {
-                "center_x": 0.5,
-                "decay": 2.0,
-                "frequency": 15.0,
-                "center_y": 0.5,
                 "anim_speed": 1.0,
-                "ripple_amount": 0.02
+                "decay": 2.0,
+                "center_x": 0.5,
+                "frequency": 15.0,
+                "ripple_amount": 0.02,
+                "center_y": 0.5
               }
             },
             {
@@ -94,11 +94,13 @@
             "type": "Shader",
             "path": "shaders/voronoi.fs",
             "params": {
+              "style": 0.0,
               "cell_count": 8.0,
-              "color1": [
-                0.1,
-                0.4,
+              "edge_width": 0.065,
+              "color2": [
                 0.9,
+                0.2,
+                0.3,
                 1.0
               ],
               "edge_color": [
@@ -107,15 +109,13 @@
                 1.0,
                 1.0
               ],
-              "anim_speed": 2.1,
-              "style": 0.0,
-              "color2": [
+              "color1": [
+                0.1,
+                0.4,
                 0.9,
-                0.2,
-                0.3,
                 1.0
               ],
-              "edge_width": 0.065
+              "anim_speed": 2.1
             }
           },
           "effects": [
@@ -124,10 +124,10 @@
               "path": "shaders/hue_shift.fs",
               "enabled": true,
               "params": {
-                "cycle_speed": 0.5,
-                "auto_cycle": false,
                 "saturation": 1.0,
-                "hue_shift": 0.55
+                "auto_cycle": false,
+                "hue_shift": 0.55,
+                "cycle_speed": 0.5
               }
             }
           ],
@@ -144,11 +144,11 @@
           "path": "shaders/kaleidoscope.fs",
           "enabled": true,
           "params": {
-            "center_x": 0.5,
-            "segments": 2.0,
-            "zoom": 1.0,
+            "rotation": 0.0,
             "center_y": 0.5,
-            "rotation": 0.0
+            "zoom": 1.0,
+            "segments": 2.0,
+            "center_x": 0.5
           }
         }
       ]
@@ -166,33 +166,33 @@
             "type": "Shader",
             "path": "shaders/black_hole.fs",
             "params": {
-              "crystal_dist": 2.5,
-              "shell_radius": 4.5,
+              "spin_speed": 0.5,
+              "orbit_radius": 6.0,
               "orbit_tilt": 3.9,
+              "pulse_rate": 1.0,
+              "streak_count": 60.0,
+              "cloud_density": 0.75,
+              "jet_power": 0.7,
+              "jet_width": 0.72,
+              "camera_speed": 0.3,
               "scatter": 0.5,
               "jet_height": 6.0,
-              "contrast": 1.3,
-              "crystal_glow": 0.6,
-              "invert": 0.0,
               "crystal_size": 0.3,
-              "color_mode": 0.0,
-              "cloud_density": 0.75,
-              "hole_size": 0.2,
-              "hue_shift": 0.0,
-              "jet_power": 0.7,
-              "orbit_radius": 6.0,
+              "crystal_glow": 0.6,
               "equator_bias": 0.6,
-              "density": 2.5,
-              "streak_count": 60.0,
-              "camera_speed": 0.3,
+              "color_mode": 0.0,
               "jet_speed": 1.0,
-              "jet_width": 0.72,
-              "pulse_rate": 1.0,
-              "distortion": 0.4,
-              "spin_speed": 0.5,
+              "shell_radius": 4.5,
+              "crystal_dist": 2.5,
               "bloom": 0.2,
+              "distortion": 0.4,
               "streak_thin": 0.75,
-              "crystal_count": 0.0
+              "density": 2.5,
+              "hole_size": 0.2,
+              "crystal_count": 0.0,
+              "contrast": 1.3,
+              "invert": 0.0,
+              "hue_shift": 0.0
             }
           },
           "effects": [],
@@ -209,24 +209,24 @@
             "type": "Shader",
             "path": "shaders/char_cycle.fs",
             "params": {
-              "fg_color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ],
-              "speed_variation": 0.5,
+              "char_set": 11.0,
+              "offset_amount": 10.7,
+              "grid_size": 5.0,
               "bg_color": [
                 0.0,
                 0.0,
                 0.0,
                 1.0
               ],
-              "grid_size": 5.0,
-              "char_set": 11.0,
-              "speed": 0.1,
+              "speed_variation": 0.5,
               "table_mode": 3.0,
-              "offset_amount": 10.7
+              "fg_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "speed": 0.1
             }
           },
           "effects": [
@@ -235,13 +235,13 @@
               "path": "shaders/scatter_popup.fs",
               "enabled": false,
               "params": {
+                "pop_speed": 2.3,
+                "min_radius": 0.25,
                 "bg_mode": 0.0,
                 "popup_count": 16.0,
-                "popup_scale": 0.15,
                 "max_radius": 0.45,
-                "min_radius": 0.25,
-                "opacity": 0.9,
-                "pop_speed": 2.3
+                "popup_scale": 0.15,
+                "opacity": 0.9
               }
             },
             {
@@ -249,17 +249,17 @@
               "path": "shaders/chroma_key.fs",
               "enabled": true,
               "params": {
-                "tolerance": 0.0,
-                "opacity": 1.0,
-                "color_fringe": 0.0,
-                "edge_blur": 0.0,
-                "softness": 0.1,
                 "target_color": [
                   0.0,
                   0.0,
                   0.0,
                   1.0
                 ],
+                "edge_blur": 0.0,
+                "tolerance": 0.0,
+                "opacity": 1.0,
+                "color_fringe": 0.0,
+                "softness": 0.1,
                 "noise": 0.0
               }
             }
@@ -277,29 +277,29 @@
             "type": "Shader",
             "path": "shaders/graph_network.fs",
             "params": {
-              "rotation": 0.0,
               "speed": 0.5,
-              "stickiness": 0.6,
-              "node_size": 0.025,
-              "hue_shift": 0.0,
               "connect_dist": 0.5,
-              "node_count": 28.0,
+              "attraction": 0.5,
+              "max_connections": 5.0,
+              "stickiness": 0.6,
+              "tracking": 0.08,
               "color_base": [
                 0.9767008,
                 0.9767008,
                 0.9767008,
                 1.0
               ],
-              "attraction": 0.5,
-              "edge_width": 0.0045,
               "bg_color": [
                 0.0,
                 0.0,
                 0.0,
                 0.0
               ],
-              "tracking": 0.08,
-              "max_connections": 5.0,
+              "node_size": 0.025,
+              "rotation": 0.0,
+              "node_count": 28.0,
+              "edge_width": 0.0045,
+              "hue_shift": 0.0,
               "zoom": 0.7
             }
           },
@@ -320,6 +320,63 @@
       "blend_mode": "normal",
       "decks": [
         {
+          "uuid": "ac40bfe2",
+          "name": "dark_matter",
+          "source": {
+            "type": "Shader",
+            "path": "shaders/dark_matter.fs",
+            "params": {
+              "speed": 0.7,
+              "color_filament": [
+                0.7,
+                0.3,
+                0.9,
+                1.0
+              ],
+              "zoom": 0.9,
+              "color_node": [
+                1.0,
+                0.7,
+                0.15,
+                1.0
+              ],
+              "seed": 0.0,
+              "rotation": -0.09,
+              "warp": 0.2,
+              "scale_mult": 1.2,
+              "contrast": 3.6,
+              "brightness": 0.6,
+              "node_glow": 2.6,
+              "web_scale": 7.7,
+              "bg_color": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          },
+          "effects": [
+            {
+              "uuid": "141e9f14",
+              "path": "shaders/kaleidoscope.fs",
+              "enabled": true,
+              "params": {
+                "center_y": 0.5,
+                "rotation": 0.0,
+                "zoom": 1.0,
+                "segments": 2.0,
+                "center_x": 0.5
+              }
+            }
+          ],
+          "opacity": 1.0,
+          "blend_mode": "add",
+          "mute": false,
+          "solo": false,
+          "z_index": 0
+        },
+        {
           "uuid": "e5d5b303",
           "name": "screen-shot-2012-01-10-at-14-53-54.png",
           "source": {
@@ -332,8 +389,8 @@
               "path": "shaders/zoom.fs",
               "enabled": true,
               "params": {
-                "zoom_amount": 1.1,
                 "center_x": 0.2,
+                "zoom_amount": 1.1,
                 "center_y": 0.5
               }
             },
@@ -342,86 +399,86 @@
               "path": "shaders/chroma_flow.fs",
               "enabled": true,
               "params": {
-                "palette_3": [
-                  1.0,
-                  1.0,
-                  0.0,
-                  1.0
-                ],
-                "group_speed_0": 1.0,
-                "flow_type": 0.0,
-                "palette_size": 4.0,
-                "group_speed_1": 1.0,
-                "group_speed_3": 1.0,
-                "group_speed_6": 1.0,
-                "palette_4": [
-                  1.0,
-                  0.0,
-                  1.0,
-                  1.0
-                ],
-                "palette_mode": false,
-                "group_angle_2": 90.0,
-                "group_angle_5": 225.0,
                 "flow_scale": 1.0,
-                "group_angle_7": 315.0,
+                "group_angle_0": 0.0,
+                "group_angle_3": 135.0,
                 "palette_2": [
                   0.0,
                   1.0,
                   0.2,
                   1.0
                 ],
-                "displacement_falloff": 0.2,
+                "group_speed_0": 1.0,
                 "palette_1": [
                   0.0,
                   0.5,
                   1.0,
                   1.0
                 ],
-                "snap_hardness": 0.7,
+                "palette_3": [
+                  1.0,
+                  1.0,
+                  0.0,
+                  1.0
+                ],
+                "group_angle_2": 90.0,
+                "palette_size": 4.0,
+                "group_speed_7": 1.0,
+                "group_angle_4": 180.0,
+                "group_speed_1": 1.0,
+                "group_angle_7": 315.0,
+                "displacement_falloff": 0.2,
+                "palette_mode": false,
+                "group_angle_5": 225.0,
+                "group_speed_4": 1.0,
+                "group_angle_6": 270.0,
                 "palette_5": [
                   0.0,
                   1.0,
                   1.0,
                   1.0
                 ],
-                "flow_speed": 0.5,
-                "edge_blend_width": 0.05,
-                "background_fill": [
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0
-                ],
-                "group_angle_6": 270.0,
-                "group_speed_7": 1.0,
-                "palette_0": [
-                  1.0,
-                  0.0,
-                  0.0,
-                  1.0
-                ],
-                "group_speed_5": 1.0,
-                "color_preservation": 1.0,
-                "group_angle_1": 45.0,
-                "group_speed_2": 1.0,
-                "group_angle_0": 0.0,
-                "displacement_amount": 0.1,
-                "group_angle_4": 180.0,
-                "group_angle_3": 135.0,
                 "palette_6": [
                   1.0,
                   0.5,
                   0.0,
                   1.0
                 ],
-                "group_speed_4": 1.0,
+                "palette_4": [
+                  1.0,
+                  0.0,
+                  1.0,
+                  1.0
+                ],
+                "displacement_amount": 0.1,
+                "group_speed_3": 1.0,
                 "palette_7": [
                   0.5,
                   0.0,
                   1.0,
                   1.0
-                ]
+                ],
+                "group_speed_2": 1.0,
+                "background_fill": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "flow_type": 0.0,
+                "color_preservation": 1.0,
+                "group_speed_5": 1.0,
+                "flow_speed": 0.5,
+                "group_angle_1": 45.0,
+                "snap_hardness": 0.7,
+                "palette_0": [
+                  1.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "group_speed_6": 1.0,
+                "edge_blend_width": 0.05
               }
             }
           ],
@@ -438,25 +495,25 @@
             "type": "Shader",
             "path": "shaders/tas_psychedelic.fs",
             "params": {
-              "snake_density": 8.0,
-              "snake_length": 0.6,
-              "anim_speed": 0.5,
-              "move_speed": 1.0,
-              "slither_freq": 1.0,
-              "snake_thickness": 0.02,
-              "move_range": 1.0,
-              "snake_color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ],
               "bg_color": [
                 0.0,
                 0.0,
                 0.0,
                 0.0
               ],
+              "snake_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "slither_freq": 1.0,
+              "snake_density": 8.0,
+              "snake_length": 0.6,
+              "move_speed": 1.0,
+              "snake_thickness": 0.02,
+              "anim_speed": 0.5,
+              "move_range": 1.0,
               "slither_amp": 1.0
             }
           },
@@ -466,66 +523,9 @@
               "path": "shaders/kaleidoscope.fs",
               "enabled": true,
               "params": {
-                "center_y": 0.5,
                 "rotation": 0.0,
                 "zoom": 0.65,
-                "segments": 2.0,
-                "center_x": 0.5
-              }
-            }
-          ],
-          "opacity": 1.0,
-          "blend_mode": "add",
-          "mute": false,
-          "solo": false,
-          "z_index": 0
-        },
-        {
-          "uuid": "ac40bfe2",
-          "name": "dark_matter",
-          "source": {
-            "type": "Shader",
-            "path": "shaders/dark_matter.fs",
-            "params": {
-              "brightness": 0.6,
-              "node_glow": 2.6,
-              "bg_color": [
-                0.0,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "warp": 0.2,
-              "zoom": 0.9,
-              "color_node": [
-                1.0,
-                0.7,
-                0.15,
-                1.0
-              ],
-              "color_filament": [
-                0.7,
-                0.3,
-                0.9,
-                1.0
-              ],
-              "rotation": -0.09,
-              "web_scale": 7.7,
-              "seed": 0.0,
-              "speed": 0.7,
-              "contrast": 3.6,
-              "scale_mult": 1.2
-            }
-          },
-          "effects": [
-            {
-              "uuid": "141e9f14",
-              "path": "shaders/kaleidoscope.fs",
-              "enabled": true,
-              "params": {
                 "center_y": 0.5,
-                "zoom": 1.0,
-                "rotation": 0.0,
                 "segments": 2.0,
                 "center_x": 0.5
               }
@@ -544,13 +544,13 @@
           "path": "shaders/luma_key.fs",
           "enabled": true,
           "params": {
-            "threshold": 0.4,
-            "noise": 0.0,
             "color_fringe": 0.0,
-            "edge_blur": 0.0,
-            "invert": false,
             "opacity": 0.0,
-            "softness": 0.1
+            "softness": 0.1,
+            "edge_blur": 0.0,
+            "threshold": 0.4,
+            "invert": false,
+            "noise": 0.0
           }
         }
       ]
@@ -574,9 +574,9 @@
               "path": "shaders/zoom.fs",
               "enabled": true,
               "params": {
-                "zoom_amount": 1.5,
+                "center_x": 0.5,
                 "center_y": 0.5,
-                "center_x": 0.5
+                "zoom_amount": 1.5
               }
             },
             {
@@ -584,10 +584,10 @@
               "path": "shaders/hue_shift.fs",
               "enabled": true,
               "params": {
-                "auto_cycle": false,
-                "hue_shift": 0.5,
                 "cycle_speed": 0.5,
-                "saturation": 1.0
+                "auto_cycle": false,
+                "saturation": 1.0,
+                "hue_shift": 0.5
               }
             },
             {
@@ -595,17 +595,17 @@
               "path": "shaders/chroma_key.fs",
               "enabled": true,
               "params": {
-                "edge_blur": 0.0,
+                "softness": 0.1,
+                "opacity": 0.68,
+                "color_fringe": 0.0,
                 "target_color": [
                   0.0,
                   1.0,
                   0.0,
                   1.0
                 ],
-                "softness": 0.1,
-                "color_fringe": 0.0,
+                "edge_blur": 0.0,
                 "noise": 0.0,
-                "opacity": 0.68,
                 "tolerance": 0.15
               }
             }
@@ -623,11 +623,11 @@
           "path": "shaders/kaleidoscope.fs",
           "enabled": true,
           "params": {
-            "zoom": 1.0,
+            "center_y": 0.5,
+            "center_x": 0.5,
             "segments": 2.0,
             "rotation": 0.0,
-            "center_x": 0.5,
-            "center_y": 0.5
+            "zoom": 1.0
           }
         }
       ]
@@ -645,24 +645,24 @@
             "type": "Shader",
             "path": "shaders/game_of_life.fs",
             "params": {
+              "sim_speed": 44.0,
+              "seed": 0.28,
+              "density": 0.52,
               "color_alive": [
                 0.0,
                 1.0,
                 0.5,
                 1.0
               ],
-              "seed": 0.28,
+              "glow": 0.15,
+              "grid_size": 250.0,
+              "trail_fade": 0.26,
               "color_dead": [
                 0.0,
                 0.05,
                 0.02,
                 1.0
-              ],
-              "trail_fade": 0.26,
-              "sim_speed": 44.0,
-              "grid_size": 250.0,
-              "density": 0.52,
-              "glow": 0.15
+              ]
             }
           },
           "effects": [],
@@ -774,24 +774,8 @@
       }
     ],
     "assignments": {
-      "deck_9d226b11:fx0:group_speed_4": [],
-      "deck_ddde6acd:camera_speed": [],
-      "deck_4c523e98:pattern": [],
-      "deck_9d226b11:fx3:gr": [],
-      "deck_e7ab541a:grid_size": [],
-      "fx_5e20c625:hue_shift": [
-        {
-          "source_id": "cd9211c8",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "cd9211c8",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_6ba53879:membrane_amp": [],
+      "deck_2fb377fc:grid_density": [],
+      "deck_4c523e98:layers": [],
       "deck_3acc92df:camera_speed": [
         {
           "source_id": "3a0109d3",
@@ -799,59 +783,10 @@
           "component": null
         }
       ],
-      "deck_9d226b11:fx0:group_speed_3": [],
-      "deck_4c523e98:layers": [],
-      "deck_275c7eda:edge_width": [
-        {
-          "source_id": "3a0109d3",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "3a0109d3",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_9d226b11:fx0:group_speed_5": [],
-      "deck_3acc92df:shell_radius": [
-        {
-          "source_id": "174e91c7",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_9d226b11:fx3:rg": [],
-      "deck_1ea42b09:char_set": [
-        {
-          "source_id": "4a49268c",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_ddde6acd:crystal_dist": [],
-      "deck_ddde6acd:pulse_rate": [],
-      "deck_9d226b11:fx1:drip_speed": [],
-      "deck_e7ab541a:fx1:bg_mode": [],
       "deck_ddde6acd:cloud_density": [],
-      "deck_9d226b11:fx3:rb": [],
+      "deck_ddde6acd:streak_thin": [],
+      "deck_ddde6acd:camera_speed": [],
       "deck_9d226b11:fx1:hue_shift": [],
-      "deck_e7ab541a:char_set": [],
-      "deck_e7ab541a:speed_variation": [],
-      "deck_9d226b11:fx2:hue_shift": [],
-      "fx_88ed3d1e:hue_shift": [
-        {
-          "source_id": "4a49268c",
-          "amount": 0.5,
-          "component": null
-        },
-        {
-          "source_id": "cd9211c8",
-          "amount": 0.5,
-          "component": null
-        }
-      ],
-      "deck_6ba53879:fx0:shadow_r": [],
       "deck_275c7eda:anim_speed": [
         {
           "source_id": "3a0109d3",
@@ -864,6 +799,50 @@
           "component": null
         }
       ],
+      "deck_9d226b11:fx1:drip_speed": [],
+      "deck_e7ab541a:grid_size": [],
+      "deck_9d226b11:fx2:hue_shift": [],
+      "fx_5e20c625:hue_shift": [
+        {
+          "source_id": "cd9211c8",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "cd9211c8",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "fx_88ed3d1e:hue_shift": [
+        {
+          "source_id": "4a49268c",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "cd9211c8",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_d34acfbd:anim_speed": [],
+      "deck_ddde6acd:crystal_dist": [],
+      "deck_6ba53879:fx0:shadow_r": [],
+      "deck_9d226b11:fx3:gr": [],
+      "deck_e7ab541a:char_set": [],
+      "deck_ddde6acd:spin_speed": [],
+      "deck_1ea42b09:char_set": [
+        {
+          "source_id": "4a49268c",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_9d226b11:fx3:rb": [],
+      "deck_4c523e98:pattern": [],
+      "deck_e7ab541a:fx1:bg_mode": [],
+      "deck_9d226b11:fx0:group_speed_5": [],
       "deck_40c44853:sim_speed": [
         {
           "source_id": "3a0109d3",
@@ -876,15 +855,36 @@
           "component": null
         }
       ],
-      "deck_ddde6acd:spin_speed": [],
-      "deck_6ba53879:fx0:shadow_g": [],
-      "deck_ddde6acd:streak_thin": [],
-      "deck_4c523e98:glow_amount": [],
-      "deck_2fb377fc:grid_density": [],
-      "deck_d34acfbd:anim_speed": [],
       "deck_7891e6d2:pattern": [
         {
           "source_id": "cd9211c8",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_6ba53879:fx0:shadow_g": [],
+      "deck_6ba53879:membrane_amp": [],
+      "deck_9d226b11:fx3:rg": [],
+      "deck_9d226b11:fx0:group_speed_3": [],
+      "deck_e7ab541a:speed_variation": [],
+      "deck_ddde6acd:pulse_rate": [],
+      "deck_4c523e98:glow_amount": [],
+      "deck_3acc92df:shell_radius": [
+        {
+          "source_id": "174e91c7",
+          "amount": 0.5,
+          "component": null
+        }
+      ],
+      "deck_9d226b11:fx0:group_speed_4": [],
+      "deck_275c7eda:edge_width": [
+        {
+          "source_id": "3a0109d3",
+          "amount": 0.5,
+          "component": null
+        },
+        {
+          "source_id": "3a0109d3",
           "amount": 0.5,
           "component": null
         }

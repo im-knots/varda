@@ -527,9 +527,60 @@ pub(super) fn render_channel_column(ui: &mut egui::Ui, ch: &ChannelUIInfo, data:
                         actions.select_channel = Some(ch_idx);
                     }
                 }
-                for deck in &ch.decks {
+                let is_deck_drag_active = egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx());
+                let drag_is_same_ch = egui::DragAndDrop::payload::<(usize, usize)>(ui.ctx())
+                    .map(|p| p.0 == ch_idx)
+                    .unwrap_or(false);
+
+                for (i, deck) in ch.decks.iter().enumerate() {
+                    // Drop zone BEFORE each deck (for reordering within channel)
+                    if is_deck_drag_active && drag_is_same_ch {
+                        let drop_zone = ui.allocate_response(
+                            egui::vec2(ui.available_width(), 6.0),
+                            egui::Sense::click(),
+                        );
+                        if drop_zone.contains_pointer() {
+                            ui.painter().rect_filled(
+                                drop_zone.rect,
+                                2.0,
+                                accent.linear_multiply(0.5),
+                            );
+                        }
+                        if let Some(payload) = drop_zone.dnd_release_payload::<(usize, usize)>() {
+                            let (src_ch, src_deck) = *payload;
+                            if src_ch == ch_idx && src_deck != i {
+                                let to = if src_deck < i { i - 1 } else { i };
+                                if to != src_deck {
+                                    actions.deck_to_reorder = Some((ch_idx, src_deck, to));
+                                }
+                            }
+                        }
+                    }
+
                     render_deck_thumbnail(ui, ch_idx, deck, accent, data, actions);
                     ui.add_space(2.0);
+                }
+
+                // Drop zone AFTER last deck (for moving to end)
+                if is_deck_drag_active && drag_is_same_ch && !ch.decks.is_empty() {
+                    let drop_zone = ui.allocate_response(
+                        egui::vec2(ui.available_width(), 6.0),
+                        egui::Sense::click(),
+                    );
+                    if drop_zone.contains_pointer() {
+                        ui.painter().rect_filled(
+                            drop_zone.rect,
+                            2.0,
+                            accent.linear_multiply(0.5),
+                        );
+                    }
+                    if let Some(payload) = drop_zone.dnd_release_payload::<(usize, usize)>() {
+                        let (src_ch, src_deck) = *payload;
+                        let last = ch.decks.len() - 1;
+                        if src_ch == ch_idx && src_deck != last {
+                            actions.deck_to_reorder = Some((ch_idx, src_deck, last));
+                        }
+                    }
                 }
 
                 // Drop hint when dragging over a channel with existing decks

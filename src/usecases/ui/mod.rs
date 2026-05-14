@@ -891,6 +891,8 @@ pub struct UIActions {
     pub remove_channel: Option<usize>,
     /// Move a deck between channels: (source_ch_idx, source_deck_idx, target_ch_idx)
     pub deck_to_move: Option<(usize, usize, usize)>,
+    /// Reorder a deck within a channel: (channel_idx, from_deck_idx, to_deck_idx)
+    pub deck_to_reorder: Option<(usize, usize, usize)>,
     /// Output window actions
     pub output_actions: Vec<OutputAction>,
     /// Surface actions
@@ -1112,6 +1114,7 @@ impl UIActions {
             add_channel: false,
             remove_channel: None,
             deck_to_move: None,
+            deck_to_reorder: None,
             output_actions: Vec::new(),
             surface_actions: Vec::new(),
             toggle_stage_editor: false,
@@ -1186,6 +1189,7 @@ impl UIActions {
             || self.add_channel
             || self.remove_channel.is_some()
             || self.deck_to_move.is_some()
+            || self.deck_to_reorder.is_some()
             || self.effect_to_move.is_some()
             || self.ch_effect_to_move.is_some()
             || self.master_effect_to_move.is_some()

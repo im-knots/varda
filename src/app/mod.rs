@@ -447,6 +447,10 @@ impl VardaApp {
                     Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
                 }
             }
+            EngineCommand::ReorderDeck { ch, from_idx, to_idx } => {
+                self.reorder_deck(ch, from_idx, to_idx);
+                CommandResult::Ok
+            }
             EngineCommand::SetDeckOpacity { channel_idx, deck_idx, opacity } => {
                 self.set_deck_opacity(channel_idx, deck_idx, opacity);
                 CommandResult::Ok

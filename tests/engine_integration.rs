@@ -275,6 +275,16 @@ fn move_deck_between_channels() {
     assert_eq!(state.mixer.channels[1].decks.len(), before_ch1 + 1);
 }
 
+#[test]
+fn reorder_deck_via_command() {
+    let Some(mut app) = headless_app() else { return; };
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [0.0, 1.0, 0.0, 1.0] });
+    let r = send_cmd(&mut app, EngineCommand::ReorderDeck { ch: 0, from_idx: 0, to_idx: 1 });
+    assert!(matches!(r, CommandResult::Ok));
+    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 2);
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Chaos Tests Round 3: GPU Headless — adversarial engine commands
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

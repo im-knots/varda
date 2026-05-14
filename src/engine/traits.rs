@@ -23,6 +23,7 @@ pub trait MixerCommands {
     fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<()>;
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()>;
     fn move_deck(&mut self, src_ch: usize, src_deck: usize, dst_ch: usize) -> Result<()>;
+    fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize);
     fn set_deck_opacity(&mut self, channel_idx: usize, deck_idx: usize, opacity: f32);
     fn set_deck_blend_mode(&mut self, channel_idx: usize, deck_idx: usize, mode: BlendMode);
     fn set_deck_solo(&mut self, channel_idx: usize, deck_idx: usize, solo: bool);
