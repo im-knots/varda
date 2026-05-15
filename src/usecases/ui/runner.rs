@@ -133,9 +133,24 @@ impl ApplicationHandler for UIRunner {
             }
         } else {
             // Windowed: create main UI window + egui
-            let window_attrs = Window::default_attributes()
+            let window_icon = {
+                static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
+                image::load_from_memory(ICON_BYTES)
+                    .ok()
+                    .map(|img| {
+                        let rgba = img.into_rgba8();
+                        let (w, h) = (rgba.width(), rgba.height());
+                        winit::window::Icon::from_rgba(rgba.into_raw(), w, h)
+                            .ok()
+                    })
+                    .flatten()
+            };
+            let mut window_attrs = Window::default_attributes()
                 .with_title("Varda VJ Software")
                 .with_inner_size(winit::dpi::LogicalSize::new(1920, 1080));
+            if let Some(icon) = window_icon {
+                window_attrs = window_attrs.with_window_icon(Some(icon));
+            }
 
             let window_static: &'static Window = match event_loop.create_window(window_attrs) {
                 Ok(w) => { log::info!("Window created"); Box::leak(Box::new(w)) }
@@ -157,6 +172,20 @@ impl ApplicationHandler for UIRunner {
             self.egui_renderer = Some(egui_wgpu::Renderer::new(
                 &gpu.device, win_surface.surface_config.format, egui_wgpu::RendererOptions::default(),
             ));
+
+            // Set the application icon on egui's viewport (controls dock/taskbar icon)
+            {
+                static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
+                if let Ok(img) = image::load_from_memory(ICON_BYTES) {
+                    let rgba = img.into_rgba8();
+                    let icon_data = egui::IconData {
+                        rgba: rgba.as_raw().to_vec(),
+                        width: rgba.width(),
+                        height: rgba.height(),
+                    };
+                    self.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon_data))));
+                }
+            }
             self.window_surface = Some(win_surface);
             gpu
         };

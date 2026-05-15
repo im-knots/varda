@@ -253,24 +253,31 @@ float scatteredDots(vec3 ro, vec3 rd) {
     return acc;
 }
 
-// Smooth 3D value noise
-float vnoise(vec3 p) {
-    vec3 i = floor(p);
-    vec3 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f); // smoothstep interpolation
-    float a = hash(dot(i, vec3(127.1, 311.7, 74.7)));
-    float b = hash(dot(i + vec3(1,0,0), vec3(127.1, 311.7, 74.7)));
-    float c = hash(dot(i + vec3(0,1,0), vec3(127.1, 311.7, 74.7)));
-    float d = hash(dot(i + vec3(1,1,0), vec3(127.1, 311.7, 74.7)));
-    float e = hash(dot(i + vec3(0,0,1), vec3(127.1, 311.7, 74.7)));
-    float g = hash(dot(i + vec3(1,0,1), vec3(127.1, 311.7, 74.7)));
-    float h = hash(dot(i + vec3(0,1,1), vec3(127.1, 311.7, 74.7)));
-    float k = hash(dot(i + vec3(1,1,1), vec3(127.1, 311.7, 74.7)));
-    return mix(mix(mix(a,b,f.x), mix(c,d,f.x), f.y),
-               mix(mix(e,g,f.x), mix(h,k,f.x), f.y), f.z);
+// 2D value noise for dust FBM
+float noise2d(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(dot(i, vec2(127.1, 311.7)));
+    float b = hash(dot(i + vec2(1.0, 0.0), vec2(127.1, 311.7)));
+    float c = hash(dot(i + vec2(0.0, 1.0), vec2(127.1, 311.7)));
+    float d = hash(dot(i + vec2(1.0, 1.0), vec2(127.1, 311.7)));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-// ── Orbiting dust clouds — disk-shaped, respects equator_bias ────────
+// FBM with domain rotation for organic, non-repetitive patterns
+float fbm(vec2 p) {
+    float v = 0.0, a = 0.5;
+    mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+    for (int i = 0; i < 5; i++) {
+        v += a * noise2d(p);
+        p = rot * p * 2.0;
+        a *= 0.5;
+    }
+    return v;
+}
+
+// ── Orbiting dust clouds — FBM filaments in a disk ──────────────────
 float dustClouds(vec3 ro, vec3 rd, float t) {
     if (cloud_density < 0.01) return 0.0;
     float acc = 0.0;
@@ -289,15 +296,25 @@ float dustClouds(vec3 ro, vec3 rd, float t) {
         float angSpeed = 1.8 / (sqrt(r) + 0.15);
         float ang = atan(p.z, p.x) - t * angSpeed;
 
-        // Smooth wispy noise in polar coords
-        vec3 noiseP = vec3(ang * 2.0, r * 3.0, p.y * 4.0);
-        float n = vnoise(noiseP) * 0.6 + vnoise(noiseP * 2.5) * 0.3 + vnoise(noiseP * 6.0) * 0.1;
+        // Swirling 2D coordinates in the disk plane
+        vec2 sp = vec2(ang * r, r * 3.0);
+        float swirl = t * 0.15;
+        float cs = cos(swirl), sn = sin(swirl);
+        sp = vec2(sp.x * cs - sp.y * sn, sp.x * sn + sp.y * cs);
+
+        // Multi-scale FBM for filamentary structure
+        float n1 = fbm(sp * 1.2 + vec2(1.7, 9.2));
+        float n2 = fbm(sp * 2.0 + vec2(8.3, 2.8) + t * 0.08);
+        // Ridged noise — creates thin, bright wisps
+        float filament = 1.0 - abs(n1 * 2.0 - 1.0);
+        filament = filament * filament;
+        float detail = 0.5 + 0.5 * n2;
 
         // Radial density — denser near inner edge
         float rFade = smoothstep(EH, EH + 0.5, r) * smoothstep(shell_radius * 1.8, shell_radius * 0.5, r);
         float innerBoost = 1.0 + 2.0 * smoothstep(EH + 1.0, EH + 0.2, r);
 
-        float cloudShape = smoothstep(0.35, 0.55, n) * rFade * yFade * innerBoost;
+        float cloudShape = filament * detail * rFade * yFade * innerBoost;
         acc += cloudShape * cloud_density * 0.04;
     }
     return acc;

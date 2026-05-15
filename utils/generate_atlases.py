@@ -133,6 +133,9 @@ NOTO_HIERO      = os.path.join(HOME, 'Library/Fonts/NotoSansEgyptianHieroglyphs-
 NOTO_LINEARB    = os.path.join(HOME, 'Library/Fonts/NotoSansLinearB-Regular.ttf')
 NOTO_PHOENICIAN = os.path.join(HOME, 'Library/Fonts/NotoSansPhoenician-Regular.ttf')
 
+# Handwritten font for physics/math (Bradley Hand has Greek + Latin + basic math)
+BRADLEY_HAND_PATH = '/System/Library/Fonts/Supplemental/Bradley Hand Bold.ttf'
+
 # ── Script definitions ────────────────────────────────────────────────
 # (name, font_path, codepoints, filename, filter_cats, cell_size)
 # Complex/thin-stroke scripts use CELL_COMPLEX for adequate MSDF resolution.
@@ -154,6 +157,47 @@ SCRIPTS = [
     ("Sanskrit",    ARIAL_PATH,      list(range(0x0900, 0x097F)) + list(range(0x1CD0, 0x1CFF)) + list(range(0xA8E0, 0xA8FF)), "sanskrit_font_atlas.png", True, C),
 ]
 
+# Physics / math for SM Lagrangian (Bradley Hand Bold coverage only)
+PHYSICS_CPS = (
+    # Latin uppercase
+    [0x0041, 0x0042, 0x0043, 0x0044, 0x0046, 0x0047, 0x0048, 0x004C,
+     0x004D, 0x004E, 0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055,
+     0x0056, 0x0057, 0x0059] +
+    # Latin lowercase
+    [0x0062, 0x0063, 0x0064, 0x0065, 0x0067, 0x0068, 0x0069, 0x006C,
+     0x006E, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075] +
+    # Greek uppercase
+    [0x0391, 0x0392, 0x0393, 0x0394, 0x0395, 0x0396, 0x0397, 0x0398,
+     0x039A, 0x039B, 0x039C, 0x039D, 0x039E, 0x03A0, 0x03A1, 0x03A3,
+     0x03A4, 0x03A5, 0x03A6, 0x03A7, 0x03A8, 0x03A9] +
+    # Greek lowercase α-ω
+    list(range(0x03B1, 0x03CA)) +
+    # Digits 0-9
+    list(range(0x0030, 0x003A)) +
+    [
+        0x2211,  # ∑ summation
+        0x222B,  # ∫ integral
+        0x2202,  # ∂ partial derivative
+        0x2207,  # ∇ nabla
+        0x221E,  # ∞ infinity
+        0x00D7,  # × multiplication
+        0x2260,  # ≠ not equal
+        0x2264,  # ≤ less-equal
+        0x2265,  # ≥ greater-equal
+        0x2248,  # ≈ approximately
+        0x2020,  # † dagger (Hermitian conjugate)
+        0x221A,  # √ square root
+        0x0028,  # ( left paren
+        0x0029,  # ) right paren
+        0x005B,  # [ left bracket
+        0x005D,  # ] right bracket
+        0x003D,  # = equals
+        0x002B,  # + plus
+        0x002D,  # - minus
+        0x002F,  # / solidus
+    ]
+)
+
 WITCHY_CPS = list(range(0x1F700, 0x1F774)) + [
     0x2609, 0x260A, 0x260B,
     0x2640, 0x2642, 0x2643, 0x2644, 0x2645, 0x2646, 0x2647,
@@ -173,6 +217,12 @@ if __name__ == '__main__':
         n = generate_msdf_atlas(font_path, cps, filename, name,
                                 filter_cats=fc, cell_size=cs)
         results[name] = n
+
+    # Physics (handwritten Bradley Hand) — skip category filtering, thin strokes
+    print(f"  Processing Physics ({len(PHYSICS_CPS)} codepoints, {CELL_COMPLEX}px cell)...")
+    n = generate_msdf_atlas(BRADLEY_HAND_PATH, PHYSICS_CPS, "physics_font_atlas.png",
+                            "Physics", filter_cats=False, cell_size=CELL_COMPLEX)
+    results["Physics"] = n
 
     # Witchy (alchemical + astrology) — skip category filtering, thin strokes
     print(f"  Processing Witchy ({len(WITCHY_CPS)} codepoints, {CELL_COMPLEX}px cell)...")

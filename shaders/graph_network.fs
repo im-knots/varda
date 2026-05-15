@@ -270,14 +270,14 @@ void main() {
 
     } else {
         // === RENDER PASS ===
-        // Read smoothed camera state from pixel 24
-        vec4 cam = readState(MAX_NODES);
-        vec2 camCenter = cam.xy;
-        float camRadius = cam.z;
+        // Optimised: no large position array (saves 96 float registers → avoids
+        // spilling). Node positions read on demand via texture cache (all warp
+        // threads read the same texels → L1 hits). A "nearby node" pre-filter
+        // lets most pixels skip the O(N²) edge loop entirely.
 
-        // Zoom: plain zoom around origin. Tracking: blend toward largest cluster.
-        vec2 center = camCenter * tracking;
-        float scale = mix(0.5 / max(zoom, 0.1), camRadius, tracking);
+        vec4 cam = readState(MAX_NODES);
+        vec2 center = cam.xy * tracking;
+        float scale = mix(0.5 / max(zoom, 0.1), cam.z, tracking);
 
         vec2 p = (uv - 0.5) * 2.0;
         p.x *= RENDERSIZE.x / RENDERSIZE.y;
@@ -285,47 +285,68 @@ void main() {
         p = rot2(p, PHASE_TIME_1);
         p += center;
 
-        // Load node positions
-        vec2 positions[MAX_NODES];
-        for (int i = 0; i < MAX_NODES; i++) {
-            if (i >= numNodes) break;
-            positions[i] = readState(i).xy;
-        }
-
         vec3 col = bg_color.rgb;
         vec3 baseHSV = rgb2hsv(color_base.rgb);
         float baseHue = baseHSV.x;
 
-        // --- Edges (respect max_connections per node) ---
+        // Precompute thresholds
+        float edgeCutoff = max(edge_width * 1.5, 0.03);
+        float connectDistSq = connect_dist * connect_dist;
+        // An edge (i,j) can only be within edgeCutoff of pixel p if at least
+        // one endpoint is within (connect_dist + edgeCutoff) of p.
+        float nearRadius = connect_dist + edgeCutoff;
+        float nearRadiusSq = nearRadius * nearRadius;
+        float nodeCutoffSq = node_size * node_size * 16.0; // (node_size*4)^2
+
+        // --- Phase 1: identify nearby nodes ---
+        // Compact list avoids iterating all MAX_NODES in later loops.
+        int nearList[MAX_NODES];
+        int nearCount = 0;
+        bool isNear[MAX_NODES];
+        for (int i = 0; i < MAX_NODES; i++) {
+            if (i >= numNodes) { isNear[i] = false; continue; }
+            vec2 d = p - readState(i).xy;
+            bool close = dot(d, d) < nearRadiusSq;
+            isNear[i] = close;
+            if (close) { nearList[nearCount] = i; nearCount++; }
+        }
+
+        // --- Phase 2: edges (only pairs with ≥1 nearby endpoint) ---
         int maxConn = clamp(int(max_connections), 1, 20);
         int connCounts[MAX_NODES];
         for (int i = 0; i < MAX_NODES; i++) connCounts[i] = 0;
 
-        // Visible radius: edge line vanishes beyond edge_width*1.5,
-        // glow exp(-de*200)*0.06 < 0.001 when de > 0.03
-        float edgeCutoff = max(edge_width * 1.5, 0.03);
-
         for (int i = 0; i < MAX_NODES; i++) {
             if (i >= numNodes) break;
+            bool iNear = isNear[i];
+            vec2 pi = readState(i).xy;
+
             for (int j = i + 1; j < MAX_NODES; j++) {
                 if (j >= numNodes) break;
 
-                // AABB early-out: skip if pixel is far from both endpoints
-                vec2 mn = min(positions[i], positions[j]) - edgeCutoff;
-                vec2 mx = max(positions[i], positions[j]) + edgeCutoff;
-                if (p.x < mn.x || p.x > mx.x || p.y < mn.y || p.y > mx.y) continue;
+                // Skip pair when neither endpoint is near this pixel
+                if (!iNear && !isNear[j]) continue;
 
-                float dist = length(positions[i] - positions[j]);
-                if (dist > connect_dist) continue;
+                vec2 pj = readState(j).xy;
+
+                // Squared distance avoids sqrt for connection test
+                vec2 dd = pi - pj;
+                float distSq = dot(dd, dd);
+                if (distSq > connectDistSq) continue;
                 if (connCounts[i] >= maxConn || connCounts[j] >= maxConn) continue;
-
                 connCounts[i]++;
                 connCounts[j]++;
 
-                // Distance to line segment — skip color math if too far
-                float de = dSegment(p, positions[i], positions[j]);
+                // AABB early-out
+                vec2 mn = min(pi, pj) - edgeCutoff;
+                vec2 mx = max(pi, pj) + edgeCutoff;
+                if (p.x < mn.x || p.x > mx.x || p.y < mn.y || p.y > mx.y) continue;
+
+                // Segment distance — skip colour math if too far
+                float de = dSegment(p, pi, pj);
                 if (de > edgeCutoff) continue;
 
+                float dist = sqrt(distSq);
                 float edgeFade = 1.0 - dist / connect_dist;
                 edgeFade *= edgeFade;
 
@@ -339,13 +360,10 @@ void main() {
             }
         }
 
-        // --- Nodes ---
-        // Glow becomes negligible beyond ~3x node_size
-        float nodeCutoff = node_size * 4.0;
-        float nodeCutoffSq = nodeCutoff * nodeCutoff;
-        for (int i = 0; i < MAX_NODES; i++) {
-            if (i >= numNodes) break;
-            vec2 diff = p - positions[i];
+        // --- Phase 3: nodes (only nearby ones can contribute) ---
+        for (int ni = 0; ni < nearCount; ni++) {
+            int i = nearList[ni];
+            vec2 diff = p - readState(i).xy;
             float ndSq = dot(diff, diff);
             if (ndSq > nodeCutoffSq) continue;
             float nd = sqrt(ndSq);
