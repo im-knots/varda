@@ -5,8 +5,8 @@
   "right_panel_open": true,
   "stage_editor_open": false,
   "dome_preview_open": true,
-  "dome_mode_active": false,
-  "dome_preset": "Octa",
+  "dome_mode_active": true,
+  "dome_preset": "Triple",
   "dome_geometry": {
     "radius": 2.35,
     "truncation_degrees": 73.0,
@@ -31,63 +31,23 @@
           "azimuth_degrees": 0.0,
           "elevation_degrees": 30.0,
           "distance": 0.5,
-          "fov_degrees": 51.75,
+          "fov_degrees": 138.0,
           "aspect_ratio": 1.7777778,
           "overlap_pct": 0.15
         },
         {
-          "azimuth_degrees": 45.0,
+          "azimuth_degrees": 120.0,
           "elevation_degrees": 30.0,
           "distance": 0.5,
-          "fov_degrees": 51.75,
+          "fov_degrees": 138.0,
           "aspect_ratio": 1.7777778,
           "overlap_pct": 0.15
         },
         {
-          "azimuth_degrees": 90.0,
+          "azimuth_degrees": 240.0,
           "elevation_degrees": 30.0,
           "distance": 0.5,
-          "fov_degrees": 51.75,
-          "aspect_ratio": 1.7777778,
-          "overlap_pct": 0.15
-        },
-        {
-          "azimuth_degrees": 135.0,
-          "elevation_degrees": 30.0,
-          "distance": 0.5,
-          "fov_degrees": 51.75,
-          "aspect_ratio": 1.7777778,
-          "overlap_pct": 0.15
-        },
-        {
-          "azimuth_degrees": 180.0,
-          "elevation_degrees": 30.0,
-          "distance": 0.5,
-          "fov_degrees": 51.75,
-          "aspect_ratio": 1.7777778,
-          "overlap_pct": 0.15
-        },
-        {
-          "azimuth_degrees": 225.0,
-          "elevation_degrees": 30.0,
-          "distance": 0.5,
-          "fov_degrees": 51.75,
-          "aspect_ratio": 1.7777778,
-          "overlap_pct": 0.15
-        },
-        {
-          "azimuth_degrees": 270.0,
-          "elevation_degrees": 30.0,
-          "distance": 0.5,
-          "fov_degrees": 51.75,
-          "aspect_ratio": 1.7777778,
-          "overlap_pct": 0.15
-        },
-        {
-          "azimuth_degrees": 315.0,
-          "elevation_degrees": 30.0,
-          "distance": 0.5,
-          "fov_degrees": 51.75,
+          "fov_degrees": 138.0,
           "aspect_ratio": 1.7777778,
           "overlap_pct": 0.15
         }
@@ -96,14 +56,20 @@
   },
   "outputs": [
     {
-      "uuid": "2dc7ac81",
-      "name": "Output 1",
+      "uuid": "02de4c26",
+      "name": "Output 2",
       "target": {
-        "type": "rtmp_stream",
-        "url": "rtmp://",
-        "codec": "H.264"
+        "type": "windowed"
       },
       "surface_assignments": [],
+      "window_position": [
+        1008,
+        314
+      ],
+      "window_size": [
+        1280,
+        720
+      ],
       "edge_blend_mode": "Manual",
       "edge_blend": {
         "left": {
