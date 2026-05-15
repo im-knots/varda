@@ -67,6 +67,16 @@ pub struct UIRunner {
 
     // ── Signal-driven shutdown (SIGINT/SIGTERM) ─────────────────────
     shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
+    // ── Cached window geometry (avoids XGetGeometry round-trip per frame) ──
+    // winit 0.30's Window::inner_size() on X11 issues a synchronous XGetGeometry
+    // request every call. egui_winit::State::take_egui_input() calls inner_size()
+    // unconditionally, causing a blocking X11 round-trip each frame. We cache
+    // the size here, updated from Resized/ScaleFactorChanged events, and bypass
+    // take_egui_input() to avoid the stall.
+    egui_start_time: std::time::Instant,
+    cached_screen_size: winit::dpi::PhysicalSize<u32>,
+    cached_scale_factor: f32,
 }
 
 impl UIRunner {
@@ -100,6 +110,9 @@ impl UIRunner {
             api_handle: None,
             last_headless_frame: None,
             shutdown_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            egui_start_time: std::time::Instant::now(),
+            cached_screen_size: winit::dpi::PhysicalSize::new(0, 0),
+            cached_scale_factor: 1.0,
         }
     }
 
@@ -149,6 +162,9 @@ impl ApplicationHandler for UIRunner {
                 Err(e) => { log::error!("Failed to create render context: {}", e); event_loop.exit(); return; }
             };
 
+            self.cached_screen_size = window_static.inner_size();
+            self.cached_scale_factor = window_static.scale_factor() as f32;
+            self.egui_start_time = std::time::Instant::now(); // reset to window-creation epoch
             self.blit_pipeline = BlitPipeline::new(&gpu.device, win_surface.surface_config.format).ok();
             self.egui_state = Some(egui_winit::State::new(
                 self.egui_ctx.clone(), egui::ViewportId::ROOT, window_static,
@@ -211,10 +227,14 @@ impl ApplicationHandler for UIRunner {
                     event_loop.exit();
                 }
                 WindowEvent::Resized(new_size) => {
+                    self.cached_screen_size = new_size;
                     let device = &varda.gpu_context().device;
                     if let Some(ws) = &mut self.window_surface {
                         ws.resize(device, new_size);
                     }
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    self.cached_scale_factor = scale_factor as f32;
                 }
                 WindowEvent::RedrawRequested => {
                     self.render(event_loop);
@@ -480,9 +500,29 @@ impl UIRunner {
         ui_data.dome_preview_texture = self.dome_preview_texture;
 
         // 5. Run egui frame
+        // Bypass take_egui_input() to avoid an XGetGeometry round-trip every frame.
+        // winit 0.30's Window::inner_size() on X11 is a synchronous xcb request;
+        // take_egui_input() calls it unconditionally. We replicate what it does
+        // using cached values updated from Resized/ScaleFactorChanged events.
         let raw_input = {
             let Some(egui_state) = &mut self.egui_state else { return };
-            egui_state.take_egui_input(window)
+            let display_scale = self.cached_scale_factor;
+            let pixels_per_point = self.egui_ctx.zoom_factor() * display_scale;
+            let w = self.cached_screen_size.width as f32 / pixels_per_point;
+            let h = self.cached_screen_size.height as f32 / pixels_per_point;
+            let input = egui_state.egui_input_mut();
+            input.time = Some(self.egui_start_time.elapsed().as_secs_f64());
+            if w > 0.0 && h > 0.0 {
+                input.screen_rect = Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(w, h),
+                ));
+            }
+            input.viewport_id = egui::ViewportId::ROOT;
+            input.viewports.entry(egui::ViewportId::ROOT)
+                .or_default()
+                .native_pixels_per_point = Some(display_scale);
+            input.take()
         };
         let mut ui_actions = ui::UIActions::new();
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
