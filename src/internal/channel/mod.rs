@@ -561,28 +561,25 @@ impl Channel {
             .chain(transitioning.into_iter())
             .collect();
 
-        // Composite all decks to the composite texture (batched submission)
+        // Composite decks via ping-pong: alternate target/background textures
+        // so each blend writes to a fresh attachment, avoiding the snapshot copy.
         let width = self.composite_texture.width();
         let height = self.composite_texture.height();
         let mut composite_cmds: Vec<wgpu::CommandBuffer> = Vec::new();
+        let mut current_is_composite = true;
 
         for (i, info) in ordered.iter().enumerate() {
             let slot = &mut self.decks[info.deck_idx];
 
+            let (target_view, background_view) = if current_is_composite {
+                (&self.effect_ping_view, &self.composite_view)
+            } else {
+                (&self.composite_view, &self.effect_ping_view)
+            };
+
             // Check if this deck is transitioning with a shader
             if let Some(progress) = info.transition_progress {
                 if let Some(effect) = slot.transition_effect.as_mut().filter(|_| i > 0) {
-                    // Snapshot composite-so-far into effect_ping_texture
-                    let mut copy_encoder = context.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor { label: Some("AT Snapshot Copy") },
-                    );
-                    copy_encoder.copy_texture_to_texture(
-                        self.composite_texture.as_image_copy(),
-                        self.effect_ping_texture.as_image_copy(),
-                        self.composite_texture.size(),
-                    );
-                    composite_cmds.push(copy_encoder.finish());
-
                     // Run transition shader: start=deck (outgoing), end=composite-below (incoming)
                     let uniforms = ISFUniforms {
                         time,
@@ -603,20 +600,21 @@ impl Channel {
 
                     let cmd = effect.pipeline.render_to_cmd(
                         context,
-                        &slot.deck.texture_view,      // startImage: outgoing deck
-                        &self.effect_ping_view,         // endImage: composite below
-                        &self.composite_view,           // output: back to composite
+                        &slot.deck.texture_view, // startImage: outgoing deck
+                        background_view,         // endImage: composite below
+                        target_view,             // output: alternate texture
                         &uniforms,
                         effect.params.buffer(),
                     );
                     composite_cmds.push(cmd);
+                    current_is_composite = !current_is_composite;
                     continue;
                 }
 
                 // Opacity fade fallback (no shader or first deck)
                 let fade_opacity = info.opacity * (1.0 - progress as f32);
                 if i == 0 {
-                    // First deck: simple blit with alpha blending
+                    // First deck: simple blit to composite_texture
                     self.blit_pipeline.set_opacity(&context.queue, fade_opacity);
                     let bind_group = self.blit_pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
                     let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -641,20 +639,11 @@ impl Channel {
                         self.blit_pipeline.render(&mut render_pass, &bind_group);
                     }
                     composite_cmds.push(encoder.finish());
+                    current_is_composite = true;
                 } else {
-                    // Subsequent decks: snapshot + composite shader
-                    let mut copy_encoder = context.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor { label: Some("Composite Snapshot Copy (AT fade)") },
-                    );
-                    copy_encoder.copy_texture_to_texture(
-                        self.composite_texture.as_image_copy(),
-                        self.effect_ping_texture.as_image_copy(),
-                        self.composite_texture.size(),
-                    );
-                    composite_cmds.push(copy_encoder.finish());
-
+                    // Subsequent decks: blend src + background_view → target_view
                     self.composite_pipeline.set_params(&context.queue, fade_opacity, info.blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
-                    let bind_group = self.composite_pipeline.create_bind_group(&context.device, &slot.deck.texture_view, &self.effect_ping_view);
+                    let bind_group = self.composite_pipeline.create_bind_group(&context.device, &slot.deck.texture_view, background_view);
                     let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("Channel Composite Encoder (AT fade)"),
                     });
@@ -662,7 +651,7 @@ impl Channel {
                         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("Channel Composite Pass (AT fade)"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &self.composite_view,
+                                view: target_view,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -677,13 +666,14 @@ impl Channel {
                         self.composite_pipeline.render(&mut render_pass, &bind_group);
                     }
                     composite_cmds.push(encoder.finish());
+                    current_is_composite = !current_is_composite;
                 }
                 continue;
             }
 
             // Normal compositing
             if i == 0 {
-                // First deck: simple blit with alpha blending (Normal = just copy)
+                // First deck: simple blit to composite_texture
                 self.blit_pipeline.set_opacity(&context.queue, info.opacity);
                 let bind_group = self.blit_pipeline.create_bind_group(&context.device, &slot.deck.texture_view);
                 let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -708,20 +698,11 @@ impl Channel {
                     self.blit_pipeline.render(&mut render_pass, &bind_group);
                 }
                 composite_cmds.push(encoder.finish());
+                current_is_composite = true;
             } else {
-                // Subsequent decks: snapshot composite → ping, blend src + ping → composite
-                let mut copy_encoder = context.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("Composite Snapshot Copy") },
-                );
-                copy_encoder.copy_texture_to_texture(
-                    self.composite_texture.as_image_copy(),
-                    self.effect_ping_texture.as_image_copy(),
-                    self.composite_texture.size(),
-                );
-                composite_cmds.push(copy_encoder.finish());
-
+                // Subsequent decks: blend src + background_view → target_view
                 self.composite_pipeline.set_params(&context.queue, info.opacity, info.blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
-                let bind_group = self.composite_pipeline.create_bind_group(&context.device, &slot.deck.texture_view, &self.effect_ping_view);
+                let bind_group = self.composite_pipeline.create_bind_group(&context.device, &slot.deck.texture_view, background_view);
                 let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Channel Composite Encoder"),
                 });
@@ -729,7 +710,7 @@ impl Channel {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Channel Composite Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &self.composite_view,
+                            view: target_view,
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -744,7 +725,15 @@ impl Channel {
                     self.composite_pipeline.render(&mut render_pass, &bind_group);
                 }
                 composite_cmds.push(encoder.finish());
+                current_is_composite = !current_is_composite;
             }
+        }
+
+        // If the final result is in effect_ping_texture, swap it with composite_texture
+        // so that self.composite_texture always contains the latest frame for downstream stages.
+        if !current_is_composite {
+            std::mem::swap(&mut self.composite_texture, &mut self.effect_ping_texture);
+            std::mem::swap(&mut self.composite_view, &mut self.effect_ping_view);
         }
 
         // If no decks, clear the composite texture to transparent
@@ -820,17 +809,10 @@ impl Channel {
                 read_from_composite = !read_from_composite;
             }
 
-            // If result is in ping texture, copy back to composite
+            // If result is in ping texture, swap it with composite_texture
             if !read_from_composite {
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Channel Effect Final Copy Encoder"),
-                });
-                encoder.copy_texture_to_texture(
-                    self.effect_ping_texture.as_image_copy(),
-                    self.composite_texture.as_image_copy(),
-                    self.composite_texture.size(),
-                );
-                fx_cmd_buffers.push(encoder.finish());
+                std::mem::swap(&mut self.composite_texture, &mut self.effect_ping_texture);
+                std::mem::swap(&mut self.composite_view, &mut self.effect_ping_view);
             }
 
             // Batch submit all channel effects
