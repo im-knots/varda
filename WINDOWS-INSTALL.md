@@ -143,7 +143,7 @@ cd vcpkg
 
 Then set:
 ```powershell
-$env:LIBCLANG_PATH = "C:\Users\<YourUsername>\repos\vcpkg\installed\x64-windows\bin"
+$env:LIBCLANG_PATH = "C:\path\to\vcpkg\installed\x64-windows\bin"
 ```
 
 ---
@@ -174,10 +174,10 @@ cd vcpkg
 **Set environment variable:**
 ```powershell
 # For current session:
-$env:VCPKG_ROOT = "C:\Users\<YourUsername>\repos\vcpkg"
+$env:VCPKG_ROOT = "C:\path\to\vcpkg"
 
 # To make permanent:
-[System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', 'C:\Users\<YourUsername>\repos\vcpkg', [System.EnvironmentVariableTarget]::User)
+[System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', 'C:\path\to\vcpkg', [System.EnvironmentVariableTarget]::User)
 ```
 
 ---
@@ -188,7 +188,7 @@ If you don't already have vcpkg set up:
 
 ```powershell
 # Clone vcpkg
-cd C:\Users\<YourUsername>\repos  # or wherever you keep projects
+cd C:\path\to  # or wherever you keep projects
 git clone https://github.com/microsoft/vcpkg.git
 cd vcpkg
 
@@ -212,7 +212,7 @@ After installing all dependencies, ensure these environment variables are set:
 $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
 
 # vcpkg for FFmpeg and other libraries
-$env:VCPKG_ROOT = "C:\Users\<YourUsername>\repos\vcpkg"
+$env:VCPKG_ROOT = "C:\path\to\vcpkg"
 ```
 
 ### Making Environment Variables Permanent:
@@ -220,7 +220,7 @@ $env:VCPKG_ROOT = "C:\Users\<YourUsername>\repos\vcpkg"
 **Via PowerShell (Administrator):**
 ```powershell
 [System.Environment]::SetEnvironmentVariable('LIBCLANG_PATH', 'C:\Program Files\LLVM\bin', [System.EnvironmentVariableTarget]::User)
-[System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', 'C:\Users\<YourUsername>\repos\vcpkg', [System.EnvironmentVariableTarget]::User)
+[System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', 'C:\path\to\vcpkg', [System.EnvironmentVariableTarget]::User)
 ```
 
 **Via GUI:**
@@ -229,7 +229,7 @@ $env:VCPKG_ROOT = "C:\Users\<YourUsername>\repos\vcpkg"
 3. Under "User variables", click "New"
 4. Add:
    - Variable: `LIBCLANG_PATH`, Value: `C:\Program Files\LLVM\bin`
-   - Variable: `VCPKG_ROOT`, Value: `C:\Users\<YourUsername>\repos\vcpkg`
+   - Variable: `VCPKG_ROOT`, Value: `C:\path\to\vcpkg`
 
 ---
 
@@ -551,7 +551,7 @@ After all dependencies are installed and environment variables are set:
 # 1. Open a NEW PowerShell window (to load environment variables)
 
 # 2. Navigate to Varda
-cd C:\Users\<YourUsername>\repos\varda
+cd C:\path\to\varda
 
 # 3. Clean previous builds
 cargo clean
