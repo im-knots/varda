@@ -1,11 +1,11 @@
 {
   "grid_size": 0.05,
-  "snap": true,
+  "snap": false,
   "library_panel_open": true,
   "right_panel_open": true,
-  "stage_editor_open": false,
+  "stage_editor_open": true,
   "dome_preview_open": true,
-  "dome_mode_active": true,
+  "dome_mode_active": false,
   "dome_preset": "Triple",
   "dome_geometry": {
     "radius": 2.35,
@@ -16,7 +16,96 @@
     "content_roll_degrees": 0.0
   },
   "surfaces": {
-    "surfaces": [],
+    "surfaces": [
+      {
+        "uuid": "a8f1e79a",
+        "name": "Surface 1",
+        "vertices": [
+          [
+            0.48154864,
+            0.30318844
+          ],
+          [
+            0.87552994,
+            0.29892924
+          ],
+          [
+            0.87580657,
+            0.626507
+          ],
+          [
+            0.48155198,
+            0.6248414
+          ]
+        ],
+        "extra_contours": [],
+        "source": "Master",
+        "content_mapping": "Mapped",
+        "output_type": "Projection",
+        "circle_hint": null,
+        "default_warp": null
+      },
+      {
+        "uuid": "9352f048",
+        "name": "Surface 2",
+        "vertices": [
+          [
+            0.48165864,
+            0.22611836
+          ],
+          [
+            0.90356696,
+            0.22611836
+          ],
+          [
+            0.90356696,
+            0.29845345
+          ],
+          [
+            0.48165864,
+            0.29845345
+          ]
+        ],
+        "extra_contours": [],
+        "source": {
+          "Channel": 5
+        },
+        "content_mapping": "Fill",
+        "output_type": "Projection",
+        "circle_hint": null,
+        "default_warp": null
+      },
+      {
+        "uuid": "52bd757c",
+        "name": "Surface 3",
+        "vertices": [
+          [
+            0.8767565,
+            0.225
+          ],
+          [
+            0.91602564,
+            0.22105806
+          ],
+          [
+            0.90681994,
+            0.6665609
+          ],
+          [
+            0.8747,
+            0.6685914
+          ]
+        ],
+        "extra_contours": [],
+        "source": {
+          "Channel": 5
+        },
+        "content_mapping": "Fill",
+        "output_type": "Projection",
+        "circle_hint": null,
+        "default_warp": null
+      }
+    ],
     "dome_setup": {
       "geometry": {
         "radius": 2.35,
@@ -56,19 +145,19 @@
   },
   "outputs": [
     {
-      "uuid": "02de4c26",
-      "name": "Output 2",
+      "uuid": "135f448b",
+      "name": "Output 1",
       "target": {
         "type": "windowed"
       },
       "surface_assignments": [],
       "window_position": [
-        1008,
-        314
+        0,
+        25
       ],
       "window_size": [
-        1280,
-        720
+        3440,
+        1298
       ],
       "edge_blend_mode": "Manual",
       "edge_blend": {
