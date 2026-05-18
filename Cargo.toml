@@ -73,7 +73,16 @@ ctrlc = "3.5.2"
 test-fixtures = []
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 egui_kittest = { version = "0.33.3", features = ["wgpu", "snapshot"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 varda = { path = ".", features = ["test-fixtures"] }
+
+[[bench]]
+name = "compositing"
+harness = false
+
+[[bench]]
+name = "shader_params"
+harness = false
