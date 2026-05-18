@@ -215,5 +215,42 @@ output/<uuid>/surface/<surface_uuid>    # output ↔ surface assignment with war
 
 Modulation uses a colon-separated key scheme (`deck_<uuid>:<param>`, `fx_<uuid>:<param>`) so the modulation engine can route LFOs, envelopes, and audio-reactive sources to any parameter in the graph without coupling to positional indices.
 
+## Benchmarking
+
+Criterion harness for the compositing pipeline and per-frame shader parameter buffer build so perf changes land with quantitative evidence.
+
+**GPU suites** (`benches/compositing.rs`):
+- `channel_composite_solid` — solid-color decks measuring per-deck copy-on-composite slope
+- `channel_composite_shader` — same shape with a fragment shader on every pixel (difference vs solid ≈ per-deck shader cost)
+- `mixer_crossfade` — two channels through the crossfader at 50%
+- 60fps preflight at 8-deck 1080p (panics if frame budget exceeded)
+- Per-deck slope reporter (decks/8 − decks/1, ÷ 7)
+
+**CPU suite** (`benches/shader_params.rs`):
+- `no_mod` — std140 buffer serialization only
+- `empty_mod` — modulation engine present but no assignments (isolates per-param key allocation cost)
+- `active_lfo` — full modulation path: lookup, LFO read, clamp, write
+
+**Run benchmarks:**
+
+```bash
+# Full criterion run with HTML reports
+cargo bench --bench compositing
+cargo bench --bench shader_params
+
+# Headless smoke test (compile + execute, no statistics)
+./scripts/bench-smoke.sh
+```
+
+**Compare before/after a perf change:**
+
+```bash
+# Save baseline before your change
+cargo bench --bench compositing -- --save-baseline pre
+
+# Make your change, then compare
+cargo bench --bench compositing -- --baseline pre
+```
+
 ## License
 [MIT](LICENSE)
