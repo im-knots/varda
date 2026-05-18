@@ -168,16 +168,24 @@ impl Mixer {
         }
 
         // Fallback: opacity-based crossfade
+        //
+        // For 2-channel mode the first channel is blitted onto a cleared-to-black
+        // target using ALPHA_BLENDING.  The hardware blend applies SrcAlpha to the
+        // RGB output, so if the blit shader also multiplies alpha by opacity, the
+        // effective weight becomes opacity² (double-application).
+        //
+        // To avoid this, the first channel is always blitted at full opacity and
+        // the crossfader value is used solely as the second channel's composite
+        // opacity.  The composite shader performs `mix(dst, src, src_a)`, which
+        // yields the correct linear crossfade: (1-cf)·A + cf·B.
         let opacities: Vec<f32> = if channel_count == 2 {
-            vec![
-                (1.0 - self.crossfader) * self.channels[0].opacity,
-                self.crossfader * self.channels[1].opacity,
-            ]
+            vec![1.0, self.crossfader]
         } else {
             self.channels.iter().map(|ch| ch.opacity).collect()
         };
 
-        let mut cmd_buffers = Vec::new();
+        // Submit per-channel to ensure each channel's uniform buffer writes
+        // are consumed before the next channel overwrites them.
         let mut is_first = true;
         for (_i, (channel, &opacity)) in self.channels.iter().zip(opacities.iter()).enumerate() {
             if opacity <= 0.0 { continue; }
@@ -207,7 +215,7 @@ impl Mixer {
                     });
                     self.blit_pipeline.render(&mut render_pass, &bind_group);
                 }
-                cmd_buffers.push(encoder.finish());
+                context.queue.submit(std::iter::once(encoder.finish()));
                 is_first = false;
             } else {
                 // Subsequent channels: snapshot + composite shader
@@ -219,7 +227,6 @@ impl Mixer {
                     self.effect_ping_texture.as_image_copy(),
                     self.composite_texture.size(),
                 );
-                cmd_buffers.push(copy_encoder.finish());
 
                 let blend_mode = channel.blend_mode;
                 self.composite_pipeline.set_params(&context.queue, opacity, blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
@@ -245,12 +252,8 @@ impl Mixer {
                     });
                     self.composite_pipeline.render(&mut render_pass, &bind_group);
                 }
-                cmd_buffers.push(encoder.finish());
+                context.queue.submit([copy_encoder.finish(), encoder.finish()]);
             }
-        }
-
-        if !cmd_buffers.is_empty() {
-            context.queue.submit(cmd_buffers);
         }
 
         Ok(())
@@ -283,16 +286,15 @@ impl Mixer {
         };
 
         let channel_count = self.channels.len();
+        // Same linear-crossfade formula as composite_channels (see comment there).
         let opacities: Vec<f32> = if channel_count == 2 {
-            vec![
-                (1.0 - self.crossfader) * self.channels[0].opacity,
-                self.crossfader * self.channels[1].opacity,
-            ]
+            vec![1.0, self.crossfader]
         } else {
             self.channels.iter().map(|ch| ch.opacity).collect()
         };
 
-        let mut cmd_buffers = Vec::new();
+        // Submit per-channel to ensure each channel's uniform buffer writes
+        // are consumed before the next channel overwrites them.
         let mut is_first = true;
         for &ch_idx in indices {
             if ch_idx >= self.channels.len() { continue; }
@@ -325,7 +327,7 @@ impl Mixer {
                     });
                     self.blit_pipeline.render(&mut render_pass, &bind_group);
                 }
-                cmd_buffers.push(encoder.finish());
+                context.queue.submit(std::iter::once(encoder.finish()));
                 is_first = false;
             } else {
                 // Subsequent channels: snapshot sub-mix → effect_ping, composite shader
@@ -337,7 +339,6 @@ impl Mixer {
                     self.effect_ping_texture.as_image_copy(),
                     sub_tex.size(),
                 );
-                cmd_buffers.push(copy_encoder.finish());
 
                 let blend_mode = channel.blend_mode;
                 self.composite_pipeline.set_params(&context.queue, opacity, blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
@@ -363,7 +364,7 @@ impl Mixer {
                     });
                     self.composite_pipeline.render(&mut render_pass, &bind_group);
                 }
-                cmd_buffers.push(encoder.finish());
+                context.queue.submit([copy_encoder.finish(), encoder.finish()]);
             }
         }
 
@@ -388,11 +389,7 @@ impl Mixer {
                     occlusion_query_set: None,
                 });
             }
-            cmd_buffers.push(encoder.finish());
-        }
-
-        if !cmd_buffers.is_empty() {
-            context.queue.submit(cmd_buffers);
+            context.queue.submit(std::iter::once(encoder.finish()));
         }
     }
 

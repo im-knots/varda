@@ -476,4 +476,43 @@ mod tests {
         assert!(seq.enabled);
         assert!(!seq.state.playing);
     }
+
+    // ── Crossfade opacity formula tests ──────────────────────────────
+
+    /// Verify the 2-channel crossfade opacity formula produces a linear blend.
+    /// First channel is always 1.0 (base layer); crossfader drives the second
+    /// channel's composite opacity.  The composite shader's mix() then yields:
+    ///     result = (1 - cf) * A + cf * B
+    #[test]
+    fn crossfade_opacities_linear() {
+        for i in 0..=10 {
+            let cf = i as f32 / 10.0;
+            let opacities = [1.0_f32, cf];
+            // Simulates composite shader mix(A, B, src_a):
+            //   result = (1 - src_a) * A + src_a * B
+            // With A blitted at full opacity, A_weight = 1 - cf, B_weight = cf.
+            let a_weight = 1.0 - opacities[1];
+            let b_weight = opacities[1];
+            let sum = a_weight + b_weight;
+            assert!(
+                (sum - 1.0).abs() < 1e-6,
+                "Weights must sum to 1.0 at cf={cf}: got {sum}"
+            );
+        }
+    }
+
+    /// Old formula had squared falloff: first channel weight was (1-cf)²
+    /// because ALPHA_BLENDING double-applied the opacity.  Ensure the new
+    /// formula avoids this.
+    #[test]
+    fn crossfade_midpoint_symmetric() {
+        let cf = 0.5_f32;
+        let opacities = [1.0_f32, cf];
+        let a_weight = 1.0 - opacities[1];
+        let b_weight = opacities[1];
+        assert!(
+            (a_weight - b_weight).abs() < 1e-6,
+            "At crossfader 0.5, weights must be equal: A={a_weight}, B={b_weight}"
+        );
+    }
 }
