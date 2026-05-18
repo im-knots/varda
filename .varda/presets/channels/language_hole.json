@@ -1,6 +1,6 @@
 {
-  "uuid": "c6b715b4",
-  "name": "Ch 1",
+  "uuid": "13604ff3",
+  "name": "Ch 2",
   "opacity": 0.0,
   "blend_mode": "normal",
   "decks": [
@@ -11,33 +11,33 @@
         "type": "Shader",
         "path": "shaders/black_hole.fs",
         "params": {
-          "camera_speed": 0.3,
-          "crystal_dist": 2.5,
-          "jet_power": 0.7,
-          "bloom": 0.2,
-          "hue_shift": 0.0,
-          "invert": 0.0,
-          "distortion": 0.4,
-          "density": 2.5,
-          "jet_height": 6.0,
-          "shell_radius": 4.5,
-          "crystal_count": 0.0,
-          "crystal_glow": 0.6,
-          "pulse_rate": 1.0,
-          "orbit_radius": 6.0,
-          "color_mode": 0.0,
-          "scatter": 0.5,
-          "cloud_density": 0.75,
-          "jet_width": 0.72,
-          "contrast": 1.3,
-          "streak_count": 60.0,
-          "orbit_tilt": 3.9,
-          "streak_thin": 0.75,
-          "jet_speed": 1.0,
-          "spin_speed": 0.5,
           "crystal_size": 0.3,
+          "crystal_count": 0.0,
+          "distortion": 0.4,
+          "jet_height": 6.0,
+          "crystal_glow": 0.6,
+          "density": 2.5,
+          "crystal_dist": 2.5,
+          "orbit_tilt": 3.9,
+          "invert": 0.0,
+          "scatter": 0.5,
+          "spin_speed": 0.5,
+          "equator_bias": 0.6,
+          "streak_count": 60.0,
+          "jet_power": 0.7,
+          "camera_speed": 0.3,
           "hole_size": 0.2,
-          "equator_bias": 0.6
+          "shell_radius": 4.5,
+          "jet_width": 0.72,
+          "jet_speed": 1.0,
+          "pulse_rate": 1.0,
+          "bloom": 0.2,
+          "color_mode": 0.0,
+          "hue_shift": 0.0,
+          "contrast": 1.3,
+          "orbit_radius": 6.0,
+          "streak_thin": 0.75,
+          "cloud_density": 0.75
         }
       },
       "effects": [],
@@ -93,24 +93,24 @@
         "type": "Shader",
         "path": "shaders/char_cycle.fs",
         "params": {
-          "offset_amount": 10.7,
-          "speed": 0.1,
-          "char_set": 11.0,
-          "speed_variation": 0.5,
-          "table_mode": 3.0,
           "grid_size": 5.0,
+          "char_set": 11.0,
+          "speed": 0.1,
+          "table_mode": 3.0,
+          "fg_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "speed_variation": 0.5,
           "bg_color": [
             0.0,
             0.0,
             0.0,
             1.0
           ],
-          "fg_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
+          "offset_amount": 10.7
         }
       },
       "effects": [
@@ -120,12 +120,12 @@
           "enabled": true,
           "params": {
             "popup_count": 16.0,
-            "bg_mode": 0.0,
-            "popup_scale": 0.15,
+            "pop_speed": 2.3,
             "opacity": 0.9,
-            "max_radius": 0.45,
             "min_radius": 0.25,
-            "pop_speed": 2.3
+            "popup_scale": 0.15,
+            "bg_mode": 0.21,
+            "max_radius": 0.45
           }
         },
         {
@@ -133,15 +133,18 @@
           "path": "shaders/chroma_key.fs",
           "enabled": true,
           "params": {
-            "opacity": 0.0,
             "softness": 0.1,
+            "edge_blur": 0.0,
+            "color_fringe": 0.0,
             "target_color": [
               0.0,
               0.0,
               0.0,
               1.0
             ],
-            "tolerance": 0.15
+            "opacity": 0.0,
+            "tolerance": 0.0,
+            "noise": 0.0
           }
         }
       ],
@@ -178,30 +181,30 @@
         "type": "Shader",
         "path": "shaders/graph_network.fs",
         "params": {
-          "stickiness": 0.5,
           "attraction": 0.5,
-          "node_size": 0.013,
-          "connect_dist": 0.5,
-          "zoom": 0.3,
-          "tracking": 0.28,
-          "speed": 0.5,
-          "edge_width": 0.003,
-          "max_connections": 5.0,
-          "rotation": 0.0,
           "node_count": 28.0,
-          "color_base": [
-            0.9767008,
-            0.9767008,
-            0.9767008,
-            1.0
-          ],
+          "connect_dist": 0.5,
+          "node_size": 0.025,
+          "zoom": 0.7,
           "bg_color": [
             0.0,
             0.0,
             0.0,
             0.0
           ],
-          "hue_shift": 0.0
+          "max_connections": 5.0,
+          "edge_width": 0.0045,
+          "color_base": [
+            0.9767008,
+            0.9767008,
+            0.9767008,
+            1.0
+          ],
+          "speed": 0.5,
+          "tracking": 0.08,
+          "stickiness": 0.6,
+          "hue_shift": 0.0,
+          "rotation": 0.0
         }
       },
       "effects": [],

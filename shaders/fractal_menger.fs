@@ -1,10 +1,10 @@
 /*{
-    "DESCRIPTION": "Menger Sponge - Raymarched 3D fractal explorer with flythrough camera, fog, and orbit trap coloring",
+    "DESCRIPTION": "Menger Sponge - Raymarched 3D fractal explorer with flythrough camera and orbit trap coloring",
     "CREDIT": "Varda VJ",
     "ISFVSN": "2.0",
     "CATEGORIES": ["Generator", "Generative", "3D", "Fractal"],
     "INPUTS": [
-        {"NAME": "iterations", "TYPE": "float", "DEFAULT": 5.0, "MIN": 3.0, "MAX": 12.0, "LABEL": "Iterations"},
+        {"NAME": "iterations", "TYPE": "float", "DEFAULT": 6.0, "MIN": 3.0, "MAX": 12.0, "LABEL": "Iterations"},
         {"NAME": "menger_scale", "TYPE": "float", "DEFAULT": 3.0, "MIN": 2.0, "MAX": 5.0, "LABEL": "Scale"},
         {"NAME": "offset", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.5, "MAX": 2.0, "LABEL": "Offset"},
         {"NAME": "cam_x", "TYPE": "float", "DEFAULT": 0.0, "MIN": -20.0, "MAX": 20.0, "LABEL": "Camera X"},
@@ -15,11 +15,10 @@
         {"NAME": "rot_z", "TYPE": "float", "DEFAULT": 0.0, "MIN": -3.14159, "MAX": 3.14159, "LABEL": "Rotate Z"},
         {"NAME": "fov", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.3, "MAX": 2.5, "LABEL": "FOV"},
         {"NAME": "fly_speed", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0, "LABEL": "Fly Speed"},
-        {"NAME": "max_steps", "TYPE": "float", "DEFAULT": 96.0, "MIN": 40.0, "MAX": 200.0, "LABEL": "Max Steps"},
-        {"NAME": "fog_density", "TYPE": "float", "DEFAULT": 0.1, "MIN": 0.0, "MAX": 1.0, "LABEL": "Fog Density"},
+        {"NAME": "max_steps", "TYPE": "float", "DEFAULT": 128.0, "MIN": 40.0, "MAX": 256.0, "LABEL": "Max Steps"},
         {"NAME": "ao_strength", "TYPE": "float", "DEFAULT": 0.7, "MIN": 0.0, "MAX": 1.0, "LABEL": "AO Strength"},
-        {"NAME": "color1", "TYPE": "color", "DEFAULT": [0.9, 0.88, 0.85, 1.0], "LABEL": "Color Warm"},
-        {"NAME": "color2", "TYPE": "color", "DEFAULT": [0.3, 0.15, 0.5, 1.0], "LABEL": "Color Cool"},
+        {"NAME": "color1", "TYPE": "color", "DEFAULT": [0.0, 0.8, 1.0, 1.0], "LABEL": "Color Warm"},
+        {"NAME": "color2", "TYPE": "color", "DEFAULT": [1.0, 0.2, 0.0, 1.0], "LABEL": "Color Cool"},
         {"NAME": "color_mode", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 2.0, "LABEL": "Color Mode"},
         {"NAME": "sun_elev", "TYPE": "float", "DEFAULT": 0.6, "MIN": -1.0, "MAX": 1.0, "LABEL": "Sun Elevation"},
         {"NAME": "sun_azim", "TYPE": "float", "DEFAULT": 0.8, "MIN": -3.14159, "MAX": 3.14159, "LABEL": "Sun Azimuth"},
@@ -66,7 +65,7 @@ layout(set = 0, binding = 1) uniform UserParams {
     float fov;
     float fly_speed;
     float max_steps;
-    float fog_density;
+
     float ao_strength;
     vec4 color1;
     vec4 color2;
@@ -80,13 +79,18 @@ layout(set = 0, binding = 1) uniform UserParams {
 mat3 rotX(float a){float c=cos(a),s=sin(a);return mat3(1,0,0,0,c,-s,0,s,c);}
 mat3 rotY(float a){float c=cos(a),s=sin(a);return mat3(c,0,s,0,1,0,-s,0,c);}
 
-// Menger sponge DE: iteratively subtract cross-shaped holes from a box
+// Orbit trap output from last mengerDE call
+vec4 g_trap = vec4(0.0);
+float g_pixFootprint = 0.0; // pixel footprint for LOD — set before marching
+
+// Menger sponge DE with vec4 orbit trap tracking
 vec2 mengerDE(vec3 pos) {
     vec3 z = pos;
     float sc = menger_scale;
     float off = offset;
-    float trap = 1e10;
+    vec4 trap = vec4(1e10);
     int iters = int(iterations);
+    float pf = g_pixFootprint;
 
     vec3 a = abs(z);
     float d = max(a.x - 1.0, max(a.y - 1.0, a.z - 1.0));
@@ -94,11 +98,13 @@ vec2 mengerDE(vec3 pos) {
     float pw = 1.0;
     for (int i = 0; i < 12; i++) {
         if (i >= iters) break;
+        // LOD: bail when detail scale is sub-pixel
+        if (pf > 0.0 && 1.0/pw < pf) break;
         z = abs(z);
         if (z.x < z.y) z.xy = z.yx;
         if (z.x < z.z) z.xz = z.zx;
         if (z.y < z.z) z.yz = z.zy;
-        trap = min(trap, dot(z, z));
+        trap = min(trap, vec4(abs(z), dot(z, z)));
         z = z * sc - off * (sc - 1.0);
         if (z.z < -0.5 * off * (sc - 1.0)) z.z += off * (sc - 1.0);
         pw *= sc;
@@ -107,30 +113,54 @@ vec2 mengerDE(vec3 pos) {
         float cz = max(abs(z.x), abs(z.y)) - off;
         d = max(d, min(cx, min(cy, cz)) / pw);
     }
-    return vec2(d, trap);
+    g_trap = trap;
+    // Fudge factor to avoid overstepping thin features
+    d *= 0.7;
+    // Clamp DE to pixel footprint — sub-pixel detail is aliasing noise
+    if (pf > 0.0) d = max(d, pf * 0.5);
+    return vec2(d, trap.w);
 }
 
 float de(vec3 p) { return mengerDE(p).x; }
 
-// Tetrahedron normal — 4 DE calls instead of 6
-vec3 calcNormal(vec3 p, float d) {
-    float e = clamp(d * 0.002, 0.0001, 0.005);
-    vec2 h = vec2(e, -e);
-    return normalize(
-        h.xyy * de(p + h.xyy) +
-        h.yyx * de(p + h.yyx) +
-        h.yxy * de(p + h.yxy) +
-        h.xxx * de(p + h.xxx));
+// Box intersection for bounding volume optimization
+vec2 boxIntersect(vec3 ro, vec3 rd, vec3 boxSize) {
+    vec3 m = 1.0 / rd;
+    vec3 n = m * ro;
+    vec3 k = abs(m) * boxSize;
+    vec3 t1 = -n - k;
+    vec3 t2 = -n + k;
+    float tN = max(max(t1.x, t1.y), t1.z);
+    float tF = min(min(t2.x, t2.y), t2.z);
+    if (tN > tF || tF < 0.0) return vec2(-1.0);
+    return vec2(tN, tF);
 }
 
+// Tetrahedron normal with pixel-footprint epsilon
+vec3 calcNormal(vec3 p, float pixSize) {
+    float e = max(pixSize * 0.5, 2e-5);
+    vec2 h = vec2(e, -e);
+    vec3 n = h.xyy * de(p + h.xyy) +
+             h.yyx * de(p + h.yyx) +
+             h.yxy * de(p + h.yxy) +
+             h.xxx * de(p + h.xxx);
+    float len = length(n);
+    return (len > 1e-20) ? n / len : vec3(0.0, 1.0, 0.0);
+}
+
+// Improved soft shadows (IQ's improved technique)
 float softShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
     float res = 1.0;
     float t = tmin;
-    for (int i = 0; i < 12; i++) {
+    float ph = 1e10;
+    for (int i = 0; i < 24; i++) {
         float h = de(ro + rd * t);
-        res = min(res, k * h / t);
-        t += clamp(h, 0.02, 0.5);
-        if (h < 0.002 || t > tmax) break;
+        float y = h * h / (2.0 * ph);
+        float d2 = sqrt(max(h * h - y * y, 0.0));
+        res = min(res, k * d2 / max(0.0, t - y));
+        ph = h;
+        t += clamp(h, 0.005, 0.2);
+        if (res < 0.001 || t > tmax) break;
     }
     return clamp(res, 0.0, 1.0);
 }
@@ -142,7 +172,9 @@ void main() {
 
     vec2 p = (uv - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
+    float pixelSize = 1.0 / RENDERSIZE.y;
 
+    // Camera
     mat3 camRot = rotY(rot_y) * rotX(rot_x);
     vec3 fw = camRot * vec3(0, 0, 1);
     vec3 ri = normalize(cross(fw, vec3(0, 1, 0)));
@@ -155,62 +187,127 @@ void main() {
     vec3 rd = normalize(p.x * ri2 + p.y * up2 + fw / tan(fov * 0.5 + 0.3));
 
     vec3 sunDir = normalize(vec3(cos(sun_azim)*cos(sun_elev), sin(sun_elev), sin(sun_azim)*cos(sun_elev)));
+    vec3 light2 = normalize(vec3(-0.707, 0.0, 0.707));
+
+    // Bounding box optimization
+    vec2 bb = boxIntersect(ro, rd, vec3(1.2));
+    float tStart = max(bb.x, 0.0);
+    float tEnd = bb.y;
 
     // Raymarch
-    float dist = 0.0;
+    float dist = tStart;
     int steps = 0;
     int maxS = int(max_steps);
-    vec2 hitInfo = vec2(0.0);
     bool hit = false;
     float minD = 1e10;
-    for (int i = 0; i < 200; i++) {
-        if (i >= maxS) break;
-        hitInfo = mengerDE(ro + rd * dist);
-        float d = hitInfo.x;
-        float ad = abs(d);
-        minD = min(minD, ad);
-        float thresh = clamp(dist * 0.0001, 0.0001, 0.002);
-        if (ad < thresh && dist > 0.02) { hit = true; steps = i; break; }
-        dist += (d > 0.0) ? d * 0.95 : max(ad, 0.02);
-        steps = i;
-        if (dist > 50.0) break;
+
+    float lastD = 0.0;
+    float minDdist = dist;
+    float minStep = pixelSize * 2.0; // prevent stalling when camera is inside fractal
+    if (bb.y > 0.0) { // bb.y > 0 means the box is ahead (works both outside and inside)
+        for (int i = 0; i < 256; i++) {
+            if (i >= maxS) break;
+            g_pixFootprint = pixelSize * max(dist, 0.5); // LOD: scale iterations to pixel size
+            vec3 pos = ro + rd * dist;
+            vec2 hitInfo = mengerDE(pos);
+            float d = hitInfo.x;
+            float ad = abs(d);
+            if (ad < minD) { minD = ad; minDdist = dist; }
+            float thresh = max(pixelSize * dist * 0.25, 5e-7);
+            if (ad < thresh && dist > minStep * 4.0) { hit = true; steps = i; lastD = d; break; }
+            dist += max(d, minStep);
+            steps = i;
+            if (dist > tEnd + 0.1 || dist > 50.0) break;
+        }
+        g_pixFootprint = 0.0; // full precision for normals/shadows
     }
 
-    vec3 fogColor = bg_color.rgb;
-    vec3 col = fogColor;
+    // Binary search refinement for crisp edges
+    if (hit) {
+        float lo = dist - abs(lastD) * 2.0;
+        float hi = dist;
+        lo = max(lo, 0.0);
+        for (int j = 0; j < 8; j++) {
+            float mid = (lo + hi) * 0.5;
+            float d = mengerDE(ro + rd * mid).x;
+            float thresh = max(pixelSize * mid * 0.25, 5e-7);
+            if (abs(d) < thresh) { hi = mid; } else { lo = mid; }
+        }
+        dist = hi;
+        mengerDE(ro + rd * dist); // re-evaluate for g_trap
+    }
+
+    // Soft hit: step-exhausted ray that got very close to the surface
+    float softThresh = max(pixelSize * minDdist * 8.0, 0.001);
+    if (!hit && minD < softThresh && minDdist > minStep * 4.0) {
+        hit = true;
+        dist = minDdist;
+        mengerDE(ro + rd * dist);
+    }
+
+    vec3 col = bg_color.rgb;
 
     if (hit) {
         vec3 hp = ro + rd * dist;
-        vec3 n = calcNormal(hp, dist);
+        float pxSz = pixelSize * dist;
+        vec3 n = calcNormal(hp, pxSz);
+        if (dot(n, rd) > 0.0) n = -n;
 
+        // Orbit-trap based AO
+        float occ = clamp(0.05 * log(g_trap.w + 1.0), 0.0, 1.0);
+        occ = 1.0 - ao_strength * (1.0 - occ);
+
+        // Color mode selection
         float cm = color_mode;
-        float t;
+        vec3 albedo;
         if (cm < 0.5) {
-            t = clamp(sqrt(hitInfo.y) * 0.3, 0.0, 1.0);
+            // Orbit trap coloring
+            albedo = vec3(0.01);
+            albedo = mix(albedo, color1.rgb, clamp(g_trap.x * 0.5, 0.0, 1.0));
+            albedo = mix(albedo, color2.rgb, clamp(g_trap.y * 0.5, 0.0, 1.0));
+            albedo = mix(albedo, mix(color1.rgb, color2.rgb, 0.5), clamp(pow(g_trap.z * 0.3, 4.0), 0.0, 1.0));
         } else if (cm < 1.5) {
-            t = clamp(dist * 0.05, 0.0, 1.0);
+            float t = clamp(dist * 0.05, 0.0, 1.0);
+            albedo = mix(color1.rgb, color2.rgb, t);
         } else {
-            t = float(steps) / float(maxS);
+            float t = float(steps) / float(maxS);
+            albedo = mix(color1.rgb, color2.rgb, t);
         }
-        vec3 albedo = mix(color1.rgb, color2.rgb, t);
 
-        float diff = max(dot(n, sunDir), 0.0);
-        float amb = 0.3 + 0.15 * (0.5 + 0.5 * n.y);
-        float ao = 1.0 - ao_strength * float(steps) / float(maxS);
-
+        // Shadows
         float shad = 1.0;
         if (shadow_strength > 0.01) {
             shad = mix(1.0, softShadow(hp + n * 0.01, sunDir, 0.01, 5.0, 8.0), shadow_strength);
         }
 
-        col = albedo * (diff * 0.8 * shad + amb) * ao;
-        col += vec3(1.0) * pow(max(dot(reflect(-sunDir, n), -rd), 0.0), 32.0) * 0.3 * shad;
-        col = mix(col, fogColor, 1.0 - exp(-dist * fog_density));
+        // Multi-light illumination (IQ style)
+        float dif1 = clamp(dot(sunDir, n), 0.0, 1.0) * shad;
+        vec3 hal = normalize(sunDir - rd);
+        float spe = pow(clamp(dot(n, hal), 0.0, 1.0), 32.0) * dif1
+                   * (0.04 + 0.96 * pow(clamp(1.0 - dot(hal, sunDir), 0.0, 1.0), 5.0));
+        float dif2 = clamp(0.5 + 0.5 * dot(light2, n), 0.0, 1.0) * occ;
+        float dif3 = (0.7 + 0.3 * n.y) * (0.2 + 0.8 * occ);
+        float fac = clamp(1.0 + dot(rd, n), 0.0, 1.0);
+
+        vec3 lin = vec3(0.0);
+        lin += 7.0 * vec3(1.50, 1.10, 0.70) * dif1;
+        lin += 4.0 * vec3(0.25, 0.20, 0.15) * dif2;
+        lin += 1.5 * vec3(0.10, 0.20, 0.30) * dif3;
+        lin += 2.5 * vec3(0.35, 0.30, 0.25) * (0.05 + 0.95 * occ);
+        lin += 4.0 * fac * occ;
+
+        col = albedo * lin;
+        col = pow(col, vec3(0.7, 0.9, 1.0));
+        col += spe * 15.0;
+
+
     } else {
-        // Edge glow: soften silhouettes by blending near-miss rays
+        // Edge glow for near-miss rays
         float glow = exp(-minD * 200.0) * 0.15;
         col = mix(col, mix(color1.rgb, color2.rgb, 0.5), glow);
     }
 
-    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+    // Gamma correction
+    col = sqrt(clamp(col, 0.0, 1.0));
+    fragColor = vec4(col, 1.0);
 }

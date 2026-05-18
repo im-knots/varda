@@ -191,5 +191,42 @@ void main() {
             println!("Expected compilation error (legacy uniforms vs Vulkan blocks): {}", e);
         }
     }
+
+    #[test]
+    fn test_compile_tree_of_life_naga() {
+        let source = std::fs::read_to_string("shaders/tree_of_life.fs")
+            .expect("tree_of_life.fs should exist");
+        let json_end = source.find("}*/").expect("JSON header");
+        let glsl = source[json_end + 3..].trim();
+
+        let spirv = compile_glsl_to_spirv(glsl, "tree_of_life.fs");
+        if let Err(ref e) = spirv {
+            panic!("GLSL compilation failed: {}", e);
+        }
+        let spirv_data = spirv.unwrap();
+
+        // Now test naga parse + validation (same as pipeline.rs)
+        let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let module = naga::front::spv::parse_u8_slice(
+            &spirv_bytes, &naga::front::spv::Options::default()
+        ).expect("naga SPIR-V parse should succeed");
+
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        ).validate(&module);
+        if let Err(ref e) = info {
+            panic!("Naga validation failed: {:?}", e);
+        }
+
+        // Try WGSL output too
+        let wgsl = naga::back::wgsl::write_string(
+            &module, &info.unwrap(), naga::back::wgsl::WriterFlags::empty()
+        );
+        if let Err(ref e) = wgsl {
+            panic!("WGSL output failed: {:?}", e);
+        }
+        println!("WGSL output length: {}", wgsl.unwrap().len());
+    }
 }
 
