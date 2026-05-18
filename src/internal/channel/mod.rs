@@ -561,10 +561,11 @@ impl Channel {
             .chain(transitioning.into_iter())
             .collect();
 
-        // Composite all decks to the composite texture (batched submission)
+        // Composite all decks to the composite texture.
+        // Submit per-deck to ensure each deck's uniform buffer writes
+        // are consumed before the next deck overwrites them.
         let width = self.composite_texture.width();
         let height = self.composite_texture.height();
-        let mut composite_cmds: Vec<wgpu::CommandBuffer> = Vec::new();
 
         for (i, info) in ordered.iter().enumerate() {
             let slot = &mut self.decks[info.deck_idx];
@@ -581,7 +582,7 @@ impl Channel {
                         self.effect_ping_texture.as_image_copy(),
                         self.composite_texture.size(),
                     );
-                    composite_cmds.push(copy_encoder.finish());
+                    context.queue.submit(std::iter::once(copy_encoder.finish()));
 
                     // Run transition shader: start=deck (outgoing), end=composite-below (incoming)
                     let uniforms = ISFUniforms {
@@ -609,7 +610,7 @@ impl Channel {
                         &uniforms,
                         effect.params.buffer(),
                     );
-                    composite_cmds.push(cmd);
+                    context.queue.submit(std::iter::once(cmd));
                     continue;
                 }
 
@@ -640,7 +641,7 @@ impl Channel {
                         });
                         self.blit_pipeline.render(&mut render_pass, &bind_group);
                     }
-                    composite_cmds.push(encoder.finish());
+                    context.queue.submit(std::iter::once(encoder.finish()));
                 } else {
                     // Subsequent decks: snapshot + composite shader
                     let mut copy_encoder = context.device.create_command_encoder(
@@ -651,7 +652,6 @@ impl Channel {
                         self.effect_ping_texture.as_image_copy(),
                         self.composite_texture.size(),
                     );
-                    composite_cmds.push(copy_encoder.finish());
 
                     self.composite_pipeline.set_params(&context.queue, fade_opacity, info.blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
                     let bind_group = self.composite_pipeline.create_bind_group(&context.device, &slot.deck.texture_view, &self.effect_ping_view);
@@ -676,7 +676,7 @@ impl Channel {
                         });
                         self.composite_pipeline.render(&mut render_pass, &bind_group);
                     }
-                    composite_cmds.push(encoder.finish());
+                    context.queue.submit([copy_encoder.finish(), encoder.finish()]);
                 }
                 continue;
             }
@@ -707,7 +707,7 @@ impl Channel {
                     });
                     self.blit_pipeline.render(&mut render_pass, &bind_group);
                 }
-                composite_cmds.push(encoder.finish());
+                context.queue.submit(std::iter::once(encoder.finish()));
             } else {
                 // Subsequent decks: snapshot composite → ping, blend src + ping → composite
                 let mut copy_encoder = context.device.create_command_encoder(
@@ -718,7 +718,6 @@ impl Channel {
                     self.effect_ping_texture.as_image_copy(),
                     self.composite_texture.size(),
                 );
-                composite_cmds.push(copy_encoder.finish());
 
                 self.composite_pipeline.set_params(&context.queue, info.opacity, info.blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
                 let bind_group = self.composite_pipeline.create_bind_group(&context.device, &slot.deck.texture_view, &self.effect_ping_view);
@@ -743,7 +742,7 @@ impl Channel {
                     });
                     self.composite_pipeline.render(&mut render_pass, &bind_group);
                 }
-                composite_cmds.push(encoder.finish());
+                context.queue.submit([copy_encoder.finish(), encoder.finish()]);
             }
         }
 
@@ -769,12 +768,7 @@ impl Channel {
                     occlusion_query_set: None,
                 });
             }
-            composite_cmds.push(encoder.finish());
-        }
-
-        // Batch submit all compositing commands
-        if !composite_cmds.is_empty() {
-            context.queue.submit(composite_cmds);
+            context.queue.submit(std::iter::once(encoder.finish()));
         }
 
         // Apply channel effect chain (if any)
