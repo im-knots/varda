@@ -430,6 +430,9 @@ struct StageEditorState {
     selection_rect_start: Option<[f32; 2]>,
     /// Drag state for radius handle on circle surfaces
     dragging_radius: Option<String>, // surface_uuid
+    /// Drag state for edge dragging: (surface_uuid, contour_idx, edge_start_idx,
+    /// original_v0, original_v1, grab_point_on_edge)
+    dragging_edge: Option<(String, usize, usize, [f32; 2], [f32; 2], [f32; 2])>,
 }
 
 /// Full-screen stage editor — replaces the deck view
@@ -871,6 +874,40 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 (dx_px * dx_px + dy_px * dy_px).sqrt()
             };
 
+            // Helper: find the closest edge of a specific surface within a threshold.
+            // Returns (contour_idx, edge_start_idx, projected_point, distance_px).
+            let find_closest_edge = |nx: f32, ny: f32, surface: &super::super::SurfaceUI, threshold: f32|
+                -> Option<(usize, usize, [f32; 2], f32)>
+            {
+                let contours: Vec<&Vec<[f32; 2]>> = std::iter::once(&surface.vertices)
+                    .chain(surface.extra_contours.iter()).collect();
+                let mut best: Option<(usize, usize, [f32; 2], f32)> = None;
+                for (ci, verts) in contours.iter().enumerate() {
+                    let n = verts.len();
+                    for ei in 0..n {
+                        let ej = (ei + 1) % n;
+                        let (ax, ay) = (verts[ei][0], verts[ei][1]);
+                        let (bx, by) = (verts[ej][0], verts[ej][1]);
+                        let dx = (bx - ax) * canvas_width;
+                        let dy = (by - ay) * canvas_height;
+                        let len_sq = dx * dx + dy * dy;
+                        if len_sq < 1e-6 { continue; }
+                        let px_nx = (nx - ax) * canvas_width;
+                        let px_ny = (ny - ay) * canvas_height;
+                        let t = ((px_nx * dx + px_ny * dy) / len_sq).clamp(0.0, 1.0);
+                        let proj_x = ax + t * (bx - ax);
+                        let proj_y = ay + t * (by - ay);
+                        let d = pixel_dist(nx, ny, proj_x, proj_y);
+                        if d < threshold {
+                            if best.as_ref().map_or(true, |b| d < b.3) {
+                                best = Some((ci, ei, [proj_x, proj_y], d));
+                            }
+                        }
+                    }
+                }
+                best
+            };
+
             // Helper: find what's under the cursor
             // vertex: (surface_uuid, contour_idx, vertex_idx)
             // edge: (surface_uuid, contour_idx, edge_start_idx, projected_point)
@@ -878,6 +915,9 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             let hit_test = |nx: f32, ny: f32| -> (Option<(String, usize, usize)>, Option<(String, usize, usize, [f32; 2])>, Option<(String, f32, f32)>) {
                 let vertex_threshold_px = 14.0;
                 let edge_threshold_px = 10.0;
+                // Wider threshold for edges when cursor is inside the surface.
+                // This ensures top/right edges are grabbable from inside.
+                let edge_inner_threshold_px = 24.0;
                 let mut found_vertex = None;
                 let mut found_edge = None;
                 let mut found_surface = None;
@@ -896,29 +936,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         }
                     }
 
+                    // Standard edge detection (narrow threshold, works from outside)
                     if found_edge.is_none() {
-                        for (ci, verts) in contours.iter().enumerate() {
-                            let n = verts.len();
-                            for ei in 0..n {
-                                let ej = (ei + 1) % n;
-                                let (ax, ay) = (verts[ei][0], verts[ei][1]);
-                                let (bx, by) = (verts[ej][0], verts[ej][1]);
-                                let dx = (bx - ax) * canvas_width;
-                                let dy = (by - ay) * canvas_height;
-                                let len_sq = dx * dx + dy * dy;
-                                if len_sq < 1e-6 { continue; }
-                                let px_nx = (nx - ax) * canvas_width;
-                                let px_ny = (ny - ay) * canvas_height;
-                                let t = (px_nx * dx + px_ny * dy) / len_sq;
-                                let t = t.clamp(0.0, 1.0);
-                                let proj_x = ax + t * (bx - ax);
-                                let proj_y = ay + t * (by - ay);
-                                if pixel_dist(nx, ny, proj_x, proj_y) < edge_threshold_px {
-                                    found_edge = Some((uid.clone(), ci, ei, [proj_x, proj_y]));
-                                    break;
-                                }
-                            }
-                            if found_edge.is_some() { break; }
+                        if let Some((ci, ei, proj, _d)) = find_closest_edge(nx, ny, surface, edge_threshold_px) {
+                            found_edge = Some((uid.clone(), ci, ei, proj));
                         }
                     }
 
@@ -941,6 +962,13 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         };
                         if point_in(&surface.vertices) || surface.extra_contours.iter().any(|c| point_in(c)) {
                             found_surface = Some((uid.clone(), nx, ny));
+                            // If cursor is inside the surface but no edge found yet,
+                            // try again with a wider threshold to catch edges from inside.
+                            if found_edge.is_none() {
+                                if let Some((ci, ei, proj, _d)) = find_closest_edge(nx, ny, surface, edge_inner_threshold_px) {
+                                    found_edge = Some((uid.clone(), ci, ei, proj));
+                                }
+                            }
                         }
                     }
                 }
@@ -950,9 +978,11 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // Hover feedback: change cursor when over interactive elements
             if let Some(pos) = canvas_response.hover_pos() {
                 let [nx, ny] = to_norm(pos);
-                let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
+                let (found_vertex, found_edge, found_surface) = hit_test(nx, ny);
                 if found_vertex.is_some() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                } else if found_edge.is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 } else if found_surface.is_some() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                 }
@@ -1033,8 +1063,9 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         state.dragging_vertex = None;
                         state.moving_surface = None;
                         state.selection_rect_start = None;
+                        state.dragging_edge = None;
                     } else {
-                        let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
+                        let (found_vertex, found_edge, found_surface) = hit_test(nx, ny);
 
                         if let Some((uuid, ci, vi)) = found_vertex {
                             // If vertex drag on a circle, auto-convert to polygon first
@@ -1048,6 +1079,27 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             state.dragging_vertex = Some((uuid, ci, vi));
                             state.moving_surface = None;
                             state.selection_rect_start = None;
+                            state.dragging_edge = None;
+                        } else if let Some((uuid, ci, ei, grab_pt)) = found_edge {
+                            // Edge drag: store original edge endpoints + grab point
+                            if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == uuid) {
+                                let verts = if ci == 0 { &surface.vertices } else { &surface.extra_contours[ci - 1] };
+                                let ej = (ei + 1) % verts.len();
+                                let v0 = verts[ei];
+                                let v1 = verts[ej];
+                                // Auto-convert circle to polygon before edge drag
+                                if surface.circle_hint.is_some() {
+                                    actions.surface_actions.push(SurfaceAction::ConvertToPolygon { uuid: uuid.clone() });
+                                }
+                                if !shift_held {
+                                    state.selected_surfaces.clear();
+                                }
+                                state.selected_surfaces.insert(uuid.clone());
+                                state.dragging_edge = Some((uuid, ci, ei, v0, v1, grab_pt));
+                                state.dragging_vertex = None;
+                                state.moving_surface = None;
+                                state.selection_rect_start = None;
+                            }
                         } else if let Some((uuid, lx, ly)) = found_surface {
                             if !shift_held && !state.selected_surfaces.contains(&uuid) {
                                 state.selected_surfaces.clear();
@@ -1056,6 +1108,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             state.moving_surface = Some((uuid, lx, ly));
                             state.dragging_vertex = None;
                             state.selection_rect_start = None;
+                            state.dragging_edge = None;
                         } else {
                             if !shift_held {
                                 state.selected_surfaces.clear();
@@ -1063,6 +1116,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             state.selection_rect_start = Some([nx, ny]);
                             state.dragging_vertex = None;
                             state.moving_surface = None;
+                            state.dragging_edge = None;
                         }
                     }
                 }
@@ -1095,6 +1149,29 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                         uuid: uuid.clone(), contour: ci, vertices: new_verts,
                                     });
                                 }
+                            }
+                        }
+                    } else if let Some((ref uuid, ci, ei, orig_v0, orig_v1, grab_pt)) = state.dragging_edge {
+                        // Edge drag: move both edge endpoints by the cursor displacement
+                        // relative to where the user first grabbed the edge.
+                        let dx = nx - grab_pt[0];
+                        let dy = ny - grab_pt[1];
+                        if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
+                            let contour_verts = if ci == 0 { Some(&surface.vertices) } else { surface.extra_contours.get(ci - 1) };
+                            if let Some(verts) = contour_verts {
+                                let mut new_verts = verts.clone();
+                                let ej = (ei + 1) % new_verts.len();
+                                new_verts[ei] = [
+                                    (orig_v0[0] + dx).clamp(0.0, 1.0),
+                                    (orig_v0[1] + dy).clamp(0.0, 1.0),
+                                ];
+                                new_verts[ej] = [
+                                    (orig_v1[0] + dx).clamp(0.0, 1.0),
+                                    (orig_v1[1] + dy).clamp(0.0, 1.0),
+                                ];
+                                actions.surface_actions.push(SurfaceAction::UpdateVertices {
+                                    uuid: uuid.clone(), contour: ci, vertices: new_verts,
+                                });
                             }
                         }
                     } else if let Some((ref _uuid, lx, ly)) = state.moving_surface {
@@ -1158,6 +1235,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 state.dragging_vertex = None;
                 state.moving_surface = None;
                 state.dragging_radius = None;
+                state.dragging_edge = None;
             }
 
             // Delete selected surfaces (handled below via keymap)
