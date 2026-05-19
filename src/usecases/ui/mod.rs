@@ -635,7 +635,7 @@ pub struct SequenceStepUI {
 /// UI-friendly step kind representation
 #[derive(Clone)]
 pub enum SequenceStepKindUI {
-    Fade { from_ch: usize, to_ch: usize, duration_val: f64, duration_unit: crate::channel::DurationUnit, easing: String, transition_shader: Option<String> },
+    Fade { from_ch: usize, to_ch: usize, duration_val: f64, duration_unit: crate::channel::DurationUnit, easing: String, transition_shader: Option<String>, target_amount: f32 },
     Wait { duration_val: f64, duration_unit: crate::channel::DurationUnit },
     GoTo { step_index: usize },
 }
@@ -1085,6 +1085,8 @@ pub enum SequenceAction {
     SetGoToTarget { seq_idx: usize, step_idx: usize, target: usize },
     /// Set fade step transition shader (None = opacity fade)
     SetStepTransitionShader { seq_idx: usize, step_idx: usize, shader: Option<String> },
+    /// Set fade step target opacity amount (0.0–1.0)
+    SetStepTargetAmount { seq_idx: usize, step_idx: usize, amount: f32 },
 }
 
 impl UIActions {

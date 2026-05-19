@@ -230,6 +230,8 @@ pub enum TransitionStepConfig {
         easing: EasingConfig,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         transition_shader: Option<String>,
+        #[serde(default = "default_target_amount")]
+        target_amount: f32,
     },
     Wait {
         duration: DurationSpecConfig,
@@ -249,6 +251,7 @@ pub enum EasingConfig {
 }
 
 fn default_easing() -> EasingConfig { EasingConfig::EaseInOut }
+fn default_target_amount() -> f32 { 1.0 }
 
 impl From<crate::mixer::CrossfadeEasing> for EasingConfig {
     fn from(e: crate::mixer::CrossfadeEasing) -> Self {
@@ -881,6 +884,7 @@ mod tests {
                     duration: DurationSpecConfig::Beats(4.0),
                     easing: EasingConfig::EaseInOut,
                     transition_shader: Some("dissolve".into()),
+                    target_amount: 1.0,
                 },
                 TransitionStepConfig::Wait {
                     duration: DurationSpecConfig::Seconds(10.0),

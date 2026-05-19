@@ -807,6 +807,8 @@ impl VardaApp {
                     EngineCommand::SetGoToTarget { seq_idx: *seq_idx, step_idx: *step_idx, target: *target },
                 SequenceAction::SetStepTransitionShader { seq_idx, step_idx, shader } =>
                     EngineCommand::SetStepTransitionShader { seq_idx: *seq_idx, step_idx: *step_idx, shader_name: shader.clone() },
+                SequenceAction::SetStepTargetAmount { seq_idx, step_idx, amount } =>
+                    EngineCommand::SetStepTargetAmount { seq_idx: *seq_idx, step_idx: *step_idx, amount: *amount },
             };
             self.execute_command(cmd);
         }

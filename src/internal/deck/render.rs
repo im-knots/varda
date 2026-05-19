@@ -459,6 +459,16 @@ impl Deck {
                 wgpu::TextureFormat::Rgba8Unorm
             };
 
+            // Use the pass buffer's actual dimensions as RENDERSIZE so
+            // shaders that store per-pixel state (e.g. particle buffers)
+            // can address their own texels correctly.
+            let pass_render_size = pass_buffers.get(target_name)
+                .map(|pb| {
+                    let sz = pb.texture_a.size();
+                    [sz.width as f32, sz.height as f32]
+                })
+                .unwrap_or([render_width as f32, render_height as f32]);
+
             for iter in 0..iterations {
                 let effective_frame = frame_count * SIMULATION_ITERATIONS as u32 + iter as u32;
 
@@ -467,7 +477,7 @@ impl Deck {
                     time_delta: time_delta / SIMULATION_ITERATIONS as f32,
                     frame_index: effective_frame,
                     pass_index: pass_idx as i32,
-                    render_size: [render_width as f32, render_height as f32],
+                    render_size: pass_render_size,
                     audio_level: audio_data.level,
                     audio_bass: audio_data.bass(),
                     audio_mid: audio_data.mid(),

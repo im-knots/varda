@@ -136,6 +136,7 @@ pub enum EngineCommand {
     SetGoToTarget { seq_idx: usize, step_idx: usize, target: usize },
     ToggleStepDurationUnit { seq_idx: usize, step_idx: usize },
     SetStepDurationValue { seq_idx: usize, step_idx: usize, value: f64 },
+    SetStepTargetAmount { seq_idx: usize, step_idx: usize, amount: f32 },
 
     // ── Stream Library ─────────────────────────────────────────
     AddStreamLibraryEntry { url: String, mode: crate::stream::SrtMode },

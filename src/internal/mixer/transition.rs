@@ -112,6 +112,8 @@ pub enum StepKind {
         easing: CrossfadeEasing,
         /// Transition shader name (None = opacity fade). Only used in 2-channel mode.
         transition_shader: Option<String>,
+        /// Target opacity for the destination channel (0.0–1.0). Default 1.0 = full.
+        target_amount: f32,
     },
     /// Wait/hold for a duration.
     Wait {
@@ -277,7 +279,7 @@ impl Mixer {
 
             let step = &seq.steps[seq.state.current_step];
             let mutation = match &step.kind {
-                StepKind::Fade { from_ch, to_ch, duration, easing, .. } => {
+                StepKind::Fade { from_ch, to_ch, duration, easing, target_amount, .. } => {
                     let duration_secs = duration.to_seconds(bpm);
                     if duration_secs <= 0.0 {
                         seq.state.current_step += 1;
@@ -298,7 +300,7 @@ impl Mixer {
                             seq.state.playing = false;
                         }
                     }
-                    Some((*from_ch, *to_ch, eased, completed))
+                    Some((*from_ch, *to_ch, eased, completed, *target_amount))
                 }
                 StepKind::Wait { duration } => {
                     let duration_secs = duration.to_seconds(bpm);
@@ -328,20 +330,20 @@ impl Mixer {
                 }
             };
 
-            if let Some((from, to, eased, completed)) = mutation {
+            if let Some((from, to, eased, completed, target_amount)) = mutation {
                 if channel_count == 2 {
                     if from < channel_count && to < channel_count {
                         let from_val = if from == 0 { 0.0f32 } else { 1.0f32 };
-                        let to_val = if to == 0 { 0.0f32 } else { 1.0f32 };
+                        let to_val = if to == 0 { 0.0f32 } else { target_amount };
                         self.crossfader = if completed { to_val } else { from_val + (to_val - from_val) * eased };
                     }
                 } else {
                     if completed {
-                        if from < channel_count { self.channels[from].opacity = 0.0; }
-                        if to < channel_count { self.channels[to].opacity = 1.0; }
+                        if from < channel_count { self.channels[from].opacity = 1.0 - target_amount; }
+                        if to < channel_count { self.channels[to].opacity = target_amount; }
                     } else {
-                        if from < channel_count { self.channels[from].opacity = 1.0 - eased; }
-                        if to < channel_count { self.channels[to].opacity = eased; }
+                        if from < channel_count { self.channels[from].opacity = 1.0 - eased * target_amount; }
+                        if to < channel_count { self.channels[to].opacity = eased * target_amount; }
                     }
                 }
             }

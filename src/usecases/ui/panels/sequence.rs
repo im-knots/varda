@@ -298,6 +298,13 @@ fn render_duration_editor(
     if ui.add(drag).changed() {
         actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
     }
+    // Slider for duration (visual scrub)
+    let slider = egui::Slider::new(&mut dur, 0.1..=max_val)
+        .max_decimals(1)
+        .show_value(false);
+    if ui.add_sized([80.0, 16.0], slider).changed() {
+        actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
+    }
     // Unit selector: side-by-side buttons
     let units = [
         (DurationUnit::Seconds, "s"),
@@ -333,7 +340,7 @@ pub(super) fn render_sequence_step_editor(
     let seq = &data.sequences[seq_idx];
 
     match &step.kind {
-        SequenceStepKindUI::Fade { from_ch, to_ch, duration_val, duration_unit, easing, transition_shader } => {
+        SequenceStepKindUI::Fade { from_ch, to_ch, duration_val, duration_unit, easing, transition_shader, target_amount } => {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let from_label = channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?");
@@ -395,6 +402,18 @@ pub(super) fn render_sequence_step_editor(
                             }
                         }
                     });
+                ui.separator();
+                // Target amount slider (0–100%)
+                ui.label(egui::RichText::new("Target:").small());
+                let mut amt = *target_amount;
+                let slider = egui::Slider::new(&mut amt, 0.0..=1.0)
+                    .max_decimals(2)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
+                if ui.add_sized([70.0, 16.0], slider).changed() {
+                    actions.sequence_actions.push(SequenceAction::SetStepTargetAmount {
+                        seq_idx, step_idx, amount: amt,
+                    });
+                }
             });
         }
         SequenceStepKindUI::Wait { duration_val, duration_unit } => {
@@ -456,7 +475,7 @@ mod tests {
             current_step: 0,
             step_elapsed: 0.0,
             steps: vec![
-                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None } },
+                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None, target_amount: 1.0 } },
                 SequenceStepUI { label: "Wait".into(), kind: SequenceStepKindUI::Wait { duration_val: 2.0, duration_unit: DurationUnit::Seconds } },
                 SequenceStepUI { label: "GoTo".into(), kind: SequenceStepKindUI::GoTo { step_index: 0 } },
             ],

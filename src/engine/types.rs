@@ -282,7 +282,7 @@ pub struct SequenceStepSnapshot {
 
 #[derive(Clone, Serialize)]
 pub enum SequenceStepKindSnapshot {
-    Fade { from_ch: usize, to_ch: usize, duration_val: f64, duration_unit: crate::channel::DurationUnit, easing: String, transition_shader: Option<String> },
+    Fade { from_ch: usize, to_ch: usize, duration_val: f64, duration_unit: crate::channel::DurationUnit, easing: String, transition_shader: Option<String>, target_amount: f32 },
     Wait { duration_val: f64, duration_unit: crate::channel::DurationUnit },
     GoTo { step_index: usize },
 }
