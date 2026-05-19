@@ -449,13 +449,14 @@ pub fn snapshot_scene(
             name: seq.name.clone(),
             enabled: seq.enabled,
             steps: seq.steps.iter().map(|step| match &step.kind {
-                crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader, target_amount } => {
                     TransitionStepConfig::Fade {
                         from_ch: *from_ch,
                         to_ch: *to_ch,
                         duration: duration_spec_to_config(duration),
                         easing: (*easing).into(),
                         transition_shader: transition_shader.clone(),
+                        target_amount: *target_amount,
                     }
                 }
                 crate::mixer::StepKind::Wait { duration } => {
@@ -807,7 +808,7 @@ pub fn restore_scene(
         use crate::scene::TransitionStepConfig;
         let steps = seq_config.steps.iter().filter_map(|step| {
             let kind = match step {
-                TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader, target_amount } => {
                     if *from_ch >= channel_count || *to_ch >= channel_count {
                         log::warn!(
                             "Transition step references channel {} or {} but only {} channels exist; skipping",
@@ -821,6 +822,7 @@ pub fn restore_scene(
                         duration: duration_config_to_spec(duration),
                         easing: (*easing).into(),
                         transition_shader: transition_shader.clone(),
+                        target_amount: *target_amount,
                     }
                 }
                 TransitionStepConfig::Wait { duration } => {

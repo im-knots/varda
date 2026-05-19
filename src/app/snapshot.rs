@@ -154,7 +154,7 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
     mixer.transition_sequences().iter().map(|seq| {
         let steps = seq.steps.iter().map(|step| {
             let (label, kind) = match &step.kind {
-                crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                crate::mixer::StepKind::Fade { from_ch, to_ch, duration, easing, transition_shader, target_amount } => {
                     let unit_label = duration.unit().label();
                     let easing_name = format!("{:?}", easing);
                     let label = format!("Fade {} -> {} ({:.1}{})",
@@ -165,6 +165,7 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
                         from_ch: *from_ch, to_ch: *to_ch,
                         duration_val: duration.value(), duration_unit: duration.unit(),
                         easing: easing_name, transition_shader: transition_shader.clone(),
+                        target_amount: *target_amount,
                     })
                 }
                 crate::mixer::StepKind::Wait { duration } => {
@@ -509,8 +510,8 @@ pub(crate) fn build_ui_data(
     let sequences = engine.mixer.sequences.iter().map(|seq| {
         let steps = seq.steps.iter().map(|s| {
             let kind = match &s.kind {
-                SequenceStepKindSnapshot::Fade { from_ch, to_ch, duration_val, duration_unit, easing, transition_shader } =>
-                    SequenceStepKindUI::Fade { from_ch: *from_ch, to_ch: *to_ch, duration_val: *duration_val, duration_unit: *duration_unit, easing: easing.clone(), transition_shader: transition_shader.clone() },
+                SequenceStepKindSnapshot::Fade { from_ch, to_ch, duration_val, duration_unit, easing, transition_shader, target_amount } =>
+                    SequenceStepKindUI::Fade { from_ch: *from_ch, to_ch: *to_ch, duration_val: *duration_val, duration_unit: *duration_unit, easing: easing.clone(), transition_shader: transition_shader.clone(), target_amount: *target_amount },
                 SequenceStepKindSnapshot::Wait { duration_val, duration_unit } =>
                     SequenceStepKindUI::Wait { duration_val: *duration_val, duration_unit: *duration_unit },
                 SequenceStepKindSnapshot::GoTo { step_index } =>

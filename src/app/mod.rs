@@ -836,6 +836,7 @@ impl VardaApp {
             EngineCommand::SetStepFromCh { seq_idx, step_idx, ch } => self.cmd_set_step_from_ch(seq_idx, step_idx, ch),
             EngineCommand::SetStepToCh { seq_idx, step_idx, ch } => self.cmd_set_step_to_ch(seq_idx, step_idx, ch),
             EngineCommand::SetGoToTarget { seq_idx, step_idx, target } => self.cmd_set_goto_target(seq_idx, step_idx, target),
+            EngineCommand::SetStepTargetAmount { seq_idx, step_idx, amount } => self.cmd_set_step_target_amount(seq_idx, step_idx, amount),
 
             // ── Stream Library ─────────────────────────────────
             EngineCommand::AddStreamLibraryEntry { url, mode } => self.cmd_add_stream_library_entry(url, mode),

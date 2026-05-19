@@ -363,12 +363,13 @@ impl VardaApp {
             use crate::scene::TransitionStepConfig;
             let steps = seq_config.steps.iter().map(|step| {
                 let kind = match step {
-                    TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader } => {
+                    TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader, target_amount } => {
                         StepKind::Fade {
                             from_ch: *from_ch, to_ch: *to_ch,
                             duration: duration_config_to_spec(duration),
                             easing: (*easing).into(),
                             transition_shader: transition_shader.clone(),
+                            target_amount: *target_amount,
                         }
                     }
                     TransitionStepConfig::Wait { duration } => StepKind::Wait {

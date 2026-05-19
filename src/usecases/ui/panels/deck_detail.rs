@@ -1030,7 +1030,7 @@ mod tests {
             current_step: 0,
             step_elapsed: 0.0,
             steps: vec![
-                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None } },
+                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None, target_amount: 1.0 } },
             ],
         });
         data.selected_sequence = Some(0);
@@ -1053,7 +1053,7 @@ mod tests {
             current_step: 0,
             step_elapsed: 0.0,
             steps: vec![
-                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None } },
+                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None, target_amount: 1.0 } },
                 SequenceStepUI { label: "Wait".into(), kind: SequenceStepKindUI::Wait { duration_val: 2.0, duration_unit: DurationUnit::Seconds } },
             ],
         });

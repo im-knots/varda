@@ -46,6 +46,7 @@ impl VardaApp {
                 duration: crate::channel::DurationSpec::Seconds(2.0),
                 easing: crate::mixer::CrossfadeEasing::EaseInOut,
                 transition_shader: None,
+                target_amount: 1.0,
             }});
             CommandResult::Ok
         } else {
@@ -236,6 +237,21 @@ impl VardaApp {
         if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
             if let Some(step) = seq.steps.get_mut(step_idx) {
                 if let crate::mixer::StepKind::GoTo { step_index } = &mut step.kind { *step_index = target; }
+                CommandResult::Ok
+            } else {
+                CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
+            }
+        } else {
+            CommandResult::Err { code: ErrorCode::NotFound, message: "Sequence not found".into() }
+        }
+    }
+
+    pub(crate) fn cmd_set_step_target_amount(&mut self, seq_idx: usize, step_idx: usize, amount: f32) -> CommandResult {
+        if let Some(seq) = self.mixer.transition_sequences_mut().get_mut(seq_idx) {
+            if let Some(step) = seq.steps.get_mut(step_idx) {
+                if let crate::mixer::StepKind::Fade { target_amount, .. } = &mut step.kind {
+                    *target_amount = amount.clamp(0.0, 1.0);
+                }
                 CommandResult::Ok
             } else {
                 CommandResult::Err { code: ErrorCode::NotFound, message: "Step not found".into() }
