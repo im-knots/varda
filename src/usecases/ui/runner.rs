@@ -18,6 +18,72 @@ use winit::{
     window::{Window, WindowId},
 };
 
+/// Work item sent to the background detection thread.
+struct DetectRequest {
+    rgba: Vec<u8>,
+    w: u32,
+    h: u32,
+    params: crate::surface::detect::DetectionParams,
+    /// When true, this is a capture (freeze-frame) request — the response
+    /// triggers a transition to Preview mode rather than just updating overlays.
+    is_capture: bool,
+    camera_id: crate::camera::CameraId,
+}
+
+/// Result returned from the background detection thread.
+struct DetectResponse {
+    contours: Vec<crate::surface::detect::DetectedContour>,
+    is_capture: bool,
+    camera_id: crate::camera::CameraId,
+}
+
+/// Spawn a long-lived detection worker thread. It reads requests from `rx`,
+/// runs detection (which is wrapped in `catch_unwind` inside `detect_from_rgba`),
+/// and sends results back on the returned receiver.
+fn spawn_detect_thread(
+    rx: std::sync::mpsc::Receiver<DetectRequest>,
+) -> std::sync::mpsc::Receiver<DetectResponse> {
+    let (tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("varda-detect".into())
+        .spawn(move || {
+            let mut consecutive_errors: u32 = 0;
+            while let Ok(req) = rx.recv() {
+                let contours = match crate::surface::import::detect_from_rgba(
+                    &req.rgba, req.w, req.h, &req.params,
+                ) {
+                    Ok(result) => {
+                        consecutive_errors = 0;
+                        result.contours
+                    }
+                    Err(e) => {
+                        // Rate-limit error logging: log first, then every 60th
+                        if !matches!(e, crate::surface::import::ImportError::NoContours) {
+                            consecutive_errors += 1;
+                            if consecutive_errors == 1 || consecutive_errors % 60 == 0 {
+                                log::warn!(
+                                    "Detection error (count={}): {}",
+                                    consecutive_errors, e
+                                );
+                            }
+                        }
+                        Vec::new()
+                    }
+                };
+                if tx.send(DetectResponse {
+                    contours,
+                    is_capture: req.is_capture,
+                    camera_id: req.camera_id,
+                }).is_err() {
+                    break; // main thread dropped the receiver — exit
+                }
+            }
+            log::info!("Detection worker thread exiting");
+        })
+        .expect("Failed to spawn detection thread");
+    result_rx
+}
+
 pub struct UIRunner {
     // ── Session config (CLI flags + workspace defaults) ──────────────
     config: AppConfig,
@@ -35,6 +101,14 @@ pub struct UIRunner {
     main_output_texture: Option<egui::TextureId>,
     dome_preview_renderer: Option<crate::renderer::dome_preview::DomePreviewRenderer>,
     dome_preview_texture: Option<egui::TextureId>,
+    // Camera detection mode state
+    camera_detect_texture: Option<egui::TextureId>,
+    camera_detect_camera_id: Option<crate::camera::CameraId>,
+    camera_detect_contours: Vec<crate::surface::detect::DetectedContour>,
+    // Background detection thread channels
+    detect_req_tx: std::sync::mpsc::Sender<DetectRequest>,
+    detect_res_rx: std::sync::mpsc::Receiver<DetectResponse>,
+    detect_in_flight: bool,
     main_window_id: Option<WindowId>,
 
     // ── UI-consumer-owned layout/selection state ─────────────────────
@@ -83,6 +157,8 @@ impl UIRunner {
     pub fn new(config: AppConfig) -> Self {
         let (file_dialog_tx, file_dialog_rx) = std::sync::mpsc::channel();
         let (deck_load_tx, deck_load_rx) = std::sync::mpsc::channel();
+        let (detect_req_tx, detect_req_rx) = std::sync::mpsc::channel();
+        let detect_res_rx = spawn_detect_thread(detect_req_rx);
         Self {
             config,
             window: None,
@@ -97,6 +173,12 @@ impl UIRunner {
             main_output_texture: None,
             dome_preview_renderer: None,
             dome_preview_texture: None,
+            camera_detect_texture: None,
+            camera_detect_camera_id: None,
+            camera_detect_contours: Vec::new(),
+            detect_req_tx,
+            detect_res_rx,
+            detect_in_flight: false,
             main_window_id: None,
             layout: super::UILayoutState::default(),
             file_dialog_tx,
@@ -518,6 +600,58 @@ impl UIRunner {
             }
         }
 
+        // 3c. Camera detection mode — open/release camera as needed
+        {
+            let detect_camera_id = match &self.layout.camera_detect_mode {
+                ui::CameraDetectMode::Live { camera_id, .. } => Some(*camera_id),
+                ui::CameraDetectMode::Preview { camera_id, .. } => Some(*camera_id),
+                ui::CameraDetectMode::Off => None,
+            };
+
+            if let (Some(cam_id), Some(varda)) = (detect_camera_id, self.varda.as_mut()) {
+                if self.camera_detect_camera_id != Some(cam_id) {
+                    // Release previous camera if switching
+                    if let Some(prev_id) = self.camera_detect_camera_id.take() {
+                        varda.camera_manager_mut().release_camera(prev_id);
+                        if let (Some(tex_id), Some(egui_renderer)) = (self.camera_detect_texture.take(), self.egui_renderer.as_mut()) {
+                            egui_renderer.free_texture(&tex_id);
+                        }
+                    }
+                    // Open new camera (uses convenience method to avoid split-borrow)
+                    match varda.open_camera(cam_id) {
+                        Ok(_res) => {
+                            if let Some(tex_view) = varda.camera_manager().texture_view(cam_id) {
+                                let context = varda.gpu_context();
+                                if let Some(egui_renderer) = self.egui_renderer.as_mut() {
+                                    let tid = egui_renderer.register_native_texture(
+                                        &context.device, tex_view, wgpu::FilterMode::Linear,
+                                    );
+                                    self.camera_detect_texture = Some(tid);
+                                }
+                            }
+                            self.camera_detect_camera_id = Some(cam_id);
+                            log::info!("Camera detection: opened camera {}", cam_id);
+                        }
+                        Err(e) => {
+                            log::error!("Camera detection: failed to open camera {}: {}", cam_id, e);
+                            self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
+                        }
+                    }
+                }
+            } else if detect_camera_id.is_none() && self.camera_detect_camera_id.is_some() {
+                // Mode is Off — release camera
+                if let Some(prev_id) = self.camera_detect_camera_id.take() {
+                    if let Some(varda) = self.varda.as_mut() {
+                        varda.camera_manager_mut().release_camera(prev_id);
+                    }
+                    if let (Some(tex_id), Some(egui_renderer)) = (self.camera_detect_texture.take(), self.egui_renderer.as_mut()) {
+                        egui_renderer.free_texture(&tex_id);
+                    }
+                }
+                self.camera_detect_contours.clear();
+            }
+        }
+
         // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
         let Some(varda_ref) = self.varda.as_ref() else { return; };
         let mut ui_data = varda_ref
@@ -527,6 +661,47 @@ impl UIRunner {
         ui_data.pending_deck_loads = self.pending_deck_loads.load(std::sync::atomic::Ordering::Relaxed);
         ui_data.dome_preview_open = self.layout.dome_preview_open;
         ui_data.dome_preview_texture = self.dome_preview_texture;
+        ui_data.camera_detect_texture = self.camera_detect_texture;
+        ui_data.camera_detect_mode = self.layout.camera_detect_mode.clone();
+
+        // Poll background detection results (non-blocking)
+        while let Ok(response) = self.detect_res_rx.try_recv() {
+            self.detect_in_flight = false;
+            if response.is_capture {
+                // Capture complete — transition to Preview mode
+                let n = response.contours.len();
+                self.camera_detect_contours = response.contours.clone();
+                self.layout.camera_detect_mode = ui::CameraDetectMode::Preview {
+                    camera_id: response.camera_id,
+                    contours: response.contours,
+                    selected: vec![true; n],
+                };
+                // Re-snapshot UIData mode since we just changed it
+                ui_data.camera_detect_mode = self.layout.camera_detect_mode.clone();
+            } else {
+                // Live overlay update
+                self.camera_detect_contours = response.contours;
+            }
+        }
+
+        // Submit new detection work if in Live mode and no work in flight
+        if let ui::CameraDetectMode::Live { camera_id, ref params } = self.layout.camera_detect_mode {
+            if !self.detect_in_flight {
+                if let Some(frame) = varda_ref.camera_manager().snapshot_frame(camera_id) {
+                    let _ = self.detect_req_tx.send(DetectRequest {
+                        rgba: frame.0,
+                        w: frame.1,
+                        h: frame.2,
+                        params: params.clone(),
+                        is_capture: false,
+                        camera_id,
+                    });
+                    self.detect_in_flight = true;
+                }
+            }
+        }
+
+        ui_data.camera_detect_contours = self.camera_detect_contours.clone();
 
         // 5. Run egui frame
         // Bypass take_egui_input() to avoid an XGetGeometry round-trip every frame.
@@ -598,6 +773,70 @@ impl UIRunner {
                         let _ = dome_resized; // suppress unused warning
                     }
                     let _ = (context, egui_renderer, renderer); // used below if resize
+                }
+            }
+        }
+
+        // 6a3. Camera detection actions
+        {
+            let actions: Vec<_> = ui_actions.camera_detect_actions.drain(..).collect();
+            for action in actions {
+                match action {
+                    ui::CameraDetectAction::Enter { camera_id } => {
+                        self.layout.camera_detect_mode = ui::CameraDetectMode::Live {
+                            camera_id,
+                            params: crate::surface::detect::DetectionParams::default(),
+                        };
+                    }
+                    ui::CameraDetectAction::Exit => {
+                        self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
+                        // Camera release handled by lifecycle block on next frame
+                    }
+                    ui::CameraDetectAction::UpdateParams(params) => {
+                        if let ui::CameraDetectMode::Live { params: ref mut p, .. } = self.layout.camera_detect_mode {
+                            *p = params.clone();
+                            // Detection runs every frame in the lifecycle block — no need to run here
+                        }
+                    }
+                    ui::CameraDetectAction::Capture => {
+                        // Send a capture request to the background thread — the
+                        // response (polled above) will transition to Preview mode.
+                        if let ui::CameraDetectMode::Live { camera_id, ref params } = self.layout.camera_detect_mode {
+                            if let Some(varda) = &self.varda {
+                                if let Some(frame) = varda.camera_manager().snapshot_frame(camera_id) {
+                                    let _ = self.detect_req_tx.send(DetectRequest {
+                                        rgba: frame.0,
+                                        w: frame.1,
+                                        h: frame.2,
+                                        params: params.clone(),
+                                        is_capture: true,
+                                        camera_id,
+                                    });
+                                    self.detect_in_flight = true;
+                                }
+                            }
+                        }
+                    }
+                    ui::CameraDetectAction::ToggleContour(idx) => {
+                        if let ui::CameraDetectMode::Preview { ref mut selected, .. } = self.layout.camera_detect_mode {
+                            if let Some(s) = selected.get_mut(idx) { *s = !*s; }
+                        }
+                    }
+                    ui::CameraDetectAction::SelectAll(val) => {
+                        if let ui::CameraDetectMode::Preview { ref mut selected, .. } = self.layout.camera_detect_mode {
+                            selected.iter_mut().for_each(|s| *s = val);
+                        }
+                    }
+                    ui::CameraDetectAction::Accept => {
+                        if let ui::CameraDetectMode::Preview { ref contours, ref selected, .. } = self.layout.camera_detect_mode {
+                            let chosen: Vec<_> = contours.iter().zip(selected.iter())
+                                .filter(|(_, &s)| s).map(|(c, _)| c.clone()).collect();
+                            if !chosen.is_empty() {
+                                ui_actions.surface_actions.push(ui::SurfaceAction::ConfirmDetectedContours { contours: chosen });
+                            }
+                        }
+                        self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
+                    }
                 }
             }
         }

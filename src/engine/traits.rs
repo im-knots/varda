@@ -108,6 +108,20 @@ pub trait SurfaceCommands {
     fn unassign_surface_from_output(&mut self, output_uuid: &str, assignment_idx: usize);
 }
 
+/// Commands for surface auto-detection and import.
+pub trait DetectCommands {
+    /// Detect contours from raster image bytes.
+    fn detect_from_image(&self, image_data: &[u8], params: &crate::surface::detect::DetectionParams) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    /// Detect contours from SVG data.
+    fn detect_from_svg(&self, svg_data: &[u8]) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    /// Detect contours from DXF data.
+    fn detect_from_dxf(&self, dxf_data: &[u8]) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    /// Detect contours from a camera snapshot (RGBA frame data).
+    fn detect_from_camera(&mut self, camera_id: CameraId, params: &crate::surface::detect::DetectionParams) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    /// Create surfaces from confirmed detected contours.
+    fn confirm_detected_contours(&mut self, contours: &[crate::surface::detect::DetectedContour]) -> Vec<String>;
+}
+
 /// Read-only queries for surface state.
 pub trait SurfaceQueries {
     fn surface_snapshot(&self) -> Vec<SurfaceSnapshot>;

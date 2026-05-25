@@ -411,4 +411,50 @@ impl CameraManager {
     pub fn is_active(&self, id: CameraId) -> bool {
         self.active.contains_key(&id)
     }
+
+    /// Snapshot the current frame from an active camera without consuming it.
+    /// Uses `try_lock()` for non-blocking access so we don't stall the render thread.
+    /// Returns `Some((data, width, height))` if a frame is available, `None` otherwise.
+    pub fn snapshot_frame(&self, id: CameraId) -> Option<(Vec<u8>, u32, u32)> {
+        let cam = self.active.get(&id)?;
+        let guard = cam.frame_data.try_lock().ok()?;
+        let data = guard.as_ref()?.clone();
+        Some((data, cam.width, cam.height))
+    }
+
+    /// Returns the first active camera ID, if any.
+    pub fn first_active_id(&self) -> Option<CameraId> {
+        self.active.keys().next().copied()
+    }
+
+    /// Returns all active camera IDs as a sorted vec.
+    pub fn active_ids(&self) -> Vec<CameraId> {
+        let mut ids: Vec<CameraId> = self.active.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_frame_on_empty_manager_returns_none() {
+        let mgr = CameraManager::new();
+        assert!(mgr.snapshot_frame(0).is_none());
+        assert!(mgr.snapshot_frame(42).is_none());
+    }
+
+    #[test]
+    fn first_active_id_on_empty_manager_returns_none() {
+        let mgr = CameraManager::new();
+        assert!(mgr.first_active_id().is_none());
+    }
+
+    #[test]
+    fn active_ids_on_empty_manager_returns_empty() {
+        let mgr = CameraManager::new();
+        assert!(mgr.active_ids().is_empty());
+    }
 }

@@ -660,6 +660,61 @@ impl VardaApp {
             EngineCommand::AssignSurfaceToOutputByIdx { output_idx, surface_uuid } => self.cmd_assign_surface_to_output_by_idx(output_idx, &surface_uuid),
             EngineCommand::UnassignSurfaceFromOutputByIdx { output_idx, assignment_idx } => self.cmd_unassign_surface_from_output_by_idx(output_idx, assignment_idx),
 
+            // ── Surface Auto-Detection ────────────────────────
+            EngineCommand::DetectFromImage { image_data, params } => {
+                match self.detect_from_image(&image_data, &params) {
+                    Ok(result) => CommandResult::OkWithData {
+                        data: serde_json::to_value(&result).unwrap_or_default(),
+                    },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
+                }
+            }
+            EngineCommand::DetectFromSvg { svg_data } => {
+                match self.detect_from_svg(&svg_data) {
+                    Ok(result) => CommandResult::OkWithData {
+                        data: serde_json::to_value(&result).unwrap_or_default(),
+                    },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
+                }
+            }
+            EngineCommand::DetectFromDxf { dxf_data } => {
+                match self.detect_from_dxf(&dxf_data) {
+                    Ok(result) => CommandResult::OkWithData {
+                        data: serde_json::to_value(&result).unwrap_or_default(),
+                    },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
+                }
+            }
+            EngineCommand::ConfirmDetectedContours { contours } => {
+                let uuids = self.confirm_detected_contours(&contours);
+                CommandResult::OkWithData {
+                    data: serde_json::json!({ "surface_uuids": uuids }),
+                }
+            }
+            EngineCommand::DetectFromCamera { camera_id, params } => {
+                match self.detect_from_camera(camera_id, &params) {
+                    Ok(result) => {
+                        let uuids = self.confirm_detected_contours(&result.contours);
+                        CommandResult::OkWithData {
+                            data: serde_json::json!({ "surface_uuids": uuids, "contours_found": result.contours.len() }),
+                        }
+                    }
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
+                }
+            }
+
             // ── Video Playback ────────────────────────────────
             EngineCommand::VideoTogglePlay { channel_idx, deck_idx } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
@@ -1218,6 +1273,22 @@ impl VardaApp {
     /// Read-only access to the mixer.
     pub fn mixer_ref(&self) -> &crate::mixer::Mixer {
         &self.mixer
+    }
+
+    /// Read-only access to the camera manager.
+    pub fn camera_manager(&self) -> &CameraManager {
+        &self.camera_manager
+    }
+
+    /// Mutable access to the camera manager (open/release cameras).
+    pub fn camera_manager_mut(&mut self) -> &mut CameraManager {
+        &mut self.camera_manager
+    }
+
+    /// Open a camera, returning resolution on success. Avoids split-borrow issues
+    /// by accessing both `camera_manager` and `context` internally.
+    pub fn open_camera(&mut self, id: crate::camera::CameraId) -> anyhow::Result<(u32, u32)> {
+        self.camera_manager.open_camera(id, &self.context.device)
     }
 
     /// Read-only access to the outputs.

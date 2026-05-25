@@ -670,6 +670,116 @@ impl SurfaceCommands for VardaApp {
     }
 }
 
+impl DetectCommands for VardaApp {
+    fn detect_from_image(
+        &self,
+        image_data: &[u8],
+        params: &crate::surface::detect::DetectionParams,
+    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError> {
+        crate::surface::import::detect_from_image(image_data, params)
+    }
+
+    fn detect_from_svg(
+        &self,
+        svg_data: &[u8],
+    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError> {
+        crate::surface::import::detect_from_svg(svg_data)
+    }
+
+    fn detect_from_dxf(
+        &self,
+        dxf_data: &[u8],
+    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError> {
+        crate::surface::import::detect_from_dxf(dxf_data)
+    }
+
+    fn detect_from_camera(
+        &mut self,
+        camera_id: CameraId,
+        params: &crate::surface::detect::DetectionParams,
+    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError> {
+        // If camera isn't active yet, open it temporarily for the snapshot.
+        let was_inactive = !self.camera_manager.is_active(camera_id);
+        if was_inactive {
+            self.camera_manager
+                .open_camera(camera_id, &self.context.device)
+                .map_err(|e| {
+                    crate::surface::import::ImportError::ImageLoad(format!(
+                        "Failed to open camera {}: {}",
+                        camera_id, e
+                    ))
+                })?;
+        }
+
+        // Spin-wait for a frame (capture thread needs time to produce one).
+        // Budget: up to 500ms in 10ms increments.
+        let mut frame = None;
+        for _ in 0..50 {
+            if let Some(f) = self.camera_manager.snapshot_frame(camera_id) {
+                frame = Some(f);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // Release the camera if we opened it just for this snapshot.
+        if was_inactive {
+            self.camera_manager.release_camera(camera_id);
+        }
+
+        let (rgba, w, h) = frame.ok_or_else(|| {
+            crate::surface::import::ImportError::ImageLoad(format!(
+                "No frame received from camera {} within timeout",
+                camera_id
+            ))
+        })?;
+        crate::surface::import::detect_from_rgba(&rgba, w, h, params)
+    }
+
+    fn confirm_detected_contours(
+        &mut self,
+        contours: &[crate::surface::detect::DetectedContour],
+    ) -> Vec<String> {
+        let mut uuids = Vec::with_capacity(contours.len());
+        for contour in contours {
+            let uuid = if contour.is_circular {
+                if let Some((center, radius)) = contour.circle_fit {
+                    let hint = crate::surface::CircleHint {
+                        center,
+                        radius,
+                        sides: 32,
+                        aspect_ratio: 1.0,
+                    };
+                    self.output.surface_manager.add_circle_surface(
+                        contour.suggested_name.clone(),
+                        hint,
+                        OutputSource::Master,
+                    )
+                } else {
+                    self.output.surface_manager.add_polygon_surface(
+                        contour.suggested_name.clone(),
+                        contour.vertices.clone(),
+                        OutputSource::Master,
+                    )
+                }
+            } else {
+                self.output.surface_manager.add_polygon_surface(
+                    contour.suggested_name.clone(),
+                    contour.vertices.clone(),
+                    OutputSource::Master,
+                )
+            };
+            log::info!(
+                "Created surface '{}' from detection (uuid {})",
+                contour.suggested_name,
+                uuid
+            );
+            uuids.push(uuid);
+        }
+        uuids
+    }
+}
+
 impl SurfaceQueries for VardaApp {
     fn surface_snapshot(&self) -> Vec<SurfaceSnapshot> {
         self.output.surface_manager.surfaces.iter().map(|s| SurfaceSnapshot {

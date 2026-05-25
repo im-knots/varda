@@ -68,6 +68,10 @@ utoipa = { version = "5.5.0", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 clap = { version = "4.6.1", features = ["derive"] }
 ctrlc = "3.5.2"
+imageproc = "0.26.2"
+usvg = "0.47.0"
+dxf = "0.6.1"
+base64 = "0.22.1"
 
 [features]
 test-fixtures = []

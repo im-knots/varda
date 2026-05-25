@@ -557,6 +557,9 @@ pub(crate) fn build_ui_data(
         dome_mode_active: layout.dome_mode_active,
         dome_preset: layout.dome_preset,
         dome_geometry: layout.dome_geometry,
+        camera_detect_texture: None, // populated by UIRunner
+        camera_detect_mode: crate::usecases::ui::CameraDetectMode::Off, // populated by UIRunner
+        camera_detect_contours: vec![], // populated by UIRunner
         library_panel_open: layout.library_panel_open, right_panel_open: layout.right_panel_open,
         stage_editor_grid_size: layout.stage_editor_grid_size, stage_editor_snap: layout.stage_editor_snap,
         available_monitors, midi_devices, midi_mappings,

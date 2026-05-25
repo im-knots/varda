@@ -6,14 +6,14 @@
     "INPUTS": [
         {"NAME": "flow_speed", "TYPE": "float", "DEFAULT": 0.25, "MIN": 0.0, "MAX": 1.0, "LABEL": "Flow Speed"},
         {"NAME": "blob_scale", "TYPE": "float", "DEFAULT": 1.5, "MIN": 0.5, "MAX": 4.0, "LABEL": "Blob Scale"},
-        {"NAME": "color_intensity", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.3, "MAX": 2.0, "LABEL": "Color Intensity"},
-        {"NAME": "edge_glow", "TYPE": "float", "DEFAULT": 0.7, "MIN": 0.0, "MAX": 1.5, "LABEL": "Edge Glow"},
+        {"NAME": "color_intensity", "TYPE": "float", "DEFAULT": 1.2, "MIN": 0.3, "MAX": 2.0, "LABEL": "Color Intensity"},
+        {"NAME": "edge_glow", "TYPE": "float", "DEFAULT": 0.6, "MIN": 0.0, "MAX": 1.5, "LABEL": "Edge Glow"},
         {"NAME": "dye_spread", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0, "LABEL": "Dye Spread"},
-        {"NAME": "warmth", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0, "LABEL": "Projector Warmth"},
-        {"NAME": "vignette_amt", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0, "LABEL": "Vignette"},
+        {"NAME": "warmth", "TYPE": "float", "DEFAULT": 0.4, "MIN": 0.0, "MAX": 1.0, "LABEL": "Projector Warmth"},
+        {"NAME": "vignette_amt", "TYPE": "float", "DEFAULT": 0.6, "MIN": 0.0, "MAX": 1.0, "LABEL": "Vignette"},
         {"NAME": "palette", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Palette (0=Classic 1=Acid 2=Sunset 3=Deep)"},
         {"NAME": "agitation", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0, "LABEL": "Agitation"},
-        {"NAME": "focus_soft", "TYPE": "float", "DEFAULT": 0.2, "MIN": 0.0, "MAX": 1.0, "LABEL": "Soft Focus"}
+        {"NAME": "focus_soft", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0, "LABEL": "Soft Focus"}
     ],
     "PHASE_INPUTS": [{"PARAM": "flow_speed", "INDEX": 0}]
 }*/
@@ -55,22 +55,7 @@ layout(set = 0, binding = 1) uniform UserParams {
     float focus_soft;
 };
 
-#define PI  3.14159265359
-#define TAU 6.28318530718
-
-// ---- Noise primitives ----
-
-vec3 hash33(vec3 p3) {
-    p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));
-    p3 += dot(p3, p3.yxz + 33.33);
-    return fract((p3.xxy + p3.yxx) * p3.zyx);
-}
-
-vec2 hash22(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.xx + p3.yz) * p3.zy);
-}
+// ---- Noise primitives (quintic-interpolated, no grid artifacts) ----
 
 float hash21(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -78,11 +63,10 @@ float hash21(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
-// Smooth 2D noise
 float noise2(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
+    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
     float a = hash21(i);
     float b = hash21(i + vec2(1, 0));
     float c = hash21(i + vec2(0, 1));
@@ -90,176 +74,162 @@ float noise2(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// FBM with domain warping for organic flow
+// FBM with per-octave rotation to break grid alignment
 float fbm(vec2 p, int octaves) {
     float val = 0.0;
     float amp = 0.5;
     float freq = 1.0;
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 6; i++) {
         if (i >= octaves) break;
         val += amp * noise2(p * freq);
-        freq *= 2.01;
+        freq *= 2.03;
         amp *= 0.49;
-        // Slight rotation per octave for organic feel
         p = vec2(p.x * 0.866 - p.y * 0.5, p.x * 0.5 + p.y * 0.866);
     }
     return val;
 }
 
-// Domain-warped FBM: the key to the liquid oil look
-float warpedFbm(vec2 p, float t) {
-    // First warp layer
-    vec2 q = vec2(fbm(p + vec2(0.0, 0.0), 5),
-                  fbm(p + vec2(5.2, 1.3), 5));
+// ---- Inigo Quilez canonical domain warping ----
+// fbm(p + fbm(p + fbm(p))) with q and r exposed for color mapping.
+// This single technique creates all the organic, stretchy, liquid movement.
+float pattern(vec2 p, float t, out vec2 q, out vec2 r) {
+    float agit = 1.0 + agitation * 0.8;
 
-    // Second warp layer (warp the warp)
-    vec2 r = vec2(fbm(p + 4.0 * q + vec2(1.7, 9.2) + t * 0.15, 5),
-                  fbm(p + 4.0 * q + vec2(8.3, 2.8) + t * 0.126, 5));
+    q = vec2(
+        fbm(p + vec2(0.0, 0.0) + vec2(t * 0.11 * agit, t * 0.07 * agit), 5),
+        fbm(p + vec2(5.2, 1.3) + vec2(t * 0.08 * agit, -t * 0.06 * agit), 5)
+    );
 
-    return fbm(p + 4.0 * r, 6);
+    r = vec2(
+        fbm(p + 4.0 * q + vec2(1.7, 9.2) + vec2(t * 0.05 * agit, 0.0), 5),
+        fbm(p + 4.0 * q + vec2(8.3, 2.8) + vec2(0.0, -t * 0.04 * agit), 5)
+    );
+
+    return fbm(p + 4.0 * r, 5);
 }
 
-// Metaball field for large organic blobs
-float metaballs(vec2 p, float t) {
-    float field = 0.0;
-    for (int i = 0; i < 8; i++) {
-        float fi = float(i);
-        // Each blob has its own slow orbit
-        vec2 center = vec2(
-            sin(t * 0.17 + fi * 1.73) * 0.35 + sin(t * 0.09 + fi * 2.51) * 0.2,
-            cos(t * 0.13 + fi * 2.17) * 0.35 + cos(t * 0.11 + fi * 1.37) * 0.2
-        );
-        float radius = 0.08 + 0.05 * sin(t * 0.23 + fi * 3.14);
-        float d = length(p - center);
-        field += (radius * radius) / (d * d + 0.001);
-    }
-    return field;
-}
+// ---- Dye palettes: vivid Flo-Master ink colors ----
 
-// Color palettes inspired by actual liquid light show dyes
-vec3 getPaletteColor(float t, float pal) {
-    int p = int(floor(pal + 0.5));
-    vec3 a, b, c, d;
-    if (p == 0) {
-        // Classic: magenta, green, blue, yellow
-        a = vec3(0.5, 0.5, 0.5);
-        b = vec3(0.5, 0.5, 0.5);
-        c = vec3(1.0, 0.7, 0.4);
-        d = vec3(0.0, 0.15, 0.20);
-    } else if (p == 1) {
-        // Acid: neon green, hot pink, electric blue
-        a = vec3(0.5, 0.5, 0.5);
-        b = vec3(0.5, 0.5, 0.5);
-        c = vec3(1.0, 1.0, 0.5);
-        d = vec3(0.80, 0.90, 0.30);
-    } else if (p == 2) {
-        // Sunset: deep reds, oranges, purples
-        a = vec3(0.5, 0.5, 0.5);
-        b = vec3(0.5, 0.5, 0.5);
-        c = vec3(1.0, 0.5, 0.2);
-        d = vec3(0.0, 0.25, 0.45);
+vec3 dyeColor(int ci, int pal) {
+    if (pal == 0) {
+        if (ci == 0) return vec3(0.90, 0.05, 0.55);
+        if (ci == 1) return vec3(0.05, 0.80, 0.35);
+        if (ci == 2) return vec3(0.15, 0.10, 0.90);
+        return vec3(0.95, 0.80, 0.10);
+    } else if (pal == 1) {
+        if (ci == 0) return vec3(0.95, 0.10, 0.70);
+        if (ci == 1) return vec3(0.30, 0.95, 0.10);
+        if (ci == 2) return vec3(0.05, 0.80, 0.95);
+        return vec3(0.95, 0.50, 0.05);
+    } else if (pal == 2) {
+        if (ci == 0) return vec3(0.90, 0.10, 0.15);
+        if (ci == 1) return vec3(0.95, 0.65, 0.05);
+        if (ci == 2) return vec3(0.45, 0.10, 0.75);
+        return vec3(0.90, 0.30, 0.50);
     } else {
-        // Deep: indigo, teal, gold
-        a = vec3(0.5, 0.5, 0.5);
-        b = vec3(0.5, 0.5, 0.5);
-        c = vec3(0.5, 1.0, 0.7);
-        d = vec3(0.15, 0.40, 0.65);
+        if (ci == 0) return vec3(0.20, 0.05, 0.65);
+        if (ci == 1) return vec3(0.05, 0.60, 0.55);
+        if (ci == 2) return vec3(0.85, 0.75, 0.10);
+        return vec3(0.55, 0.05, 0.30);
     }
-    return a + b * cos(TAU * (c * t + d));
 }
 
 void main() {
-    // Uniform preservation
     float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
     float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
-    // Centered, aspect-corrected coordinates
     vec2 p = (uv - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
-
     float t = PHASE_TIME_0;
+    int pal = int(floor(palette + 0.5));
 
-    float agit = agitation;
+    // Scale coordinate space for blob size
+    vec2 wp = p * blob_scale * 0.7;
 
-    // ---- Layer 1: Large-scale oil blobs via metaballs ----
-    vec2 mp = p * blob_scale * 0.7;
-    float meta = metaballs(mp, t * (1.0 + agit));
+    // ---- Core: IQ double domain warp produces the organic liquid structure ----
+    vec2 q, r;
+    float f = pattern(wp, t, q, r);
 
-    // Threshold metaball field into distinct oil regions
-    float oilMask = smoothstep(1.2, 2.5, meta);
-    float oilEdge = smoothstep(1.0, 1.3, meta) - smoothstep(2.3, 2.8, meta);
+    // ---- Color mapping from warp intermediates (q and r) ----
+    // This is how IQ gets color variation: the intermediate warp vectors
+    // q and r reveal the internal structure of the fluid movement.
+    // We use them to blend between dye colors, creating distinct territories
+    // that push each other around — exactly like immiscible liquids.
 
-    // ---- Layer 2: Domain-warped noise for organic dye flow ----
-    vec2 wp = p * blob_scale * 1.3;
-    float warp1 = warpedFbm(wp + vec2(t * 0.05, 0.0), t);
-    float warp2 = warpedFbm(wp + vec2(100.0, t * 0.04), t * 0.8);
-    float warp3 = warpedFbm(wp * 0.8 + vec2(200.0, 50.0), t * 1.1);
+    vec3 c0 = dyeColor(0, pal);
+    vec3 c1 = dyeColor(1, pal);
+    vec3 c2 = dyeColor(2, pal);
+    vec3 c3 = dyeColor(3, pal);
 
-    // ---- Compose color layers like actual dye in water ----
-    // Each warp channel drives a different dye color
-    float dyeA = smoothstep(0.3, 0.7, warp1) * (0.5 + dye_spread * 0.5);
-    float dyeB = smoothstep(0.35, 0.65, warp2) * (0.5 + dye_spread * 0.5);
-    float dyeC = smoothstep(0.4, 0.6, warp3) * (0.5 + dye_spread * 0.5);
+    // Use q to create the primary color territories
+    float qLen = length(q);
+    float qAngle = atan(q.y, q.x) * 0.318; // normalize to ~[-1,1]
 
-    // Get palette colors at different phase offsets
-    vec3 colA = getPaletteColor(warp1 * 0.5 + t * 0.02, palette);
-    vec3 colB = getPaletteColor(warp2 * 0.5 + 0.33 + t * 0.015, palette);
-    vec3 colC = getPaletteColor(warp3 * 0.5 + 0.66 + t * 0.01, palette);
+    // Use r to create secondary modulation
+    float rLen = length(r);
+    float rAngle = atan(r.y, r.x) * 0.318;
 
-    // Immiscible layers: colors don't blend, they push each other
-    // Simulate surface tension between dyes
-    vec3 liquid = vec3(0.02, 0.01, 0.02); // dark base (water)
+    // Blend factors: smooth territory boundaries from the warp field values
+    float spread = 0.5 + dye_spread * 1.5;
+    float w0 = smoothstep(0.0, spread, qLen + rAngle * 0.3);
+    float w1 = smoothstep(0.0, spread, rLen + qAngle * 0.3);
+    float w2 = smoothstep(0.0, spread, f + qLen * 0.2);
+    float w3 = smoothstep(0.0, spread, 1.0 - f + rLen * 0.2);
 
-    // Layer the dyes with priority/dominance
-    float dominance1 = dyeA * (1.0 + oilMask * 0.5);
-    float dominance2 = dyeB * (1.0 - oilMask * 0.3);
-    float dominance3 = dyeC * smoothstep(0.0, 0.5, 1.0 - oilMask);
+    // Normalize to ensure smooth blending (soft territory boundaries)
+    float wTotal = w0 + w1 + w2 + w3 + 0.001;
+    w0 /= wTotal; w1 /= wTotal; w2 /= wTotal; w3 /= wTotal;
 
-    // Weighted blend that respects immiscibility
-    float totalWeight = dominance1 + dominance2 + dominance3 + 0.001;
-    liquid = (colA * dominance1 + colB * dominance2 + colC * dominance3) / totalWeight;
+    vec3 liquid = c0 * w0 + c1 * w1 + c2 * w2 + c3 * w3;
 
-    // Fade toward dark base where no dye is strong
-    float dyePresence = max(max(dominance1, dominance2), dominance3);
-    liquid = mix(vec3(0.02, 0.01, 0.03), liquid, smoothstep(0.1, 0.5, dyePresence));
+    // ---- Luminosity variation from the warp field ----
+    // The field value f acts as "dye density": brighter where liquid is thin,
+    // deeper/richer where it pools. This is the main depth cue.
+    float luminosity = 0.6 + 0.5 * f;
+    liquid *= luminosity;
 
-    // ---- Edge glow: bright lines where oil regions meet ----
-    float edgeBright = oilEdge * edge_glow * 2.0;
-    // Iridescent edge color
-    vec3 edgeCol = getPaletteColor(warp1 + warp2 + t * 0.05, palette) * 1.5;
-    liquid += edgeCol * edgeBright;
+    // ---- Edge glow at territory boundaries ----
+    // Where two colors meet, the projector light catches the meniscus.
+    // Detect by looking at how close the top two blend weights are.
+    float maxW = max(max(w0, w1), max(w2, w3));
+    float sorted0 = maxW;
+    float sorted1 = 0.0;
+    if (w0 < sorted0) sorted1 = max(sorted1, w0);
+    if (w1 < sorted0) sorted1 = max(sorted1, w1);
+    if (w2 < sorted0) sorted1 = max(sorted1, w2);
+    if (w3 < sorted0) sorted1 = max(sorted1, w3);
 
-    // ---- Surface tension boundaries between dye regions ----
-    float boundary = abs(dyeA - dyeB) + abs(dyeB - dyeC) + abs(dyeA - dyeC);
-    boundary = smoothstep(0.1, 0.5, boundary) * edge_glow * 0.5;
-    liquid += vec3(boundary) * 0.3;
+    float edgeProximity = 1.0 - smoothstep(0.0, 0.15, sorted0 - sorted1);
+    edgeProximity *= edgeProximity;
+    // Bright warm glow at edges
+    liquid += edgeProximity * edge_glow * vec3(0.25, 0.20, 0.15) * luminosity;
 
-    // ---- Color intensity & saturation ----
+    // ---- Color intensity and saturation boost ----
     liquid *= color_intensity;
-
-    // Boost saturation (liquid light shows are VIVID)
     float lum = dot(liquid, vec3(0.299, 0.587, 0.114));
-    liquid = mix(vec3(lum), liquid, 1.3);
+    liquid = mix(vec3(lum), liquid, 1.4);
 
-    // ---- Projector warmth (incandescent lamp cast) ----
-    liquid = mix(liquid, liquid * vec3(1.1, 1.0, 0.8), warmth);
-    liquid += vec3(0.03, 0.015, 0.0) * warmth; // slight warm fog
+    // ---- Projector warmth: tungsten lamp tint ----
+    liquid = mix(liquid, liquid * vec3(1.12, 0.98, 0.78), warmth);
+    liquid += vec3(0.03, 0.015, 0.0) * warmth;
 
-    // ---- Soft focus (overhead projector optics) ----
-    // Simulate by gently blending with a slightly offset sample
+    // ---- Soft focus / bloom: projector optics halation ----
     if (focus_soft > 0.01) {
-        float sf = focus_soft * 0.003;
-        // Average nearby noise evaluations for a fake blur
-        float w2a = warpedFbm(wp + vec2(sf, 0.0), t);
-        float w2b = warpedFbm(wp + vec2(0.0, sf), t);
-        vec3 softCol = getPaletteColor((w2a + w2b) * 0.25 + t * 0.02, palette);
-        liquid = mix(liquid, (liquid + softCol * dyePresence) * 0.5, focus_soft * 0.4);
+        float gl = dot(liquid, vec3(0.299, 0.587, 0.114));
+        float glow = smoothstep(0.35, 0.9, gl);
+        liquid += liquid * glow * focus_soft * 0.4;
+        // Slight desaturation in bright glow areas
+        float ld = dot(liquid, vec3(0.299, 0.587, 0.114));
+        liquid = mix(liquid, vec3(ld), glow * focus_soft * 0.2);
     }
 
-    // ---- Vignette (projector edge falloff) ----
-    float vig = 1.0 - smoothstep(0.5, 1.4, length(p * 0.7)) * vignette_amt;
+    // ---- Circular vignette: projector lens edge falloff ----
+    float vig = 1.0 - smoothstep(0.4, 1.3, length(p * 0.7)) * vignette_amt;
     liquid *= vig;
+
+    // ---- Gentle tone curve: preserve the luminous projected quality ----
+    liquid = pow(liquid, vec3(0.92));
 
     liquid = clamp(liquid, 0.0, 1.0);
     fragColor = vec4(liquid, 1.0);

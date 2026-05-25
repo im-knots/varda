@@ -7,6 +7,9 @@
 //! coordinates [0..1]. Rectangles are just 4-vertex polygons. This supports
 //! triangles, circles (N-gon approximations), and arbitrary shapes.
 
+pub mod detect;
+pub mod import;
+
 use crate::deck::generate_short_uuid;
 use crate::renderer::context::OutputSource;
 use serde::{Deserialize, Serialize};
