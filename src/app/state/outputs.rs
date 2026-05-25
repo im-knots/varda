@@ -201,4 +201,17 @@ impl VardaApp {
             CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
         }
     }
+
+    /// Set output rotation and rebuild intermediate textures.
+    pub fn cmd_set_output_rotation(&mut self, idx: usize, rotation: crate::renderer::context::OutputRotation) -> CommandResult {
+        if let Some(output) = self.output.outputs.get_mut(idx) {
+            match output {
+                UnifiedOutput::Window(w) => { w.set_rotation(&self.context.device, rotation); }
+                UnifiedOutput::Headless(h) => { h.set_rotation(rotation); }
+            }
+            CommandResult::Ok
+        } else {
+            CommandResult::Err { code: ErrorCode::NotFound, message: "Output not found".into() }
+        }
+    }
 }

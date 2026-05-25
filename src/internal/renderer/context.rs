@@ -207,6 +207,60 @@ impl WindowSurface {
     }
 }
 
+
+/// Per-output rotation applied at the final blit stage.
+/// For 90°/270°, intermediate textures are created at swapped dimensions
+/// (portrait content for landscape projectors and vice versa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum OutputRotation {
+    #[default]
+    Deg0,
+    Deg90,
+    Deg180,
+    Deg270,
+}
+
+impl OutputRotation {
+    /// All rotation variants for UI dropdowns.
+    pub const ALL: [OutputRotation; 4] = [
+        OutputRotation::Deg0,
+        OutputRotation::Deg90,
+        OutputRotation::Deg180,
+        OutputRotation::Deg270,
+    ];
+
+    /// GPU-side index (0–3) for the shader uniform.
+    pub fn index(&self) -> u32 {
+        match self {
+            OutputRotation::Deg0 => 0,
+            OutputRotation::Deg90 => 1,
+            OutputRotation::Deg180 => 2,
+            OutputRotation::Deg270 => 3,
+        }
+    }
+
+    /// Whether this rotation swaps width and height.
+    pub fn swaps_dimensions(&self) -> bool {
+        matches!(self, OutputRotation::Deg90 | OutputRotation::Deg270)
+    }
+
+    /// Effective texture dimensions after rotation.
+    /// For 0°/180° returns (w, h); for 90°/270° returns (h, w).
+    pub fn effective_dimensions(&self, w: u32, h: u32) -> (u32, u32) {
+        if self.swaps_dimensions() { (h, w) } else { (w, h) }
+    }
+
+    /// Human-readable label for UI display.
+    pub fn label(&self) -> &'static str {
+        match self {
+            OutputRotation::Deg0 => "0°",
+            OutputRotation::Deg90 => "90°",
+            OutputRotation::Deg180 => "180°",
+            OutputRotation::Deg270 => "270°",
+        }
+    }
+}
+
 /// Content source that an output window can display
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum OutputSource {
@@ -375,6 +429,8 @@ pub struct OutputWindow {
     /// When edge blend is on, edge blend shader writes here from surface_texture.
     pub preview_texture: wgpu::Texture,
     pub preview_texture_view: wgpu::TextureView,
+    /// Per-output rotation applied at the final blit stage.
+    pub rotation: OutputRotation,
 }
 
 impl OutputWindow {
@@ -443,6 +499,7 @@ impl OutputWindow {
             surface_texture_view,
             preview_texture,
             preview_texture_view,
+            rotation: OutputRotation::default(),
         })
     }
 
@@ -470,13 +527,27 @@ impl OutputWindow {
             self.surface_config.height = new_size.height;
             self.surface.configure(device, &self.surface_config);
             let fmt = self.surface_config.format;
-            let (tex, view) = Self::create_intermediate_texture(device, new_size.width, new_size.height, fmt, "Surface Intermediate");
+            let (ew, eh) = self.rotation.effective_dimensions(new_size.width, new_size.height);
+            let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Surface Intermediate");
             self.surface_texture = tex;
             self.surface_texture_view = view;
-            let (tex, view) = Self::create_intermediate_texture(device, new_size.width, new_size.height, fmt, "Preview");
+            let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Preview");
             self.preview_texture = tex;
             self.preview_texture_view = view;
         }
+    }
+
+    /// Set output rotation and rebuild intermediate textures at effective dimensions.
+    pub fn set_rotation(&mut self, device: &wgpu::Device, rotation: OutputRotation) {
+        self.rotation = rotation;
+        let fmt = self.surface_config.format;
+        let (ew, eh) = rotation.effective_dimensions(self.size.width, self.size.height);
+        let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Surface Intermediate");
+        self.surface_texture = tex;
+        self.surface_texture_view = view;
+        let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Preview");
+        self.preview_texture = tex;
+        self.preview_texture_view = view;
     }
 
     /// Render the routed content to this output window's surface (simple single-source blit)
@@ -615,8 +686,9 @@ impl OutputWindow {
             );
         }
 
-        // Final pass: blit preview_texture → swap chain
+        // Final pass: blit preview_texture → swap chain (with rotation)
         {
+            self.blit_pipeline.set_rotation(&context.queue, self.rotation.index());
             let blit_bg = self.blit_pipeline.create_bind_group(&context.device, &self.preview_texture_view);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(&format!("Output '{}' Swap Blit", self.name)),
@@ -1014,6 +1086,8 @@ pub struct HeadlessOutput {
     pub edge_blend_texture: wgpu::Texture,
     /// View into the intermediate edge blend texture.
     pub edge_blend_texture_view: wgpu::TextureView,
+    /// Per-output rotation applied at the final blit stage.
+    pub rotation: OutputRotation,
 }
 
 /// Result of delivering a frame to an output target.
@@ -1162,7 +1236,14 @@ impl HeadlessOutput {
             edge_blend_pipeline,
             edge_blend_texture: eb_tex,
             edge_blend_texture_view: eb_view,
+            rotation: OutputRotation::default(),
         }
+    }
+
+    /// Set output rotation. Headless outputs don't have intermediate textures to rebuild,
+    /// but the rotation is stored for the blit shader.
+    pub fn set_rotation(&mut self, rotation: OutputRotation) {
+        self.rotation = rotation;
     }
 }
 
@@ -1248,6 +1329,14 @@ impl UnifiedOutput {
         }
     }
 
+    /// Current output rotation.
+    pub fn rotation(&self) -> OutputRotation {
+        match self {
+            UnifiedOutput::Window(w) => w.rotation,
+            UnifiedOutput::Headless(h) => h.rotation,
+        }
+    }
+
     /// Active duration for headless outputs (subprocess or NDI/Syphon).
     pub fn active_duration(&self) -> std::time::Duration {
         match self {
@@ -1263,5 +1352,73 @@ impl UnifiedOutput {
                     .unwrap_or_default()
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::OutputRotation;
+
+    #[test]
+    fn output_rotation_default_is_deg0() {
+        assert_eq!(OutputRotation::default(), OutputRotation::Deg0);
+    }
+
+    #[test]
+    fn output_rotation_index_values() {
+        assert_eq!(OutputRotation::Deg0.index(), 0);
+        assert_eq!(OutputRotation::Deg90.index(), 1);
+        assert_eq!(OutputRotation::Deg180.index(), 2);
+        assert_eq!(OutputRotation::Deg270.index(), 3);
+    }
+
+    #[test]
+    fn output_rotation_swaps_dimensions() {
+        assert!(!OutputRotation::Deg0.swaps_dimensions());
+        assert!(OutputRotation::Deg90.swaps_dimensions());
+        assert!(!OutputRotation::Deg180.swaps_dimensions());
+        assert!(OutputRotation::Deg270.swaps_dimensions());
+    }
+
+    #[test]
+    fn output_rotation_effective_dimensions() {
+        assert_eq!(OutputRotation::Deg0.effective_dimensions(1920, 1080), (1920, 1080));
+        assert_eq!(OutputRotation::Deg90.effective_dimensions(1920, 1080), (1080, 1920));
+        assert_eq!(OutputRotation::Deg180.effective_dimensions(1920, 1080), (1920, 1080));
+        assert_eq!(OutputRotation::Deg270.effective_dimensions(1920, 1080), (1080, 1920));
+    }
+
+    #[test]
+    fn output_rotation_labels() {
+        assert_eq!(OutputRotation::Deg0.label(), "0°");
+        assert_eq!(OutputRotation::Deg90.label(), "90°");
+        assert_eq!(OutputRotation::Deg180.label(), "180°");
+        assert_eq!(OutputRotation::Deg270.label(), "270°");
+    }
+
+    #[test]
+    fn output_rotation_all_contains_all_variants() {
+        assert_eq!(OutputRotation::ALL.len(), 4);
+        assert_eq!(OutputRotation::ALL[0], OutputRotation::Deg0);
+        assert_eq!(OutputRotation::ALL[1], OutputRotation::Deg90);
+        assert_eq!(OutputRotation::ALL[2], OutputRotation::Deg180);
+        assert_eq!(OutputRotation::ALL[3], OutputRotation::Deg270);
+    }
+
+    #[test]
+    fn output_rotation_serde_roundtrip() {
+        for rot in OutputRotation::ALL {
+            let json = serde_json::to_string(&rot).unwrap();
+            let deserialized: OutputRotation = serde_json::from_str(&json).unwrap();
+            assert_eq!(rot, deserialized);
+        }
+    }
+
+    #[test]
+    fn output_rotation_deserialize_default() {
+        // Missing field should deserialize as Deg0
+        let config: OutputRotation = serde_json::from_str("\"Deg0\"").unwrap();
+        assert_eq!(config, OutputRotation::Deg0);
     }
 }

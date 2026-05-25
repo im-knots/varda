@@ -297,14 +297,25 @@ impl HapPlayer {
                             continue;
                         }
                         LoopMode::PingPong => {
-                            self.playback.reverse = !self.playback.reverse;
-                            let pos = if self.playback.reverse {
-                                self.playback.effective_out() - (1.0 / self.playback.frame_rate)
+                            // EOS: flip direction and seek to the opposite boundary.
+                            // advance_frame() may have already flipped `reverse`,
+                            // so we set it explicitly based on which boundary we hit.
+                            // Forward EOS (at end) → go reverse from out-point.
+                            // Reverse EOS (at start) → go forward from in-point.
+                            // Use position to determine which boundary we're near.
+                            let out_pt = self.playback.effective_out();
+                            let in_pt = self.playback.in_point;
+                            let mid = (in_pt + out_pt) / 2.0;
+                            if self.playback.position >= mid {
+                                // Near end → reverse
+                                self.playback.reverse = true;
+                                self.playback.position = out_pt - (1.0 / self.playback.frame_rate);
                             } else {
-                                self.playback.in_point
-                            };
-                            self.playback.position = pos;
-                            self.seek(pos)?;
+                                // Near start → forward
+                                self.playback.reverse = false;
+                                self.playback.position = in_pt;
+                            }
+                            self.seek(self.playback.position)?;
                             continue;
                         }
                         LoopMode::OneShot => {

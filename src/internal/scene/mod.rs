@@ -81,6 +81,7 @@ pub struct ChannelConfig {
 }
 
 fn default_opacity() -> f32 { 1.0 }
+fn default_video_speed() -> f64 { 1.0 }
 
 // ── Deck ───────────────────────────────────────────────────────────
 
@@ -290,6 +291,18 @@ pub enum SourceConfig {
     /// Video file (ffmpeg or HAP)
     Video {
         path: String,
+        /// Loop mode (default: Loop)
+        #[serde(default)]
+        loop_mode: crate::video::LoopMode,
+        /// Playback speed multiplier (default: 1.0)
+        #[serde(default = "default_video_speed")]
+        speed: f64,
+        /// In-point in seconds (default: 0.0 = start)
+        #[serde(default)]
+        in_point: f64,
+        /// Out-point in seconds (default: 0.0 = end of file)
+        #[serde(default)]
+        out_point: f64,
     },
     /// Static image
     Image {
@@ -401,6 +414,9 @@ pub struct OutputConfig {
     /// Edge blending configuration for multi-projector overlap zones.
     #[serde(default)]
     pub edge_blend: crate::renderer::edge_blend::EdgeBlendConfig,
+    /// Per-output rotation (0°/90°/180°/270°).
+    #[serde(default)]
+    pub rotation: crate::renderer::context::OutputRotation,
 }
 
 impl OutputConfig {
@@ -416,6 +432,7 @@ impl OutputConfig {
             window_size: None,
             edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
+            rotation: crate::renderer::context::OutputRotation::default(),
         }
     }
 }
@@ -514,7 +531,7 @@ impl SourceConfig {
                     errors.push(format!("{}: shader path is empty", prefix));
                 }
             }
-            SourceConfig::Video { path } => {
+            SourceConfig::Video { path, .. } => {
                 if path.trim().is_empty() {
                     errors.push(format!("{}: video path is empty", prefix));
                 }
@@ -787,11 +804,23 @@ mod tests {
 
     #[test]
     fn scene_config_roundtrip_video_source() {
-        let source = SourceConfig::Video { path: "clips/intro.mov".into() };
+        let source = SourceConfig::Video {
+            path: "clips/intro.mov".into(),
+            loop_mode: crate::video::LoopMode::Loop,
+            speed: 1.0,
+            in_point: 0.0,
+            out_point: 0.0,
+        };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
         match restored {
-            SourceConfig::Video { path } => assert_eq!(path, "clips/intro.mov"),
+            SourceConfig::Video { path, loop_mode, speed, in_point, out_point } => {
+                assert_eq!(path, "clips/intro.mov");
+                assert_eq!(loop_mode, crate::video::LoopMode::Loop);
+                assert!((speed - 1.0).abs() < 1e-5);
+                assert!((in_point - 0.0).abs() < 1e-5);
+                assert!((out_point - 0.0).abs() < 1e-5);
+            }
             _ => panic!("Expected Video"),
         }
     }
@@ -1043,7 +1072,7 @@ mod tests {
     fn validate_source_empty_path() {
         let s = SourceConfig::Shader { path: "".into(), params: HashMap::new() };
         assert!(!s.validate("src").is_empty());
-        let s = SourceConfig::Video { path: " ".into() };
+        let s = SourceConfig::Video { path: " ".into(), loop_mode: Default::default(), speed: 1.0, in_point: 0.0, out_point: 0.0 };
         assert!(!s.validate("src").is_empty());
         let s = SourceConfig::Image { path: "".into() };
         assert!(!s.validate("src").is_empty());

@@ -546,17 +546,6 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             }
         });
 
-        ui.separator();
-
-        // Add Surface
-        if ui.button("+ Add Surface").clicked() {
-            let idx = data.surfaces.len() + 1;
-            actions.surface_actions.push(SurfaceAction::Add {
-                name: format!("Surface {}", idx),
-                source: OutputSource::Master,
-            });
-        }
-
         // Import from file
         if ui.button("📁 Import").clicked() {
             if let Some(path) = rfd::FileDialog::new()

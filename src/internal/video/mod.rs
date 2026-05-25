@@ -18,9 +18,10 @@ use ffmpeg::software::scaling::{context::Context as Scaler, flag::Flags};
 use ffmpeg::util::frame::video::Video;
 
 /// Loop mode for video playback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum LoopMode {
     /// Standard loop — restart from in-point when reaching out-point.
+    #[default]
     Loop,
     /// Play forward then reverse repeatedly.
     PingPong,
@@ -259,10 +260,12 @@ pub struct VideoPlayer {
     frame_cache: Vec<Vec<u8>>,
     /// Current read index into frame_cache during reverse playback.
     cache_read_idx: usize,
-    /// Whether we're actively caching frames (disabled when memory cap hit).
+    /// Whether we're actively caching frames (disabled when memory cap hit this pass).
     caching_enabled: bool,
-    /// Set permanently once the cache overflows — prevents re-filling on subsequent passes.
+    /// Set when cache overflows this pass — reset each new forward pass.
     cache_overflowed: bool,
+    /// Permanent flag: suppresses repeated log warnings after the first overflow.
+    cache_overflow_warned: bool,
     /// Bytes per frame for cache budget calculation.
     frame_byte_size: usize,
 }
@@ -303,6 +306,7 @@ impl VideoPlayer {
             cache_read_idx: 0,
             caching_enabled: true,
             cache_overflowed: false,
+            cache_overflow_warned: false,
             frame_byte_size,
         })
     }
@@ -328,10 +332,18 @@ impl VideoPlayer {
             // Forward→reverse flip (hit out-point). Serve from cache.
             if !self.frame_cache.is_empty() {
                 self.cache_read_idx = self.frame_cache.len() - 1;
+            } else {
+                // No cache available (overflow or very short video).
+                // Hold the current frame at the boundary and stay in reverse —
+                // advance_frame will walk the position backward and eventually
+                // hit in_point, triggering the reverse→forward flip below.
+                return Ok(Some(&self.frame_data));
             }
         } else if was_reverse && !self.playback.reverse {
             // Reverse→forward flip (hit in-point). Clear cache, seek to in-point.
+            // Reset overflow so the new forward pass gets a fresh caching budget.
             self.frame_cache.clear();
+            self.cache_overflowed = false;
             self.caching_enabled = true;
             self.seek(self.playback.position)?;
         }
@@ -345,16 +357,20 @@ impl VideoPlayer {
                 self.frame_data.copy_from_slice(&self.frame_cache[self.cache_read_idx]);
                 return Ok(Some(&self.frame_data));
             }
-            // Cache exhausted — flip back to forward
+            // Cache exhausted before position reached in_point.
+            // Flip back to forward, seek to in_point, start a new forward pass.
+            // Reset overflow so the new forward pass gets a fresh caching budget.
             self.playback.reverse = false;
             self.playback.position = self.playback.in_point;
             self.frame_cache.clear();
-            self.caching_enabled = !self.cache_overflowed;
+            self.cache_overflowed = false;
+            self.caching_enabled = true;
             self.seek(self.playback.position)?;
         } else if result.needs_seek {
             // Forward seek (loop restart, etc.)
             self.frame_cache.clear();
-            self.caching_enabled = !self.cache_overflowed;
+            self.cache_overflowed = false;
+            self.caching_enabled = true;
             self.seek(self.playback.position)?;
         }
 
@@ -384,9 +400,10 @@ impl VideoPlayer {
                             self.frame_cache.push(self.frame_data.clone());
                         } else {
                             self.caching_enabled = false;
-                            if !self.cache_overflowed {
-                                self.cache_overflowed = true;
-                                log::warn!("Ping-pong frame cache full ({} frames, {} MB) — reverse will loop instead",
+                            self.cache_overflowed = true;
+                            if !self.cache_overflow_warned {
+                                self.cache_overflow_warned = true;
+                                log::warn!("Ping-pong frame cache full ({} frames, {} MB) — reverse will cover partial clip",
                                     self.frame_cache.len(),
                                     self.frame_cache.len() * self.frame_byte_size / (1024 * 1024));
                             }
@@ -430,14 +447,16 @@ impl VideoPlayer {
                             continue;
                         }
                         LoopMode::PingPong => {
+                            self.playback.reverse = true;
                             if !self.frame_cache.is_empty() {
-                                self.playback.reverse = true;
                                 self.cache_read_idx = self.frame_cache.len() - 1;
                                 return self.next_frame();
                             }
-                            self.playback.position = self.playback.in_point;
-                            self.seek(self.playback.position)?;
-                            continue;
+                            // No cache: hold current frame at boundary.
+                            // advance_frame will walk position backward until in_point,
+                            // then flip back to forward on the next pass.
+                            self.playback.position = self.playback.effective_out() - (1.0 / self.playback.frame_rate);
+                            return Ok(Some(&self.frame_data));
                         }
                         LoopMode::OneShot => {
                             self.playback.playing = false;
