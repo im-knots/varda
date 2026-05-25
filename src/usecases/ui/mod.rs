@@ -737,6 +737,8 @@ pub enum OutputAction {
     SetEdgeBlend { output_idx: usize, config: crate::renderer::edge_blend::EdgeBlendConfig },
     /// Set edge blend mode (Auto / Manual) for an output
     SetEdgeBlendMode { output_idx: usize, mode: crate::renderer::edge_blend::EdgeBlendMode },
+    /// Set output rotation (0°/90°/180°/270°)
+    SetRotation { idx: usize, rotation: crate::renderer::context::OutputRotation },
 }
 
 /// Snapshot of a surface assignment for UI display
@@ -771,6 +773,8 @@ pub struct OutputUI {
     pub edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode,
     /// Edge blending configuration
     pub edge_blend: crate::renderer::edge_blend::EdgeBlendConfig,
+    /// Per-output rotation (0°/90°/180°/270°)
+    pub rotation: crate::renderer::context::OutputRotation,
 }
 
 /// Surface action from UI

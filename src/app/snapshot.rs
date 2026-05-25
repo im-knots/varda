@@ -482,6 +482,7 @@ pub(crate) fn build_ui_data(
             name: o.name().to_string(), target, target_label,
             is_windowed, is_active, active_duration,
             surface_assignments, calibration_mode, edge_blend_mode, edge_blend,
+            rotation: o.rotation(),
         }
     }).collect();
 

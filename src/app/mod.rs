@@ -912,6 +912,7 @@ impl VardaApp {
             EngineCommand::ResetWarp { output_idx, assignment_idx } => self.cmd_reset_warp(output_idx, assignment_idx),
             EngineCommand::SetEdgeBlend { output_idx, config } => self.cmd_set_edge_blend(output_idx, config),
             EngineCommand::SetEdgeBlendMode { output_idx, mode } => self.cmd_set_edge_blend_mode(output_idx, mode),
+            EngineCommand::SetOutputRotation { idx, rotation } => self.cmd_set_output_rotation(idx, rotation),
 
             // ── Modulation Updates ────────────────────────────────
             EngineCommand::UpdateLfoFrequency { uuid, frequency } => {

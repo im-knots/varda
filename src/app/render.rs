@@ -500,6 +500,7 @@ impl VardaApp {
                     Some(view) => view,
                     None => continue,
                 };
+                h.blit_pipeline.set_rotation(&context.queue, h.rotation.index());
                 let bind_group = h.blit_pipeline.create_bind_group(&context.device, source_view);
                 {
                     let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

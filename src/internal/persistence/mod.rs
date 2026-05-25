@@ -312,9 +312,16 @@ pub fn snapshot_scene(
                         params: slot.deck.generator_params.values.clone(),
                     }
                 }
-                "video" => SourceConfig::Video {
-                    path: slot.deck.source_path().unwrap_or_default().to_string(),
-                },
+                "video" => {
+                    let pb = slot.deck.playback_state();
+                    SourceConfig::Video {
+                        path: slot.deck.source_path().unwrap_or_default().to_string(),
+                        loop_mode: pb.map(|p| p.loop_mode).unwrap_or_default(),
+                        speed: pb.map(|p| p.speed).unwrap_or(1.0),
+                        in_point: pb.map(|p| p.in_point).unwrap_or(0.0),
+                        out_point: pb.map(|p| p.out_point).unwrap_or(0.0),
+                    }
+                }
                 "image" => SourceConfig::Image {
                     path: slot.deck.source_path().unwrap_or_default().to_string(),
                 },
@@ -634,6 +641,7 @@ pub fn snapshot_stage(
             window_size,
             edge_blend_mode,
             edge_blend,
+            rotation: unified.rotation(),
         }
     }).collect();
 
@@ -872,8 +880,15 @@ pub(crate) fn restore_deck(
             }
             deck
         }
-        SourceConfig::Video { path } => {
-            Deck::new_from_video(context, path, render_width, render_height)?
+        SourceConfig::Video { path, loop_mode, speed, in_point, out_point } => {
+            let mut deck = Deck::new_from_video(context, path, render_width, render_height)?;
+            if let Some(pb) = deck.playback_state_mut() {
+                pb.loop_mode = *loop_mode;
+                pb.speed = *speed;
+                pb.in_point = *in_point;
+                pb.out_point = *out_point;
+            }
+            deck
         }
         SourceConfig::Image { path } => {
             Deck::new_from_image(context, path, render_width, render_height)?
@@ -1006,7 +1021,7 @@ pub(crate) fn restore_effect(config: &EffectConfig, context: &GpuContext, target
 pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
     match (deck.source_type(), config) {
         ("shader", SourceConfig::Shader { path, .. }) => deck.source_path() == Some(path.as_str()),
-        ("video", SourceConfig::Video { path }) => deck.source_path() == Some(path.as_str()),
+        ("video", SourceConfig::Video { path, .. }) => deck.source_path() == Some(path.as_str()),
         ("image", SourceConfig::Image { path }) => deck.source_path() == Some(path.as_str()),
         ("solid_color", SourceConfig::SolidColor { .. }) => true,
         ("camera", SourceConfig::Camera { name }) => {
@@ -1051,7 +1066,7 @@ mod tests {
         // Any solid color config matches a solid color deck
         assert!(source_configs_match(&deck, &SourceConfig::SolidColor { color: [0.0, 1.0, 0.0, 1.0] }));
         // But not other types
-        assert!(!source_configs_match(&deck, &SourceConfig::Video { path: "test.mp4".into() }));
+        assert!(!source_configs_match(&deck, &SourceConfig::Video { path: "test.mp4".into(), loop_mode: Default::default(), speed: 1.0, in_point: 0.0, out_point: 0.0 }));
         assert!(!source_configs_match(&deck, &SourceConfig::Shader { path: "test.fs".into(), params: HashMap::new() }));
     }
 
@@ -1139,6 +1154,7 @@ mod tests {
             window_size: None,
             edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
+            rotation: crate::renderer::context::OutputRotation::default(),
         });
         let errors = prefs.validate();
         assert!(errors.iter().any(|e| e.contains("warp corner")));

@@ -115,6 +115,23 @@ fn render_windowed_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
             });
     });
 
+    // Rotation selector
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Rotation:").small());
+        egui::ComboBox::from_id_salt(format!("output_rotation_{}", idx))
+            .selected_text(egui::RichText::new(output.rotation.label()).small())
+            .width(80.0)
+            .show_ui(ui, |ui| {
+                for rot in crate::renderer::context::OutputRotation::ALL {
+                    if ui.selectable_label(output.rotation == rot, rot.label()).clicked() {
+                        actions.output_actions.push(OutputAction::SetRotation {
+                            idx, rotation: rot,
+                        });
+                    }
+                }
+            });
+    });
+
     // Calibration toggle
     ui.horizontal(|ui| {
         let cal_label = if output.calibration_mode { "🔧 Done" } else { "🔧 Calibrate" };
@@ -222,6 +239,23 @@ fn render_headless_controls(ui: &mut egui::Ui, idx: usize, output: &super::super
     if is_stream {
         render_stream_config(ui, idx, output, actions);
     }
+
+    // Rotation selector
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Rotation:").small());
+        egui::ComboBox::from_id_salt(format!("headless_rotation_{}", idx))
+            .selected_text(egui::RichText::new(output.rotation.label()).small())
+            .width(80.0)
+            .show_ui(ui, |ui| {
+                for rot in crate::renderer::context::OutputRotation::ALL {
+                    if ui.selectable_label(output.rotation == rot, rot.label()).clicked() {
+                        actions.output_actions.push(OutputAction::SetRotation {
+                            idx, rotation: rot,
+                        });
+                    }
+                }
+            });
+    });
 
     // Surface assignments
     ui.add_space(2.0);
@@ -824,6 +858,7 @@ mod tests {
             calibration_mode: false,
             edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
+            rotation: crate::renderer::context::OutputRotation::default(),
         });
         let mut actions = UIActions::new();
         let _harness = egui_kittest::Harness::new_ui(|ui| {

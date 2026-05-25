@@ -8,7 +8,7 @@ use super::edge_blend::SurfaceOverlapZones;
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlitParams {
     opacity: f32,
-    _pad: f32,
+    rotation: u32,
     /// UV scale factor (default 1.0, 1.0 = no scaling)
     uv_scale: [f32; 2],
     /// UV offset (default 0.0, 0.0 = no offset)
@@ -72,7 +72,7 @@ impl BlitPipeline {
             label: Some("Blit Params Buffer"),
             contents: bytemuck::cast_slice(&[BlitParams {
                 opacity: 1.0,
-                _pad: 0.0,
+                rotation: 0,
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
                 _pad2: [0.0, 0.0],
@@ -183,7 +183,7 @@ impl BlitPipeline {
     pub fn set_opacity(&self, queue: &wgpu::Queue, opacity: f32) {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[BlitParams {
             opacity,
-            _pad: 0.0,
+            rotation: 0,
             uv_scale: [1.0, 1.0],
             uv_offset: [0.0, 0.0],
             _pad2: [0.0, 0.0],
@@ -194,9 +194,20 @@ impl BlitPipeline {
     pub fn set_uv_transform(&self, queue: &wgpu::Queue, opacity: f32, uv_scale: [f32; 2], uv_offset: [f32; 2]) {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[BlitParams {
             opacity,
-            _pad: 0.0,
+            rotation: 0,
             uv_scale,
             uv_offset,
+            _pad2: [0.0, 0.0],
+        }]));
+    }
+
+    /// Set rotation for the final blit pass (0=0°, 1=90°, 2=180°, 3=270°).
+    pub fn set_rotation(&self, queue: &wgpu::Queue, rotation: u32) {
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[BlitParams {
+            opacity: 1.0,
+            rotation,
+            uv_scale: [1.0, 1.0],
+            uv_offset: [0.0, 0.0],
             _pad2: [0.0, 0.0],
         }]));
     }
@@ -228,7 +239,7 @@ impl BlitPipeline {
             label: Some("Blit Params Buffer (per-surface)"),
             contents: bytemuck::cast_slice(&[BlitParams {
                 opacity,
-                _pad: 0.0,
+                rotation: 0,
                 uv_scale,
                 uv_offset,
                 _pad2: [0.0, 0.0],

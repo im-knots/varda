@@ -161,6 +161,7 @@ pub enum EngineCommand {
     ResetWarp { output_idx: usize, assignment_idx: usize },
     SetEdgeBlend { output_idx: usize, config: crate::renderer::edge_blend::EdgeBlendConfig },
     SetEdgeBlendMode { output_idx: usize, mode: crate::renderer::edge_blend::EdgeBlendMode },
+    SetOutputRotation { idx: usize, rotation: crate::renderer::context::OutputRotation },
 
     // ── Surfaces ────────────────────────────────────────────────
     AddSurface { name: String, source: OutputSource },

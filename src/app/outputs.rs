@@ -32,6 +32,8 @@ impl VardaApp {
                     EngineCommand::SetEdgeBlend { output_idx: *output_idx, config: *config },
                 ui::OutputAction::SetEdgeBlendMode { output_idx, mode } =>
                     EngineCommand::SetEdgeBlendMode { output_idx: *output_idx, mode: *mode },
+                ui::OutputAction::SetRotation { idx, rotation } =>
+                    EngineCommand::SetOutputRotation { idx: *idx, rotation: *rotation },
             };
             self.execute_command(cmd);
         }
@@ -91,6 +93,7 @@ impl VardaApp {
                                 }).collect();
                                 output.edge_blend_mode = config.edge_blend_mode;
                                 output.edge_blend = config.edge_blend;
+                                output.rotation = config.rotation;
                                 // If Display target, set fullscreen — or fall back to
                                 // Windowed if the target monitor is no longer connected.
                                 if let OutputTarget::Display { ref name, .. } = target {
@@ -146,6 +149,7 @@ impl VardaApp {
                 }).collect();
                 headless.edge_blend_mode = config.edge_blend_mode;
                 headless.edge_blend = config.edge_blend;
+                headless.rotation = config.rotation;
                 log::info!("Created headless output '{}'", name);
                 self.output.outputs.push(UnifiedOutput::Headless(headless));
             }
