@@ -187,6 +187,18 @@ pub enum EngineCommand {
     AssignSurfaceToOutputByIdx { output_idx: usize, surface_uuid: String },
     UnassignSurfaceFromOutputByIdx { output_idx: usize, assignment_idx: usize },
 
+    // ── Surface Auto-Detection ──────────────────────────────────
+    /// Detect contours from a raster image and create surfaces from them.
+    DetectFromImage { image_data: Vec<u8>, params: crate::surface::detect::DetectionParams },
+    /// Detect contours from an SVG file.
+    DetectFromSvg { svg_data: Vec<u8> },
+    /// Detect contours from a DXF file.
+    DetectFromDxf { dxf_data: Vec<u8> },
+    /// Confirm detected contours: create surfaces from them.
+    ConfirmDetectedContours { contours: Vec<crate::surface::detect::DetectedContour> },
+    /// Detect contours from a camera snapshot.
+    DetectFromCamera { camera_id: CameraId, params: crate::surface::detect::DetectionParams },
+
     // ── Modulation Updates ─────────────────────────────────────
     UpdateLfoFrequency { uuid: String, frequency: f32 },
     UpdateLfoWaveform { uuid: String, waveform: LFOWaveform },

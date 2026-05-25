@@ -61,6 +61,25 @@ impl VardaApp {
                 ui::SurfaceAction::GenerateDomeSlices { setup } => {
                     self.generate_dome_slices(setup);
                 }
+                ui::SurfaceAction::ImportFromFile { path } => {
+                    let params = crate::surface::detect::DetectionParams::default();
+                    match crate::surface::import::detect_from_file(path, &params) {
+                        Ok(result) => {
+                            use crate::engine::traits::DetectCommands;
+                            let uuids = self.confirm_detected_contours(&result.contours);
+                            log::info!("Imported {} surfaces from {}", uuids.len(), path.display());
+                        }
+                        Err(e) => {
+                            log::error!("Surface import failed: {}", e);
+                        }
+                    }
+                }
+                ui::SurfaceAction::ConfirmDetectedContours { contours } => {
+                    use crate::engine::traits::DetectCommands;
+                    let uuids = self.confirm_detected_contours(contours);
+                    log::info!("Created {} surfaces from detection", uuids.len());
+                }
+
             }
         }
     }

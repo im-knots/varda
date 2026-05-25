@@ -6,9 +6,11 @@ pub mod widgets;
 use crate::mixer::CrossfadeEasing;
 use crate::modulation::{LFOWaveform, AudioBandPreset, AudioReactMode, ADSRStage, StepInterpolation};
 use crate::audio::AudioSourceId;
+use crate::camera::CameraId;
 use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::{DomeSetup, DomePreset, DomeGeometry};
+use crate::surface::detect::{DetectedContour, DetectionParams};
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
@@ -50,6 +52,8 @@ pub struct UILayoutState {
     pub dome_preset: DomePreset,
     /// Active dome geometry (radius, truncation, tilt)
     pub dome_geometry: DomeGeometry,
+    /// Camera detection mode state
+    pub camera_detect_mode: CameraDetectMode,
 }
 
 impl Default for UILayoutState {
@@ -69,8 +73,39 @@ impl Default for UILayoutState {
             dome_mode_active: false,
             dome_preset: DomePreset::Quad,
             dome_geometry: DomeGeometry::default(),
+            camera_detect_mode: CameraDetectMode::Off,
         }
     }
+}
+
+/// Camera detection mode state machine.
+///
+/// Off → Live (camera feed) → Preview (frozen frame with contour selection) → Off
+#[derive(Debug, Clone, Default)]
+pub enum CameraDetectMode {
+    #[default]
+    Off,
+    Live {
+        camera_id: CameraId,
+        params: DetectionParams,
+    },
+    Preview {
+        camera_id: CameraId,
+        contours: Vec<DetectedContour>,
+        selected: Vec<bool>,
+    },
+}
+
+/// Actions emitted by the camera detection UI.
+#[derive(Debug, Clone)]
+pub enum CameraDetectAction {
+    Enter { camera_id: CameraId },
+    Exit,
+    UpdateParams(DetectionParams),
+    Capture,
+    ToggleContour(usize),
+    SelectAll(bool),
+    Accept,
 }
 
 impl UILayoutState {
@@ -511,6 +546,12 @@ pub struct UIData {
     pub dome_preset: DomePreset,
     /// Active dome geometry (radius, truncation, tilt)
     pub dome_geometry: DomeGeometry,
+    /// Camera detection mode texture (live camera feed registered with egui)
+    pub camera_detect_texture: Option<egui::TextureId>,
+    /// Current camera detection mode state
+    pub camera_detect_mode: CameraDetectMode,
+    /// Contours detected in current frame (for overlay rendering)
+    pub camera_detect_contours: Vec<DetectedContour>,
     /// Whether the library panel (left sidebar) is open
     pub library_panel_open: bool,
     /// Whether the right panel (master output sidebar) is open
@@ -772,6 +813,11 @@ pub enum SurfaceAction {
     Combine { uuids: Vec<String> },
     /// Generate dome slices: remove old "Dome P*" surfaces, compute warp meshes, create new surfaces
     GenerateDomeSlices { setup: DomeSetup },
+    /// Import surfaces from a file (path decided by UI file dialog)
+    ImportFromFile { path: std::path::PathBuf },
+    /// Confirm detected contours and create surfaces from them
+    ConfirmDetectedContours { contours: Vec<crate::surface::detect::DetectedContour> },
+
 }
 
 /// Dome-mode UI actions (camera interaction, mode toggle, config changes).
@@ -912,6 +958,8 @@ pub struct UIActions {
     pub toggle_dome_preview: bool,
     /// Dome mode actions (camera, config, mode toggle)
     pub dome_actions: Vec<DomeAction>,
+    /// Camera detection actions
+    pub camera_detect_actions: Vec<CameraDetectAction>,
     /// Set stage editor grid size (normalized)
     pub set_grid_size: Option<f32>,
     /// Toggle snap-to-grid
@@ -1136,6 +1184,7 @@ impl UIActions {
             toggle_stage_editor: false,
             toggle_dome_preview: false,
             dome_actions: Vec::new(),
+            camera_detect_actions: Vec::new(),
             set_grid_size: None,
             toggle_snap: false,
             midi_rescan: false,
@@ -1492,6 +1541,9 @@ impl UIData {
             dome_mode_active: false,
             dome_preset: DomePreset::Quad,
             dome_geometry: DomeGeometry::default(),
+            camera_detect_texture: None,
+            camera_detect_mode: CameraDetectMode::Off,
+            camera_detect_contours: vec![],
             library_panel_open: true,
             right_panel_open: true,
             stage_editor_grid_size: 0.05,

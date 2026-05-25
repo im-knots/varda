@@ -99,6 +99,9 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::surfaces::set_circle_sides, routes::surfaces::convert_to_polygon,
         routes::surfaces::combine, routes::surfaces::move_surface,
         routes::surfaces::update_contour_vertices,
+        // Stage Detection
+        routes::stage::detect_image, routes::stage::detect_svg,
+        routes::stage::detect_dxf, routes::stage::detect_confirm, routes::stage::detect_camera,
         // Outputs
         routes::outputs::create, routes::outputs::close,
         routes::outputs::set_display, routes::outputs::assign_surface,
@@ -179,6 +182,12 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/stage/surfaces/{uuid}", get(routes::stage::surface_by_uuid))
         .route("/api/stage/outputs", get(routes::stage::outputs))
         .route("/api/stage/outputs/{uuid}", get(routes::stage::output_by_uuid))
+        // ── Stage Detection ─────────────────────────────────────
+        .route("/api/stage/detect/image", axum::routing::post(routes::stage::detect_image))
+        .route("/api/stage/detect/svg", axum::routing::post(routes::stage::detect_svg))
+        .route("/api/stage/detect/dxf", axum::routing::post(routes::stage::detect_dxf))
+        .route("/api/stage/detect/confirm", axum::routing::post(routes::stage::detect_confirm))
+        .route("/api/stage/detect/camera", axum::routing::post(routes::stage::detect_camera))
         // ── Library ─────────────────────────────────────────────
         .route("/api/library/generators", get(routes::library::generators))
         .route("/api/library/effects", get(routes::library::effects))
