@@ -24,7 +24,7 @@ echo "    prefix: $PREFIX"
 echo "    cpus: $NPROC"
 
 # --- nasm (needed for x264/x265 asm optimizations) ---
-echo "==> [1/5] Building nasm..."
+echo "==> [1/6] Building nasm..."
 cd "$BUILDDIR"
 curl -sL https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.gz | tar xz
 cd nasm-2.16.03
@@ -35,7 +35,7 @@ make install
 export PATH="$PREFIX/bin:$PATH"
 
 # --- x264 ---
-echo "==> [2/5] Building x264 (x86_64)..."
+echo "==> [2/6] Building x264 (x86_64)..."
 cd "$BUILDDIR"
 git clone --depth 1 https://code.videolan.org/videolan/x264.git
 cd x264
@@ -50,7 +50,7 @@ make -j"$NPROC"
 make install
 
 # --- x265 ---
-echo "==> [3/5] Building x265 (x86_64)..."
+echo "==> [3/6] Building x265 (x86_64)..."
 cd "$BUILDDIR"
 git clone --depth 1 -b Release_4.1 https://bitbucket.org/multicoreware/x265_git.git
 cd x265_git/build
@@ -67,9 +67,39 @@ cmake ../source \
   -DENABLE_ASSEMBLY=OFF
 make -j"$NPROC"
 make install
+# x265 cmake doesn't always install the shared lib or .pc file — do it manually
+cp -f libx265.*.dylib "$PREFIX/lib/" 2>/dev/null || true
+ln -sf libx265.215.dylib "$PREFIX/lib/libx265.dylib"
+X265_VERSION=$(grep '#define X265_BUILD' "$PREFIX/include/x265_config.h" | awk '{print $3}')
+cat > "$PREFIX/lib/pkgconfig/x265.pc" <<PCEOF
+prefix=$PREFIX
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: x265
+Description: H.265/HEVC video encoder
+Version: $X265_VERSION
+Libs: -L\${libdir} -lx265
+Libs.private: -lc++ -ldl
+Cflags: -I\${includedir}
+PCEOF
+
+# --- OpenSSL (needed by libsrt for encryption) ---
+echo "==> [4/6] Building OpenSSL (x86_64)..."
+cd "$BUILDDIR"
+curl -sL https://github.com/openssl/openssl/releases/download/openssl-3.3.2/openssl-3.3.2.tar.gz | tar xz
+cd openssl-3.3.2
+./Configure darwin64-x86_64-cc \
+  --prefix="$PREFIX" \
+  --openssldir="$PREFIX/ssl" \
+  no-tests no-apps no-docs \
+  -mmacosx-version-min=10.15
+make -j"$NPROC"
+make install_sw
 
 # --- libsrt ---
-echo "==> [4/5] Building libsrt (x86_64)..."
+echo "==> [5/6] Building libsrt (x86_64)..."
 cd "$BUILDDIR"
 git clone --depth 1 -b v1.5.4 https://github.com/Haivision/srt.git
 cd srt
@@ -79,6 +109,10 @@ cmake . \
   -DCMAKE_C_FLAGS="$CFLAGS" \
   -DCMAKE_CXX_FLAGS="$CXXFLAGS" \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DOPENSSL_ROOT_DIR="$PREFIX" \
+  -DOPENSSL_INCLUDE_DIR="$PREFIX/include" \
+  -DOPENSSL_CRYPTO_LIBRARY="$PREFIX/lib/libcrypto.dylib" \
+  -DOPENSSL_SSL_LIBRARY="$PREFIX/lib/libssl.dylib" \
   -DENABLE_SHARED=ON \
   -DENABLE_STATIC=OFF \
   -DENABLE_APPS=OFF
@@ -86,7 +120,7 @@ make -j"$NPROC"
 make install
 
 # --- FFmpeg ---
-echo "==> [5/5] Building FFmpeg (x86_64)..."
+echo "==> [6/6] Building FFmpeg (x86_64)..."
 cd "$BUILDDIR"
 curl -sL https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.gz | tar xz
 cd ffmpeg-7.1.1
