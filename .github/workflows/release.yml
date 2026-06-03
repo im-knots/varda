@@ -13,8 +13,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  guard:
+    name: Verify tag is on main
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check tag commit is on main
+        run: |
+          TAG_SHA=$(git rev-parse HEAD)
+          if ! git branch -r --contains "$TAG_SHA" | grep -q 'origin/main'; then
+            echo "::error::Tag does not point to a commit on main. Aborting release."
+            exit 1
+          fi
+
   build-linux:
     name: Linux AppImage
+    needs: [guard]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -36,6 +52,7 @@ jobs:
 
   build-macos-arm64:
     name: macOS (arm64)
+    needs: [guard]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v5
@@ -59,6 +76,7 @@ jobs:
 
   build-macos-x86:
     name: macOS (x86_64)
+    needs: [guard]
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v5
