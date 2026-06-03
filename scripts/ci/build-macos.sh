@@ -104,6 +104,16 @@ for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice
   fi
 done
 
+# Bundle NDI SDK (runtime-loaded via libloading, universal binary from cask)
+NDI_LIB="/Library/NDI SDK for Apple/lib/macOS/libndi.dylib"
+if [ -f "$NDI_LIB" ]; then
+  echo "==> Bundling NDI SDK..."
+  cp "$NDI_LIB" Varda.app/Contents/Frameworks/libndi.dylib
+  install_name_tool -id "@executable_path/../Frameworks/libndi.dylib" Varda.app/Contents/Frameworks/libndi.dylib 2>/dev/null || true
+else
+  echo "==> NDI SDK not found, skipping bundle (install with: brew install --cask libndi)"
+fi
+
 # Bundle licenses
 cp LICENSE Varda.app/Contents/Resources/licenses/ 2>/dev/null || echo "MIT License" > Varda.app/Contents/Resources/licenses/LICENSE
 echo "FFmpeg is licensed under the LGPL v2.1+. See https://ffmpeg.org/legal.html" > Varda.app/Contents/Resources/licenses/FFMPEG-LICENSE
