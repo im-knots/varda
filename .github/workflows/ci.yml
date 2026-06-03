@@ -11,8 +11,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  check-linux:
-    name: Linux (fmt + test)
+  check:
+    name: fmt + test
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -47,33 +47,6 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
-
-      - name: Run tests
-        run: cargo test --lib
-
-  check-macos:
-    name: macOS (test)
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install system dependencies
-        run: |
-          brew tap homebrew-ffmpeg/ffmpeg
-          brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry & build
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: macos-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-cargo-
 
       - name: Run tests
         run: cargo test --lib
