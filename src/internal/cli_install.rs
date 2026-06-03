@@ -8,7 +8,9 @@
 //!   Uses `osascript` for the admin prompt.
 //! - **Linux**: symlinks the AppImage to `~/.local/bin/varda`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
 /// Run the first-launch CLI install check.
 /// This is intentionally silent on success and non-fatal on failure.
@@ -22,11 +24,17 @@ fn try_install() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {}", e))?;
     let exe = exe.canonicalize().unwrap_or_else(|_| exe.clone());
 
-    if cfg!(target_os = "macos") {
-        install_macos(&exe)
-    } else if cfg!(target_os = "linux") {
-        install_linux(&exe)
-    } else {
+    #[cfg(target_os = "macos")]
+    {
+        return install_macos(&exe);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return install_linux(&exe);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = exe;
         Err("unsupported platform".into())
     }
 }
@@ -36,6 +44,7 @@ fn try_install() -> Result<(), String> {
 //        → /usr/local/bin/varda (wrapper script, needs admin)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 fn install_macos(exe: &Path) -> Result<(), String> {
     // Only act when running from a .app bundle
     let macos_dir = exe.parent().ok_or("no parent")?;
@@ -74,6 +83,7 @@ fn install_macos(exe: &Path) -> Result<(), String> {
     install_macos_with_admin(&wrapper_content)
 }
 
+#[cfg(target_os = "macos")]
 fn install_macos_with_admin(wrapper_content: &str) -> Result<(), String> {
     // Use osascript to get admin privileges via GUI prompt
     let escaped = wrapper_content.replace('\\', "\\\\").replace('"', "\\\"");
@@ -110,6 +120,7 @@ fn install_macos_with_admin(wrapper_content: &str) -> Result<(), String> {
 // Linux: /path/to/Varda-x86_64.AppImage → ~/.local/bin/varda (symlink)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "linux")]
 fn install_linux(exe: &Path) -> Result<(), String> {
     // Only act when running from an AppImage
     let appimage_var = std::env::var("APPIMAGE").ok();
