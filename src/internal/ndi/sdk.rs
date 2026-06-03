@@ -57,6 +57,11 @@ impl NdiSdk {
     }
 
     fn try_load_library() -> Option<Library> {
+        // Check app bundle Frameworks directory first (bundled NDI)
+        if let Some(lib) = Self::try_load_from_bundle() {
+            return Some(lib);
+        }
+
         let paths: &[&str] = if cfg!(target_os = "macos") {
             &[
                 "/Library/NDI SDK for Apple/lib/macOS/libndi.dylib",
@@ -64,6 +69,7 @@ impl NdiSdk {
             ]
         } else if cfg!(target_os = "linux") {
             &[
+                "libndi.so",
                 "/usr/lib/libndi.so",
                 "/usr/local/lib/libndi.so",
                 "/usr/lib/x86_64-linux-gnu/libndi.so",
@@ -81,6 +87,31 @@ impl NdiSdk {
             }
         }
         None
+    }
+
+    /// Try to load NDI from the app bundle's Frameworks directory.
+    /// Path: <exe>/../Frameworks/libndi.dylib (macOS .app bundle)
+    fn try_load_from_bundle() -> Option<Library> {
+        let exe = std::env::current_exe().ok()?;
+        let frameworks = exe.parent()?.parent()?.join("Frameworks");
+        let ndi_path = if cfg!(target_os = "macos") {
+            frameworks.join("libndi.dylib")
+        } else {
+            return None;
+        };
+        if !ndi_path.exists() {
+            return None;
+        }
+        match unsafe { Library::new(&ndi_path) } {
+            Ok(lib) => {
+                log::info!("Loaded NDI SDK from bundle: {}", ndi_path.display());
+                Some(lib)
+            }
+            Err(e) => {
+                log::warn!("Failed to load bundled NDI SDK: {}", e);
+                None
+            }
+        }
     }
 
     unsafe fn resolve_symbols(lib: Library) -> Option<Self> {

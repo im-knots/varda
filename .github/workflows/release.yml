@@ -54,6 +54,13 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
+      - name: Install NDI SDK
+        run: |
+          cd /tmp
+          curl -sL https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz | tar xz
+          echo Y | ./Install_NDI_SDK_v6_Linux.sh >/dev/null
+          ls -la "/tmp/NDI SDK for Linux/lib/x86_64-linux-gnu/"libndi* || true
+
       - name: Run tests
         run: cargo test --lib
 
@@ -87,6 +94,7 @@ jobs:
           brew tap homebrew-ffmpeg/ffmpeg
           brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
           brew install cmake pkg-config create-dmg nasm
+          brew install --cask libndi
 
       - name: Build arm64 .app
         run: |

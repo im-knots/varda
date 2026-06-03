@@ -60,6 +60,21 @@ for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice
   find /usr/lib -name "${lib}.so*" -exec cp -P {} Varda.AppDir/usr/lib/ \; 2>/dev/null || true
 done
 
+# Bundle NDI SDK (runtime-loaded via libloading)
+NDI_SDK_DIR=""
+for d in "/tmp/NDI SDK for Linux" "$HOME/NDI SDK for Linux"; do
+  if [ -d "$d" ]; then
+    NDI_SDK_DIR="$d"
+    break
+  fi
+done
+if [ -n "$NDI_SDK_DIR" ]; then
+  echo "==> Bundling NDI SDK from: $NDI_SDK_DIR"
+  cp -P "$NDI_SDK_DIR/lib/x86_64-linux-gnu/"libndi.so* Varda.AppDir/usr/lib/ 2>/dev/null || true
+else
+  echo "==> NDI SDK not found, skipping bundle"
+fi
+
 # Bundle licenses
 cp LICENSE Varda.AppDir/usr/share/licenses/ 2>/dev/null || echo "MIT License" > Varda.AppDir/usr/share/licenses/LICENSE
 echo "FFmpeg is licensed under the LGPL v2.1+. See https://ffmpeg.org/legal.html" > Varda.AppDir/usr/share/licenses/FFMPEG-LICENSE
