@@ -47,7 +47,8 @@ $FfmpegDlls = @(
     "avutil-59.dll",
     "swscale-8.dll",
     "swresample-5.dll",
-    "avdevice-61.dll"
+    "avdevice-61.dll",
+    "avfilter-10.dll"
 )
 foreach ($dll in $FfmpegDlls) {
     $src = Join-Path $VcpkgBin $dll

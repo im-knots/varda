@@ -56,7 +56,7 @@ cp target/release/varda Varda.AppDir/usr/bin/
 cp -r shaders/* Varda.AppDir/usr/share/varda/shaders/
 
 # Bundle FFmpeg shared libs
-for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice libsrt; do
+for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice libavfilter libsrt; do
   find /usr/lib -name "${lib}.so*" -exec cp -P {} Varda.AppDir/usr/lib/ \; 2>/dev/null || true
 done
 
