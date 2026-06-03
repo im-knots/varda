@@ -87,9 +87,15 @@ impl AccActions {
         self.audio_rescan |= a.audio_rescan;
 
         // Options — take latest non-None
-        if a.select_deck.is_some() { self.select_deck = a.select_deck; }
-        if a.select_channel.is_some() { self.select_channel = a.select_channel; }
-        if a.remove_channel.is_some() { self.remove_channel = a.remove_channel; }
+        if a.select_deck.is_some() {
+            self.select_deck = a.select_deck;
+        }
+        if a.select_channel.is_some() {
+            self.select_channel = a.select_channel;
+        }
+        if a.remove_channel.is_some() {
+            self.remove_channel = a.remove_channel;
+        }
 
         // Crossfader — pattern-match variants
         if let Some(ref ca) = a.crossfader_action {
@@ -97,9 +103,15 @@ impl AccActions {
                 CrossfaderAction::SnapA => self.crossfader_snap_a = true,
                 CrossfaderAction::SnapB => self.crossfader_snap_b = true,
                 CrossfaderAction::AutoTransition { duration_secs, .. } => {
-                    if (*duration_secs - 1.0).abs() < 0.01 { self.crossfader_auto_1s = true; }
-                    if (*duration_secs - 2.0).abs() < 0.01 { self.crossfader_auto_2s = true; }
-                    if (*duration_secs - 4.0).abs() < 0.01 { self.crossfader_auto_4s = true; }
+                    if (*duration_secs - 1.0).abs() < 0.01 {
+                        self.crossfader_auto_1s = true;
+                    }
+                    if (*duration_secs - 2.0).abs() < 0.01 {
+                        self.crossfader_auto_2s = true;
+                    }
+                    if (*duration_secs - 4.0).abs() < 0.01 {
+                        self.crossfader_auto_4s = true;
+                    }
                 }
                 _ => {}
             }
@@ -107,10 +119,14 @@ impl AccActions {
 
         // Vec actions — match known patterns
         for oa in &a.output_actions {
-            if matches!(oa, OutputAction::Create) { self.output_create = true; }
+            if matches!(oa, OutputAction::Create) {
+                self.output_create = true;
+            }
         }
         for sa in &a.surface_actions {
-            if matches!(sa, SurfaceAction::Add { .. }) { self.surface_add = true; }
+            if matches!(sa, SurfaceAction::Add { .. }) {
+                self.surface_add = true;
+            }
         }
         for ma in &a.modulation_actions {
             match ma {
@@ -122,18 +138,28 @@ impl AccActions {
             }
         }
         for sa in &a.sequence_actions {
-            if matches!(sa, SequenceAction::Create) { self.sequence_create = true; }
+            if matches!(sa, SequenceAction::Create) {
+                self.sequence_create = true;
+            }
         }
 
         // Combo box actions
-        if a.set_transition.is_some() { self.set_transition = a.set_transition.clone(); }
+        if a.set_transition.is_some() {
+            self.set_transition = a.set_transition.clone();
+        }
         self.channel_updates_count += a.channel_updates.len();
         self.scaling_mode_updates_count += a.scaling_mode_updates.len();
 
         // Collapsing header items
-        if a.solid_color_to_add.is_some() { self.solid_color_to_add = a.solid_color_to_add; }
-        if a.open_image_dialog_for_channel.is_some() { self.open_image_dialog_for_channel = a.open_image_dialog_for_channel; }
-        if a.open_video_dialog_for_channel.is_some() { self.open_video_dialog_for_channel = a.open_video_dialog_for_channel; }
+        if a.solid_color_to_add.is_some() {
+            self.solid_color_to_add = a.solid_color_to_add;
+        }
+        if a.open_image_dialog_for_channel.is_some() {
+            self.open_image_dialog_for_channel = a.open_image_dialog_for_channel;
+        }
+        if a.open_video_dialog_for_channel.is_some() {
+            self.open_video_dialog_for_channel = a.open_video_dialog_for_channel;
+        }
         self.midi_device_toggles_count += a.midi_device_toggles.len();
     }
 }
@@ -168,7 +194,10 @@ fn click_add_channel_sets_action() {
     harness.get_by_label("➕ Ch").click();
     harness.run();
 
-    assert!(harness.state().add_channel, "add_channel should be true after clicking ➕ Ch");
+    assert!(
+        harness.state().add_channel,
+        "add_channel should be true after clicking ➕ Ch"
+    );
 }
 
 // ── Snap Crossfader ─────────────────────────────────────────────────
@@ -180,7 +209,10 @@ fn click_snap_a_sets_crossfader_action() {
     harness.get_by_label("⏮ Ch A").click();
     harness.run();
 
-    assert!(harness.state().crossfader_snap_a, "Expected SnapA crossfader action");
+    assert!(
+        harness.state().crossfader_snap_a,
+        "Expected SnapA crossfader action"
+    );
 }
 
 #[test]
@@ -190,7 +222,10 @@ fn click_snap_b_sets_crossfader_action() {
     harness.get_by_label("Ch B ⏭").click();
     harness.run();
 
-    assert!(harness.state().crossfader_snap_b, "Expected SnapB crossfader action");
+    assert!(
+        harness.state().crossfader_snap_b,
+        "Expected SnapB crossfader action"
+    );
 }
 
 // ── Toggle Library Panel ────────────────────────────────────────────
@@ -204,7 +239,10 @@ fn click_close_library_sets_toggle() {
     harness.get_by_label("◀").click();
     harness.run();
 
-    assert!(harness.state().toggle_library_panel, "toggle_library_panel should be true");
+    assert!(
+        harness.state().toggle_library_panel,
+        "toggle_library_panel should be true"
+    );
 }
 
 #[test]
@@ -216,7 +254,10 @@ fn click_open_library_sets_toggle() {
     harness.get_by_label("▶").click();
     harness.run();
 
-    assert!(harness.state().toggle_library_panel, "toggle_library_panel should be true");
+    assert!(
+        harness.state().toggle_library_panel,
+        "toggle_library_panel should be true"
+    );
 }
 
 // ── Select Master ───────────────────────────────────────────────────
@@ -228,7 +269,10 @@ fn click_main_output_heading_selects_master() {
     harness.get_by_label("🎬 Main Output").click();
     harness.run();
 
-    assert!(harness.state().select_master, "select_master should be true");
+    assert!(
+        harness.state().select_master,
+        "select_master should be true"
+    );
 }
 
 // ── Save ────────────────────────────────────────────────────────────
@@ -240,7 +284,10 @@ fn click_save_button_sets_save_requested() {
     harness.get_by_label("💾 Save").click();
     harness.run();
 
-    assert!(harness.state().save_requested, "save_requested should be true");
+    assert!(
+        harness.state().save_requested,
+        "save_requested should be true"
+    );
 }
 
 // ── Auto Crossfade Transitions ──────────────────────────────────────
@@ -253,7 +300,10 @@ fn click_auto_transition_1s() {
     harness.get_by_label("→Ch A 1s").click();
     harness.run();
 
-    assert!(harness.state().crossfader_auto_1s, "Expected 1s auto-transition");
+    assert!(
+        harness.state().crossfader_auto_1s,
+        "Expected 1s auto-transition"
+    );
 }
 
 #[test]
@@ -263,7 +313,10 @@ fn click_auto_transition_2s() {
     harness.get_by_label("2s").click();
     harness.run();
 
-    assert!(harness.state().crossfader_auto_2s, "Expected 2s auto-transition");
+    assert!(
+        harness.state().crossfader_auto_2s,
+        "Expected 2s auto-transition"
+    );
 }
 
 #[test]
@@ -273,7 +326,10 @@ fn click_auto_transition_4s() {
     harness.get_by_label("4s").click();
     harness.run();
 
-    assert!(harness.state().crossfader_auto_4s, "Expected 4s auto-transition");
+    assert!(
+        harness.state().crossfader_auto_4s,
+        "Expected 4s auto-transition"
+    );
 }
 
 // ── Output Window ───────────────────────────────────────────────────
@@ -302,7 +358,10 @@ fn click_new_output_creates_output_action() {
     harness.get_by_label("+ Windowed").click();
     harness.run();
 
-    assert!(harness.state().output_create, "Expected OutputAction::Create");
+    assert!(
+        harness.state().output_create,
+        "Expected OutputAction::Create"
+    );
 }
 
 // ── Modulation Sources ──────────────────────────────────────────────
@@ -318,7 +377,10 @@ fn click_add_lfo() {
     harness.get_by_label("➕ LFO").click();
     harness.run();
 
-    assert!(harness.state().mod_add_lfo, "Expected ModulationAction::AddLFO");
+    assert!(
+        harness.state().mod_add_lfo,
+        "Expected ModulationAction::AddLFO"
+    );
 }
 
 #[test]
@@ -332,7 +394,10 @@ fn click_add_audio_mod() {
     harness.get_by_label("➕ Audio").click();
     harness.run();
 
-    assert!(harness.state().mod_add_audio, "Expected ModulationAction::AddAudioFFT");
+    assert!(
+        harness.state().mod_add_audio,
+        "Expected ModulationAction::AddAudioFFT"
+    );
 }
 
 #[test]
@@ -346,7 +411,10 @@ fn click_add_adsr() {
     harness.get_by_label("➕ ADSR").click();
     harness.run();
 
-    assert!(harness.state().mod_add_adsr, "Expected ModulationAction::AddADSR");
+    assert!(
+        harness.state().mod_add_adsr,
+        "Expected ModulationAction::AddADSR"
+    );
 }
 
 #[test]
@@ -360,7 +428,10 @@ fn click_add_step_seq() {
     harness.get_by_label("➕ StepSeq").click();
     harness.run();
 
-    assert!(harness.state().mod_add_step_seq, "Expected ModulationAction::AddStepSequencer");
+    assert!(
+        harness.state().mod_add_step_seq,
+        "Expected ModulationAction::AddStepSequencer"
+    );
 }
 
 // ── Stage Editor ────────────────────────────────────────────────────
@@ -379,7 +450,10 @@ fn click_open_stage_editor() {
     harness.get_by_label("✏ Open Editor").click();
     harness.run();
 
-    assert!(harness.state().toggle_stage_editor, "toggle_stage_editor should be true");
+    assert!(
+        harness.state().toggle_stage_editor,
+        "toggle_stage_editor should be true"
+    );
 }
 
 #[test]
@@ -425,9 +499,11 @@ fn click_add_sequence() {
     harness.get_by_label("+ Sequence").click();
     harness.run();
 
-    assert!(harness.state().sequence_create, "Expected SequenceAction::Create");
+    assert!(
+        harness.state().sequence_create,
+        "Expected SequenceAction::Create"
+    );
 }
-
 
 // ═══════════════════════════════════════════════════════════════════
 // Context-dependent tests (require modified fixture state)
@@ -465,7 +541,10 @@ fn click_remove_channel_with_three_channels() {
     // There are multiple "x" labels (channel remove + deck remove).
     // Collect them and click the first one — validates the button exists.
     let nodes: Vec<_> = harness.get_all_by_label("x").collect();
-    assert!(!nodes.is_empty(), "Expected at least one 'x' button with 3 channels");
+    assert!(
+        !nodes.is_empty(),
+        "Expected at least one 'x' button with 3 channels"
+    );
     nodes[0].click();
     harness.run();
 }
@@ -482,7 +561,10 @@ fn click_exit_midi_learn() {
     harness.get_by_label("x Exit MIDI Learn").click();
     harness.run();
 
-    assert!(harness.state().midi_learn_toggle, "midi_learn_toggle should be true");
+    assert!(
+        harness.state().midi_learn_toggle,
+        "midi_learn_toggle should be true"
+    );
 }
 
 // ── Select Channel (click channel heading) ──────────────────────────
@@ -495,7 +577,11 @@ fn click_channel_heading_selects_channel() {
     harness.get_by_label("▌ Ch A").click();
     harness.run();
 
-    assert_eq!(harness.state().select_channel, Some(0), "Expected select_channel = Some(0)");
+    assert_eq!(
+        harness.state().select_channel,
+        Some(0),
+        "Expected select_channel = Some(0)"
+    );
 }
 
 #[test]
@@ -505,7 +591,11 @@ fn click_channel_b_heading_selects_channel_b() {
     harness.get_by_label("▌ Ch B").click();
     harness.run();
 
-    assert_eq!(harness.state().select_channel, Some(1), "Expected select_channel = Some(1)");
+    assert_eq!(
+        harness.state().select_channel,
+        Some(1),
+        "Expected select_channel = Some(1)"
+    );
 }
 
 // ── Library: Open Library from right panel (when closed) ────────────
@@ -531,7 +621,10 @@ fn click_open_library_from_right_panel() {
     harness.get_by_label("📚 Open Library (L)").click();
     harness.run();
 
-    assert!(harness.state().toggle_library_panel, "toggle_library_panel should be true");
+    assert!(
+        harness.state().toggle_library_panel,
+        "toggle_library_panel should be true"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -599,7 +692,11 @@ fn combo_blend_mode_exists_with_correct_value() {
 
     // Each channel should have a blend mode combo showing "Norm"
     let norms: Vec<_> = harness.get_all_by_value("Norm").collect();
-    assert!(norms.len() >= 2, "Expected at least 2 blend mode combos (one per channel), got {}", norms.len());
+    assert!(
+        norms.len() >= 2,
+        "Expected at least 2 blend mode combos (one per channel), got {}",
+        norms.len()
+    );
 }
 
 // ── Scaling Mode Combo (existence only — selectable_value limitation) ─
@@ -712,7 +809,10 @@ fn collapsing_camera_rescan() {
     harness.get_by_label("🔄 Rescan").click();
     harness.run();
 
-    assert!(harness.state().camera_rescan, "camera_rescan should be true");
+    assert!(
+        harness.state().camera_rescan,
+        "camera_rescan should be true"
+    );
 }
 
 // ── MIDI: Clear All Mappings (inside collapsing header) ─────────────
@@ -757,5 +857,8 @@ fn collapsing_midi_clear_all_mappings() {
     harness.get_by_label("🗑 Clear All").click();
     harness.run();
 
-    assert!(harness.state().midi_clear_mappings, "midi_clear_mappings should be true");
+    assert!(
+        harness.state().midi_clear_mappings,
+        "midi_clear_mappings should be true"
+    );
 }

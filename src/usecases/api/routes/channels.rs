@@ -7,7 +7,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
-use crate::usecases::api::{SharedState, command_response};
+use crate::usecases::api::{command_response, SharedState};
 
 #[derive(Deserialize, ToSchema)]
 pub struct ChannelOpacityBody {
@@ -34,7 +34,10 @@ pub async fn remove_channel(
     State(state): State<SharedState>,
     Path(idx): Path<usize>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::RemoveChannel { channel_idx: idx }).await {
+    match state
+        .send_command(EngineCommand::RemoveChannel { channel_idx: idx })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -46,10 +49,13 @@ pub async fn set_opacity(
     Path(idx): Path<usize>,
     Json(body): Json<ChannelOpacityBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::SetChannelOpacity {
-        channel_idx: idx,
-        opacity: body.opacity,
-    }).await {
+    match state
+        .send_command(EngineCommand::SetChannelOpacity {
+            channel_idx: idx,
+            opacity: body.opacity,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -61,10 +67,13 @@ pub async fn set_blend_mode(
     Path(idx): Path<usize>,
     Json(body): Json<ChannelBlendModeBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::SetChannelBlendMode {
-        channel_idx: idx,
-        mode: body.mode,
-    }).await {
+    match state
+        .send_command(EngineCommand::SetChannelBlendMode {
+            channel_idx: idx,
+            mode: body.mode,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }

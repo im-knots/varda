@@ -3,19 +3,21 @@ pub mod panels;
 pub mod runner;
 pub mod widgets;
 
-use crate::mixer::CrossfadeEasing;
-use crate::modulation::{LFOWaveform, AudioBandPreset, AudioReactMode, ADSRStage, StepInterpolation};
 use crate::audio::AudioSourceId;
 use crate::camera::CameraId;
+use crate::mixer::CrossfadeEasing;
+use crate::modulation::{
+    ADSRStage, AudioBandPreset, AudioReactMode, LFOWaveform, StepInterpolation,
+};
 use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
-use crate::renderer::slicer::{DomeSetup, DomePreset, DomeGeometry};
+use crate::renderer::slicer::{DomeGeometry, DomePreset, DomeSetup};
 use crate::surface::detect::{DetectedContour, DetectionParams};
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
 // Re-export default render resolution constants from the engine layer
-pub use crate::app::{DEFAULT_RENDER_WIDTH, DEFAULT_RENDER_HEIGHT};
+pub use crate::app::{DEFAULT_RENDER_HEIGHT, DEFAULT_RENDER_WIDTH};
 
 /// UI-consumer-owned layout and selection state.
 ///
@@ -176,12 +178,16 @@ impl UILayoutState {
                 DomeAction::SetRadius(r) => self.dome_geometry.radius = *r,
                 DomeAction::SetTruncation(deg) => self.dome_geometry.truncation_degrees = *deg,
                 DomeAction::SetTilt(deg) => self.dome_geometry.tilt_degrees = *deg,
-                DomeAction::SetContentAzimuth(deg) => self.dome_geometry.content_azimuth_degrees = *deg,
-                DomeAction::SetContentElevation(deg) => self.dome_geometry.content_elevation_degrees = *deg,
+                DomeAction::SetContentAzimuth(deg) => {
+                    self.dome_geometry.content_azimuth_degrees = *deg
+                }
+                DomeAction::SetContentElevation(deg) => {
+                    self.dome_geometry.content_elevation_degrees = *deg
+                }
                 DomeAction::SetContentRoll(deg) => self.dome_geometry.content_roll_degrees = *deg,
-                DomeAction::RotateCamera { .. } |
-                DomeAction::ZoomCamera { .. } |
-                DomeAction::ResetCamera => {
+                DomeAction::RotateCamera { .. }
+                | DomeAction::ZoomCamera { .. }
+                | DomeAction::ResetCamera => {
                     // Camera actions are handled by the runner, not layout state
                 }
             }
@@ -229,61 +235,236 @@ pub struct ShaderParamsUI {
 
 /// Parameter update to apply after egui
 pub enum ParamUpdate {
-    GeneratorFloat { ch_idx: usize, deck_idx: usize, name: String, value: f32 },
-    GeneratorBool { ch_idx: usize, deck_idx: usize, name: String, value: bool },
-    GeneratorColor { ch_idx: usize, deck_idx: usize, name: String, value: [f32; 4] },
-    GeneratorResetToDefaults { ch_idx: usize, deck_idx: usize },
-    EffectFloat { ch_idx: usize, deck_idx: usize, effect_idx: usize, name: String, value: f32 },
-    EffectBool { ch_idx: usize, deck_idx: usize, effect_idx: usize, name: String, value: bool },
-    EffectColor { ch_idx: usize, deck_idx: usize, effect_idx: usize, name: String, value: [f32; 4] },
-    ChannelEffectFloat { ch_idx: usize, effect_idx: usize, name: String, value: f32 },
-    ChannelEffectBool { ch_idx: usize, effect_idx: usize, name: String, value: bool },
-    ChannelEffectColor { ch_idx: usize, effect_idx: usize, name: String, value: [f32; 4] },
-    MasterEffectFloat { effect_idx: usize, name: String, value: f32 },
-    MasterEffectBool { effect_idx: usize, name: String, value: bool },
-    MasterEffectColor { effect_idx: usize, name: String, value: [f32; 4] },
+    GeneratorFloat {
+        ch_idx: usize,
+        deck_idx: usize,
+        name: String,
+        value: f32,
+    },
+    GeneratorBool {
+        ch_idx: usize,
+        deck_idx: usize,
+        name: String,
+        value: bool,
+    },
+    GeneratorColor {
+        ch_idx: usize,
+        deck_idx: usize,
+        name: String,
+        value: [f32; 4],
+    },
+    GeneratorResetToDefaults {
+        ch_idx: usize,
+        deck_idx: usize,
+    },
+    EffectFloat {
+        ch_idx: usize,
+        deck_idx: usize,
+        effect_idx: usize,
+        name: String,
+        value: f32,
+    },
+    EffectBool {
+        ch_idx: usize,
+        deck_idx: usize,
+        effect_idx: usize,
+        name: String,
+        value: bool,
+    },
+    EffectColor {
+        ch_idx: usize,
+        deck_idx: usize,
+        effect_idx: usize,
+        name: String,
+        value: [f32; 4],
+    },
+    ChannelEffectFloat {
+        ch_idx: usize,
+        effect_idx: usize,
+        name: String,
+        value: f32,
+    },
+    ChannelEffectBool {
+        ch_idx: usize,
+        effect_idx: usize,
+        name: String,
+        value: bool,
+    },
+    ChannelEffectColor {
+        ch_idx: usize,
+        effect_idx: usize,
+        name: String,
+        value: [f32; 4],
+    },
+    MasterEffectFloat {
+        effect_idx: usize,
+        name: String,
+        value: f32,
+    },
+    MasterEffectBool {
+        effect_idx: usize,
+        name: String,
+        value: bool,
+    },
+    MasterEffectColor {
+        effect_idx: usize,
+        name: String,
+        value: [f32; 4],
+    },
 }
 
 /// Modulation action from UI
 pub enum ModulationAction {
-    AddLFO { waveform: LFOWaveform, frequency: f32 },
-    AddAudioFFT { preset: AudioBandPreset, source_id: Option<AudioSourceId> },
-    AddADSR { attack: f32, decay: f32, sustain: f32, release: f32 },
-    AddStepSequencer { num_steps: usize, rate: f32 },
-    RemoveSource { source_id: String },
-    UpdateLFOFrequency { source_id: String, frequency: f32 },
-    UpdateLFOWaveform { source_id: String, waveform: LFOWaveform },
-    UpdateLFOPhase { source_id: String, phase: f32 },
-    UpdateLFOAmplitude { source_id: String, amplitude: f32 },
-    UpdateLFOBipolar { source_id: String, bipolar: bool },
-    UpdateAudioSmoothing { source_id: String, smoothing: f32 },
-    UpdateAudioFreqLow { source_id: String, freq_low: f32 },
-    UpdateAudioFreqHigh { source_id: String, freq_high: f32 },
-    UpdateAudioGain { source_id: String, gain: f32 },
-    UpdateAudioPreset { source_id: String, preset: AudioBandPreset },
-    UpdateAudioSource { source_id: String, source_id_audio: Option<AudioSourceId> },
-    UpdateAudioMode { source_id: String, mode: AudioReactMode },
-    UpdateAudioNoiseGate { source_id: String, noise_gate: f32 },
+    AddLFO {
+        waveform: LFOWaveform,
+        frequency: f32,
+    },
+    AddAudioFFT {
+        preset: AudioBandPreset,
+        source_id: Option<AudioSourceId>,
+    },
+    AddADSR {
+        attack: f32,
+        decay: f32,
+        sustain: f32,
+        release: f32,
+    },
+    AddStepSequencer {
+        num_steps: usize,
+        rate: f32,
+    },
+    RemoveSource {
+        source_id: String,
+    },
+    UpdateLFOFrequency {
+        source_id: String,
+        frequency: f32,
+    },
+    UpdateLFOWaveform {
+        source_id: String,
+        waveform: LFOWaveform,
+    },
+    UpdateLFOPhase {
+        source_id: String,
+        phase: f32,
+    },
+    UpdateLFOAmplitude {
+        source_id: String,
+        amplitude: f32,
+    },
+    UpdateLFOBipolar {
+        source_id: String,
+        bipolar: bool,
+    },
+    UpdateAudioSmoothing {
+        source_id: String,
+        smoothing: f32,
+    },
+    UpdateAudioFreqLow {
+        source_id: String,
+        freq_low: f32,
+    },
+    UpdateAudioFreqHigh {
+        source_id: String,
+        freq_high: f32,
+    },
+    UpdateAudioGain {
+        source_id: String,
+        gain: f32,
+    },
+    UpdateAudioPreset {
+        source_id: String,
+        preset: AudioBandPreset,
+    },
+    UpdateAudioSource {
+        source_id: String,
+        source_id_audio: Option<AudioSourceId>,
+    },
+    UpdateAudioMode {
+        source_id: String,
+        mode: AudioReactMode,
+    },
+    UpdateAudioNoiseGate {
+        source_id: String,
+        noise_gate: f32,
+    },
     // ADSR updates
-    UpdateADSRAttack { source_id: String, attack: f32 },
-    UpdateADSRDecay { source_id: String, decay: f32 },
-    UpdateADSRSustain { source_id: String, sustain: f32 },
-    UpdateADSRRelease { source_id: String, release: f32 },
-    TriggerADSR { source_id: String },
-    ReleaseADSR { source_id: String },
+    UpdateADSRAttack {
+        source_id: String,
+        attack: f32,
+    },
+    UpdateADSRDecay {
+        source_id: String,
+        decay: f32,
+    },
+    UpdateADSRSustain {
+        source_id: String,
+        sustain: f32,
+    },
+    UpdateADSRRelease {
+        source_id: String,
+        release: f32,
+    },
+    TriggerADSR {
+        source_id: String,
+    },
+    ReleaseADSR {
+        source_id: String,
+    },
     // Step sequencer updates
-    UpdateStepValue { source_id: String, step_idx: usize, value: f32 },
-    UpdateStepRate { source_id: String, rate: f32 },
-    UpdateStepInterpolation { source_id: String, interpolation: StepInterpolation },
-    UpdateStepBipolar { source_id: String, bipolar: bool },
-    SetStepCount { source_id: String, count: usize },
+    UpdateStepValue {
+        source_id: String,
+        step_idx: usize,
+        value: f32,
+    },
+    UpdateStepRate {
+        source_id: String,
+        rate: f32,
+    },
+    UpdateStepInterpolation {
+        source_id: String,
+        interpolation: StepInterpolation,
+    },
+    UpdateStepBipolar {
+        source_id: String,
+        bipolar: bool,
+    },
+    SetStepCount {
+        source_id: String,
+        count: usize,
+    },
     // Mod-on-mod: assign a modulator to another modulator's parameter
-    AssignModOnMod { target_source_id: String, param_name: String, modulator_id: String, amount: f32 },
-    RemoveModOnMod { target_source_id: String, param_name: String },
-    AssignModulation { deck_uuid: String, param_name: String, source_id: String, amount: f32 },
-    RemoveAssignment { deck_uuid: String, param_name: String, source_id: String },
-    AssignEffectModulation { effect_uuid: String, param_name: String, source_id: String, amount: f32 },
-    RemoveEffectAssignment { effect_uuid: String, param_name: String },
+    AssignModOnMod {
+        target_source_id: String,
+        param_name: String,
+        modulator_id: String,
+        amount: f32,
+    },
+    RemoveModOnMod {
+        target_source_id: String,
+        param_name: String,
+    },
+    AssignModulation {
+        deck_uuid: String,
+        param_name: String,
+        source_id: String,
+        amount: f32,
+    },
+    RemoveAssignment {
+        deck_uuid: String,
+        param_name: String,
+        source_id: String,
+    },
+    AssignEffectModulation {
+        effect_uuid: String,
+        param_name: String,
+        source_id: String,
+        amount: f32,
+    },
+    RemoveEffectAssignment {
+        effect_uuid: String,
+        param_name: String,
+    },
 }
 
 /// Modulation source data snapshot for UI display (paired with UUID)
@@ -296,10 +477,35 @@ pub struct ModSourceUIEntry {
 /// Modulation source data snapshot for UI display
 #[derive(Clone)]
 pub enum ModSourceUI {
-    LFO { waveform: LFOWaveform, frequency: f32, phase: f32, amplitude: f32, bipolar: bool },
-    Audio { source_id: Option<AudioSourceId>, freq_low: f32, freq_high: f32, gain: f32, smoothing: f32, mode: AudioReactMode, noise_gate: f32 },
-    ADSR { attack: f32, decay: f32, sustain: f32, release: f32, stage: ADSRStage },
-    StepSequencer { steps: Vec<f32>, rate: f32, interpolation: StepInterpolation, bipolar: bool },
+    LFO {
+        waveform: LFOWaveform,
+        frequency: f32,
+        phase: f32,
+        amplitude: f32,
+        bipolar: bool,
+    },
+    Audio {
+        source_id: Option<AudioSourceId>,
+        freq_low: f32,
+        freq_high: f32,
+        gain: f32,
+        smoothing: f32,
+        mode: AudioReactMode,
+        noise_gate: f32,
+    },
+    ADSR {
+        attack: f32,
+        decay: f32,
+        sustain: f32,
+        release: f32,
+        stage: ADSRStage,
+    },
+    StepSequencer {
+        steps: Vec<f32>,
+        rate: f32,
+        interpolation: StepInterpolation,
+        bipolar: bool,
+    },
 }
 
 /// Infinite non-colliding modulation source colors via binary hue subdivision.
@@ -326,11 +532,7 @@ pub fn modulator_color(idx: usize) -> egui::Color32 {
     let (sat, lit) = RING_STYLES[ring.min(RING_STYLES.len() - 1)];
 
     let (r, g, b) = panels::utils::hsl_to_rgb(hue, sat, lit);
-    egui::Color32::from_rgb(
-        (r * 255.0) as u8,
-        (g * 255.0) as u8,
-        (b * 255.0) as u8,
-    )
+    egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
 /// Modulation assignment snapshot for UI display
@@ -448,7 +650,6 @@ pub struct ChannelRenderStats {
     pub render_time_ms: f32,
 }
 
-
 /// SRT source entry for the library panel config card
 #[derive(Clone)]
 pub struct SrtLibraryEntry {
@@ -515,7 +716,8 @@ pub struct UIData {
     /// Display string for current keyboard learn target
     pub keyboard_learn_target: Option<String>,
     /// All current keybindings (read-only snapshot for dispatch + settings panel)
-    pub keymap_bindings: std::collections::HashMap<crate::keymap::KeyCombo, crate::keymap::KeyTarget>,
+    pub keymap_bindings:
+        std::collections::HashMap<crate::keymap::KeyCombo, crate::keymap::KeyTarget>,
     /// Available transition shader names (from registry)
     pub transition_names: Vec<String>,
     /// Currently active transition name, if any
@@ -676,9 +878,22 @@ pub struct SequenceStepUI {
 /// UI-friendly step kind representation
 #[derive(Clone)]
 pub enum SequenceStepKindUI {
-    Fade { from_ch: usize, to_ch: usize, duration_val: f64, duration_unit: crate::channel::DurationUnit, easing: String, transition_shader: Option<String>, target_amount: f32 },
-    Wait { duration_val: f64, duration_unit: crate::channel::DurationUnit },
-    GoTo { step_index: usize },
+    Fade {
+        from_ch: usize,
+        to_ch: usize,
+        duration_val: f64,
+        duration_unit: crate::channel::DurationUnit,
+        easing: String,
+        transition_shader: Option<String>,
+        target_amount: f32,
+    },
+    Wait {
+        duration_val: f64,
+        duration_unit: crate::channel::DurationUnit,
+    },
+    GoTo {
+        step_index: usize,
+    },
 }
 
 /// Info about an available display monitor (for UI display selector)
@@ -714,31 +929,59 @@ pub enum OutputAction {
     /// Create a new windowed output (default)
     Create,
     /// Create a new headless output with the given target
-    CreateHeadless { target: crate::renderer::context::OutputTarget },
+    CreateHeadless {
+        target: crate::renderer::context::OutputTarget,
+    },
     /// Close/remove an output by index
     Close { idx: usize },
     /// Set the target for an output (may swap windowed↔headless)
-    SetTarget { idx: usize, target: crate::renderer::context::OutputTarget },
+    SetTarget {
+        idx: usize,
+        target: crate::renderer::context::OutputTarget,
+    },
     /// Start a headless output (begin recording/streaming)
     Start { idx: usize },
     /// Stop a headless output (end recording/streaming)
     Stop { idx: usize },
     /// Assign a surface to this output (adds a SurfaceAssignment)
-    AssignSurface { output_idx: usize, surface_uuid: String },
+    AssignSurface {
+        output_idx: usize,
+        surface_uuid: String,
+    },
     /// Remove a surface assignment from this output
-    UnassignSurface { output_idx: usize, assignment_idx: usize },
+    UnassignSurface {
+        output_idx: usize,
+        assignment_idx: usize,
+    },
     /// Toggle calibration mode on an output (windowed only)
     ToggleCalibration { idx: usize },
     /// Update a warp corner for a surface assignment
-    SetWarpCorner { output_idx: usize, assignment_idx: usize, corner_idx: usize, position: [f32; 2] },
+    SetWarpCorner {
+        output_idx: usize,
+        assignment_idx: usize,
+        corner_idx: usize,
+        position: [f32; 2],
+    },
     /// Reset warp to identity for a surface assignment
-    ResetWarp { output_idx: usize, assignment_idx: usize },
+    ResetWarp {
+        output_idx: usize,
+        assignment_idx: usize,
+    },
     /// Set edge blending configuration for an output
-    SetEdgeBlend { output_idx: usize, config: crate::renderer::edge_blend::EdgeBlendConfig },
+    SetEdgeBlend {
+        output_idx: usize,
+        config: crate::renderer::edge_blend::EdgeBlendConfig,
+    },
     /// Set edge blend mode (Auto / Manual) for an output
-    SetEdgeBlendMode { output_idx: usize, mode: crate::renderer::edge_blend::EdgeBlendMode },
+    SetEdgeBlendMode {
+        output_idx: usize,
+        mode: crate::renderer::edge_blend::EdgeBlendMode,
+    },
     /// Set output rotation (0°/90°/180°/270°)
-    SetRotation { idx: usize, rotation: crate::renderer::context::OutputRotation },
+    SetRotation {
+        idx: usize,
+        rotation: crate::renderer::context::OutputRotation,
+    },
 }
 
 /// Snapshot of a surface assignment for UI display
@@ -782,19 +1025,33 @@ pub enum SurfaceAction {
     /// Add a new rectangular surface
     Add { name: String, source: OutputSource },
     /// Add a polygon surface with specific vertices
-    AddPolygon { name: String, vertices: Vec<[f32; 2]>, source: OutputSource },
+    AddPolygon {
+        name: String,
+        vertices: Vec<[f32; 2]>,
+        source: OutputSource,
+    },
     /// Remove a surface by UUID
     Remove { uuid: String },
     /// Update the vertices of a surface (specific contour: 0=primary, 1+=extra)
-    UpdateVertices { uuid: String, contour: usize, vertices: Vec<[f32; 2]> },
+    UpdateVertices {
+        uuid: String,
+        contour: usize,
+        vertices: Vec<[f32; 2]>,
+    },
     /// Move a surface by a delta (moves all contours)
     MoveDelta { uuid: String, dx: f32, dy: f32 },
     /// Change the content source for a surface
     SetSource { uuid: String, source: OutputSource },
     /// Change the output type for a surface
-    SetOutputType { uuid: String, output_type: SurfaceOutputType },
+    SetOutputType {
+        uuid: String,
+        output_type: SurfaceOutputType,
+    },
     /// Change the content mapping mode for a surface
-    SetContentMapping { uuid: String, mapping: ContentMapping },
+    SetContentMapping {
+        uuid: String,
+        mapping: ContentMapping,
+    },
     /// Rename a surface
     Rename { uuid: String, name: String },
     /// Duplicate a surface (offset slightly so it's visible)
@@ -804,9 +1061,17 @@ pub enum SurfaceAction {
     /// Flip a surface vertically (mirror around its bounding box center Y)
     FlipVertical { uuid: String },
     /// Insert a vertex on an edge (after vertex at `after_vert_idx`)
-    InsertVertex { uuid: String, after_vert_idx: usize, position: [f32; 2] },
+    InsertVertex {
+        uuid: String,
+        after_vert_idx: usize,
+        position: [f32; 2],
+    },
     /// Add a circle surface with a CircleHint (vertices generated from hint)
-    AddCircle { name: String, hint: CircleHint, source: OutputSource },
+    AddCircle {
+        name: String,
+        hint: CircleHint,
+        source: OutputSource,
+    },
     /// Update a circle's radius and regenerate vertices
     SetCircleRadius { uuid: String, radius: f32 },
     /// Update a circle's side count and regenerate vertices
@@ -820,8 +1085,9 @@ pub enum SurfaceAction {
     /// Import surfaces from a file (path decided by UI file dialog)
     ImportFromFile { path: std::path::PathBuf },
     /// Confirm detected contours and create surfaces from them
-    ConfirmDetectedContours { contours: Vec<crate::surface::detect::DetectedContour> },
-
+    ConfirmDetectedContours {
+        contours: Vec<crate::surface::detect::DetectedContour>,
+    },
 }
 
 /// Dome-mode UI actions (camera interaction, mode toggle, config changes).
@@ -873,7 +1139,11 @@ pub enum CrossfaderAction {
     /// Snap to B (1.0) immediately
     SnapB,
     /// Start auto-transition to target over duration with easing
-    AutoTransition { target: f32, duration_secs: f32, easing: CrossfadeEasing },
+    AutoTransition {
+        target: f32,
+        duration_secs: f32,
+        easing: CrossfadeEasing,
+    },
     /// Start beat-synced transition
     BeatTransition { target: f32, beats: f32 },
 }
@@ -1112,7 +1382,11 @@ pub enum SequenceAction {
     /// Stop playing a sequence
     Stop(usize),
     /// Add a Fade step to a sequence
-    AddFade { seq_idx: usize, from_ch: usize, to_ch: usize },
+    AddFade {
+        seq_idx: usize,
+        from_ch: usize,
+        to_ch: usize,
+    },
     /// Add a Wait step to a sequence
     AddWait(usize),
     /// Add a GoTo step to a sequence
@@ -1120,25 +1394,61 @@ pub enum SequenceAction {
     /// Remove a step by index from a sequence
     RemoveStep { seq_idx: usize, step_idx: usize },
     /// Move a step (from_idx, to_idx) within a sequence
-    MoveStep { seq_idx: usize, from: usize, to: usize },
+    MoveStep {
+        seq_idx: usize,
+        from: usize,
+        to: usize,
+    },
     /// Update fade/wait step duration value
-    SetStepDuration { seq_idx: usize, step_idx: usize, value: f64 },
+    SetStepDuration {
+        seq_idx: usize,
+        step_idx: usize,
+        value: f64,
+    },
     /// Toggle step duration unit (cycles s → m → h → b → s)
     ToggleStepDurationUnit { seq_idx: usize, step_idx: usize },
     /// Set step duration unit directly
-    SetStepDurationUnit { seq_idx: usize, step_idx: usize, unit: crate::channel::DurationUnit },
+    SetStepDurationUnit {
+        seq_idx: usize,
+        step_idx: usize,
+        unit: crate::channel::DurationUnit,
+    },
     /// Set fade step easing
-    SetStepEasing { seq_idx: usize, step_idx: usize, easing: String },
+    SetStepEasing {
+        seq_idx: usize,
+        step_idx: usize,
+        easing: String,
+    },
     /// Set fade step from_ch
-    SetStepFromCh { seq_idx: usize, step_idx: usize, ch: usize },
+    SetStepFromCh {
+        seq_idx: usize,
+        step_idx: usize,
+        ch: usize,
+    },
     /// Set fade step to_ch
-    SetStepToCh { seq_idx: usize, step_idx: usize, ch: usize },
+    SetStepToCh {
+        seq_idx: usize,
+        step_idx: usize,
+        ch: usize,
+    },
     /// Set GoTo step target
-    SetGoToTarget { seq_idx: usize, step_idx: usize, target: usize },
+    SetGoToTarget {
+        seq_idx: usize,
+        step_idx: usize,
+        target: usize,
+    },
     /// Set fade step transition shader (None = opacity fade)
-    SetStepTransitionShader { seq_idx: usize, step_idx: usize, shader: Option<String> },
+    SetStepTransitionShader {
+        seq_idx: usize,
+        step_idx: usize,
+        shader: Option<String>,
+    },
     /// Set fade step target opacity amount (0.0–1.0)
-    SetStepTargetAmount { seq_idx: usize, step_idx: usize, amount: f32 },
+    SetStepTargetAmount {
+        seq_idx: usize,
+        step_idx: usize,
+        amount: f32,
+    },
 }
 
 impl UIActions {
@@ -1243,7 +1553,6 @@ impl UIActions {
         self.shader_to_add.is_some()
             || !self.images_to_add.is_empty()
             || !self.videos_to_add.is_empty()
-
             || self.deck_to_remove.is_some()
             || !self.deck_updates.is_empty()
             || !self.scaling_mode_updates.is_empty()
@@ -1328,20 +1637,22 @@ pub struct SequenceStepDrag {
 
 /// Helper to extract params from ShaderParams for UI display
 pub fn collect_params(params: &ShaderParams) -> Vec<ParamUIInfo> {
-    params.param_order.iter().filter_map(|name| {
-        let value = params.values.get(name)?;
-        let def = params.definitions.get(name);
-        Some(ParamUIInfo {
-            name: name.clone(),
-            label: def.and_then(|d| d.label.clone()),
-            value: *value,
-            min: def.and_then(|d| d.min),
-            max: def.and_then(|d| d.max),
+    params
+        .param_order
+        .iter()
+        .filter_map(|name| {
+            let value = params.values.get(name)?;
+            let def = params.definitions.get(name);
+            Some(ParamUIInfo {
+                name: name.clone(),
+                label: def.and_then(|d| d.label.clone()),
+                value: *value,
+                min: def.and_then(|d| d.min),
+                max: def.and_then(|d| d.max),
+            })
         })
-    }).collect()
+        .collect()
 }
-
-
 
 #[cfg(any(test, feature = "test-fixtures"))]
 impl UIData {
@@ -1365,18 +1676,29 @@ impl UIData {
             scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_a".to_string(),
-                params: vec![
-                    ParamUIInfo { name: "speed".to_string(), label: Some("Speed".to_string()), value: crate::params::ParamValue::Float(1.0), min: Some(0.0), max: Some(5.0) },
-                ],
+                params: vec![ParamUIInfo {
+                    name: "speed".to_string(),
+                    label: Some("Speed".to_string()),
+                    value: crate::params::ParamValue::Float(1.0),
+                    min: Some(0.0),
+                    max: Some(5.0),
+                }],
             },
-            effects: vec![
-                ("dfx00001".to_string(), "test_effect".to_string(), true, ShaderParamsUI {
+            effects: vec![(
+                "dfx00001".to_string(),
+                "test_effect".to_string(),
+                true,
+                ShaderParamsUI {
                     shader_name: "test_effect".to_string(),
-                    params: vec![
-                        ParamUIInfo { name: "amount".to_string(), label: Some("Amount".to_string()), value: crate::params::ParamValue::Float(0.5), min: Some(0.0), max: Some(1.0) },
-                    ],
-                }),
-            ],
+                    params: vec![ParamUIInfo {
+                        name: "amount".to_string(),
+                        label: Some("Amount".to_string()),
+                        value: crate::params::ParamValue::Float(0.5),
+                        min: Some(0.0),
+                        max: Some(1.0),
+                    }],
+                },
+            )],
             video_playback: None,
             auto_transition: None,
         };
@@ -1407,12 +1729,15 @@ impl UIData {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             decks: vec![deck_a0, deck_a1],
-            effects: vec![
-                ("cfx00001".to_string(), "ch_effect".to_string(), true, ShaderParamsUI {
+            effects: vec![(
+                "cfx00001".to_string(),
+                "ch_effect".to_string(),
+                true,
+                ShaderParamsUI {
                     shader_name: "ch_effect".to_string(),
                     params: vec![],
-                }),
-            ],
+                },
+            )],
         };
 
         let deck_b0 = DeckUIInfo {
@@ -1477,24 +1802,25 @@ impl UIData {
             ],
             shader_count: 7,
             channels: vec![channel_a, channel_b],
-            master_effect_info: vec![
-                ("mfx00001".to_string(), "master_effect".to_string(), true, ShaderParamsUI {
+            master_effect_info: vec![(
+                "mfx00001".to_string(),
+                "master_effect".to_string(),
+                true,
+                ShaderParamsUI {
                     shader_name: "master_effect".to_string(),
                     params: vec![],
-                }),
-            ],
-            modulation_sources: vec![
-                ModSourceUIEntry {
-                    uuid: "mod00001".to_string(),
-                    source: ModSourceUI::LFO {
-                        waveform: LFOWaveform::Sine,
-                        frequency: 1.0,
-                        phase: 0.0,
-                        amplitude: 1.0,
-                        bipolar: false,
-                    },
                 },
-            ],
+            )],
+            modulation_sources: vec![ModSourceUIEntry {
+                uuid: "mod00001".to_string(),
+                source: ModSourceUI::LFO {
+                    waveform: LFOWaveform::Sine,
+                    frequency: 1.0,
+                    phase: 0.0,
+                    amplitude: 1.0,
+                    bipolar: false,
+                },
+            }],
             modulation_current_values: {
                 let mut m = std::collections::HashMap::new();
                 m.insert("mod00001".to_string(), 0.5);
@@ -1502,7 +1828,13 @@ impl UIData {
             },
             modulation_assignments: {
                 let mut m = std::collections::HashMap::new();
-                m.insert("deck_a0000001:speed".to_string(), vec![ModAssignmentUI { source_id: "mod00001".to_string(), amount: 0.5 }]);
+                m.insert(
+                    "deck_a0000001:speed".to_string(),
+                    vec![ModAssignmentUI {
+                        source_id: "mod00001".to_string(),
+                        amount: 0.5,
+                    }],
+                );
                 m
             },
             audio: AudioUIData {
@@ -1570,8 +1902,18 @@ impl UIData {
             channel_names: vec!["Ch A".to_string(), "Ch B".to_string()],
             fps: 60.0,
             channel_render_stats: vec![
-                ChannelRenderStats { name: "Ch A".to_string(), avg_deck_fps: 60.0, active_deck_count: 2, render_time_ms: 1.5 },
-                ChannelRenderStats { name: "Ch B".to_string(), avg_deck_fps: 58.0, active_deck_count: 1, render_time_ms: 0.8 },
+                ChannelRenderStats {
+                    name: "Ch A".to_string(),
+                    avg_deck_fps: 60.0,
+                    active_deck_count: 2,
+                    render_time_ms: 1.5,
+                },
+                ChannelRenderStats {
+                    name: "Ch B".to_string(),
+                    avg_deck_fps: 58.0,
+                    active_deck_count: 1,
+                    render_time_ms: 0.8,
+                },
             ],
             gpu_device_name: "Test GPU".to_string(),
             gpu_backend: "Metal".to_string(),

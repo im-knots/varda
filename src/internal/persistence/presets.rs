@@ -1,8 +1,8 @@
 //! Preset persistence — save/load deck and channel presets from `.varda/presets/`.
 
-use anyhow::{Context, Result};
-use crate::scene::{DeckConfig, ChannelConfig};
 use super::Workspace;
+use crate::scene::{ChannelConfig, DeckConfig};
+use anyhow::{Context, Result};
 
 /// A loaded deck preset with its name and config.
 #[derive(Debug, Clone)]
@@ -45,15 +45,19 @@ impl PresetLibrary {
         workspace.ensure_preset_dirs()?;
         let filename = sanitize_filename(name);
         let path = workspace.deck_presets_dir().join(&filename);
-        let json = serde_json::to_string_pretty(config)
-            .context("Failed to serialize deck preset")?;
+        let json =
+            serde_json::to_string_pretty(config).context("Failed to serialize deck preset")?;
         super::atomic_write(&path, &json)?;
         log::info!("Saved deck preset '{}' to {}", name, path.display());
         Ok(())
     }
 
     /// Save a channel preset to disk.
-    pub fn save_channel_preset(workspace: &Workspace, name: &str, config: &ChannelConfig) -> Result<()> {
+    pub fn save_channel_preset(
+        workspace: &Workspace,
+        name: &str,
+        config: &ChannelConfig,
+    ) -> Result<()> {
         let errors = config.validate("channel_preset");
         for e in &errors {
             log::error!("Channel preset '{}' save: {}", name, e);
@@ -61,8 +65,8 @@ impl PresetLibrary {
         workspace.ensure_preset_dirs()?;
         let filename = sanitize_filename(name);
         let path = workspace.channel_presets_dir().join(&filename);
-        let json = serde_json::to_string_pretty(config)
-            .context("Failed to serialize channel preset")?;
+        let json =
+            serde_json::to_string_pretty(config).context("Failed to serialize channel preset")?;
         super::atomic_write(&path, &json)?;
         log::info!("Saved channel preset '{}' to {}", name, path.display());
         Ok(())
@@ -93,7 +97,8 @@ impl PresetLibrary {
                     continue;
                 }
             };
-            let stem = path.file_stem()
+            let stem = path
+                .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
                 .to_string();
@@ -116,9 +121,12 @@ impl PresetLibrary {
                         for w in &warnings {
                             log::warn!("Preset {}: {}", path.display(), w);
                         }
-                        self.channel_presets.push(ChannelPreset { name: stem, config });
+                        self.channel_presets
+                            .push(ChannelPreset { name: stem, config });
                     }
-                    Err(e) => log::warn!("Failed to parse channel preset {}: {}", path.display(), e),
+                    Err(e) => {
+                        log::warn!("Failed to parse channel preset {}: {}", path.display(), e)
+                    }
                 }
             }
         }
@@ -133,8 +141,15 @@ impl PresetLibrary {
 
 /// Sanitize a user-provided name into a safe filename.
 pub fn sanitize_filename(name: &str) -> String {
-    let sanitized: String = name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+    let sanitized: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let truncated = if sanitized.len() > 64 {
         sanitized[..64].to_string()
@@ -155,7 +170,9 @@ mod tests {
         DeckConfig {
             uuid: crate::deck::generate_short_uuid(),
             name: "test_deck".to_string(),
-            source: SourceConfig::SolidColor { color: [1.0, 0.0, 0.0, 1.0] },
+            source: SourceConfig::SolidColor {
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
             effects: vec![],
             opacity: 0.8,
             blend_mode: BlendModeConfig::Normal,
@@ -242,22 +259,28 @@ mod tests {
 
     #[test]
     fn test_deck_preset_roundtrip_with_modulation() {
-        use crate::scene::{ModulationRecipe, ModulationRecipeAssignment};
         use crate::modulation::ModulationSource;
+        use crate::scene::{ModulationRecipe, ModulationRecipeAssignment};
 
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path().to_path_buf());
         let mut config = sample_deck_config();
-        config.modulation = vec![
-            ModulationRecipe {
-                source_uuid: "test0001".to_string(),
-                source: ModulationSource::sine_lfo(2.0),
-                assignments: vec![
-                    ModulationRecipeAssignment { param: "brightness".into(), amount: 0.5, component: None },
-                    ModulationRecipeAssignment { param: "fx0:amount".into(), amount: 0.3, component: None },
-                ],
-            },
-        ];
+        config.modulation = vec![ModulationRecipe {
+            source_uuid: "test0001".to_string(),
+            source: ModulationSource::sine_lfo(2.0),
+            assignments: vec![
+                ModulationRecipeAssignment {
+                    param: "brightness".into(),
+                    amount: 0.5,
+                    component: None,
+                },
+                ModulationRecipeAssignment {
+                    param: "fx0:amount".into(),
+                    amount: 0.3,
+                    component: None,
+                },
+            ],
+        }];
         PresetLibrary::save_deck_preset(&ws, "mod_test", &config).unwrap();
         let lib = PresetLibrary::load(&ws);
         assert_eq!(lib.deck_presets.len(), 1);
@@ -270,19 +293,19 @@ mod tests {
 
     #[test]
     fn test_modulation_recipe_serde() {
-        use crate::scene::{ModulationRecipe, ModulationRecipeAssignment};
         use crate::modulation::ModulationSource;
+        use crate::scene::{ModulationRecipe, ModulationRecipeAssignment};
 
         let mut config = sample_deck_config();
-        config.modulation = vec![
-            ModulationRecipe {
-                source_uuid: "test0002".to_string(),
-                source: ModulationSource::adsr(0.1, 0.2, 0.7, 0.3),
-                assignments: vec![
-                    ModulationRecipeAssignment { param: "scale".into(), amount: -0.8, component: Some(1) },
-                ],
-            },
-        ];
+        config.modulation = vec![ModulationRecipe {
+            source_uuid: "test0002".to_string(),
+            source: ModulationSource::adsr(0.1, 0.2, 0.7, 0.3),
+            assignments: vec![ModulationRecipeAssignment {
+                param: "scale".into(),
+                amount: -0.8,
+                component: Some(1),
+            }],
+        }];
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"modulation\""));
         assert!(json.contains("\"scale\""));

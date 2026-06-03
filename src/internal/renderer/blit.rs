@@ -1,7 +1,7 @@
+use super::edge_blend::SurfaceOverlapZones;
 /// Simple blit pipeline for copying textures to the screen
 use anyhow::Result;
 use wgpu::util::DeviceExt;
-use super::edge_blend::SurfaceOverlapZones;
 
 /// Uniform buffer for blit parameters - 32 bytes (8 x f32)
 #[repr(C)]
@@ -30,7 +30,11 @@ impl BlitPipeline {
     }
 
     /// Create a blit pipeline with a specific blend state
-    pub fn with_blend(device: &wgpu::Device, target_format: wgpu::TextureFormat, blend_state: wgpu::BlendState) -> Result<Self> {
+    pub fn with_blend(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        blend_state: wgpu::BlendState,
+    ) -> Result<Self> {
         // Create bind group layout
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Blit Bind Group Layout"),
@@ -158,7 +162,11 @@ impl BlitPipeline {
     }
 
     /// Create a bind group for a texture view
-    pub fn create_bind_group(&self, device: &wgpu::Device, texture_view: &wgpu::TextureView) -> wgpu::BindGroup {
+    pub fn create_bind_group(
+        &self,
+        device: &wgpu::Device,
+        texture_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blit Bind Group"),
             layout: &self.bind_group_layout,
@@ -181,46 +189,74 @@ impl BlitPipeline {
 
     /// Update the opacity value (call before render)
     pub fn set_opacity(&self, queue: &wgpu::Queue, opacity: f32) {
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[BlitParams {
-            opacity,
-            rotation: 0,
-            uv_scale: [1.0, 1.0],
-            uv_offset: [0.0, 0.0],
-            _pad2: [0.0, 0.0],
-        }]));
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[BlitParams {
+                opacity,
+                rotation: 0,
+                uv_scale: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
+                _pad2: [0.0, 0.0],
+            }]),
+        );
     }
 
     /// Set UV transform parameters for scaling modes
-    pub fn set_uv_transform(&self, queue: &wgpu::Queue, opacity: f32, uv_scale: [f32; 2], uv_offset: [f32; 2]) {
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[BlitParams {
-            opacity,
-            rotation: 0,
-            uv_scale,
-            uv_offset,
-            _pad2: [0.0, 0.0],
-        }]));
+    pub fn set_uv_transform(
+        &self,
+        queue: &wgpu::Queue,
+        opacity: f32,
+        uv_scale: [f32; 2],
+        uv_offset: [f32; 2],
+    ) {
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[BlitParams {
+                opacity,
+                rotation: 0,
+                uv_scale,
+                uv_offset,
+                _pad2: [0.0, 0.0],
+            }]),
+        );
     }
 
     /// Set rotation for the final blit pass (0=0°, 1=90°, 2=180°, 3=270°).
     pub fn set_rotation(&self, queue: &wgpu::Queue, rotation: u32) {
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[BlitParams {
-            opacity: 1.0,
-            rotation,
-            uv_scale: [1.0, 1.0],
-            uv_offset: [0.0, 0.0],
-            _pad2: [0.0, 0.0],
-        }]));
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[BlitParams {
+                opacity: 1.0,
+                rotation,
+                uv_scale: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
+                _pad2: [0.0, 0.0],
+            }]),
+        );
     }
 
     /// Render a texture to a render pass
-    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, bind_group: &'a wgpu::BindGroup) {
+    pub fn render<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+    ) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, bind_group, &[]);
         render_pass.draw(0..3, 0..1);
     }
 
     /// Render with specific opacity (updates buffer and renders)
-    pub fn render_with_opacity<'a>(&'a self, queue: &wgpu::Queue, render_pass: &mut wgpu::RenderPass<'a>, bind_group: &'a wgpu::BindGroup, opacity: f32) {
+    pub fn render_with_opacity<'a>(
+        &'a self,
+        queue: &wgpu::Queue,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+        opacity: f32,
+    ) {
         self.set_opacity(queue, opacity);
         self.render(render_pass, bind_group);
     }
@@ -427,18 +463,34 @@ impl CompositeBlitPipeline {
     }
 
     /// Update blend parameters.
-    pub fn set_params(&self, queue: &wgpu::Queue, opacity: f32, blend_mode: u32, uv_scale: [f32; 2], uv_offset: [f32; 2]) {
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[CompositeParams {
-            opacity,
-            blend_mode,
-            uv_scale,
-            uv_offset,
-            _pad: [0.0, 0.0],
-        }]));
+    pub fn set_params(
+        &self,
+        queue: &wgpu::Queue,
+        opacity: f32,
+        blend_mode: u32,
+        uv_scale: [f32; 2],
+        uv_offset: [f32; 2],
+    ) {
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[CompositeParams {
+                opacity,
+                blend_mode,
+                uv_scale,
+                uv_offset,
+                _pad: [0.0, 0.0],
+            }]),
+        );
     }
 
     /// Create a bind group for compositing source onto destination.
-    pub fn create_bind_group(&self, device: &wgpu::Device, source_view: &wgpu::TextureView, dest_view: &wgpu::TextureView) -> wgpu::BindGroup {
+    pub fn create_bind_group(
+        &self,
+        device: &wgpu::Device,
+        source_view: &wgpu::TextureView,
+        dest_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Composite Bind Group"),
             layout: &self.bind_group_layout,
@@ -464,7 +516,11 @@ impl CompositeBlitPipeline {
     }
 
     /// Render: draw fullscreen quad with composite shader.
-    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, bind_group: &'a wgpu::BindGroup) {
+    pub fn render<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+    ) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, bind_group, &[]);
         render_pass.draw(0..3, 0..1);
@@ -636,7 +692,11 @@ impl PolygonBlitPipeline {
             ..Default::default()
         });
 
-        Ok(Self { pipeline, bind_group_layout, sampler })
+        Ok(Self {
+            pipeline,
+            bind_group_layout,
+            sampler,
+        })
     }
 
     /// Create a bind group for a texture with UV transform, homography warp, and overlap zones.
@@ -653,9 +713,10 @@ impl PolygonBlitPipeline {
     ) -> wgpu::BindGroup {
         let h = homography.copied().unwrap_or_else(|| {
             let id = PolygonParams::identity_homography();
-            [id[0][0], id[0][1], id[0][2], id[0][3],
-             id[1][0], id[1][1], id[1][2], id[1][3],
-             id[2][0], id[2][1], id[2][2], id[2][3]]
+            [
+                id[0][0], id[0][1], id[0][2], id[0][3], id[1][0], id[1][1], id[1][2], id[1][3],
+                id[2][0], id[2][1], id[2][2], id[2][3],
+            ]
         });
 
         let z = |i: usize| -> ([f32; 4], [f32; 4]) {
@@ -683,10 +744,14 @@ impl PolygonBlitPipeline {
                 h_row2: [h[8], h[9], h[10], h[11]],
                 zone_count: overlap_zones.zones.len().min(4) as f32,
                 _zone_pad: [0.0; 3],
-                zone0_rect: z0r, zone0_cfg: z0c,
-                zone1_rect: z1r, zone1_cfg: z1c,
-                zone2_rect: z2r, zone2_cfg: z2c,
-                zone3_rect: z3r, zone3_cfg: z3c,
+                zone0_rect: z0r,
+                zone0_cfg: z0c,
+                zone1_rect: z1r,
+                zone1_cfg: z1c,
+                zone2_rect: z2r,
+                zone2_cfg: z2c,
+                zone3_rect: z3r,
+                zone3_cfg: z3c,
             }]),
             usage: wgpu::BufferUsages::UNIFORM,
         });
@@ -695,9 +760,18 @@ impl PolygonBlitPipeline {
             label: Some("Polygon Blit Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(texture_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -726,7 +800,10 @@ impl PolygonBlitPipeline {
     pub fn triangulate(
         device: &wgpu::Device,
         canvas_verts: &[[f32; 2]],
-        bb_x: f32, bb_y: f32, bb_w: f32, bb_h: f32,
+        bb_x: f32,
+        bb_y: f32,
+        bb_w: f32,
+        bb_h: f32,
     ) -> (wgpu::Buffer, u32) {
         let n = canvas_verts.len();
         if n < 3 {
@@ -742,9 +819,20 @@ impl PolygonBlitPipeline {
         let num_tris = (indices.len() / 3) as u32;
 
         let to_vert = |v: &[f32; 2]| -> PolygonVertex {
-            let u = if bb_w > 0.0 { (v[0] - bb_x) / bb_w } else { 0.0 };
-            let t = if bb_h > 0.0 { (v[1] - bb_y) / bb_h } else { 0.0 };
-            PolygonVertex { position: *v, uv: [u, t] }
+            let u = if bb_w > 0.0 {
+                (v[0] - bb_x) / bb_w
+            } else {
+                0.0
+            };
+            let t = if bb_h > 0.0 {
+                (v[1] - bb_y) / bb_h
+            } else {
+                0.0
+            };
+            PolygonVertex {
+                position: *v,
+                uv: [u, t],
+            }
         };
 
         let mut gpu_verts: Vec<PolygonVertex> = Vec::with_capacity(indices.len());
@@ -830,24 +918,27 @@ impl PolygonBlitPipeline {
     }
 }
 
-
 // === Ear-clipping triangulation for concave polygons ===
 
 /// Ear-clipping triangulation for a simple (non-self-intersecting) polygon.
 /// Returns triangle indices into the vertex array.
 fn ear_clip_triangulate(verts: &[[f32; 2]]) -> Vec<u32> {
     let n = verts.len();
-    if n < 3 { return Vec::new(); }
+    if n < 3 {
+        return Vec::new();
+    }
 
     let mut idx: Vec<usize> = (0..n).collect();
     let mut result = Vec::with_capacity((n - 2) * 3);
 
     // Determine winding via signed area (y-down coords: negative = CCW)
-    let signed_area: f32 = (0..n).map(|i| {
-        let a = verts[i];
-        let b = verts[(i + 1) % n];
-        (b[0] - a[0]) * (b[1] + a[1])
-    }).sum();
+    let signed_area: f32 = (0..n)
+        .map(|i| {
+            let a = verts[i];
+            let b = verts[(i + 1) % n];
+            (b[0] - a[0]) * (b[1] + a[1])
+        })
+        .sum();
     let ccw = signed_area < 0.0;
 
     let mut remaining = n;
@@ -866,7 +957,9 @@ fn ear_clip_triangulate(verts: &[[f32; 2]]) -> Vec<u32> {
             idx.remove(i % remaining);
             remaining -= 1;
             fail_count = 0;
-            if i >= remaining && remaining > 0 { i = 0; }
+            if i >= remaining && remaining > 0 {
+                i = 0;
+            }
         } else {
             i = (i + 1) % remaining;
             fail_count += 1;
@@ -880,12 +973,29 @@ fn ear_clip_cross(o: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 }
 
-fn ear_clip_is_ear(verts: &[[f32; 2]], idx: &[usize], prev: usize, curr: usize, next: usize, ccw: bool) -> bool {
+fn ear_clip_is_ear(
+    verts: &[[f32; 2]],
+    idx: &[usize],
+    prev: usize,
+    curr: usize,
+    next: usize,
+    ccw: bool,
+) -> bool {
     let cross = ear_clip_cross(verts[prev], verts[curr], verts[next]);
-    if ccw { if cross <= 0.0 { return false; } } else { if cross >= 0.0 { return false; } }
+    if ccw {
+        if cross <= 0.0 {
+            return false;
+        }
+    } else {
+        if cross >= 0.0 {
+            return false;
+        }
+    }
 
     for &vi in idx {
-        if vi == prev || vi == curr || vi == next { continue; }
+        if vi == prev || vi == curr || vi == next {
+            continue;
+        }
         if ear_clip_point_in_tri(verts[vi], verts[prev], verts[curr], verts[next]) {
             return false;
         }

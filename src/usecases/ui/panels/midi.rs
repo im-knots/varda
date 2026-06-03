@@ -1,6 +1,6 @@
 //! MIDI devices and mappings panel.
 
-use super::super::{UIData, UIActions};
+use super::super::{UIActions, UIData};
 
 pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.horizontal(|ui| {
@@ -28,8 +28,12 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     ui.label(egui::RichText::new(status).color(color));
                     ui.label(&dev.name);
                     if dev.has_output {
-                        ui.label(egui::RichText::new("⇄").small().color(egui::Color32::from_rgb(100, 200, 255)))
-                            .on_hover_text("Has output (LED feedback)");
+                        ui.label(
+                            egui::RichText::new("⇄")
+                                .small()
+                                .color(egui::Color32::from_rgb(100, 200, 255)),
+                        )
+                        .on_hover_text("Has output (LED feedback)");
                     }
                     ui.label(egui::RichText::new(&dev.profile).small().weak());
                 });
@@ -45,25 +49,39 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     actions.midi_clear_mappings = true;
                 }
             });
-            egui::ScrollArea::vertical().max_height(150.0).id_salt("midi_mappings_scroll").show(ui, |ui| {
-                for mapping in &data.midi_mappings {
-                    ui.horizontal(|ui| {
-                        if ui.small_button("x").clicked() {
-                            actions.midi_remove_mapping.push(mapping.key);
-                        }
-                        ui.label(egui::RichText::new(&mapping.device_name).small().color(egui::Color32::from_rgb(180, 180, 255)));
-                        ui.label(egui::RichText::new(&mapping.key_display).small().strong());
-                        ui.label(egui::RichText::new("→").small());
-                        ui.label(egui::RichText::new(&mapping.param_path).small().color(egui::Color32::from_rgb(255, 200, 100)));
-                    });
-                }
-            });
+            egui::ScrollArea::vertical()
+                .max_height(150.0)
+                .id_salt("midi_mappings_scroll")
+                .show(ui, |ui| {
+                    for mapping in &data.midi_mappings {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("x").clicked() {
+                                actions.midi_remove_mapping.push(mapping.key);
+                            }
+                            ui.label(
+                                egui::RichText::new(&mapping.device_name)
+                                    .small()
+                                    .color(egui::Color32::from_rgb(180, 180, 255)),
+                            );
+                            ui.label(egui::RichText::new(&mapping.key_display).small().strong());
+                            ui.label(egui::RichText::new("→").small());
+                            ui.label(
+                                egui::RichText::new(&mapping.param_path)
+                                    .small()
+                                    .color(egui::Color32::from_rgb(255, 200, 100)),
+                            );
+                        });
+                    }
+                });
         });
     } else {
-        ui.label(egui::RichText::new("No mappings. Right-click anywhere → Enter MIDI Learn.").small().weak());
+        ui.label(
+            egui::RichText::new("No mappings. Right-click anywhere → Enter MIDI Learn.")
+                .small()
+                .weak(),
+        );
     }
 }
-
 
 #[cfg(test)]
 mod tests {

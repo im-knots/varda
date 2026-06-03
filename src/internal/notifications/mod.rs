@@ -277,11 +277,16 @@ mod tests {
         for i in 0..1100 {
             ns.info(format!("msg {}", i));
         }
-        assert!(ns.history.len() <= 1000,
-            "history should be capped at 1000, got {}", ns.history.len());
+        assert!(
+            ns.history.len() <= 1000,
+            "history should be capped at 1000, got {}",
+            ns.history.len()
+        );
         // Oldest messages should have been evicted
-        assert!(ns.history[0].message != "msg 0",
-            "oldest message should have been evicted");
+        assert!(
+            ns.history[0].message != "msg 0",
+            "oldest message should have been evicted"
+        );
     }
 
     #[test]

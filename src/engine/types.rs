@@ -6,16 +6,18 @@
 use serde::Serialize;
 
 // Re-export existing clean value types from domain modules
+pub use crate::audio::AudioSourceId;
+pub use crate::camera::CameraId;
 pub use crate::channel::BlendMode;
 pub use crate::deck::ScalingMode;
 pub use crate::mixer::CrossfadeEasing;
-pub use crate::video::LoopMode;
-pub use crate::modulation::{LFOWaveform, AudioReactMode, ADSRStage, StepInterpolation, AudioBandPreset};
-pub use crate::audio::AudioSourceId;
-pub use crate::camera::CameraId;
+pub use crate::modulation::{
+    ADSRStage, AudioBandPreset, AudioReactMode, LFOWaveform, StepInterpolation,
+};
 pub use crate::params::ParamValue;
 pub use crate::renderer::context::OutputSource;
-pub use crate::surface::{ContentMapping, SurfaceOutputType, CircleHint};
+pub use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
+pub use crate::video::LoopMode;
 
 /// Identifies where to apply an effect in the signal chain.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize, utoipa::ToSchema)]
@@ -250,10 +252,35 @@ pub struct ModulationSourceSnapshotEntry {
 
 #[derive(Clone, Serialize)]
 pub enum ModulationSourceSnapshot {
-    LFO { waveform: LFOWaveform, frequency: f32, phase: f32, amplitude: f32, bipolar: bool },
-    Audio { source_id: Option<AudioSourceId>, freq_low: f32, freq_high: f32, gain: f32, smoothing: f32, mode: AudioReactMode, noise_gate: f32 },
-    ADSR { attack: f32, decay: f32, sustain: f32, release: f32, stage: ADSRStage },
-    StepSequencer { steps: Vec<f32>, rate: f32, interpolation: StepInterpolation, bipolar: bool },
+    LFO {
+        waveform: LFOWaveform,
+        frequency: f32,
+        phase: f32,
+        amplitude: f32,
+        bipolar: bool,
+    },
+    Audio {
+        source_id: Option<AudioSourceId>,
+        freq_low: f32,
+        freq_high: f32,
+        gain: f32,
+        smoothing: f32,
+        mode: AudioReactMode,
+        noise_gate: f32,
+    },
+    ADSR {
+        attack: f32,
+        decay: f32,
+        sustain: f32,
+        release: f32,
+        stage: ADSRStage,
+    },
+    StepSequencer {
+        steps: Vec<f32>,
+        rate: f32,
+        interpolation: StepInterpolation,
+        bipolar: bool,
+    },
 }
 
 #[derive(Clone, Serialize)]
@@ -282,9 +309,22 @@ pub struct SequenceStepSnapshot {
 
 #[derive(Clone, Serialize)]
 pub enum SequenceStepKindSnapshot {
-    Fade { from_ch: usize, to_ch: usize, duration_val: f64, duration_unit: crate::channel::DurationUnit, easing: String, transition_shader: Option<String>, target_amount: f32 },
-    Wait { duration_val: f64, duration_unit: crate::channel::DurationUnit },
-    GoTo { step_index: usize },
+    Fade {
+        from_ch: usize,
+        to_ch: usize,
+        duration_val: f64,
+        duration_unit: crate::channel::DurationUnit,
+        easing: String,
+        transition_shader: Option<String>,
+        target_amount: f32,
+    },
+    Wait {
+        duration_val: f64,
+        duration_unit: crate::channel::DurationUnit,
+    },
+    GoTo {
+        step_index: usize,
+    },
 }
 
 // ── Output Snapshot ─────────────────────────────────────────────────
@@ -429,9 +469,16 @@ mod tests {
                 sequences: vec![],
             },
             audio: AudioSnapshot {
-                level: 0.0, bass: 0.0, mid: 0.0, treble: 0.0,
-                bpm: None, beat_phase: 0.0, enabled: false,
-                devices: vec![], fft: vec![], sample_rate: 48000.0,
+                level: 0.0,
+                bass: 0.0,
+                mid: 0.0,
+                treble: 0.0,
+                bpm: None,
+                beat_phase: 0.0,
+                enabled: false,
+                devices: vec![],
+                fft: vec![],
+                sample_rate: 48000.0,
             },
             modulation: ModulationSnapshot {
                 sources: vec![],
@@ -439,22 +486,35 @@ mod tests {
                 assignments: Default::default(),
             },
             outputs: OutputSnapshot {
-                windows: vec![], surfaces: vec![], monitors: vec![],
+                windows: vec![],
+                surfaces: vec![],
+                monitors: vec![],
             },
             registry: RegistrySnapshot {
-                generators: vec![], filters: vec![], shader_count: 0,
+                generators: vec![],
+                filters: vec![],
+                shader_count: 0,
             },
             midi: MidiSnapshot {
-                devices: vec![], mappings: vec![],
-                learn_active: false, learn_target: None,
+                devices: vec![],
+                mappings: vec![],
+                learn_active: false,
+                learn_target: None,
             },
             cameras: CameraSnapshot { devices: vec![] },
             clock: ClockSnapshot {
-                bpm: None, beat_phase: 0.0, source_label: "None".into(),
-                device_name: None, active: false,
-                detected_midi_sources: vec![], osc_active: false, osc_bpm: None,
-                audio_bpm: None, preference_label: "Auto".into(),
-                preference_force_device_id: None, manual_bpm: None,
+                bpm: None,
+                beat_phase: 0.0,
+                source_label: "None".into(),
+                device_name: None,
+                active: false,
+                detected_midi_sources: vec![],
+                osc_active: false,
+                osc_bpm: None,
+                audio_bpm: None,
+                preference_label: "Auto".into(),
+                preference_force_device_id: None,
+                manual_bpm: None,
             },
             fps: 60.0,
             frame_count: 0,
@@ -472,37 +532,62 @@ mod tests {
     fn engine_state_clone() {
         let state = EngineState {
             mixer: MixerSnapshot {
-                channels: vec![], crossfader: 0.5,
-                auto_crossfade_active: false, auto_crossfade_progress: 0.0,
-                master_effects: vec![], active_transition_name: None,
-                transition_names: vec![], sequences: vec![],
+                channels: vec![],
+                crossfader: 0.5,
+                auto_crossfade_active: false,
+                auto_crossfade_progress: 0.0,
+                master_effects: vec![],
+                active_transition_name: None,
+                transition_names: vec![],
+                sequences: vec![],
             },
             audio: AudioSnapshot {
-                level: 0.0, bass: 0.0, mid: 0.0, treble: 0.0,
-                bpm: Some(120.0), beat_phase: 0.0, enabled: true,
-                devices: vec![], fft: vec![], sample_rate: 48000.0,
+                level: 0.0,
+                bass: 0.0,
+                mid: 0.0,
+                treble: 0.0,
+                bpm: Some(120.0),
+                beat_phase: 0.0,
+                enabled: true,
+                devices: vec![],
+                fft: vec![],
+                sample_rate: 48000.0,
             },
             modulation: ModulationSnapshot {
-                sources: vec![], current_values: Default::default(),
+                sources: vec![],
+                current_values: Default::default(),
                 assignments: Default::default(),
             },
             outputs: OutputSnapshot {
-                windows: vec![], surfaces: vec![], monitors: vec![],
+                windows: vec![],
+                surfaces: vec![],
+                monitors: vec![],
             },
             registry: RegistrySnapshot {
-                generators: vec![("Sine".into(), 0)], filters: vec![], shader_count: 1,
+                generators: vec![("Sine".into(), 0)],
+                filters: vec![],
+                shader_count: 1,
             },
             midi: MidiSnapshot {
-                devices: vec![], mappings: vec![],
-                learn_active: false, learn_target: None,
+                devices: vec![],
+                mappings: vec![],
+                learn_active: false,
+                learn_target: None,
             },
             cameras: CameraSnapshot { devices: vec![] },
             clock: ClockSnapshot {
-                bpm: Some(120.0), beat_phase: 0.0, source_label: "Audio".into(),
-                device_name: None, active: true,
-                detected_midi_sources: vec![], osc_active: false, osc_bpm: None,
-                audio_bpm: Some(120.0), preference_label: "Auto".into(),
-                preference_force_device_id: None, manual_bpm: None,
+                bpm: Some(120.0),
+                beat_phase: 0.0,
+                source_label: "Audio".into(),
+                device_name: None,
+                active: true,
+                detected_midi_sources: vec![],
+                osc_active: false,
+                osc_bpm: None,
+                audio_bpm: Some(120.0),
+                preference_label: "Auto".into(),
+                preference_force_device_id: None,
+                manual_bpm: None,
             },
             fps: 59.9,
             frame_count: 42,
@@ -534,7 +619,10 @@ mod tests {
             shader_name: "Color Bars".into(),
         };
         match cmd {
-            crate::engine::EngineCommand::AddDeck { channel_idx, shader_name } => {
+            crate::engine::EngineCommand::AddDeck {
+                channel_idx,
+                shader_name,
+            } => {
                 assert_eq!(channel_idx, 0);
                 assert_eq!(shader_name, "Color Bars");
             }

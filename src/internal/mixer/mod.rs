@@ -1,18 +1,17 @@
 //! Mixer - Top-level compositor that owns channels, crossfader, master effects, and modulation
 
-mod transition;
 mod render;
+mod transition;
 
 pub use transition::{
-    CrossfadeEasing, AutoCrossfade, BeatSyncCrossfade,
-    TransitionSequence, TransitionStep, StepKind, SequencerState,
-    TransitionEffect,
+    AutoCrossfade, BeatSyncCrossfade, CrossfadeEasing, SequencerState, StepKind, TransitionEffect,
+    TransitionSequence, TransitionStep,
 };
 
 use crate::channel::Channel;
 use crate::deck::Effect;
 use crate::modulation::ModulationEngine;
-use crate::renderer::{GpuContext, BlitPipeline, CompositeBlitPipeline};
+use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext};
 use anyhow::Result;
 
 /// Mixer - Top-level compositor
@@ -79,9 +78,11 @@ impl Mixer {
         let composite_view = composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let effect_ping_texture = context.create_render_texture(width, height);
-        let effect_ping_view = effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let effect_ping_view =
+            effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let composite_pipeline = CompositeBlitPipeline::new(&context.device, context.texture_format)?;
+        let composite_pipeline =
+            CompositeBlitPipeline::new(&context.device, context.texture_format)?;
         let blit_pipeline = BlitPipeline::with_blend(
             &context.device,
             context.texture_format,
@@ -119,9 +120,13 @@ impl Mixer {
     /// Resize mixer and all channel textures
     pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
         self.composite_texture = context.create_render_texture(width, height);
-        self.composite_view = self.composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.composite_view = self
+            .composite_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.effect_ping_texture = context.create_render_texture(width, height);
-        self.effect_ping_view = self.effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.effect_ping_view = self
+            .effect_ping_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         for channel in &mut self.channels {
             channel.resize(context, width, height);
@@ -273,8 +278,13 @@ impl Mixer {
     /// Replace all channels (used by persistence restore).
     /// Also updates next_channel_index based on the highest "Ch N" name.
     pub fn replace_channels(&mut self, channels: Vec<Channel>) {
-        let max_idx = channels.iter()
-            .filter_map(|ch| ch.name.strip_prefix("Ch ").and_then(|s| s.parse::<usize>().ok()))
+        let max_idx = channels
+            .iter()
+            .filter_map(|ch| {
+                ch.name
+                    .strip_prefix("Ch ")
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
             .max()
             .map(|n| n + 1)
             .unwrap_or(channels.len());
@@ -284,7 +294,11 @@ impl Mixer {
 
     /// Set the crossfader position directly (used by persistence restore).
     pub fn set_crossfader(&mut self, value: f32) {
-        self.crossfader = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.5 };
+        self.crossfader = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
     }
 
     /// Replace the modulation engine (used by persistence restore).
@@ -309,7 +323,6 @@ impl Mixer {
         self.next_channel_index += 1;
         name
     }
-
 }
 
 /// Generate a channel name from its index: 0→"Ch 0", 1→"Ch 1", 2→"Ch 2", etc.
@@ -421,7 +434,7 @@ mod tests {
     fn auto_crossfade_with_easing() {
         let mut ac = AutoCrossfade::new(0.0, 1.0, 2.0, CrossfadeEasing::EaseInOut);
         let val = ac.tick(1.0).unwrap(); // 50% through with ease-in-out
-        // Smoothstep at 0.5 = 0.5
+                                         // Smoothstep at 0.5 = 0.5
         assert!((val - 0.5).abs() < 1e-5);
     }
 
@@ -525,7 +538,10 @@ mod tests {
         // Move last to first (from=2, to=0)
         let e = effects.remove(2);
         effects.insert(0, e);
-        assert_eq!(effects, vec!["master_feedback", "master_blur", "master_color"]);
+        assert_eq!(
+            effects,
+            vec!["master_feedback", "master_blur", "master_color"]
+        );
     }
 
     // ── Chaos Tests Round 2: Crossfader/opacity arithmetic ──────────────

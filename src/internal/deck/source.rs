@@ -1,14 +1,14 @@
 //! Deck constructors — creating decks from shaders, videos, images, cameras, and solid colors.
 
-use crate::isf::{ISFShader, ISFMetadata, compile_glsl_to_spirv};
+use super::{Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, ScalingMode};
+use crate::isf::{compile_glsl_to_spirv, ISFMetadata, ISFShader};
 use crate::params::ShaderParams;
-use crate::renderer::{GpuContext, UnifiedPipeline, BlitPipeline, HapConvertPipeline};
-use crate::video::{VideoPlayer, HapTextureFormat, hap::HapPlayer};
+use crate::renderer::{BlitPipeline, GpuContext, HapConvertPipeline, UnifiedPipeline};
+use crate::video::{hap::HapPlayer, HapTextureFormat, VideoPlayer};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
-use super::{Deck, DeckSource, ExternalSourceKind, ScalingMode, PassBuffer, Effect};
 
 /// Load ISF IMPORTED images from metadata and create GPU textures.
 /// Returns (name, texture, view) sorted alphabetically by name for deterministic binding order.
@@ -25,17 +25,24 @@ pub(crate) fn load_imported_textures(
     };
 
     let shader_dir = shader_file_path
-        .map(|p| std::path::Path::new(p).parent().unwrap_or(std::path::Path::new(".")))
+        .map(|p| {
+            std::path::Path::new(p)
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+        })
         .unwrap_or(std::path::Path::new("."));
 
     let mut entries: Vec<_> = imported.iter().collect();
     entries.sort_by_key(|(name, _)| (*name).clone());
 
     // Collect paths for parallel decode
-    let load_list: Vec<_> = entries.iter().filter_map(|(name, import_def)| {
-        let rel_path = import_def.path.as_ref()?;
-        Some(((*name).clone(), shader_dir.join(rel_path)))
-    }).collect();
+    let load_list: Vec<_> = entries
+        .iter()
+        .filter_map(|(name, import_def)| {
+            let rel_path = import_def.path.as_ref()?;
+            Some(((*name).clone(), shader_dir.join(rel_path)))
+        })
+        .collect();
 
     if load_list.is_empty() {
         return Vec::new();
@@ -45,20 +52,29 @@ pub(crate) fn load_imported_textures(
 
     // Parallel PNG decode on threads, sequential GPU upload
     let decoded: Vec<_> = std::thread::scope(|s| {
-        let handles: Vec<_> = load_list.iter().map(|(name, path)| {
-            let name = name.clone();
-            let path = path.clone();
-            s.spawn(move || {
-                match image::open(&path) {
+        let handles: Vec<_> = load_list
+            .iter()
+            .map(|(name, path)| {
+                let name = name.clone();
+                let path = path.clone();
+                s.spawn(move || match image::open(&path) {
                     Ok(img) => Some((name, img.to_rgba8())),
                     Err(e) => {
-                        log::warn!("IMPORTED '{}': failed to load '{}': {}", name, path.display(), e);
+                        log::warn!(
+                            "IMPORTED '{}': failed to load '{}': {}",
+                            name,
+                            path.display(),
+                            e
+                        );
                         None
                     }
-                }
+                })
             })
-        }).collect();
-        handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok().flatten())
+            .collect()
     });
 
     // GPU upload (fast, sequential)
@@ -67,7 +83,11 @@ pub(crate) fn load_imported_textures(
         let (w, h) = img.dimensions();
         let texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("Imported: {}", name)),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -89,7 +109,11 @@ pub(crate) fn load_imported_textures(
                 bytes_per_row: Some(4 * w),
                 rows_per_image: Some(h),
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -100,19 +124,18 @@ pub(crate) fn load_imported_textures(
     result.sort_by(|a, b| a.0.cmp(&b.0));
 
     let elapsed = t0.elapsed();
-    log::info!("IMPORTED: loaded {} textures in {:.0?} (parallel decode)", result.len(), elapsed);
+    log::info!(
+        "IMPORTED: loaded {} textures in {:.0?} (parallel decode)",
+        result.len(),
+        elapsed
+    );
 
     result
 }
 
 impl Deck {
     /// Create a new deck from an ISF shader
-    pub fn new(
-        context: &GpuContext,
-        shader: ISFShader,
-        width: u32,
-        height: u32,
-    ) -> Result<Self> {
+    pub fn new(context: &GpuContext, shader: ISFShader, width: u32, height: u32) -> Result<Self> {
         // Compile to SPIR-V
         let spirv = compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
             .context("Failed to compile shader to SPIR-V")?;
@@ -125,40 +148,64 @@ impl Deck {
         let (texture, texture_b) = if has_passes {
             let tex = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Deck Texture (Linear)"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             let tex_b = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Deck Texture B (Linear)"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             (tex, tex_b)
         } else {
             let tex = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Deck Texture (Linear)"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             let tex_b = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Deck Texture B (Linear)"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             (tex, tex_b)
@@ -187,13 +234,18 @@ impl Deck {
 
             let tex_a = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("Pass Buffer A: {}", target_name)),
-                size: wgpu::Extent3d { width: pass_width, height: pass_height, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
+                size: wgpu::Extent3d {
+                    width: pass_width,
+                    height: pass_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                     | wgpu::TextureUsages::TEXTURE_BINDING
-                     | wgpu::TextureUsages::COPY_DST,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             let view_a = tex_a.create_view(&wgpu::TextureViewDescriptor::default());
@@ -201,13 +253,18 @@ impl Deck {
             let (tex_b_buf, view_b) = if is_persistent {
                 let tex = context.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&format!("Pass Buffer B: {}", target_name)),
-                    size: wgpu::Extent3d { width: pass_width, height: pass_height, depth_or_array_layers: 1 },
-                    mip_level_count: 1, sample_count: 1,
+                    size: wgpu::Extent3d {
+                        width: pass_width,
+                        height: pass_height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                         | wgpu::TextureUsages::TEXTURE_BINDING
-                         | wgpu::TextureUsages::COPY_DST,
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
                 let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -216,25 +273,25 @@ impl Deck {
                 (None, None)
             };
 
-            pass_buffers.insert(target_name.clone(), PassBuffer {
-                name: target_name,
-                texture_a: tex_a,
-                view_a,
-                texture_b: tex_b_buf,
-                view_b,
-                persistent: is_persistent,
-                read_idx: 0,
-            });
+            pass_buffers.insert(
+                target_name.clone(),
+                PassBuffer {
+                    name: target_name,
+                    texture_a: tex_a,
+                    view_a,
+                    texture_b: tex_b_buf,
+                    view_b,
+                    persistent: is_persistent,
+                    read_idx: 0,
+                },
+            );
         }
 
         let uses_float = passes.iter().any(|p| p.float.unwrap_or(false));
 
         // Load ISF IMPORTED images
-        let imported_textures = load_imported_textures(
-            &shader.metadata,
-            shader.file_path.as_deref(),
-            context,
-        );
+        let imported_textures =
+            load_imported_textures(&shader.metadata, shader.file_path.as_deref(), context);
 
         let pipeline = UnifiedPipeline::new(
             &context.device,
@@ -244,12 +301,18 @@ impl Deck {
             pass_buffers.len(),
             uses_float,
             imported_textures.len(),
-        ).context("Failed to create shader pipeline")?;
+        )
+        .context("Failed to create shader pipeline")?;
 
         let now = Instant::now();
         let source_name = shader.name();
 
-        let inputs = shader.metadata.inputs.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let inputs = shader
+            .metadata
+            .inputs
+            .as_ref()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let generator_params = ShaderParams::from_inputs(inputs);
         let generator_phase_inputs = shader.metadata.phase_inputs.clone();
 
@@ -297,12 +360,16 @@ impl Deck {
                 if s == "$WIDTH" || s == "$HEIGHT" {
                     base_size
                 } else if s.starts_with("$WIDTH/") || s.starts_with("$HEIGHT/") {
-                    let divisor: u32 = s.split('/').nth(1)
+                    let divisor: u32 = s
+                        .split('/')
+                        .nth(1)
                         .and_then(|d| d.trim().parse().ok())
                         .unwrap_or(1);
                     base_size / divisor.max(1)
                 } else if s.starts_with("$WIDTH*") || s.starts_with("$HEIGHT*") {
-                    let multiplier: u32 = s.split('*').nth(1)
+                    let multiplier: u32 = s
+                        .split('*')
+                        .nth(1)
                         .and_then(|m| m.trim().parse().ok())
                         .unwrap_or(1);
                     base_size * multiplier
@@ -336,13 +403,17 @@ impl Deck {
         height: u32,
     ) -> Result<Self> {
         let source_path_str = path.as_ref().to_string_lossy().to_string();
-        let source_name = path.as_ref()
+        let source_name = path
+            .as_ref()
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or("video")
             .to_string();
 
-        let gpu_has_bc = context.device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let gpu_has_bc = context
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
         let hap_format = if gpu_has_bc {
             crate::video::detect_hap_codec(&path).ok().flatten()
         } else {
@@ -357,35 +428,52 @@ impl Deck {
 
             let video_texture = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("HAP Video Texture"),
-                size: wgpu::Extent3d { width: vid_w, height: vid_h, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
+                size: wgpu::Extent3d {
+                    width: vid_w,
+                    height: vid_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: tex_format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            let video_texture_view = video_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let video_texture_view =
+                video_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            let (alpha_texture, alpha_texture_view) = if matches!(hap_fmt, HapTextureFormat::Bc3YCoCg) {
-                let alpha_tex = context.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("HAP Alpha Texture"),
-                    size: wgpu::Extent3d { width: vid_w, height: vid_h, depth_or_array_layers: 1 },
-                    mip_level_count: 1, sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Bc4RUnorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-                let alpha_view = alpha_tex.create_view(&wgpu::TextureViewDescriptor::default());
-                (Some(alpha_tex), Some(alpha_view))
-            } else {
-                (None, None)
-            };
+            let (alpha_texture, alpha_texture_view) =
+                if matches!(hap_fmt, HapTextureFormat::Bc3YCoCg) {
+                    let alpha_tex = context.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("HAP Alpha Texture"),
+                        size: wgpu::Extent3d {
+                            width: vid_w,
+                            height: vid_h,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Bc4RUnorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                    let alpha_view = alpha_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                    (Some(alpha_tex), Some(alpha_view))
+                } else {
+                    (None, None)
+                };
 
             let dummy_alpha = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("HAP Dummy Alpha"),
-                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::R8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
@@ -393,17 +481,29 @@ impl Deck {
             });
             context.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &dummy_alpha, mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                    texture: &dummy_alpha,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
                 &[255u8],
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: Some(1) },
-                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(1),
+                    rows_per_image: Some(1),
+                },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
             );
             let dummy_alpha_view = dummy_alpha.create_view(&wgpu::TextureViewDescriptor::default());
 
-            let convert_pipeline = HapConvertPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
-            let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+            let convert_pipeline =
+                HapConvertPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+            let blit_pipeline =
+                BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
 
             log::info!("Using HAP GPU path for '{}' ({:?})", source_name, hap_fmt);
             DeckSource::HapVideo {
@@ -421,15 +521,22 @@ impl Deck {
             let player = VideoPlayer::new(&path)?;
             let video_texture = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Video Frame Texture"),
-                size: wgpu::Extent3d { width: player.width(), height: player.height(), depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
+                size: wgpu::Extent3d {
+                    width: player.width(),
+                    height: player.height(),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            let video_texture_view = video_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+            let video_texture_view =
+                video_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let blit_pipeline =
+                BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
 
             DeckSource::Video {
                 player,
@@ -439,7 +546,14 @@ impl Deck {
             }
         };
 
-        Self::build_media_deck(context, source_name, Some(source_path_str), source, width, height)
+        Self::build_media_deck(
+            context,
+            source_name,
+            Some(source_path_str),
+            source,
+            width,
+            height,
+        )
     }
 
     /// Create a new deck from an image file (PNG, JPG, BMP, etc.)
@@ -454,7 +568,8 @@ impl Deck {
             .with_context(|| format!("Failed to load image: {}", path.as_ref().display()))?;
         let rgba = img.to_rgba8();
 
-        let source_name = path.as_ref()
+        let source_name = path
+            .as_ref()
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or("image")
@@ -477,8 +592,13 @@ impl Deck {
 
         let img_texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Image Source Texture"),
-            size: wgpu::Extent3d { width: img_w, height: img_h, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width: img_w,
+                height: img_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
@@ -487,14 +607,22 @@ impl Deck {
 
         context.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &img_texture, mip_level: 0,
-                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                texture: &img_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
             },
             &rgba,
             wgpu::TexelCopyBufferLayout {
-                offset: 0, bytes_per_row: Some(4 * img_w), rows_per_image: Some(img_h),
+                offset: 0,
+                bytes_per_row: Some(4 * img_w),
+                rows_per_image: Some(img_h),
             },
-            wgpu::Extent3d { width: img_w, height: img_h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: img_w,
+                height: img_h,
+                depth_or_array_layers: 1,
+            },
         );
 
         let img_texture_view = img_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -509,7 +637,14 @@ impl Deck {
             scaling_mode: ScalingMode::default(),
         };
 
-        Self::build_media_deck(context, source_name, Some(source_path_str), source, width, height)
+        Self::build_media_deck(
+            context,
+            source_name,
+            Some(source_path_str),
+            source,
+            width,
+            height,
+        )
     }
 
     /// Create a new deck with a solid color fill
@@ -527,7 +662,12 @@ impl Deck {
         );
 
         let source = DeckSource::SolidColor {
-            color: [color[0] as f64, color[1] as f64, color[2] as f64, color[3] as f64],
+            color: [
+                color[0] as f64,
+                color[1] as f64,
+                color[2] as f64,
+                color[3] as f64,
+            ],
         };
 
         Self::build_media_deck(context, source_name, None, source, width, height)
@@ -569,8 +709,13 @@ impl Deck {
     ) -> Result<Self> {
         let texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Deck Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
@@ -580,8 +725,13 @@ impl Deck {
 
         let texture_b = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Deck Texture B"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
@@ -648,8 +798,13 @@ impl Deck {
         height: u32,
     ) -> Result<Self> {
         Self::new_from_external(
-            context, ExternalSourceKind::Ndi(receiver_idx),
-            format!("📡 {}", source_name), source_width, source_height, width, height,
+            context,
+            ExternalSourceKind::Ndi(receiver_idx),
+            format!("📡 {}", source_name),
+            source_width,
+            source_height,
+            width,
+            height,
         )
     }
 
@@ -664,8 +819,13 @@ impl Deck {
         height: u32,
     ) -> Result<Self> {
         Self::new_from_external(
-            context, ExternalSourceKind::Syphon(client_idx),
-            format!("🔗 {}", server_name), source_width, source_height, width, height,
+            context,
+            ExternalSourceKind::Syphon(client_idx),
+            format!("🔗 {}", server_name),
+            source_width,
+            source_height,
+            width,
+            height,
         )
     }
 
@@ -680,8 +840,13 @@ impl Deck {
         height: u32,
     ) -> Result<Self> {
         Self::new_from_external(
-            context, ExternalSourceKind::Srt(receiver_idx),
-            format!("📺 {}", url), source_width, source_height, width, height,
+            context,
+            ExternalSourceKind::Srt(receiver_idx),
+            format!("📺 {}", url),
+            source_width,
+            source_height,
+            width,
+            height,
         )
     }
 
@@ -696,8 +861,13 @@ impl Deck {
         height: u32,
     ) -> Result<Self> {
         Self::new_from_external(
-            context, ExternalSourceKind::Hls(receiver_idx),
-            format!("📡 {}", url), source_width, source_height, width, height,
+            context,
+            ExternalSourceKind::Hls(receiver_idx),
+            format!("📡 {}", url),
+            source_width,
+            source_height,
+            width,
+            height,
         )
     }
 
@@ -712,8 +882,13 @@ impl Deck {
         height: u32,
     ) -> Result<Self> {
         Self::new_from_external(
-            context, ExternalSourceKind::Dash(receiver_idx),
-            format!("📡 {}", url), source_width, source_height, width, height,
+            context,
+            ExternalSourceKind::Dash(receiver_idx),
+            format!("📡 {}", url),
+            source_width,
+            source_height,
+            width,
+            height,
         )
     }
 
@@ -728,8 +903,13 @@ impl Deck {
         height: u32,
     ) -> Result<Self> {
         Self::new_from_external(
-            context, ExternalSourceKind::Rtmp(receiver_idx),
-            format!("📺 {}", url), source_width, source_height, width, height,
+            context,
+            ExternalSourceKind::Rtmp(receiver_idx),
+            format!("📺 {}", url),
+            source_width,
+            source_height,
+            width,
+            height,
         )
     }
 }
@@ -745,26 +925,47 @@ mod tests {
 
     #[test]
     fn parse_size_width_variable() {
-        assert_eq!(Deck::parse_size_expression(&Some("$WIDTH".into()), 1920), 1920);
-        assert_eq!(Deck::parse_size_expression(&Some("$HEIGHT".into()), 1080), 1080);
+        assert_eq!(
+            Deck::parse_size_expression(&Some("$WIDTH".into()), 1920),
+            1920
+        );
+        assert_eq!(
+            Deck::parse_size_expression(&Some("$HEIGHT".into()), 1080),
+            1080
+        );
     }
 
     #[test]
     fn parse_size_divide() {
-        assert_eq!(Deck::parse_size_expression(&Some("$WIDTH/2".into()), 1920), 960);
-        assert_eq!(Deck::parse_size_expression(&Some("$HEIGHT/4".into()), 1080), 270);
+        assert_eq!(
+            Deck::parse_size_expression(&Some("$WIDTH/2".into()), 1920),
+            960
+        );
+        assert_eq!(
+            Deck::parse_size_expression(&Some("$HEIGHT/4".into()), 1080),
+            270
+        );
     }
 
     #[test]
     fn parse_size_multiply() {
-        assert_eq!(Deck::parse_size_expression(&Some("$WIDTH*2".into()), 960), 1920);
-        assert_eq!(Deck::parse_size_expression(&Some("$HEIGHT*3".into()), 360), 1080);
+        assert_eq!(
+            Deck::parse_size_expression(&Some("$WIDTH*2".into()), 960),
+            1920
+        );
+        assert_eq!(
+            Deck::parse_size_expression(&Some("$HEIGHT*3".into()), 360),
+            1080
+        );
     }
 
     #[test]
     fn parse_size_literal() {
         assert_eq!(Deck::parse_size_expression(&Some("512".into()), 1920), 512);
-        assert_eq!(Deck::parse_size_expression(&Some("1024".into()), 1080), 1024);
+        assert_eq!(
+            Deck::parse_size_expression(&Some("1024".into()), 1080),
+            1024
+        );
     }
 
     #[test]
@@ -774,11 +975,17 @@ mod tests {
 
     #[test]
     fn parse_size_divide_by_zero_safe() {
-        assert_eq!(Deck::parse_size_expression(&Some("$WIDTH/0".into()), 1920), 1920);
+        assert_eq!(
+            Deck::parse_size_expression(&Some("$WIDTH/0".into()), 1920),
+            1920
+        );
     }
 
     #[test]
     fn parse_size_whitespace_trim() {
-        assert_eq!(Deck::parse_size_expression(&Some(" $WIDTH ".into()), 1920), 1920);
+        assert_eq!(
+            Deck::parse_size_expression(&Some(" $WIDTH ".into()), 1920),
+            1920
+        );
     }
 }

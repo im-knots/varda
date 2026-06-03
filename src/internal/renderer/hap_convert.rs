@@ -130,11 +130,22 @@ impl HapConvertPipeline {
             ..Default::default()
         });
 
-        Ok(Self { pipeline, bind_group_layout, sampler, params_buffer })
+        Ok(Self {
+            pipeline,
+            bind_group_layout,
+            sampler,
+            params_buffer,
+        })
     }
 
     /// Update conversion parameters.
-    pub fn set_params(&self, queue: &wgpu::Queue, opacity: f32, do_ycocg: bool, has_alpha_plane: bool) {
+    pub fn set_params(
+        &self,
+        queue: &wgpu::Queue,
+        opacity: f32,
+        do_ycocg: bool,
+        has_alpha_plane: bool,
+    ) {
         queue.write_buffer(
             &self.params_buffer,
             0,
@@ -159,16 +170,32 @@ impl HapConvertPipeline {
             label: Some("HAP Convert Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(color_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: self.params_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(alpha_view) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(alpha_view),
+                },
             ],
         })
     }
 
     /// Draw the fullscreen convert pass.
-    pub fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, bind_group: &'a wgpu::BindGroup) {
+    pub fn draw<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+    ) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, bind_group, &[]);
         render_pass.draw(0..3, 0..1);

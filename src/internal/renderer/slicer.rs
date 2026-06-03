@@ -136,7 +136,14 @@ pub fn compute_projector_mesh(
             let world_dir = rotate_y(after_el, az);
 
             // Convert ray direction to dome-surface polar coordinates
-            let uv = ray_to_domemaster_uv(world_dir, dome_trunc, dome_tilt, content_az, content_el, content_roll);
+            let uv = ray_to_domemaster_uv(
+                world_dir,
+                dome_trunc,
+                dome_tilt,
+                content_az,
+                content_el,
+                content_roll,
+            );
 
             points.push(MeshPoint {
                 position: [u, v],
@@ -150,7 +157,9 @@ pub fn compute_projector_mesh(
 
 /// Convenience: compute meshes for all projectors in a dome setup.
 pub fn compute_dome_meshes(setup: &DomeSetup) -> Vec<WarpMesh> {
-    setup.projectors.iter()
+    setup
+        .projectors
+        .iter()
         .map(|p| compute_projector_mesh(&setup.geometry, p, SLICER_GRID_COLS, SLICER_GRID_ROWS))
         .collect()
 }
@@ -159,7 +168,9 @@ pub fn compute_dome_meshes(setup: &DomeSetup) -> Vec<WarpMesh> {
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {
     let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if len < 1e-10 { return [0.0, 0.0, 1.0]; }
+    if len < 1e-10 {
+        return [0.0, 0.0, 1.0];
+    }
     [v[0] / len, v[1] / len, v[2] / len]
 }
 
@@ -220,7 +231,11 @@ fn ray_to_domemaster_uv(
     // Equidistant azimuthal: radius = polar / max_angle
     // Normalized so that truncation angle maps to the edge of the circle
     let max_angle = trunc_angle.min(std::f32::consts::PI);
-    let r = if max_angle > 1e-6 { (polar / max_angle).min(1.0) } else { 0.0 };
+    let r = if max_angle > 1e-6 {
+        (polar / max_angle).min(1.0)
+    } else {
+        0.0
+    };
 
     // Convert polar to Cartesian UV (centered at 0.5, 0.5)
     // Scale by 0.5 so the circle inscribes the [0,1]² square
@@ -305,7 +320,10 @@ impl DomePreset {
             })
             .collect();
 
-        DomeSetup { geometry, projectors }
+        DomeSetup {
+            geometry,
+            projectors,
+        }
     }
 }
 
@@ -322,7 +340,6 @@ impl std::fmt::Display for DomePreset {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -358,11 +375,23 @@ mod tests {
 
     #[test]
     fn preset_generates_correct_projector_count() {
-        for preset in [DomePreset::Single, DomePreset::Dual, DomePreset::Triple,
-                       DomePreset::Quad, DomePreset::Penta, DomePreset::Hexa, DomePreset::Octa] {
+        for preset in [
+            DomePreset::Single,
+            DomePreset::Dual,
+            DomePreset::Triple,
+            DomePreset::Quad,
+            DomePreset::Penta,
+            DomePreset::Hexa,
+            DomePreset::Octa,
+        ] {
             let setup = preset.to_setup();
-            assert_eq!(setup.projectors.len(), preset.count(),
-                "Preset {:?} should generate {} projectors", preset, preset.count());
+            assert_eq!(
+                setup.projectors.len(),
+                preset.count(),
+                "Preset {:?} should generate {} projectors",
+                preset,
+                preset.count()
+            );
         }
     }
 
@@ -374,11 +403,8 @@ mod tests {
 
     #[test]
     fn mesh_has_correct_dimensions() {
-        let mesh = compute_projector_mesh(
-            &DomeGeometry::default(),
-            &ProjectorConfig::default(),
-            5, 5,
-        );
+        let mesh =
+            compute_projector_mesh(&DomeGeometry::default(), &ProjectorConfig::default(), 5, 5);
         assert_eq!(mesh.cols, 5);
         assert_eq!(mesh.rows, 5);
         assert_eq!(mesh.points.len(), 25);
@@ -386,11 +412,8 @@ mod tests {
 
     #[test]
     fn mesh_positions_form_uniform_grid() {
-        let mesh = compute_projector_mesh(
-            &DomeGeometry::default(),
-            &ProjectorConfig::default(),
-            3, 3,
-        );
+        let mesh =
+            compute_projector_mesh(&DomeGeometry::default(), &ProjectorConfig::default(), 3, 3);
         // Corners of position grid should be at [0,0], [1,0], [0,1], [1,1]
         let tl = &mesh.points[0];
         let tr = &mesh.points[2];
@@ -408,16 +431,19 @@ mod tests {
 
     #[test]
     fn mesh_uvs_are_in_unit_square() {
-        let mesh = compute_projector_mesh(
-            &DomeGeometry::default(),
-            &ProjectorConfig::default(),
-            9, 9,
-        );
+        let mesh =
+            compute_projector_mesh(&DomeGeometry::default(), &ProjectorConfig::default(), 9, 9);
         for pt in &mesh.points {
-            assert!(pt.uv[0] >= 0.0 && pt.uv[0] <= 1.0,
-                "UV x out of range: {}", pt.uv[0]);
-            assert!(pt.uv[1] >= 0.0 && pt.uv[1] <= 1.0,
-                "UV y out of range: {}", pt.uv[1]);
+            assert!(
+                pt.uv[0] >= 0.0 && pt.uv[0] <= 1.0,
+                "UV x out of range: {}",
+                pt.uv[0]
+            );
+            assert!(
+                pt.uv[1] >= 0.0 && pt.uv[1] <= 1.0,
+                "UV y out of range: {}",
+                pt.uv[1]
+            );
         }
     }
 
@@ -425,36 +451,52 @@ mod tests {
     fn zenith_ray_maps_to_center() {
         // A ray pointing straight up should map to domemaster center
         let uv = ray_to_domemaster_uv(
-            [0.0, 1.0, 0.0], // straight up (+Y)
+            [0.0, 1.0, 0.0],             // straight up (+Y)
             std::f32::consts::FRAC_PI_2, // 90° truncation
-            0.0, // no tilt
-            0.0, 0.0, 0.0, // no content rotation
+            0.0,                         // no tilt
+            0.0,
+            0.0,
+            0.0, // no content rotation
         );
-        assert!((uv[0] - 0.5).abs() < 1e-4, "Zenith x should be 0.5, got {}", uv[0]);
-        assert!((uv[1] - 0.5).abs() < 1e-4, "Zenith y should be 0.5, got {}", uv[1]);
+        assert!(
+            (uv[0] - 0.5).abs() < 1e-4,
+            "Zenith x should be 0.5, got {}",
+            uv[0]
+        );
+        assert!(
+            (uv[1] - 0.5).abs() < 1e-4,
+            "Zenith y should be 0.5, got {}",
+            uv[1]
+        );
     }
 
     #[test]
     fn horizon_ray_maps_to_edge() {
         // A ray pointing at the horizon (+Z) with 90° truncation should map to edge
         let uv = ray_to_domemaster_uv(
-            [0.0, 0.0, 1.0], // forward (horizon)
+            [0.0, 0.0, 1.0],             // forward (horizon)
             std::f32::consts::FRAC_PI_2, // 90° truncation
             0.0,
-            0.0, 0.0, 0.0, // no content rotation
+            0.0,
+            0.0,
+            0.0, // no content rotation
         );
         // Should be at radius 0.5 from center (full edge of inscribed circle)
         let dx = uv[0] - 0.5;
         let dy = uv[1] - 0.5;
         let r = (dx * dx + dy * dy).sqrt();
-        assert!((r - 0.5).abs() < 1e-3, "Horizon radius should be 0.5, got {}", r);
+        assert!(
+            (r - 0.5).abs() < 1e-3,
+            "Horizon radius should be 0.5, got {}",
+            r
+        );
     }
 
     #[test]
     fn content_elevation_moves_zenith_to_edge() {
         // With 90° content elevation, the zenith content should end up at the horizon
         let uv = ray_to_domemaster_uv(
-            [0.0, 0.0, 1.0], // forward (horizon ray)
+            [0.0, 0.0, 1.0],             // forward (horizon ray)
             std::f32::consts::FRAC_PI_2, // 90° truncation
             0.0,
             0.0,
@@ -464,8 +506,16 @@ mod tests {
         // The zenith content (center of domemaster) should now map near center
         // because we rotated the content sphere 90° so what was at zenith is now at horizon
         // and the horizon ray should now sample near the domemaster center
-        assert!((uv[0] - 0.5).abs() < 0.05, "Expected near center x, got {}", uv[0]);
-        assert!((uv[1] - 0.5).abs() < 0.05, "Expected near center y, got {}", uv[1]);
+        assert!(
+            (uv[0] - 0.5).abs() < 0.05,
+            "Expected near center x, got {}",
+            uv[0]
+        );
+        assert!(
+            (uv[1] - 0.5).abs() < 0.05,
+            "Expected near center y, got {}",
+            uv[1]
+        );
     }
 
     #[test]
@@ -474,12 +524,18 @@ mod tests {
         let uv_no_rot = ray_to_domemaster_uv(
             [0.3, 0.8, 0.5],
             std::f32::consts::FRAC_PI_2,
-            0.0, 0.0, 0.0, 0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         );
         let uv_zero = ray_to_domemaster_uv(
             [0.3, 0.8, 0.5],
             std::f32::consts::FRAC_PI_2,
-            0.0, 0.0, 0.0, 0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         );
         assert!((uv_no_rot[0] - uv_zero[0]).abs() < 1e-6);
         assert!((uv_no_rot[1] - uv_zero[1]).abs() < 1e-6);

@@ -14,16 +14,11 @@
 ///
 /// After the criterion groups complete, the per-deck slope (decks/8 minus
 /// decks/1, divided by 7) is computed from fresh samples and printed.
-
 use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use varda::{
-    audio::AudioData,
-    deck::Deck,
-    isf::ISFShader,
-    mixer::Mixer,
-    modulation::AudioValues,
+    audio::AudioData, deck::Deck, isf::ISFShader, mixer::Mixer, modulation::AudioValues,
     renderer::context::GpuContext,
 };
 
@@ -42,7 +37,10 @@ fn make_context() -> Option<GpuContext> {
 
 fn poll(ctx: &GpuContext) {
     ctx.device
-        .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
         .ok();
 }
 
@@ -71,7 +69,9 @@ fn setup_mixer_shader(context: &GpuContext, n_decks: usize) -> Mixer {
 
 fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
     let audio = AudioData::default();
-    let audio_values = AudioValues { sources: Default::default() };
+    let audio_values = AudioValues {
+        sources: Default::default(),
+    };
     for _ in 0..3 {
         mixer.render(ctx, &audio, &audio_values).expect("warmup");
         poll(ctx);
@@ -112,7 +112,9 @@ fn bench_channel_composite_solid(c: &mut Criterion) {
     preflight_slo(&ctx);
 
     let audio = AudioData::default();
-    let audio_values = AudioValues { sources: Default::default() };
+    let audio_values = AudioValues {
+        sources: Default::default(),
+    };
 
     let mut group = c.benchmark_group("channel_composite_solid");
     group.sample_size(50);
@@ -137,7 +139,9 @@ fn bench_channel_composite_shader(c: &mut Criterion) {
     };
 
     let audio = AudioData::default();
-    let audio_values = AudioValues { sources: Default::default() };
+    let audio_values = AudioValues {
+        sources: Default::default(),
+    };
 
     let mut group = c.benchmark_group("channel_composite_shader");
     group.sample_size(50);
@@ -162,11 +166,13 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
     };
 
     let audio = AudioData::default();
-    let audio_values = AudioValues { sources: Default::default() };
+    let audio_values = AudioValues {
+        sources: Default::default(),
+    };
 
     let mut mixer = setup_mixer_solid(&ctx, 1);
-    let deck = Deck::new_solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT)
-        .expect("solid color deck");
+    let deck =
+        Deck::new_solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT).expect("solid color deck");
     mixer.channel_mut(1).unwrap().add_deck(deck);
     mixer.set_crossfader(0.5);
 

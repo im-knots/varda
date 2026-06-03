@@ -36,38 +36,77 @@ fn fire(app: &mut VardaApp, cmd: EngineCommand) {
 
 #[test]
 fn multi_step_add_deck_set_opacity_verify() {
-    let Some(mut app) = headless_app() else { return; };
-    let r = send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     assert!(matches!(r, CommandResult::Ok), "{r:?}");
     // Channels start empty, so the first added deck is at index 0
-    fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: 0.42 });
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            channel_idx: 0,
+            deck_idx: 0,
+            opacity: 0.42,
+        },
+    );
     let state = app.build_engine_state();
     assert!((state.mixer.channels[0].decks[0].opacity - 0.42).abs() < 1e-4);
 }
 
 #[test]
 fn add_deck_add_effect_verify_chain() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [0.0, 1.0, 0.0, 1.0] });
-    let r = send_cmd(&mut app, EngineCommand::AddEffect {
-        target: varda::engine::EffectTarget::Deck(0, 0),
-        shader_name: "Invert".to_string(),
-    });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [0.0, 1.0, 0.0, 1.0],
+        },
+    );
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddEffect {
+            target: varda::engine::EffectTarget::Deck(0, 0),
+            shader_name: "Invert".to_string(),
+        },
+    );
     assert!(matches!(r, CommandResult::Ok | CommandResult::Err { .. }));
     // If the shader exists the effect is added; otherwise the command may fail gracefully.
 }
 
 #[test]
 fn add_lfo_assign_modulation_verify() {
-    let Some(mut app) = headless_app() else { return; };
-    let r = send_cmd(&mut app, EngineCommand::AddLfo { waveform: LFOWaveform::Sine, frequency: 1.0 });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddLfo {
+            waveform: LFOWaveform::Sine,
+            frequency: 1.0,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
     assert!(!state.modulation.sources.is_empty());
     let lfo_id = state.modulation.sources[0].uuid.clone();
-    let r = send_cmd(&mut app, EngineCommand::AssignModulation {
-        target: "crossfader".to_string(), source_id: lfo_id, amount: 0.5,
-    });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AssignModulation {
+            target: "crossfader".to_string(),
+            source_id: lfo_id,
+            amount: 0.5,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
     assert!(state.modulation.assignments.contains_key("crossfader"));
@@ -75,24 +114,47 @@ fn add_lfo_assign_modulation_verify() {
 
 #[test]
 fn modulation_values_change_over_frames() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddLfo { waveform: LFOWaveform::Sine, frequency: 10.0 });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddLfo {
+            waveform: LFOWaveform::Sine,
+            frequency: 10.0,
+        },
+    );
     let state0 = app.build_engine_state();
     let uuid = &state0.modulation.sources[0].uuid;
-    let v0 = state0.modulation.current_values.get(uuid).copied().unwrap_or(0.0);
+    let v0 = state0
+        .modulation
+        .current_values
+        .get(uuid)
+        .copied()
+        .unwrap_or(0.0);
     for _ in 0..30 {
         app.update_frame_timing();
         app.render_mixer_frame();
     }
     let state1 = app.build_engine_state();
-    let v1 = state1.modulation.current_values.get(uuid).copied().unwrap_or(0.0);
+    let v1 = state1
+        .modulation
+        .current_values
+        .get(uuid)
+        .copied()
+        .unwrap_or(0.0);
     // At 10 Hz over 30 frames (~0.5 s at 60fps), the value should have changed.
-    assert!((v1 - v0).abs() > 1e-6 || true, "LFO value may start at same phase; just verify no crash");
+    assert!(
+        (v1 - v0).abs() > 1e-6 || true,
+        "LFO value may start at same phase; just verify no crash"
+    );
 }
 
 #[test]
 fn add_multiple_channels_verify_order() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     for _ in 0..3 {
         fire(&mut app, EngineCommand::AddChannel);
     }
@@ -105,7 +167,9 @@ fn add_multiple_channels_verify_order() {
 
 #[test]
 fn remove_middle_channel_state_consistent() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     fire(&mut app, EngineCommand::AddChannel); // now 3
     let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 1 });
     assert!(matches!(r, CommandResult::Ok));
@@ -115,25 +179,55 @@ fn remove_middle_channel_state_consistent() {
 
 #[test]
 fn deck_solo_mute_interactions() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Add two decks to ch0 (channels start empty, so indices will be 0 and 1)
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [0.0, 0.0, 1.0, 1.0] });
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [0.0, 0.0, 1.0, 1.0],
+        },
+    );
     // Mute deck 0
-    fire(&mut app, EngineCommand::SetDeckMute { channel_idx: 0, deck_idx: 0, mute: true });
+    fire(
+        &mut app,
+        EngineCommand::SetDeckMute {
+            channel_idx: 0,
+            deck_idx: 0,
+            mute: true,
+        },
+    );
     let state = app.build_engine_state();
     assert!(state.mixer.channels[0].decks[0].mute);
     // Note: effective_opacity reflects transition phase, not mute state.
     // Mute is applied at render time by skipping the deck entirely.
     // Solo deck 1
-    fire(&mut app, EngineCommand::SetDeckSolo { channel_idx: 0, deck_idx: 1, solo: true });
+    fire(
+        &mut app,
+        EngineCommand::SetDeckSolo {
+            channel_idx: 0,
+            deck_idx: 1,
+            solo: true,
+        },
+    );
     let state = app.build_engine_state();
     assert!(state.mixer.channels[0].decks[1].solo);
 }
 
 #[test]
 fn crossfader_clamping() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     fire(&mut app, EngineCommand::SetCrossfader(5.0));
     let state = app.build_engine_state();
     assert!(state.mixer.crossfader <= 1.0);
@@ -144,20 +238,53 @@ fn crossfader_clamping() {
 
 #[test]
 fn blend_mode_roundtrip() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 1.0, 1.0, 1.0] });
-    fire(&mut app, EngineCommand::SetDeckBlendMode { channel_idx: 0, deck_idx: 0, mode: BlendMode::Add });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    );
+    fire(
+        &mut app,
+        EngineCommand::SetDeckBlendMode {
+            channel_idx: 0,
+            deck_idx: 0,
+            mode: BlendMode::Add,
+        },
+    );
     let state = app.build_engine_state();
     assert_eq!(state.mixer.channels[0].decks[0].blend_mode, BlendMode::Add);
-    fire(&mut app, EngineCommand::SetDeckBlendMode { channel_idx: 0, deck_idx: 0, mode: BlendMode::Multiply });
+    fire(
+        &mut app,
+        EngineCommand::SetDeckBlendMode {
+            channel_idx: 0,
+            deck_idx: 0,
+            mode: BlendMode::Multiply,
+        },
+    );
     let state = app.build_engine_state();
-    assert_eq!(state.mixer.channels[0].decks[0].blend_mode, BlendMode::Multiply);
+    assert_eq!(
+        state.mixer.channels[0].decks[0].blend_mode,
+        BlendMode::Multiply
+    );
 }
 
 #[test]
 fn render_frames_after_mutations() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     fire(&mut app, EngineCommand::SetCrossfader(0.5));
     for _ in 0..10 {
         app.update_frame_timing();
@@ -169,7 +296,9 @@ fn render_frames_after_mutations() {
 
 #[test]
 fn many_mutations_state_consistency() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Rapid-fire 50 commands
     for i in 0..50 {
         let pos = (i as f32) / 50.0;
@@ -183,7 +312,9 @@ fn many_mutations_state_consistency() {
 
 #[test]
 fn command_reply_correctness() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Valid command
     let r = send_cmd(&mut app, EngineCommand::AddChannel);
     assert!(matches!(r, CommandResult::Ok));
@@ -194,24 +325,43 @@ fn command_reply_correctness() {
 
 #[test]
 fn add_step_sequencer_modulation() {
-    let Some(mut app) = headless_app() else { return; };
-    let r = send_cmd(&mut app, EngineCommand::AddStepSequencer { num_steps: 8, rate: 2.0 });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddStepSequencer {
+            num_steps: 8,
+            rate: 2.0,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
     assert!(!state.modulation.sources.is_empty());
     let src = &state.modulation.sources.last().unwrap().source;
-    assert!(matches!(src, varda::engine::types::ModulationSourceSnapshot::StepSequencer { .. }));
+    assert!(matches!(
+        src,
+        varda::engine::types::ModulationSourceSnapshot::StepSequencer { .. }
+    ));
 }
 
 #[test]
 fn undo_redo_crossfader_value() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // History push only happens in the UI runner, not via execute_command.
     // Undo/Redo on an empty history should return Err, not crash.
     let r = send_cmd(&mut app, EngineCommand::Undo);
-    assert!(matches!(r, CommandResult::Err { .. }), "Undo on empty history should error");
+    assert!(
+        matches!(r, CommandResult::Err { .. }),
+        "Undo on empty history should error"
+    );
     let r = send_cmd(&mut app, EngineCommand::Redo);
-    assert!(matches!(r, CommandResult::Err { .. }), "Redo on empty history should error");
+    assert!(
+        matches!(r, CommandResult::Err { .. }),
+        "Redo on empty history should error"
+    );
     // SetCrossfader still works independently
     fire(&mut app, EngineCommand::SetCrossfader(0.5));
     let state = app.build_engine_state();
@@ -220,8 +370,16 @@ fn undo_redo_crossfader_value() {
 
 #[test]
 fn set_render_resolution_and_verify() {
-    let Some(mut app) = headless_app() else { return; };
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 1280, height: 720 });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 1280,
+            height: 720,
+        },
+    );
     assert_eq!(app.render_width(), 1280);
     assert_eq!(app.render_height(), 720);
     // Render a frame to verify no crash at new resolution
@@ -231,9 +389,17 @@ fn set_render_resolution_and_verify() {
 
 #[test]
 fn publish_state_reflects_mutations() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     let reader = app.state_reader();
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     app.publish_state();
     let guard = reader.read().unwrap();
     let state = guard.as_ref().expect("state published");
@@ -242,19 +408,45 @@ fn publish_state_reflects_mutations() {
 
 #[test]
 fn effect_toggle_and_remove() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     let target = varda::engine::EffectTarget::Deck(0, 0);
     // Add an effect — it may or may not succeed depending on shader registry
-    let r = send_cmd(&mut app, EngineCommand::AddEffect { target: target.clone(), shader_name: "Invert".into() });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddEffect {
+            target: target.clone(),
+            shader_name: "Invert".into(),
+        },
+    );
     if matches!(r, CommandResult::Ok) {
         // Toggle
-        let r = send_cmd(&mut app, EngineCommand::ToggleEffect { target: target.clone(), effect_idx: 0 });
+        let r = send_cmd(
+            &mut app,
+            EngineCommand::ToggleEffect {
+                target: target.clone(),
+                effect_idx: 0,
+            },
+        );
         assert!(matches!(r, CommandResult::Ok));
         let state = app.build_engine_state();
         assert!(!state.mixer.channels[0].decks[0].effects[0].enabled);
         // Remove
-        let r = send_cmd(&mut app, EngineCommand::RemoveEffect { target, effect_idx: 0 });
+        let r = send_cmd(
+            &mut app,
+            EngineCommand::RemoveEffect {
+                target,
+                effect_idx: 0,
+            },
+        );
         assert!(matches!(r, CommandResult::Ok));
         let state = app.build_engine_state();
         assert!(state.mixer.channels[0].decks[0].effects.is_empty());
@@ -263,12 +455,27 @@ fn effect_toggle_and_remove() {
 
 #[test]
 fn move_deck_between_channels() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     let before_ch0 = app.build_engine_state().mixer.channels[0].decks.len();
     let before_ch1 = app.build_engine_state().mixer.channels[1].decks.len();
     // Deck is at index 0 (channels start empty)
-    let r = send_cmd(&mut app, EngineCommand::MoveDeck { src_ch: 0, src_deck: 0, dst_ch: 1 });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::MoveDeck {
+            src_ch: 0,
+            src_deck: 0,
+            dst_ch: 1,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
     assert_eq!(state.mixer.channels[0].decks.len(), before_ch0 - 1);
@@ -277,10 +484,31 @@ fn move_deck_between_channels() {
 
 #[test]
 fn reorder_deck_via_command() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [0.0, 1.0, 0.0, 1.0] });
-    let r = send_cmd(&mut app, EngineCommand::ReorderDeck { ch: 0, from_idx: 0, to_idx: 1 });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [0.0, 1.0, 0.0, 1.0],
+        },
+    );
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::ReorderDeck {
+            ch: 0,
+            from_idx: 0,
+            to_idx: 1,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 2);
 }
@@ -293,17 +521,47 @@ fn reorder_deck_via_command() {
 
 #[test]
 fn chaos_oob_channel_index_does_not_panic() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Add deck to non-existent channel
-    let r = send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 999, color: [1.0, 0.0, 0.0, 1.0] });
-    assert!(matches!(r, CommandResult::Err { .. }), "OOB channel should error gracefully");
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 999,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    assert!(
+        matches!(r, CommandResult::Err { .. }),
+        "OOB channel should error gracefully"
+    );
     // Remove deck from non-existent channel
-    let r = send_cmd(&mut app, EngineCommand::RemoveDeck { channel_idx: 999, deck_idx: 0 });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveDeck {
+            channel_idx: 999,
+            deck_idx: 0,
+        },
+    );
     assert!(matches!(r, CommandResult::Err { .. }));
     // Set opacity on non-existent channel
-    fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: 999, opacity: 0.5 });
+    fire(
+        &mut app,
+        EngineCommand::SetChannelOpacity {
+            channel_idx: 999,
+            opacity: 0.5,
+        },
+    );
     // Set deck opacity on non-existent deck
-    fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 999, opacity: 0.5 });
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            channel_idx: 0,
+            deck_idx: 999,
+            opacity: 0.5,
+        },
+    );
     // Render should still work
     app.update_frame_timing();
     app.render_mixer_frame();
@@ -311,16 +569,44 @@ fn chaos_oob_channel_index_does_not_panic() {
 
 #[test]
 fn chaos_oob_deck_index_does_not_panic() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     // Remove deck at index far beyond count — silent no-op (returns Ok)
-    let r = send_cmd(&mut app, EngineCommand::RemoveDeck { channel_idx: 0, deck_idx: 100 });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveDeck {
+            channel_idx: 0,
+            deck_idx: 100,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     // Move deck from invalid source — silent no-op
-    let r = send_cmd(&mut app, EngineCommand::MoveDeck { src_ch: 0, src_deck: 100, dst_ch: 1 });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::MoveDeck {
+            src_ch: 0,
+            src_deck: 100,
+            dst_ch: 1,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     // Move deck to invalid destination channel — silent no-op
-    let r = send_cmd(&mut app, EngineCommand::MoveDeck { src_ch: 0, src_deck: 0, dst_ch: 999 });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::MoveDeck {
+            src_ch: 0,
+            src_deck: 0,
+            dst_ch: 999,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     // Deck should still be present (none of the above should have touched it)
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 1);
@@ -330,7 +616,9 @@ fn chaos_oob_deck_index_does_not_panic() {
 
 #[test]
 fn chaos_nan_crossfader_via_command() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     fire(&mut app, EngineCommand::SetCrossfader(f32::NAN));
     // NaN propagates but must not crash the render
     app.update_frame_timing();
@@ -346,42 +634,109 @@ fn chaos_nan_crossfader_via_command() {
 
 #[test]
 fn chaos_nan_opacity_via_command() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
-    fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: f32::NAN });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    fire(
+        &mut app,
+        EngineCommand::SetDeckOpacity {
+            channel_idx: 0,
+            deck_idx: 0,
+            opacity: f32::NAN,
+        },
+    );
     app.update_frame_timing();
     app.render_mixer_frame();
-    fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: f32::INFINITY });
+    fire(
+        &mut app,
+        EngineCommand::SetChannelOpacity {
+            channel_idx: 0,
+            opacity: f32::INFINITY,
+        },
+    );
     app.render_mixer_frame();
-    fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: f32::NEG_INFINITY });
+    fire(
+        &mut app,
+        EngineCommand::SetChannelOpacity {
+            channel_idx: 0,
+            opacity: f32::NEG_INFINITY,
+        },
+    );
     app.render_mixer_frame();
 }
 
 #[test]
 fn chaos_extreme_render_resolution() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Tiny resolution
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 1, height: 1 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 1,
+            height: 1,
+        },
+    );
     app.update_frame_timing();
     app.render_mixer_frame();
     // Asymmetric ultra-wide
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 4096, height: 1 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 4096,
+            height: 1,
+        },
+    );
     app.render_mixer_frame();
     // Restore normal
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 1920, height: 1080 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 1920,
+            height: 1080,
+        },
+    );
     app.render_mixer_frame();
 }
 
 #[test]
 fn chaos_zero_render_resolution() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Zero dimensions — should be clamped or rejected, not crash
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 0, height: 0 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 0,
+            height: 0,
+        },
+    );
     app.update_frame_timing();
     app.render_mixer_frame();
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 0, height: 1080 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 0,
+            height: 1080,
+        },
+    );
     app.render_mixer_frame();
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 1920, height: 0 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 1920,
+            height: 0,
+        },
+    );
     app.render_mixer_frame();
 }
 
@@ -389,16 +744,33 @@ fn chaos_zero_render_resolution() {
 
 #[test]
 fn chaos_rapid_deck_add_remove_cycle() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     for i in 0..20 {
         let color = [(i as f32) / 20.0, 0.0, 0.0, 1.0];
-        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color });
+        send_cmd(
+            &mut app,
+            EngineCommand::AddSolidColorDeck {
+                channel_idx: 0,
+                color,
+            },
+        );
     }
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 20);
     // Remove all in reverse order
     for i in (0..20).rev() {
-        let r = send_cmd(&mut app, EngineCommand::RemoveDeck { channel_idx: 0, deck_idx: i });
-        assert!(matches!(r, CommandResult::Ok), "Remove deck {i} failed: {r:?}");
+        let r = send_cmd(
+            &mut app,
+            EngineCommand::RemoveDeck {
+                channel_idx: 0,
+                deck_idx: i,
+            },
+        );
+        assert!(
+            matches!(r, CommandResult::Ok),
+            "Remove deck {i} failed: {r:?}"
+        );
     }
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 0);
     // Render with empty channel
@@ -408,7 +780,9 @@ fn chaos_rapid_deck_add_remove_cycle() {
 
 #[test]
 fn chaos_rapid_channel_add_remove_cycle() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     let initial = app.build_engine_state().mixer.channels.len();
     // Add 10 channels
     for _ in 0..10 {
@@ -422,7 +796,10 @@ fn chaos_rapid_channel_add_remove_cycle() {
     // Remove channels (from end to avoid index shifting)
     for i in (initial..initial + 10).rev() {
         let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: i });
-        assert!(matches!(r, CommandResult::Ok), "Remove channel {i} failed: {r:?}");
+        assert!(
+            matches!(r, CommandResult::Ok),
+            "Remove channel {i} failed: {r:?}"
+        );
     }
     assert_eq!(app.build_engine_state().mixer.channels.len(), initial);
     app.render_mixer_frame();
@@ -430,13 +807,27 @@ fn chaos_rapid_channel_add_remove_cycle() {
 
 #[test]
 fn chaos_interleaved_add_remove_render() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Add deck, render, remove, render — 10 cycles
     for _ in 0..10 {
-        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 1.0, 1.0, 1.0] });
+        send_cmd(
+            &mut app,
+            EngineCommand::AddSolidColorDeck {
+                channel_idx: 0,
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+        );
         app.update_frame_timing();
         app.render_mixer_frame();
-        send_cmd(&mut app, EngineCommand::RemoveDeck { channel_idx: 0, deck_idx: 0 });
+        send_cmd(
+            &mut app,
+            EngineCommand::RemoveDeck {
+                channel_idx: 0,
+                deck_idx: 0,
+            },
+        );
         app.render_mixer_frame();
     }
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 0);
@@ -444,7 +835,9 @@ fn chaos_interleaved_add_remove_render() {
 
 #[test]
 fn chaos_remove_last_channels_rejected() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Mixer enforces minimum 2 channels — add extras then remove down to 2
     send_cmd(&mut app, EngineCommand::AddChannel);
     send_cmd(&mut app, EngineCommand::AddChannel);
@@ -458,9 +851,15 @@ fn chaos_remove_last_channels_rejected() {
     assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
     // Removing either of the last 2 should fail (minimum 2 enforced)
     let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 0 });
-    assert!(matches!(r, CommandResult::Err { .. }), "Should not remove below minimum");
+    assert!(
+        matches!(r, CommandResult::Err { .. }),
+        "Should not remove below minimum"
+    );
     let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 1 });
-    assert!(matches!(r, CommandResult::Err { .. }), "Should not remove below minimum");
+    assert!(
+        matches!(r, CommandResult::Err { .. }),
+        "Should not remove below minimum"
+    );
     assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
     app.update_frame_timing();
     app.render_mixer_frame();
@@ -470,9 +869,23 @@ fn chaos_remove_last_channels_rejected() {
 
 #[test]
 fn chaos_command_storm_crossfader_sweep() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 1, color: [0.0, 0.0, 1.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 1,
+            color: [0.0, 0.0, 1.0, 1.0],
+        },
+    );
     // Sweep crossfader through 100 steps while rendering
     for i in 0..=100 {
         let val = i as f32 / 100.0;
@@ -481,21 +894,46 @@ fn chaos_command_storm_crossfader_sweep() {
     app.update_frame_timing();
     app.render_mixer_frame();
     let state = app.build_engine_state();
-    assert!((state.mixer.crossfader - 1.0).abs() < 1e-4, "Final crossfader should be 1.0");
+    assert!(
+        (state.mixer.crossfader - 1.0).abs() < 1e-4,
+        "Final crossfader should be 1.0"
+    );
 }
 
 #[test]
 fn chaos_command_storm_opacity_sweep() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     // Sweep deck opacity 0→1→0 rapidly
     for i in 0..=100 {
         let val = i as f32 / 100.0;
-        fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: val });
+        fire(
+            &mut app,
+            EngineCommand::SetDeckOpacity {
+                channel_idx: 0,
+                deck_idx: 0,
+                opacity: val,
+            },
+        );
     }
     for i in (0..=100).rev() {
         let val = i as f32 / 100.0;
-        fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: val });
+        fire(
+            &mut app,
+            EngineCommand::SetDeckOpacity {
+                channel_idx: 0,
+                deck_idx: 0,
+                opacity: val,
+            },
+        );
     }
     app.update_frame_timing();
     app.render_mixer_frame();
@@ -505,15 +943,27 @@ fn chaos_command_storm_opacity_sweep() {
 
 #[test]
 fn chaos_command_storm_mixed_mutations() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Fire 50 rapid mixed commands without rendering between them
     let tx = app.command_sender();
     for i in 0..50 {
         let cmd = match i % 5 {
             0 => EngineCommand::SetCrossfader(i as f32 / 50.0),
-            1 => EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: (50 - i) as f32 / 50.0 },
-            2 => EngineCommand::AddSolidColorDeck { channel_idx: i % 2, color: [1.0, 1.0, 1.0, 1.0] },
-            3 => EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: i as f32 / 50.0 },
+            1 => EngineCommand::SetChannelOpacity {
+                channel_idx: 0,
+                opacity: (50 - i) as f32 / 50.0,
+            },
+            2 => EngineCommand::AddSolidColorDeck {
+                channel_idx: i % 2,
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            3 => EngineCommand::SetDeckOpacity {
+                channel_idx: 0,
+                deck_idx: 0,
+                opacity: i as f32 / 50.0,
+            },
             _ => EngineCommand::SetCrossfader(0.5),
         };
         tx.send((cmd, None)).unwrap();
@@ -530,9 +980,23 @@ fn chaos_command_storm_mixed_mutations() {
 
 #[test]
 fn chaos_render_many_frames_with_content() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 1, color: [0.0, 1.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 1,
+            color: [0.0, 1.0, 0.0, 1.0],
+        },
+    );
     // Render 100 frames — looking for GPU resource leaks or accumulation bugs
     for _ in 0..100 {
         app.update_frame_timing();
@@ -544,9 +1008,23 @@ fn chaos_render_many_frames_with_content() {
 
 #[test]
 fn chaos_crossfader_extremes_render() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 1, color: [0.0, 0.0, 1.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 1,
+            color: [0.0, 0.0, 1.0, 1.0],
+        },
+    );
     for &val in &[0.0, 1.0, -1.0, 2.0, -100.0, 100.0, f32::MIN, f32::MAX] {
         fire(&mut app, EngineCommand::SetCrossfader(val));
         app.update_frame_timing();
@@ -556,32 +1034,90 @@ fn chaos_crossfader_extremes_render() {
 
 #[test]
 fn chaos_opacity_extremes_render() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
-    for &val in &[0.0, 1.0, -1.0, 2.0, -100.0, 100.0, f32::MIN, f32::MAX, f32::NAN, f32::INFINITY] {
-        fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: 0, deck_idx: 0, opacity: val });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    for &val in &[
+        0.0,
+        1.0,
+        -1.0,
+        2.0,
+        -100.0,
+        100.0,
+        f32::MIN,
+        f32::MAX,
+        f32::NAN,
+        f32::INFINITY,
+    ] {
+        fire(
+            &mut app,
+            EngineCommand::SetDeckOpacity {
+                channel_idx: 0,
+                deck_idx: 0,
+                opacity: val,
+            },
+        );
         app.update_frame_timing();
         app.render_mixer_frame();
     }
     for &val in &[0.0, 1.0, -1.0, 2.0, f32::NAN, f32::INFINITY] {
-        fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: val });
+        fire(
+            &mut app,
+            EngineCommand::SetChannelOpacity {
+                channel_idx: 0,
+                opacity: val,
+            },
+        );
         app.render_mixer_frame();
     }
 }
 
 #[test]
 fn chaos_resolution_change_during_render() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     app.update_frame_timing();
     app.render_mixer_frame();
     // Change resolution and render immediately
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 640, height: 480 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 640,
+            height: 480,
+        },
+    );
     app.render_mixer_frame();
     // Change again rapidly
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 3840, height: 2160 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 3840,
+            height: 2160,
+        },
+    );
     app.render_mixer_frame();
-    fire(&mut app, EngineCommand::SetRenderResolution { width: 1920, height: 1080 });
+    fire(
+        &mut app,
+        EngineCommand::SetRenderResolution {
+            width: 1920,
+            height: 1080,
+        },
+    );
     app.render_mixer_frame();
     assert_eq!(app.render_width(), 1920);
     assert_eq!(app.render_height(), 1080);
@@ -589,15 +1125,39 @@ fn chaos_resolution_change_during_render() {
 
 #[test]
 fn chaos_blend_mode_rapid_cycling() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [0.0, 1.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [0.0, 1.0, 0.0, 1.0],
+        },
+    );
     let modes = [
-        BlendMode::Normal, BlendMode::Add, BlendMode::Multiply,
-        BlendMode::Screen, BlendMode::Overlay,
+        BlendMode::Normal,
+        BlendMode::Add,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
     ];
     for mode in modes {
-        fire(&mut app, EngineCommand::SetDeckBlendMode { channel_idx: 0, deck_idx: 1, mode });
+        fire(
+            &mut app,
+            EngineCommand::SetDeckBlendMode {
+                channel_idx: 0,
+                deck_idx: 1,
+                mode,
+            },
+        );
         app.update_frame_timing();
         app.render_mixer_frame();
     }
@@ -605,44 +1165,107 @@ fn chaos_blend_mode_rapid_cycling() {
 
 #[test]
 fn chaos_solo_mute_all_decks() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Add 5 decks to channel 0
     for i in 0..5 {
         let c = i as f32 / 5.0;
-        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [c, c, c, 1.0] });
+        send_cmd(
+            &mut app,
+            EngineCommand::AddSolidColorDeck {
+                channel_idx: 0,
+                color: [c, c, c, 1.0],
+            },
+        );
     }
     // Mute all
     for i in 0..5 {
-        fire(&mut app, EngineCommand::SetDeckMute { channel_idx: 0, deck_idx: i, mute: true });
+        fire(
+            &mut app,
+            EngineCommand::SetDeckMute {
+                channel_idx: 0,
+                deck_idx: i,
+                mute: true,
+            },
+        );
     }
     app.update_frame_timing();
     app.render_mixer_frame();
     // Solo one
-    fire(&mut app, EngineCommand::SetDeckSolo { channel_idx: 0, deck_idx: 2, solo: true });
+    fire(
+        &mut app,
+        EngineCommand::SetDeckSolo {
+            channel_idx: 0,
+            deck_idx: 2,
+            solo: true,
+        },
+    );
     app.render_mixer_frame();
     // Unmute all, unsolo
     for i in 0..5 {
-        fire(&mut app, EngineCommand::SetDeckMute { channel_idx: 0, deck_idx: i, mute: false });
+        fire(
+            &mut app,
+            EngineCommand::SetDeckMute {
+                channel_idx: 0,
+                deck_idx: i,
+                mute: false,
+            },
+        );
     }
-    fire(&mut app, EngineCommand::SetDeckSolo { channel_idx: 0, deck_idx: 2, solo: false });
+    fire(
+        &mut app,
+        EngineCommand::SetDeckSolo {
+            channel_idx: 0,
+            deck_idx: 2,
+            solo: false,
+        },
+    );
     app.render_mixer_frame();
 }
 
 #[test]
 fn chaos_state_consistency_after_storm() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     // Setup: 3 channels with 2 decks each
     send_cmd(&mut app, EngineCommand::AddChannel);
     for ch in 0..3 {
-        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: ch, color: [1.0, 0.0, 0.0, 1.0] });
-        send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: ch, color: [0.0, 1.0, 0.0, 1.0] });
+        send_cmd(
+            &mut app,
+            EngineCommand::AddSolidColorDeck {
+                channel_idx: ch,
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+        );
+        send_cmd(
+            &mut app,
+            EngineCommand::AddSolidColorDeck {
+                channel_idx: ch,
+                color: [0.0, 1.0, 0.0, 1.0],
+            },
+        );
     }
     // Storm: 200 parameter mutations
     for i in 0..200 {
         let ch = i % 3;
         let deck = i % 2;
-        fire(&mut app, EngineCommand::SetDeckOpacity { channel_idx: ch, deck_idx: deck, opacity: (i as f32 / 200.0) });
-        fire(&mut app, EngineCommand::SetChannelOpacity { channel_idx: ch, opacity: 1.0 - (i as f32 / 200.0) });
+        fire(
+            &mut app,
+            EngineCommand::SetDeckOpacity {
+                channel_idx: ch,
+                deck_idx: deck,
+                opacity: (i as f32 / 200.0),
+            },
+        );
+        fire(
+            &mut app,
+            EngineCommand::SetChannelOpacity {
+                channel_idx: ch,
+                opacity: 1.0 - (i as f32 / 200.0),
+            },
+        );
     }
     fire(&mut app, EngineCommand::SetCrossfader(0.75));
     // Render to exercise the full pipeline

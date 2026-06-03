@@ -30,35 +30,70 @@ fn send_cmd(app: &mut VardaApp, cmd: EngineCommand) -> CommandResult {
 
 #[test]
 fn surface_add_and_remove_roundtrip() {
-    let Some(mut app) = headless_app() else { return; };
-    let r = send_cmd(&mut app, EngineCommand::AddSurface {
-        name: "Test Surface".into(),
-        source: varda::renderer::context::OutputSource::Master,
-    });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddSurface {
+            name: "Test Surface".into(),
+            source: varda::renderer::context::OutputSource::Master,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
-    assert!(state.outputs.surfaces.iter().any(|s| s.name == "Test Surface"));
-    let uuid = state.outputs.surfaces.iter().find(|s| s.name == "Test Surface").unwrap().uuid.clone();
+    assert!(state
+        .outputs
+        .surfaces
+        .iter()
+        .any(|s| s.name == "Test Surface"));
+    let uuid = state
+        .outputs
+        .surfaces
+        .iter()
+        .find(|s| s.name == "Test Surface")
+        .unwrap()
+        .uuid
+        .clone();
     let r = send_cmd(&mut app, EngineCommand::RemoveSurface { uuid });
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
-    assert!(!state.outputs.surfaces.iter().any(|s| s.name == "Test Surface"));
+    assert!(!state
+        .outputs
+        .surfaces
+        .iter()
+        .any(|s| s.name == "Test Surface"));
 }
 
 #[test]
 fn surface_duplicate_roundtrip() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSurface {
-        name: "Original".into(),
-        source: varda::renderer::context::OutputSource::Master,
-    });
-    let uuid = app.build_engine_state().outputs.surfaces.iter()
-        .find(|s| s.name == "Original").unwrap().uuid.clone();
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSurface {
+            name: "Original".into(),
+            source: varda::renderer::context::OutputSource::Master,
+        },
+    );
+    let uuid = app
+        .build_engine_state()
+        .outputs
+        .surfaces
+        .iter()
+        .find(|s| s.name == "Original")
+        .unwrap()
+        .uuid
+        .clone();
     let r = send_cmd(&mut app, EngineCommand::DuplicateSurface { uuid });
     assert!(matches!(r, CommandResult::OkWithId { .. }));
     let state = app.build_engine_state();
     // Should have original + duplicate
-    let originals: Vec<_> = state.outputs.surfaces.iter()
+    let originals: Vec<_> = state
+        .outputs
+        .surfaces
+        .iter()
         .filter(|s| s.name.starts_with("Original"))
         .collect();
     assert!(originals.len() >= 2);
@@ -66,18 +101,43 @@ fn surface_duplicate_roundtrip() {
 
 #[test]
 fn surface_flip_and_move() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSurface {
-        name: "Flip Test".into(),
-        source: varda::renderer::context::OutputSource::Master,
-    });
-    let uuid = app.build_engine_state().outputs.surfaces.iter()
-        .find(|s| s.name == "Flip Test").unwrap().uuid.clone();
-    let r = send_cmd(&mut app, EngineCommand::FlipSurfaceHorizontal { uuid: uuid.clone() });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSurface {
+            name: "Flip Test".into(),
+            source: varda::renderer::context::OutputSource::Master,
+        },
+    );
+    let uuid = app
+        .build_engine_state()
+        .outputs
+        .surfaces
+        .iter()
+        .find(|s| s.name == "Flip Test")
+        .unwrap()
+        .uuid
+        .clone();
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::FlipSurfaceHorizontal { uuid: uuid.clone() },
+    );
     assert!(matches!(r, CommandResult::Ok));
-    let r = send_cmd(&mut app, EngineCommand::FlipSurfaceVertical { uuid: uuid.clone() });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::FlipSurfaceVertical { uuid: uuid.clone() },
+    );
     assert!(matches!(r, CommandResult::Ok));
-    let r = send_cmd(&mut app, EngineCommand::MoveSurface { uuid, dx: 0.1, dy: -0.1 });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::MoveSurface {
+            uuid,
+            dx: 0.1,
+            dy: -0.1,
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
 }
 
@@ -85,23 +145,51 @@ fn surface_flip_and_move() {
 
 #[test]
 fn sequence_full_lifecycle() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     let r = send_cmd(&mut app, EngineCommand::CreateSequence);
     assert!(matches!(r, CommandResult::Ok));
     assert_eq!(app.build_engine_state().mixer.sequences.len(), 1);
 
     // Add steps
-    send_cmd(&mut app, EngineCommand::AddFadeStep { seq_idx: 0, from_ch: 0, to_ch: 1 });
+    send_cmd(
+        &mut app,
+        EngineCommand::AddFadeStep {
+            seq_idx: 0,
+            from_ch: 0,
+            to_ch: 1,
+        },
+    );
     send_cmd(&mut app, EngineCommand::AddWaitStep { seq_idx: 0 });
-    send_cmd(&mut app, EngineCommand::AddGoToStep { seq_idx: 0, step_index: 0 });
+    send_cmd(
+        &mut app,
+        EngineCommand::AddGoToStep {
+            seq_idx: 0,
+            step_index: 0,
+        },
+    );
     assert_eq!(app.build_engine_state().mixer.sequences[0].steps.len(), 3);
 
     // Remove middle step
-    send_cmd(&mut app, EngineCommand::RemoveStep { seq_idx: 0, step_idx: 1 });
+    send_cmd(
+        &mut app,
+        EngineCommand::RemoveStep {
+            seq_idx: 0,
+            step_idx: 1,
+        },
+    );
     assert_eq!(app.build_engine_state().mixer.sequences[0].steps.len(), 2);
 
     // Move step
-    send_cmd(&mut app, EngineCommand::MoveStep { seq_idx: 0, from: 0, to: 1 });
+    send_cmd(
+        &mut app,
+        EngineCommand::MoveStep {
+            seq_idx: 0,
+            from: 0,
+            to: 1,
+        },
+    );
 
     // Delete sequence
     let r = send_cmd(&mut app, EngineCommand::DeleteSequence { idx: 0 });
@@ -111,21 +199,49 @@ fn sequence_full_lifecycle() {
 
 #[test]
 fn sequence_oob_returns_not_found() {
-    let Some(mut app) = headless_app() else { return; };
+    let Some(mut app) = headless_app() else {
+        return;
+    };
     let r = send_cmd(&mut app, EngineCommand::DeleteSequence { idx: 99 });
-    assert!(matches!(r, CommandResult::Err { code: ErrorCode::NotFound, .. }));
-    let r = send_cmd(&mut app, EngineCommand::AddFadeStep { seq_idx: 99, from_ch: 0, to_ch: 1 });
-    assert!(matches!(r, CommandResult::Err { code: ErrorCode::NotFound, .. }));
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddFadeStep {
+            seq_idx: 99,
+            from_ch: 0,
+            to_ch: 1,
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
 }
 
 // ── Output Commands ─────────────────────────────────────────────────
 
 #[test]
 fn headless_output_create_and_stop() {
-    let Some(mut app) = headless_app() else { return; };
-    let r = send_cmd(&mut app, EngineCommand::CreateHeadlessOutput {
-        target: varda::renderer::context::OutputTarget::NdiSend { sender_name: "Test NDI".into() },
-    });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: varda::renderer::context::OutputTarget::NdiSend {
+                sender_name: "Test NDI".into(),
+            },
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     // Verify output was created in state
     let state = app.build_engine_state();
@@ -136,13 +252,30 @@ fn headless_output_create_and_stop() {
 
 #[test]
 fn hls_library_add_remove() {
-    let Some(mut app) = headless_app() else { return; };
-    let r = send_cmd(&mut app, EngineCommand::AddHlsLibraryEntry { url: "http://example.com/stream.m3u8".into() });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddHlsLibraryEntry {
+            url: "http://example.com/stream.m3u8".into(),
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     // Add duplicate — should be idempotent
-    send_cmd(&mut app, EngineCommand::AddHlsLibraryEntry { url: "http://example.com/stream.m3u8".into() });
+    send_cmd(
+        &mut app,
+        EngineCommand::AddHlsLibraryEntry {
+            url: "http://example.com/stream.m3u8".into(),
+        },
+    );
     // Remove
-    let r = send_cmd(&mut app, EngineCommand::RemoveHlsLibraryEntry { url: "http://example.com/stream.m3u8".into() });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveHlsLibraryEntry {
+            url: "http://example.com/stream.m3u8".into(),
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
 }
 
@@ -150,8 +283,16 @@ fn hls_library_add_remove() {
 
 #[test]
 fn solid_color_deck_source_kind() {
-    let Some(mut app) = headless_app() else { return; };
-    let r = send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
     assert_eq!(state.mixer.channels[0].decks.len(), 1);
@@ -163,8 +304,16 @@ fn solid_color_deck_source_kind() {
 
 #[test]
 fn headless_render_smoke() {
-    let Some(mut app) = headless_app() else { return; };
-    send_cmd(&mut app, EngineCommand::AddSolidColorDeck { channel_idx: 0, color: [0.0, 1.0, 0.0, 1.0] });
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [0.0, 1.0, 0.0, 1.0],
+        },
+    );
     for _ in 0..10 {
         app.update_frame_timing();
         app.render_mixer_frame();

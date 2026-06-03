@@ -30,7 +30,9 @@ impl DomemasterResolution {
 }
 
 impl Default for DomemasterResolution {
-    fn default() -> Self { Self::R2K }
+    fn default() -> Self {
+        Self::R2K
+    }
 }
 
 impl std::fmt::Display for DomemasterResolution {
@@ -113,10 +115,13 @@ pub struct DomemasterRenderer {
     pub content_rotation: [f32; 3],
 }
 
-
 impl DomemasterRenderer {
     /// Create a new domemaster renderer with the given configuration.
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, config: DomemasterConfig) -> Result<Self> {
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        config: DomemasterConfig,
+    ) -> Result<Self> {
         let output_size = config.resolution.pixels();
         // Cubemap faces are half the output resolution for performance
         let face_size = output_size / 2;
@@ -124,22 +129,31 @@ impl DomemasterRenderer {
         let create_texture = |label: &str, size: u32| -> (wgpu::Texture, wgpu::TextureView) {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
-                size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                     | wgpu::TextureUsages::TEXTURE_BINDING
-                     | wgpu::TextureUsages::COPY_SRC,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
             (tex, view)
         };
 
-        let face_labels = ["Dome Face Front", "Dome Face Right", "Dome Face Back",
-                           "Dome Face Left", "Dome Face Top"];
+        let face_labels = [
+            "Dome Face Front",
+            "Dome Face Right",
+            "Dome Face Back",
+            "Dome Face Left",
+            "Dome Face Top",
+        ];
         let mut face_textures = Vec::with_capacity(NUM_FACES);
         let mut face_views = Vec::with_capacity(NUM_FACES);
         for label in &face_labels {
@@ -154,34 +168,44 @@ impl DomemasterRenderer {
         // Projection pipeline: fullscreen pass reads 5 face textures → fisheye output
         let tex_entry = |binding: u32| -> wgpu::BindGroupLayoutEntry {
             wgpu::BindGroupLayoutEntry {
-                binding, visibility: wgpu::ShaderStages::FRAGMENT,
+                binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
-                }, count: None,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
             }
         };
 
-        let projection_bind_group_layout = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
+        let projection_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Domemaster Projection BGL"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
-                        binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
-                    tex_entry(1), tex_entry(2), tex_entry(3), tex_entry(4), tex_entry(5),
+                    tex_entry(1),
+                    tex_entry(2),
+                    tex_entry(3),
+                    tex_entry(4),
+                    tex_entry(5),
                     wgpu::BindGroupLayoutEntry {
-                        binding: 6, visibility: wgpu::ShaderStages::FRAGMENT,
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false, min_binding_size: None,
-                        }, count: None,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
                 ],
-            },
-        );
+            });
 
         let vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Domemaster Vertex Shader"),
@@ -202,19 +226,24 @@ impl DomemasterRenderer {
             label: Some("Domemaster Projection Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &vertex_shader, entry_point: Some("vs_main"),
-                buffers: &[], compilation_options: Default::default(),
+                module: &vertex_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &fragment_shader, entry_point: Some("fs_main"),
+                module: &fragment_shader,
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format, blend: Some(wgpu::BlendState::REPLACE),
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default()
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
@@ -236,30 +265,49 @@ impl DomemasterRenderer {
             contents: bytemuck::cast_slice(&[DomemasterParams {
                 fov: config.fov_degrees.to_radians(),
                 tilt: config.tilt_degrees.to_radians(),
-                content_az: 0.0, content_el: 0.0, content_roll: 0.0,
-                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+                content_az: 0.0,
+                content_el: 0.0,
+                content_roll: 0.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         Ok(Self {
-            face_textures, face_views, output_texture, output_view,
-            face_blit, projection_pipeline, projection_bind_group_layout,
-            sampler, params_buffer, config, face_size, enabled: false,
+            face_textures,
+            face_views,
+            output_texture,
+            output_view,
+            face_blit,
+            projection_pipeline,
+            projection_bind_group_layout,
+            sampler,
+            params_buffer,
+            config,
+            face_size,
+            enabled: false,
             content_rotation: [0.0; 3],
         })
     }
 
     /// Update the shader params from the current config + content rotation.
     pub fn update_params(&self, queue: &wgpu::Queue) {
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[DomemasterParams {
-            fov: self.config.fov_degrees.to_radians(),
-            tilt: self.config.tilt_degrees.to_radians(),
-            content_az: self.content_rotation[0],
-            content_el: self.content_rotation[1],
-            content_roll: self.content_rotation[2],
-            _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
-        }]));
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[DomemasterParams {
+                fov: self.config.fov_degrees.to_radians(),
+                tilt: self.config.tilt_degrees.to_radians(),
+                content_az: self.content_rotation[0],
+                content_el: self.content_rotation[1],
+                content_roll: self.content_rotation[2],
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+            }]),
+        );
     }
 
     /// Set content rotation (azimuth, elevation, roll) in radians.
@@ -283,7 +331,9 @@ impl DomemasterRenderer {
         queue: &wgpu::Queue,
         source_view: &wgpu::TextureView,
     ) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Domemaster Encoder"),
@@ -302,7 +352,11 @@ impl DomemasterRenderer {
 
         for (i, (opacity, uv_scale, uv_offset)) in face_uv_configs.iter().enumerate() {
             let bind_group = self.face_blit.create_bind_group_with_params(
-                device, source_view, *opacity, *uv_scale, *uv_offset,
+                device,
+                source_view,
+                *opacity,
+                *uv_scale,
+                *uv_offset,
             );
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Dome Face Render"),
@@ -330,13 +384,34 @@ impl DomemasterRenderer {
             label: Some("Domemaster Projection Bind Group"),
             layout: &self.projection_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_FRONT]) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_RIGHT]) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_BACK]) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_LEFT]) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_TOP]) },
-                wgpu::BindGroupEntry { binding: 6, resource: self.params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_FRONT]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_RIGHT]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_BACK]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_LEFT]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.face_views[FACE_TOP]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
             ],
         });
 

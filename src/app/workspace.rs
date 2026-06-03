@@ -3,7 +3,9 @@
 use super::VardaApp;
 use crate::usecases::ui::UILayoutState;
 
-fn duration_config_to_spec(config: &crate::scene::DurationSpecConfig) -> crate::channel::DurationSpec {
+fn duration_config_to_spec(
+    config: &crate::scene::DurationSpecConfig,
+) -> crate::channel::DurationSpec {
     use crate::channel::DurationSpec;
     use crate::scene::DurationSpecConfig;
     match config {
@@ -23,38 +25,71 @@ impl VardaApp {
             return;
         }
         {
-            let scene = crate::persistence::snapshot_scene(&self.mixer, self.render_width, self.render_height);
+            let scene = crate::persistence::snapshot_scene(
+                &self.mixer,
+                self.render_width,
+                self.render_height,
+            );
             match scene.save(self.session.workspace.scene_path()) {
-                Ok(()) => log::info!("Saved scene to {}", self.session.workspace.scene_path().display()),
+                Ok(()) => log::info!(
+                    "Saved scene to {}",
+                    self.session.workspace.scene_path().display()
+                ),
                 Err(e) => log::error!("Failed to save scene: {}", e),
             }
         }
         if let Some(midi) = &self.input.midi_devices {
-            let midi_config = self.input.midi_mappings.to_config(&midi.devices, &self.input.auto_map_engine);
+            let midi_config = self
+                .input
+                .midi_mappings
+                .to_config(&midi.devices, &self.input.auto_map_engine);
             match midi_config.save(self.session.workspace.midi_path()) {
-                Ok(()) => log::info!("Saved MIDI mappings to {}", self.session.workspace.midi_path().display()),
+                Ok(()) => log::info!(
+                    "Saved MIDI mappings to {}",
+                    self.session.workspace.midi_path().display()
+                ),
                 Err(e) => log::error!("Failed to save MIDI config: {}", e),
             }
         }
         let stage = crate::persistence::snapshot_stage(
-            &self.output.surface_manager, &self.output.outputs,
-            layout.stage_editor_grid_size, layout.stage_editor_snap,
-            layout.library_panel_open, layout.right_panel_open, layout.stage_editor_open, layout.dome_preview_open,
-            layout.dome_mode_active, layout.dome_preset, layout.dome_geometry,
+            &self.output.surface_manager,
+            &self.output.outputs,
+            layout.stage_editor_grid_size,
+            layout.stage_editor_snap,
+            layout.library_panel_open,
+            layout.right_panel_open,
+            layout.stage_editor_open,
+            layout.dome_preview_open,
+            layout.dome_mode_active,
+            layout.dome_preset,
+            layout.dome_geometry,
         );
         match stage.save(self.session.workspace.stage_path()) {
-            Ok(()) => log::info!("Saved stage to {}", self.session.workspace.stage_path().display()),
+            Ok(()) => log::info!(
+                "Saved stage to {}",
+                self.session.workspace.stage_path().display()
+            ),
             Err(e) => log::error!("Failed to save stage: {}", e),
         }
         // Save keyboard shortcuts
         let keymap_config = self.input.keymap.to_config();
         match keymap_config.save(self.session.workspace.keymap_path()) {
-            Ok(()) => log::info!("Saved keymap to {}", self.session.workspace.keymap_path().display()),
+            Ok(()) => log::info!(
+                "Saved keymap to {}",
+                self.session.workspace.keymap_path().display()
+            ),
             Err(e) => log::error!("Failed to save keymap: {}", e),
         }
         // Save OSC config
-        match self.input.osc_config.save(self.session.workspace.osc_path()) {
-            Ok(()) => log::info!("Saved OSC config to {}", self.session.workspace.osc_path().display()),
+        match self
+            .input
+            .osc_config
+            .save(self.session.workspace.osc_path())
+        {
+            Ok(()) => log::info!(
+                "Saved OSC config to {}",
+                self.session.workspace.osc_path().display()
+            ),
             Err(e) => log::error!("Failed to save OSC config: {}", e),
         }
     }
@@ -89,17 +124,23 @@ impl VardaApp {
                         let mut config = output_config.clone();
                         if matches!(config.target, crate::scene::OutputTargetConfig::Windowed) {
                             if let Some(ref display_name) = config.target_display {
-                                config.target = crate::scene::OutputTargetConfig::Display { name: display_name.clone() };
+                                config.target = crate::scene::OutputTargetConfig::Display {
+                                    name: display_name.clone(),
+                                };
                             }
                         }
                         self.output.pending_output_creates.push(config);
                     }
-                    log::info!("Loaded stage with {} surfaces, {} outputs",
-                        self.output.surface_manager.surfaces.len(), prefs.outputs.len());
+                    log::info!(
+                        "Loaded stage with {} surfaces, {} outputs",
+                        self.output.surface_manager.surfaces.len(),
+                        prefs.outputs.len()
+                    );
 
                     // If any surface uses Domemaster source, ensure the renderer exists
-                    let has_dome_surfaces = self.output.surface_manager.surfaces.iter()
-                        .any(|s| matches!(s.source, crate::renderer::context::OutputSource::Domemaster));
+                    let has_dome_surfaces = self.output.surface_manager.surfaces.iter().any(|s| {
+                        matches!(s.source, crate::renderer::context::OutputSource::Domemaster)
+                    });
                     if has_dome_surfaces {
                         self.ensure_domemaster();
                     }
@@ -111,30 +152,48 @@ impl VardaApp {
             match crate::scene::SceneConfig::load(self.session.workspace.scene_path()) {
                 Ok(scene_config) => {
                     // Apply render resolution from scene if present
-                    if let (Some(w), Some(h)) = (scene_config.render_width, scene_config.render_height) {
+                    if let (Some(w), Some(h)) =
+                        (scene_config.render_width, scene_config.render_height)
+                    {
                         if w > 0 && h > 0 {
                             self.render_width = w;
                             self.render_height = h;
                             log::info!("Scene render resolution: {}×{}", w, h);
                         }
                     }
-                    match crate::persistence::restore_scene(&scene_config, &self.context, &self.registry, &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager, self.render_width, self.render_height) {
+                    match crate::persistence::restore_scene(
+                        &scene_config,
+                        &self.context,
+                        &self.registry,
+                        &mut self.camera_manager,
+                        &mut self.external_io.ndi_manager,
+                        &mut self.external_io.stream_manager,
+                        self.render_width,
+                        self.render_height,
+                    ) {
                         Ok(result) => {
                             self.mixer = result.mixer;
                             for warn in &result.warnings {
                                 self.session.notifications.warn(warn.clone());
                             }
-                            log::info!("Loaded scene with {} channels", scene_config.channels.len());
+                            log::info!(
+                                "Loaded scene with {} channels",
+                                scene_config.channels.len()
+                            );
                         }
                         Err(e) => {
                             log::error!("Failed to restore scene: {}", e);
-                            self.session.notifications.error(format!("Failed to load scene: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to load scene: {}", e));
                         }
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to load scene file: {}", e);
-                    self.session.notifications.warn(format!("Failed to load scene: {}", e));
+                    self.session
+                        .notifications
+                        .warn(format!("Failed to load scene: {}", e));
                 }
             }
         }
@@ -142,10 +201,14 @@ impl VardaApp {
             match crate::midi::MidiConfig::load(self.session.workspace.midi_path()) {
                 Ok(midi_config) => {
                     if let Some(midi) = &self.input.midi_devices {
-                        self.input.midi_mappings.load_from_config(&midi_config, &midi.devices);
+                        self.input
+                            .midi_mappings
+                            .load_from_config(&midi_config, &midi.devices);
                         log::info!("Loaded {} MIDI mappings", midi_config.mappings.len());
                     } else {
-                        log::info!("MIDI config found but no MIDI devices connected, mappings deferred");
+                        log::info!(
+                            "MIDI config found but no MIDI devices connected, mappings deferred"
+                        );
                     }
                 }
                 Err(e) => log::warn!("Failed to load MIDI config: {}", e),
@@ -174,9 +237,12 @@ impl VardaApp {
                         }
                     }
                     self.input.osc_config = config;
-                    log::info!("Loaded OSC config: port={}, enabled={}, {} feedback target(s)",
-                        self.input.osc_config.in_port, self.input.osc_config.enabled,
-                        self.input.osc_config.feedback_targets.len());
+                    log::info!(
+                        "Loaded OSC config: port={}, enabled={}, {} feedback target(s)",
+                        self.input.osc_config.in_port,
+                        self.input.osc_config.enabled,
+                        self.input.osc_config.feedback_targets.len()
+                    );
                 }
                 Err(e) => log::warn!("Failed to load OSC config: {}", e),
             }
@@ -210,11 +276,19 @@ impl VardaApp {
             if current_name.as_deref() != target_name {
                 match target_name {
                     Some(name) => {
-                        if let Some(shader) = self.registry.transitions().iter()
+                        if let Some(shader) = self
+                            .registry
+                            .transitions()
+                            .iter()
                             .find(|s| s.name() == name)
                         {
-                            if let Err(e) = self.mixer.set_transition(&self.context, (*shader).clone()) {
-                                warnings.push(format!("Failed to restore transition '{}': {}", name, e));
+                            if let Err(e) =
+                                self.mixer.set_transition(&self.context, (*shader).clone())
+                            {
+                                warnings.push(format!(
+                                    "Failed to restore transition '{}': {}",
+                                    name, e
+                                ));
                             }
                         } else {
                             warnings.push(format!("Transition '{}' not found in registry", name));
@@ -247,23 +321,45 @@ impl VardaApp {
 
             for d_idx in 0..paired_decks {
                 let deck_config = &ch_config.decks[d_idx];
-                if crate::persistence::source_configs_match(&ch.decks[d_idx].deck, &deck_config.source) {
+                if crate::persistence::source_configs_match(
+                    &ch.decks[d_idx].deck,
+                    &deck_config.source,
+                ) {
                     // Same source — patch properties in place (zero GPU cost)
-                    Self::patch_deck_slot(&mut ch.decks[d_idx], deck_config, &self.context, &self.registry);
+                    Self::patch_deck_slot(
+                        &mut ch.decks[d_idx],
+                        deck_config,
+                        &self.context,
+                        &self.registry,
+                    );
                 } else {
                     // Different source — rebuild just this deck
                     match crate::persistence::restore_deck(
-                        deck_config, &self.context, &self.registry,
-                        &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager, rw, rh,
+                        deck_config,
+                        &self.context,
+                        &self.registry,
+                        &mut self.camera_manager,
+                        &mut self.external_io.ndi_manager,
+                        &mut self.external_io.stream_manager,
+                        rw,
+                        rh,
                     ) {
                         Ok(deck) => {
                             let mut slot = crate::channel::DeckSlot::new(deck);
-                            Self::patch_deck_slot(&mut slot, deck_config, &self.context, &self.registry);
+                            Self::patch_deck_slot(
+                                &mut slot,
+                                deck_config,
+                                &self.context,
+                                &self.registry,
+                            );
                             ch.decks[d_idx] = slot;
                             structural = true;
                         }
                         Err(e) => {
-                            warnings.push(format!("Failed to restore deck '{}': {}", deck_config.name, e));
+                            warnings.push(format!(
+                                "Failed to restore deck '{}': {}",
+                                deck_config.name, e
+                            ));
                         }
                     }
                 }
@@ -279,24 +375,43 @@ impl VardaApp {
             for d_idx in paired_decks..target_deck_count {
                 let deck_config = &ch_config.decks[d_idx];
                 match crate::persistence::restore_deck(
-                    deck_config, &self.context, &self.registry,
-                    &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager, rw, rh,
+                    deck_config,
+                    &self.context,
+                    &self.registry,
+                    &mut self.camera_manager,
+                    &mut self.external_io.ndi_manager,
+                    &mut self.external_io.stream_manager,
+                    rw,
+                    rh,
                 ) {
                     Ok(deck) => {
                         let mut slot = crate::channel::DeckSlot::new(deck);
-                        Self::patch_deck_slot(&mut slot, deck_config, &self.context, &self.registry);
+                        Self::patch_deck_slot(
+                            &mut slot,
+                            deck_config,
+                            &self.context,
+                            &self.registry,
+                        );
                         ch.decks.push(slot);
                         structural = true;
                     }
                     Err(e) => {
-                        warnings.push(format!("Failed to restore deck '{}': {}", deck_config.name, e));
+                        warnings.push(format!(
+                            "Failed to restore deck '{}': {}",
+                            deck_config.name, e
+                        ));
                     }
                 }
             }
 
             // Diff channel effects
-            Self::diff_effects(&mut ch.effects, &ch_config.effects, &self.context,
-                self.context.texture_format, &mut warnings);
+            Self::diff_effects(
+                &mut ch.effects,
+                &ch_config.effects,
+                &self.context,
+                self.context.texture_format,
+                &mut warnings,
+            );
         }
 
         // Remove excess channels
@@ -308,81 +423,130 @@ impl VardaApp {
         // Add missing channels
         for ch_idx in paired_count..target_ch_count {
             let ch_config = &target.channels[ch_idx];
-            match crate::channel::Channel::new(
-                ch_config.name.clone(), &self.context, rw, rh,
-            ) {
+            match crate::channel::Channel::new(ch_config.name.clone(), &self.context, rw, rh) {
                 Ok(mut channel) => {
                     channel.opacity = ch_config.opacity;
                     channel.blend_mode = ch_config.blend_mode.into();
                     for deck_config in &ch_config.decks {
                         match crate::persistence::restore_deck(
-                            deck_config, &self.context, &self.registry,
-                            &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager, rw, rh,
+                            deck_config,
+                            &self.context,
+                            &self.registry,
+                            &mut self.camera_manager,
+                            &mut self.external_io.ndi_manager,
+                            &mut self.external_io.stream_manager,
+                            rw,
+                            rh,
                         ) {
                             Ok(deck) => {
                                 let mut slot = crate::channel::DeckSlot::new(deck);
-                                Self::patch_deck_slot(&mut slot, deck_config, &self.context, &self.registry);
+                                Self::patch_deck_slot(
+                                    &mut slot,
+                                    deck_config,
+                                    &self.context,
+                                    &self.registry,
+                                );
                                 channel.add_deck_slot(slot);
                             }
                             Err(e) => {
-                                warnings.push(format!("Failed to restore deck '{}': {}", deck_config.name, e));
+                                warnings.push(format!(
+                                    "Failed to restore deck '{}': {}",
+                                    deck_config.name, e
+                                ));
                             }
                         }
                     }
                     for eff_config in &ch_config.effects {
-                        match crate::persistence::restore_effect(eff_config, &self.context, self.context.texture_format) {
+                        match crate::persistence::restore_effect(
+                            eff_config,
+                            &self.context,
+                            self.context.texture_format,
+                        ) {
                             Ok(eff) => channel.add_effect(eff),
-                            Err(e) => warnings.push(format!("Failed to restore channel effect: {}", e)),
+                            Err(e) => {
+                                warnings.push(format!("Failed to restore channel effect: {}", e))
+                            }
                         }
                     }
                     self.mixer.channels_mut().push(channel);
                     structural = true;
                 }
                 Err(e) => {
-                    warnings.push(format!("Failed to create channel '{}': {}", ch_config.name, e));
+                    warnings.push(format!(
+                        "Failed to create channel '{}': {}",
+                        ch_config.name, e
+                    ));
                 }
             }
         }
 
         // Update next_channel_index
-        let max_idx = self.mixer.channels().iter()
-            .filter_map(|ch| ch.name.strip_prefix("Ch ").and_then(|s| s.parse::<usize>().ok()))
+        let max_idx = self
+            .mixer
+            .channels()
+            .iter()
+            .filter_map(|ch| {
+                ch.name
+                    .strip_prefix("Ch ")
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
             .max()
             .map(|n| n + 1)
             .unwrap_or(self.mixer.channels().len());
         self.mixer.set_next_channel_index(max_idx);
 
         // (e) Master effects — diff
-        Self::diff_effects(self.mixer.master_effects_mut(), &target.master_effects,
-            &self.context, self.context.texture_format, &mut warnings);
+        Self::diff_effects(
+            self.mixer.master_effects_mut(),
+            &target.master_effects,
+            &self.context,
+            self.context.texture_format,
+            &mut warnings,
+        );
 
         // (f) Transition sequences — cheap clone
         self.mixer.transition_sequences_mut().clear();
         for seq_config in &target.transition_sequences {
-            use crate::mixer::{TransitionSequence, TransitionStep, StepKind, SequencerState};
+            use crate::mixer::{SequencerState, StepKind, TransitionSequence, TransitionStep};
             use crate::scene::TransitionStepConfig;
-            let steps = seq_config.steps.iter().map(|step| {
-                let kind = match step {
-                    TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader, target_amount } => {
-                        StepKind::Fade {
-                            from_ch: *from_ch, to_ch: *to_ch,
+            let steps = seq_config
+                .steps
+                .iter()
+                .map(|step| {
+                    let kind = match step {
+                        TransitionStepConfig::Fade {
+                            from_ch,
+                            to_ch,
+                            duration,
+                            easing,
+                            transition_shader,
+                            target_amount,
+                        } => StepKind::Fade {
+                            from_ch: *from_ch,
+                            to_ch: *to_ch,
                             duration: duration_config_to_spec(duration),
                             easing: (*easing).into(),
                             transition_shader: transition_shader.clone(),
                             target_amount: *target_amount,
-                        }
-                    }
-                    TransitionStepConfig::Wait { duration } => StepKind::Wait {
-                        duration: duration_config_to_spec(duration),
-                    },
-                    TransitionStepConfig::GoTo { step_index } => StepKind::GoTo { step_index: *step_index },
-                };
-                TransitionStep { kind }
-            }).collect();
-            self.mixer.transition_sequences_mut().push(TransitionSequence {
-                name: seq_config.name.clone(), steps, enabled: seq_config.enabled,
-                state: SequencerState::new(),
-            });
+                        },
+                        TransitionStepConfig::Wait { duration } => StepKind::Wait {
+                            duration: duration_config_to_spec(duration),
+                        },
+                        TransitionStepConfig::GoTo { step_index } => StepKind::GoTo {
+                            step_index: *step_index,
+                        },
+                    };
+                    TransitionStep { kind }
+                })
+                .collect();
+            self.mixer
+                .transition_sequences_mut()
+                .push(TransitionSequence {
+                    name: seq_config.name.clone(),
+                    steps,
+                    enabled: seq_config.enabled,
+                    state: SequencerState::new(),
+                });
         }
 
         (warnings, structural)
@@ -412,13 +576,21 @@ impl VardaApp {
         }
 
         // Patch deck effects
-        Self::diff_effects(&mut slot.deck.effects, &config.effects, context,
-            wgpu::TextureFormat::Rgba8Unorm, &mut Vec::new());
+        Self::diff_effects(
+            &mut slot.deck.effects,
+            &config.effects,
+            context,
+            wgpu::TextureFormat::Rgba8Unorm,
+            &mut Vec::new(),
+        );
 
         // Patch auto-transition config
         if let Some(at_config) = &config.auto_transition {
             use crate::channel::{DeckAutoTransition, TransitionTrigger};
-            let mut at = slot.auto_transition.take().unwrap_or_else(DeckAutoTransition::new);
+            let mut at = slot
+                .auto_transition
+                .take()
+                .unwrap_or_else(DeckAutoTransition::new);
             at.enabled = at_config.enabled;
             at.trigger = match at_config.trigger {
                 crate::scene::TriggerConfig::Timer => TransitionTrigger::Timer,
@@ -432,15 +604,23 @@ impl VardaApp {
             // Compile transition shader if specified
             if let Some(shader_name) = &at_config.transition_shader {
                 // Only recompile if the shader name changed
-                let needs_compile = slot.transition_effect.as_ref()
+                let needs_compile = slot
+                    .transition_effect
+                    .as_ref()
                     .map(|te| te.shader.name() != *shader_name)
                     .unwrap_or(true);
                 if needs_compile {
-                    if let Some(shader) = registry.transitions().iter()
+                    if let Some(shader) = registry
+                        .transitions()
+                        .iter()
                         .find(|s| s.name() == *shader_name)
                     {
                         if let Err(e) = slot.set_transition_shader(context, (*shader).clone()) {
-                            log::warn!("Failed to restore deck transition shader '{}': {}", shader_name, e);
+                            log::warn!(
+                                "Failed to restore deck transition shader '{}': {}",
+                                shader_name,
+                                e
+                            );
                         }
                     }
                 }
@@ -477,7 +657,9 @@ impl VardaApp {
                 // Different shader — rebuild this effect
                 match crate::persistence::restore_effect(cfg, context, target_format) {
                     Ok(new_eff) => effects[i] = new_eff,
-                    Err(e) => warnings.push(format!("Failed to restore effect '{}': {}", cfg.path, e)),
+                    Err(e) => {
+                        warnings.push(format!("Failed to restore effect '{}': {}", cfg.path, e))
+                    }
                 }
             }
         }
@@ -509,14 +691,23 @@ mod tests {
     fn headless_app_in(workspace: &std::path::Path) -> Option<super::super::VardaApp> {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
         let ws = workspace.to_str().unwrap();
-        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon", "--workspace", ws]);
+        let config = parse_args(&[
+            "--headless",
+            "--no-osc",
+            "--no-ndi",
+            "--no-syphon",
+            "--workspace",
+            ws,
+        ]);
         super::super::VardaApp::new(gpu, &config).ok()
     }
 
     #[test]
     fn load_workspace_no_varda_dir() {
         let tmp = TempDir::new().unwrap();
-        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
         // No .varda/ exists → load_workspace returns None
         let result = app.load_workspace();
         assert!(result.is_none());
@@ -525,29 +716,46 @@ mod tests {
     #[test]
     fn save_load_roundtrip_scene() {
         let tmp = TempDir::new().unwrap();
-        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
         app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
         app.set_crossfader(0.6);
         app.save_workspace(&UILayoutState::default());
 
-        let Some(mut app2) = headless_app_in(tmp.path()) else { return; };
+        let Some(mut app2) = headless_app_in(tmp.path()) else {
+            return;
+        };
         let _ = app2.load_workspace();
         let snap = app2.mixer_snapshot();
-        assert!(!snap.channels[0].decks.is_empty(), "deck should survive roundtrip");
+        assert!(
+            !snap.channels[0].decks.is_empty(),
+            "deck should survive roundtrip"
+        );
         assert!((snap.crossfader - 0.6).abs() < 1e-4);
     }
 
     #[test]
     fn save_load_roundtrip_stage() {
         let tmp = TempDir::new().unwrap();
-        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
-        let _uuid = app.add_surface("Test Surface", crate::renderer::context::OutputSource::Master);
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let _uuid = app.add_surface(
+            "Test Surface",
+            crate::renderer::context::OutputSource::Master,
+        );
         app.save_workspace(&UILayoutState::default());
 
-        let Some(mut app2) = headless_app_in(tmp.path()) else { return; };
+        let Some(mut app2) = headless_app_in(tmp.path()) else {
+            return;
+        };
         let _ = app2.load_workspace();
         let surfaces = app2.surface_snapshot();
-        assert!(surfaces.iter().any(|s| s.name == "Test Surface"), "surface should survive roundtrip");
+        assert!(
+            surfaces.iter().any(|s| s.name == "Test Surface"),
+            "surface should survive roundtrip"
+        );
     }
 
     #[test]
@@ -558,7 +766,9 @@ mod tests {
         // Write corrupt JSON
         std::fs::write(varda_dir.join("scene.json"), "not valid json {{{").unwrap();
 
-        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
         // Should not crash, should return None or gracefully handle
         let _result = app.load_workspace();
         // App should still function with default state
@@ -573,7 +783,9 @@ mod tests {
         std::fs::create_dir_all(&varda_dir).unwrap();
         // .varda/ exists but no scene.json
 
-        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
         let _ = app.load_workspace();
         // Should skip scene loading gracefully
         let snap = app.mixer_snapshot();
@@ -585,7 +797,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let varda_dir = tmp.path().join(".varda");
         assert!(!varda_dir.exists());
-        let Some(app) = headless_app_in(tmp.path()) else { return; };
+        let Some(app) = headless_app_in(tmp.path()) else {
+            return;
+        };
         app.save_workspace(&UILayoutState::default());
         assert!(varda_dir.exists());
     }
@@ -593,13 +807,17 @@ mod tests {
     #[test]
     fn load_workspace_returns_layout() {
         let tmp = TempDir::new().unwrap();
-        let Some(app) = headless_app_in(tmp.path()) else { return; };
+        let Some(app) = headless_app_in(tmp.path()) else {
+            return;
+        };
         let mut layout = UILayoutState::default();
         layout.stage_editor_open = true;
         layout.library_panel_open = true;
         app.save_workspace(&layout);
 
-        let Some(mut app2) = headless_app_in(tmp.path()) else { return; };
+        let Some(mut app2) = headless_app_in(tmp.path()) else {
+            return;
+        };
         let loaded = app2.load_workspace();
         assert!(loaded.is_some(), "should return layout");
         let loaded = loaded.unwrap();
@@ -610,22 +828,28 @@ mod tests {
     #[test]
     fn apply_scene_diff_crossfader() {
         let tmp = TempDir::new().unwrap();
-        let Some(mut app) = headless_app_in(tmp.path()) else { return; };
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
         // Build a minimal SceneConfig with different crossfader
         let scene = crate::scene::SceneConfig {
             version: 3,
             channels: vec![
                 crate::scene::ChannelConfig {
                     uuid: crate::deck::generate_short_uuid(),
-                    name: "Ch 0".into(), opacity: 1.0,
+                    name: "Ch 0".into(),
+                    opacity: 1.0,
                     blend_mode: crate::scene::BlendModeConfig::Normal,
-                    decks: vec![], effects: vec![],
+                    decks: vec![],
+                    effects: vec![],
                 },
                 crate::scene::ChannelConfig {
                     uuid: crate::deck::generate_short_uuid(),
-                    name: "Ch 1".into(), opacity: 1.0,
+                    name: "Ch 1".into(),
+                    opacity: 1.0,
                     blend_mode: crate::scene::BlendModeConfig::Normal,
-                    decks: vec![], effects: vec![],
+                    decks: vec![],
+                    effects: vec![],
                 },
             ],
             crossfader: 0.42,
@@ -639,6 +863,9 @@ mod tests {
         let (warnings, _structural) = app.apply_scene_diff(&scene, 1920, 1080);
         assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
         let snap = app.mixer_snapshot();
-        assert!((snap.crossfader - 0.42).abs() < 1e-4, "crossfader should be applied via diff");
+        assert!(
+            (snap.crossfader - 0.42).abs() < 1e-4,
+            "crossfader should be applied via diff"
+        );
     }
 }

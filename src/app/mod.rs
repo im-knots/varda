@@ -114,14 +114,14 @@ use crate::camera::CameraManager;
 use crate::keymap::KeymapStore;
 use crate::midi;
 use crate::mixer::Mixer;
+use crate::notifications::NotificationSystem;
 use crate::osc::{OscConfig, OscFeedbackSender, OscReceiver};
 use crate::persistence::Workspace;
 use crate::registry::ShaderRegistry;
 use crate::renderer::context::{GpuContext, UnifiedOutput};
 use crate::surface::SurfaceManager;
-use crate::notifications::NotificationSystem;
 
-use crate::engine::{CommandEnvelope, CommandResult, ErrorCode, EngineCommand, EngineState};
+use crate::engine::{CommandEnvelope, CommandResult, EngineCommand, EngineState, ErrorCode};
 
 // ── Domain sub-structs ──────────────────────────────────────────
 
@@ -257,7 +257,11 @@ impl VardaApp {
         for path in crate::registry::get_default_library_paths() {
             if path.is_dir() {
                 if let Err(e) = registry.add_library_path(&path) {
-                    log::warn!("Failed to add user shader library path {}: {}", path.display(), e);
+                    log::warn!(
+                        "Failed to add user shader library path {}: {}",
+                        path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -294,8 +298,18 @@ impl VardaApp {
 
         let osc_receiver = if osc_config.enabled {
             match OscReceiver::new(osc_config.in_port) {
-                Ok(osc) => { log::info!("OSC receiver started on port {}", osc_config.in_port); Some(osc) }
-                Err(e) => { log::warn!("Failed to start OSC receiver on port {}: {}", osc_config.in_port, e); None }
+                Ok(osc) => {
+                    log::info!("OSC receiver started on port {}", osc_config.in_port);
+                    Some(osc)
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to start OSC receiver on port {}: {}",
+                        osc_config.in_port,
+                        e
+                    );
+                    None
+                }
             }
         } else {
             log::info!("OSC input disabled by config");
@@ -311,7 +325,10 @@ impl VardaApp {
                 }
                 Some(sender)
             }
-            Err(e) => { log::warn!("Failed to create OSC feedback sender: {}", e); None }
+            Err(e) => {
+                log::warn!("Failed to create OSC feedback sender: {}", e);
+                None
+            }
         };
 
         let mut controller_led_mgr = midi::ControllerLedManager::new();
@@ -327,7 +344,10 @@ impl VardaApp {
                 auto_map_engine.sync_devices(&mgr);
                 Some(mgr)
             }
-            Err(e) => { log::warn!("Failed to initialize MIDI: {}", e); None }
+            Err(e) => {
+                log::warn!("Failed to initialize MIDI: {}", e);
+                None
+            }
         };
 
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -455,7 +475,10 @@ impl VardaApp {
                 return CommandResult::Ok;
             }
         }
-        CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found".into() }
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            message: "Deck not found".into(),
+        }
     }
 
     /// Execute a single command and return the result.
@@ -468,7 +491,11 @@ impl VardaApp {
                 self.set_crossfader(pos);
                 CommandResult::Ok
             }
-            EngineCommand::AutoCrossfade { target, duration_secs, easing } => {
+            EngineCommand::AutoCrossfade {
+                target,
+                duration_secs,
+                easing,
+            } => {
                 self.start_auto_crossfade(target, duration_secs, easing);
                 CommandResult::Ok
             }
@@ -476,73 +503,126 @@ impl VardaApp {
                 self.start_beat_crossfade(target, beats);
                 CommandResult::Ok
             }
-            EngineCommand::AddDeck { channel_idx, shader_name } => {
-                match self.add_deck(channel_idx, &shader_name) {
-                    Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
-                }
-            }
+            EngineCommand::AddDeck {
+                channel_idx,
+                shader_name,
+            } => match self.add_deck(channel_idx, &shader_name) {
+                Ok(_) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: e.to_string(),
+                },
+            },
             EngineCommand::AddImageDeck { channel_idx, path } => {
                 match self.add_image_deck(channel_idx, &path) {
                     Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
                 }
             }
             EngineCommand::AddVideoDeck { channel_idx, path } => {
                 match self.add_video_deck(channel_idx, &path) {
                     Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
                 }
             }
             EngineCommand::AddSolidColorDeck { channel_idx, color } => {
                 match self.add_solid_color_deck(channel_idx, color) {
                     Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
                 }
             }
-            EngineCommand::AddCameraDeck { channel_idx, camera_id } => {
-                match self.add_camera_deck(channel_idx, camera_id) {
-                    Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
-                }
-            }
-            EngineCommand::RemoveDeck { channel_idx, deck_idx } => {
-                match self.remove_deck(channel_idx, deck_idx) {
-                    Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::NotFound, message: e.to_string() },
-                }
-            }
-            EngineCommand::MoveDeck { src_ch, src_deck, dst_ch } => {
-                match self.move_deck(src_ch, src_deck, dst_ch) {
-                    Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
-                }
-            }
-            EngineCommand::ReorderDeck { ch, from_idx, to_idx } => {
+            EngineCommand::AddCameraDeck {
+                channel_idx,
+                camera_id,
+            } => match self.add_camera_deck(channel_idx, camera_id) {
+                Ok(_) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::RemoveDeck {
+                channel_idx,
+                deck_idx,
+            } => match self.remove_deck(channel_idx, deck_idx) {
+                Ok(_) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::MoveDeck {
+                src_ch,
+                src_deck,
+                dst_ch,
+            } => match self.move_deck(src_ch, src_deck, dst_ch) {
+                Ok(_) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::ReorderDeck {
+                ch,
+                from_idx,
+                to_idx,
+            } => {
                 self.reorder_deck(ch, from_idx, to_idx);
                 CommandResult::Ok
             }
-            EngineCommand::SetDeckOpacity { channel_idx, deck_idx, opacity } => {
+            EngineCommand::SetDeckOpacity {
+                channel_idx,
+                deck_idx,
+                opacity,
+            } => {
                 self.set_deck_opacity(channel_idx, deck_idx, opacity);
                 CommandResult::Ok
             }
-            EngineCommand::SetDeckBlendMode { channel_idx, deck_idx, mode } => {
+            EngineCommand::SetDeckBlendMode {
+                channel_idx,
+                deck_idx,
+                mode,
+            } => {
                 self.set_deck_blend_mode(channel_idx, deck_idx, mode);
                 CommandResult::Ok
             }
-            EngineCommand::SetDeckSolo { channel_idx, deck_idx, solo } => {
+            EngineCommand::SetDeckSolo {
+                channel_idx,
+                deck_idx,
+                solo,
+            } => {
                 self.set_deck_solo(channel_idx, deck_idx, solo);
                 CommandResult::Ok
             }
-            EngineCommand::SetDeckMute { channel_idx, deck_idx, mute } => {
+            EngineCommand::SetDeckMute {
+                channel_idx,
+                deck_idx,
+                mute,
+            } => {
                 self.set_deck_mute(channel_idx, deck_idx, mute);
                 CommandResult::Ok
             }
-            EngineCommand::SetDeckScalingMode { channel_idx, deck_idx, mode } => {
+            EngineCommand::SetDeckScalingMode {
+                channel_idx,
+                deck_idx,
+                mode,
+            } => {
                 self.set_deck_scaling_mode(channel_idx, deck_idx, mode);
                 CommandResult::Ok
             }
-            EngineCommand::SetChannelOpacity { channel_idx, opacity } => {
+            EngineCommand::SetChannelOpacity {
+                channel_idx,
+                opacity,
+            } => {
                 self.set_channel_opacity(channel_idx, opacity);
                 CommandResult::Ok
             }
@@ -550,24 +630,32 @@ impl VardaApp {
                 self.set_channel_blend_mode(channel_idx, mode);
                 CommandResult::Ok
             }
-            EngineCommand::AddChannel => {
-                match self.add_channel() {
-                    Ok(_idx) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() },
-                }
-            }
+            EngineCommand::AddChannel => match self.add_channel() {
+                Ok(_idx) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message: e.to_string(),
+                },
+            },
             EngineCommand::RemoveChannel { channel_idx } => {
                 match self.remove_channel(channel_idx) {
                     Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::NotFound, message: e.to_string() },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: e.to_string(),
+                    },
                 }
             }
-            EngineCommand::AddEffect { target, shader_name } => {
-                match self.add_effect(target, &shader_name) {
-                    Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
-                }
-            }
+            EngineCommand::AddEffect {
+                target,
+                shader_name,
+            } => match self.add_effect(target, &shader_name) {
+                Ok(_) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: e.to_string(),
+                },
+            },
             EngineCommand::RemoveEffect { target, effect_idx } => {
                 self.remove_effect(target, effect_idx);
                 CommandResult::Ok
@@ -576,14 +664,21 @@ impl VardaApp {
                 self.toggle_effect(target, effect_idx);
                 CommandResult::Ok
             }
-            EngineCommand::MoveEffect { target, from_idx, to_idx } => {
+            EngineCommand::MoveEffect {
+                target,
+                from_idx,
+                to_idx,
+            } => {
                 self.move_effect(target, from_idx, to_idx);
                 CommandResult::Ok
             }
             EngineCommand::SetTransition { shader_name } => {
                 match self.set_transition(shader_name.as_deref()) {
                     Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
                 }
             }
             EngineCommand::SetParam { path, value } => {
@@ -595,7 +690,10 @@ impl VardaApp {
             EngineCommand::OpenAudioSource { source_id } => {
                 match self.open_audio_source(source_id) {
                     Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() },
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: e.to_string(),
+                    },
                 }
             }
             EngineCommand::CloseAudioSource { source_id } => {
@@ -608,7 +706,10 @@ impl VardaApp {
             }
 
             // ── Modulation ───────────────────────────────────
-            EngineCommand::AddLfo { waveform, frequency } => {
+            EngineCommand::AddLfo {
+                waveform,
+                frequency,
+            } => {
                 self.add_lfo(waveform, frequency);
                 CommandResult::Ok
             }
@@ -616,7 +717,12 @@ impl VardaApp {
                 self.add_audio_band(preset, source_id);
                 CommandResult::Ok
             }
-            EngineCommand::AddAdsr { attack, decay, sustain, release } => {
+            EngineCommand::AddAdsr {
+                attack,
+                decay,
+                sustain,
+                release,
+            } => {
                 self.add_adsr(attack, decay, sustain, release);
                 CommandResult::Ok
             }
@@ -628,7 +734,11 @@ impl VardaApp {
                 self.remove_modulation_source(&uuid);
                 CommandResult::Ok
             }
-            EngineCommand::AssignModulation { target, source_id, amount } => {
+            EngineCommand::AssignModulation {
+                target,
+                source_id,
+                amount,
+            } => {
                 self.assign_modulation(&target, &source_id, amount);
                 CommandResult::Ok
             }
@@ -659,17 +769,26 @@ impl VardaApp {
                 self.add_surface(&name, source);
                 CommandResult::Ok
             }
-            EngineCommand::AddPolygonSurface { name, vertices, source } => {
+            EngineCommand::AddPolygonSurface {
+                name,
+                vertices,
+                source,
+            } => {
                 self.add_polygon_surface(&name, &vertices, source);
                 CommandResult::Ok
             }
-            EngineCommand::AddCircleSurface { name, center, radius, sides, aspect_ratio, source } => {
+            EngineCommand::AddCircleSurface {
+                name,
+                center,
+                radius,
+                sides,
+                aspect_ratio,
+                source,
+            } => {
                 self.add_circle_surface(&name, center, radius, sides, aspect_ratio, source);
                 CommandResult::Ok
             }
-            EngineCommand::RemoveSurface { uuid } => {
-                self.cmd_remove_surface(&uuid)
-            }
+            EngineCommand::RemoveSurface { uuid } => self.cmd_remove_surface(&uuid),
             EngineCommand::SetSurfaceSource { uuid, source } => {
                 self.set_surface_source(&uuid, source);
                 self.recompute_auto_edge_blend();
@@ -688,29 +807,59 @@ impl VardaApp {
                 self.rename_surface(&uuid, &name);
                 CommandResult::Ok
             }
-            EngineCommand::UpdateSurfaceVertices { uuid, vertices } => self.cmd_update_surface_vertices(&uuid, vertices),
+            EngineCommand::UpdateSurfaceVertices { uuid, vertices } => {
+                self.cmd_update_surface_vertices(&uuid, vertices)
+            }
             EngineCommand::DuplicateSurface { uuid } => self.cmd_duplicate_surface(&uuid),
-            EngineCommand::FlipSurfaceHorizontal { uuid } => self.cmd_flip_surface_horizontal(&uuid),
+            EngineCommand::FlipSurfaceHorizontal { uuid } => {
+                self.cmd_flip_surface_horizontal(&uuid)
+            }
             EngineCommand::FlipSurfaceVertical { uuid } => self.cmd_flip_surface_vertical(&uuid),
-            EngineCommand::InsertSurfaceVertex { uuid, after_vert_idx, position } => self.cmd_insert_surface_vertex(&uuid, after_vert_idx, position),
-            EngineCommand::SetCircleRadius { uuid, radius } => self.cmd_set_circle_radius(&uuid, radius),
-            EngineCommand::SetCircleSides { uuid, sides } => self.cmd_set_circle_sides(&uuid, sides),
-            EngineCommand::ConvertSurfaceToPolygon { uuid } => self.cmd_convert_surface_to_polygon(&uuid),
+            EngineCommand::InsertSurfaceVertex {
+                uuid,
+                after_vert_idx,
+                position,
+            } => self.cmd_insert_surface_vertex(&uuid, after_vert_idx, position),
+            EngineCommand::SetCircleRadius { uuid, radius } => {
+                self.cmd_set_circle_radius(&uuid, radius)
+            }
+            EngineCommand::SetCircleSides { uuid, sides } => {
+                self.cmd_set_circle_sides(&uuid, sides)
+            }
+            EngineCommand::ConvertSurfaceToPolygon { uuid } => {
+                self.cmd_convert_surface_to_polygon(&uuid)
+            }
             EngineCommand::CombineSurfaces { uuids } => self.cmd_combine_surfaces(&uuids),
             EngineCommand::MoveSurface { uuid, dx, dy } => self.cmd_move_surface(&uuid, dx, dy),
-            EngineCommand::UpdateSurfaceContourVertices { uuid, contour, vertices } => self.cmd_update_surface_contour_vertices(&uuid, contour, vertices),
-            EngineCommand::AssignSurfaceToOutput { output_uuid, surface_uuid } => {
+            EngineCommand::UpdateSurfaceContourVertices {
+                uuid,
+                contour,
+                vertices,
+            } => self.cmd_update_surface_contour_vertices(&uuid, contour, vertices),
+            EngineCommand::AssignSurfaceToOutput {
+                output_uuid,
+                surface_uuid,
+            } => {
                 self.assign_surface_to_output(&output_uuid, &surface_uuid);
                 self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
-            EngineCommand::UnassignSurfaceFromOutput { output_uuid, assignment_idx } => {
+            EngineCommand::UnassignSurfaceFromOutput {
+                output_uuid,
+                assignment_idx,
+            } => {
                 self.unassign_surface_from_output(&output_uuid, assignment_idx);
                 self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
-            EngineCommand::AssignSurfaceToOutputByIdx { output_idx, surface_uuid } => self.cmd_assign_surface_to_output_by_idx(output_idx, &surface_uuid),
-            EngineCommand::UnassignSurfaceFromOutputByIdx { output_idx, assignment_idx } => self.cmd_unassign_surface_from_output_by_idx(output_idx, assignment_idx),
+            EngineCommand::AssignSurfaceToOutputByIdx {
+                output_idx,
+                surface_uuid,
+            } => self.cmd_assign_surface_to_output_by_idx(output_idx, &surface_uuid),
+            EngineCommand::UnassignSurfaceFromOutputByIdx {
+                output_idx,
+                assignment_idx,
+            } => self.cmd_unassign_surface_from_output_by_idx(output_idx, assignment_idx),
 
             // ── Surface Auto-Detection ────────────────────────
             EngineCommand::DetectFromImage { image_data, params } => {
@@ -724,28 +873,24 @@ impl VardaApp {
                     },
                 }
             }
-            EngineCommand::DetectFromSvg { svg_data } => {
-                match self.detect_from_svg(&svg_data) {
-                    Ok(result) => CommandResult::OkWithData {
-                        data: serde_json::to_value(&result).unwrap_or_default(),
-                    },
-                    Err(e) => CommandResult::Err {
-                        code: ErrorCode::InvalidInput,
-                        message: e.to_string(),
-                    },
-                }
-            }
-            EngineCommand::DetectFromDxf { dxf_data } => {
-                match self.detect_from_dxf(&dxf_data) {
-                    Ok(result) => CommandResult::OkWithData {
-                        data: serde_json::to_value(&result).unwrap_or_default(),
-                    },
-                    Err(e) => CommandResult::Err {
-                        code: ErrorCode::InvalidInput,
-                        message: e.to_string(),
-                    },
-                }
-            }
+            EngineCommand::DetectFromSvg { svg_data } => match self.detect_from_svg(&svg_data) {
+                Ok(result) => CommandResult::OkWithData {
+                    data: serde_json::to_value(&result).unwrap_or_default(),
+                },
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::DetectFromDxf { dxf_data } => match self.detect_from_dxf(&dxf_data) {
+                Ok(result) => CommandResult::OkWithData {
+                    data: serde_json::to_value(&result).unwrap_or_default(),
+                },
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: e.to_string(),
+                },
+            },
             EngineCommand::ConfirmDetectedContours { contours } => {
                 let uuids = self.confirm_detected_contours(&contours);
                 CommandResult::OkWithData {
@@ -768,7 +913,10 @@ impl VardaApp {
             }
 
             // ── Video Playback ────────────────────────────────
-            EngineCommand::VideoTogglePlay { channel_idx, deck_idx } => {
+            EngineCommand::VideoTogglePlay {
+                channel_idx,
+                deck_idx,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
@@ -777,20 +925,37 @@ impl VardaApp {
                         }
                     }
                 }
-                CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found or not a video".into() }
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Deck not found or not a video".into(),
+                }
             }
-            EngineCommand::VideoSeek { channel_idx, deck_idx, position_secs } => {
+            EngineCommand::VideoSeek {
+                channel_idx,
+                deck_idx,
+                position_secs,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         if let Err(e) = ch.decks[deck_idx].deck.video_seek(position_secs) {
-                            return CommandResult::Err { code: ErrorCode::InvalidInput, message: e.to_string() };
+                            return CommandResult::Err {
+                                code: ErrorCode::InvalidInput,
+                                message: e.to_string(),
+                            };
                         }
                         return CommandResult::Ok;
                     }
                 }
-                CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found".into() }
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Deck not found".into(),
+                }
             }
-            EngineCommand::VideoSetSpeed { channel_idx, deck_idx, speed } => {
+            EngineCommand::VideoSetSpeed {
+                channel_idx,
+                deck_idx,
+                speed,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
@@ -799,9 +964,16 @@ impl VardaApp {
                         }
                     }
                 }
-                CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found or not a video".into() }
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Deck not found or not a video".into(),
+                }
             }
-            EngineCommand::VideoSetLoopMode { channel_idx, deck_idx, mode } => {
+            EngineCommand::VideoSetLoopMode {
+                channel_idx,
+                deck_idx,
+                mode,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
@@ -810,9 +982,16 @@ impl VardaApp {
                         }
                     }
                 }
-                CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found or not a video".into() }
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Deck not found or not a video".into(),
+                }
             }
-            EngineCommand::VideoSetInPoint { channel_idx, deck_idx, secs } => {
+            EngineCommand::VideoSetInPoint {
+                channel_idx,
+                deck_idx,
+                secs,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
@@ -821,9 +1000,16 @@ impl VardaApp {
                         }
                     }
                 }
-                CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found or not a video".into() }
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Deck not found or not a video".into(),
+                }
             }
-            EngineCommand::VideoSetOutPoint { channel_idx, deck_idx, secs } => {
+            EngineCommand::VideoSetOutPoint {
+                channel_idx,
+                deck_idx,
+                secs,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
@@ -832,9 +1018,15 @@ impl VardaApp {
                         }
                     }
                 }
-                CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found or not a video".into() }
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Deck not found or not a video".into(),
+                }
             }
-            EngineCommand::VideoClearInOutPoints { channel_idx, deck_idx } => {
+            EngineCommand::VideoClearInOutPoints {
+                channel_idx,
+                deck_idx,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
@@ -844,32 +1036,55 @@ impl VardaApp {
                         }
                     }
                 }
-                CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found or not a video".into() }
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Deck not found or not a video".into(),
+                }
             }
 
             // ── Deck Auto-Transitions ─────────────────────────
-            EngineCommand::SetAutoTransitionEnabled { channel_idx, deck_idx, enabled } => {
-                self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                    at.enabled = enabled;
-                    if !enabled { at.phase = crate::channel::DeckTransitionPhase::Inactive; }
-                })
-            }
-            EngineCommand::SetAutoTransitionTrigger { channel_idx, deck_idx, clip_end } => {
-                self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                    at.trigger = if clip_end { crate::channel::TransitionTrigger::ClipEnd } else { crate::channel::TransitionTrigger::Timer };
-                })
-            }
-            EngineCommand::SetAutoTransitionPlayDuration { channel_idx, deck_idx, value, unit } => {
-                self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                    at.play_duration = crate::channel::DurationSpec::from_value_unit(value, unit);
-                })
-            }
-            EngineCommand::SetAutoTransitionDuration { channel_idx, deck_idx, value, unit } => {
-                self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                    at.transition_duration = crate::channel::DurationSpec::from_value_unit(value, unit);
-                })
-            }
-            EngineCommand::SetAutoTransitionShader { channel_idx, deck_idx, shader_name } => {
+            EngineCommand::SetAutoTransitionEnabled {
+                channel_idx,
+                deck_idx,
+                enabled,
+            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+                at.enabled = enabled;
+                if !enabled {
+                    at.phase = crate::channel::DeckTransitionPhase::Inactive;
+                }
+            }),
+            EngineCommand::SetAutoTransitionTrigger {
+                channel_idx,
+                deck_idx,
+                clip_end,
+            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+                at.trigger = if clip_end {
+                    crate::channel::TransitionTrigger::ClipEnd
+                } else {
+                    crate::channel::TransitionTrigger::Timer
+                };
+            }),
+            EngineCommand::SetAutoTransitionPlayDuration {
+                channel_idx,
+                deck_idx,
+                value,
+                unit,
+            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+                at.play_duration = crate::channel::DurationSpec::from_value_unit(value, unit);
+            }),
+            EngineCommand::SetAutoTransitionDuration {
+                channel_idx,
+                deck_idx,
+                value,
+                unit,
+            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+                at.transition_duration = crate::channel::DurationSpec::from_value_unit(value, unit);
+            }),
+            EngineCommand::SetAutoTransitionShader {
+                channel_idx,
+                deck_idx,
+                shader_name,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         let slot = &mut ch.decks[deck_idx];
@@ -880,9 +1095,14 @@ impl VardaApp {
                             at.transition_shader_name = shader_name.clone();
                         }
                         if let Some(shader_name) = &shader_name {
-                            if let Some(shader) = self.registry.transitions().iter()
-                                .find(|s| s.name() == *shader_name) {
-                                let _ = slot.set_transition_shader(&self.context, (*shader).clone());
+                            if let Some(shader) = self
+                                .registry
+                                .transitions()
+                                .iter()
+                                .find(|s| s.name() == *shader_name)
+                            {
+                                let _ =
+                                    slot.set_transition_shader(&self.context, (*shader).clone());
                             }
                         } else {
                             slot.transition_effect = None;
@@ -890,38 +1110,71 @@ impl VardaApp {
                         return CommandResult::Ok;
                     }
                 }
-                CommandResult::Err { code: ErrorCode::NotFound, message: "Deck not found".into() }
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Deck not found".into(),
+                }
             }
-            EngineCommand::ToggleAutoTransitionPlayDurationUnit { channel_idx, deck_idx } => {
-                self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                    let next_unit = at.play_duration.unit().next();
-                    at.play_duration = crate::channel::DurationSpec::from_value_unit(at.play_duration.value(), next_unit);
-                })
-            }
-            EngineCommand::ToggleAutoTransitionDurationUnit { channel_idx, deck_idx } => {
-                self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                    let next_unit = at.transition_duration.unit().next();
-                    at.transition_duration = crate::channel::DurationSpec::from_value_unit(at.transition_duration.value(), next_unit);
-                })
-            }
-            EngineCommand::SetAutoTransitionPlayDurationValue { channel_idx, deck_idx, value } => {
-                self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                    at.play_duration.set_value(value);
-                })
-            }
-            EngineCommand::SetAutoTransitionDurationValue { channel_idx, deck_idx, value } => {
-                self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                    at.transition_duration.set_value(value);
-                })
-            }
+            EngineCommand::ToggleAutoTransitionPlayDurationUnit {
+                channel_idx,
+                deck_idx,
+            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+                let next_unit = at.play_duration.unit().next();
+                at.play_duration = crate::channel::DurationSpec::from_value_unit(
+                    at.play_duration.value(),
+                    next_unit,
+                );
+            }),
+            EngineCommand::ToggleAutoTransitionDurationUnit {
+                channel_idx,
+                deck_idx,
+            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+                let next_unit = at.transition_duration.unit().next();
+                at.transition_duration = crate::channel::DurationSpec::from_value_unit(
+                    at.transition_duration.value(),
+                    next_unit,
+                );
+            }),
+            EngineCommand::SetAutoTransitionPlayDurationValue {
+                channel_idx,
+                deck_idx,
+                value,
+            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+                at.play_duration.set_value(value);
+            }),
+            EngineCommand::SetAutoTransitionDurationValue {
+                channel_idx,
+                deck_idx,
+                value,
+            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+                at.transition_duration.set_value(value);
+            }),
 
             // ── External I/O Deck Sources ─────────────────────
-            EngineCommand::AddNdiDeck { channel_idx, source_name } => self.cmd_add_ndi_deck(channel_idx, source_name),
-            EngineCommand::AddSyphonDeck { channel_idx, server_name } => self.cmd_add_syphon_deck(channel_idx, server_name),
-            EngineCommand::AddSrtDeck { channel_idx, url, mode } => self.cmd_add_srt_deck(channel_idx, url, mode),
-            EngineCommand::AddHlsDeck { channel_idx, url } => self.cmd_add_hls_deck(channel_idx, url),
-            EngineCommand::AddDashDeck { channel_idx, url } => self.cmd_add_dash_deck(channel_idx, url),
-            EngineCommand::AddRtmpDeck { channel_idx, url, mode } => self.cmd_add_rtmp_deck(channel_idx, url, mode),
+            EngineCommand::AddNdiDeck {
+                channel_idx,
+                source_name,
+            } => self.cmd_add_ndi_deck(channel_idx, source_name),
+            EngineCommand::AddSyphonDeck {
+                channel_idx,
+                server_name,
+            } => self.cmd_add_syphon_deck(channel_idx, server_name),
+            EngineCommand::AddSrtDeck {
+                channel_idx,
+                url,
+                mode,
+            } => self.cmd_add_srt_deck(channel_idx, url, mode),
+            EngineCommand::AddHlsDeck { channel_idx, url } => {
+                self.cmd_add_hls_deck(channel_idx, url)
+            }
+            EngineCommand::AddDashDeck { channel_idx, url } => {
+                self.cmd_add_dash_deck(channel_idx, url)
+            }
+            EngineCommand::AddRtmpDeck {
+                channel_idx,
+                url,
+                mode,
+            } => self.cmd_add_rtmp_deck(channel_idx, url, mode),
 
             // ── Transition Sequences ──────────────────────────
             EngineCommand::CreateSequence => self.cmd_create_sequence(),
@@ -929,113 +1182,270 @@ impl VardaApp {
             EngineCommand::PlaySequence { idx } => self.cmd_play_sequence(idx),
             EngineCommand::StopSequence { idx } => self.cmd_stop_sequence(idx),
             EngineCommand::ToggleSequence { idx } => self.cmd_toggle_sequence(idx),
-            EngineCommand::AddFadeStep { seq_idx, from_ch, to_ch } => self.cmd_add_fade_step(seq_idx, from_ch, to_ch),
+            EngineCommand::AddFadeStep {
+                seq_idx,
+                from_ch,
+                to_ch,
+            } => self.cmd_add_fade_step(seq_idx, from_ch, to_ch),
             EngineCommand::AddWaitStep { seq_idx } => self.cmd_add_wait_step(seq_idx),
-            EngineCommand::AddGoToStep { seq_idx, step_index } => self.cmd_add_goto_step(seq_idx, step_index),
-            EngineCommand::RemoveStep { seq_idx, step_idx } => self.cmd_remove_step(seq_idx, step_idx),
-            EngineCommand::SetStepDuration { seq_idx, step_idx, value, unit } => self.cmd_set_step_duration(seq_idx, step_idx, value, unit),
-            EngineCommand::SetStepEasing { seq_idx, step_idx, easing } => self.cmd_set_step_easing(seq_idx, step_idx, easing),
-            EngineCommand::SetStepTransitionShader { seq_idx, step_idx, shader_name } => self.cmd_set_step_transition_shader(seq_idx, step_idx, shader_name),
+            EngineCommand::AddGoToStep {
+                seq_idx,
+                step_index,
+            } => self.cmd_add_goto_step(seq_idx, step_index),
+            EngineCommand::RemoveStep { seq_idx, step_idx } => {
+                self.cmd_remove_step(seq_idx, step_idx)
+            }
+            EngineCommand::SetStepDuration {
+                seq_idx,
+                step_idx,
+                value,
+                unit,
+            } => self.cmd_set_step_duration(seq_idx, step_idx, value, unit),
+            EngineCommand::SetStepEasing {
+                seq_idx,
+                step_idx,
+                easing,
+            } => self.cmd_set_step_easing(seq_idx, step_idx, easing),
+            EngineCommand::SetStepTransitionShader {
+                seq_idx,
+                step_idx,
+                shader_name,
+            } => self.cmd_set_step_transition_shader(seq_idx, step_idx, shader_name),
             EngineCommand::MoveStep { seq_idx, from, to } => self.cmd_move_step(seq_idx, from, to),
-            EngineCommand::SetStepDurationUnit { seq_idx, step_idx, unit } => self.cmd_set_step_duration_unit(seq_idx, step_idx, unit),
-            EngineCommand::ToggleStepDurationUnit { seq_idx, step_idx } => self.cmd_toggle_step_duration_unit(seq_idx, step_idx),
-            EngineCommand::SetStepDurationValue { seq_idx, step_idx, value } => self.cmd_set_step_duration_value(seq_idx, step_idx, value),
-            EngineCommand::SetStepFromCh { seq_idx, step_idx, ch } => self.cmd_set_step_from_ch(seq_idx, step_idx, ch),
-            EngineCommand::SetStepToCh { seq_idx, step_idx, ch } => self.cmd_set_step_to_ch(seq_idx, step_idx, ch),
-            EngineCommand::SetGoToTarget { seq_idx, step_idx, target } => self.cmd_set_goto_target(seq_idx, step_idx, target),
-            EngineCommand::SetStepTargetAmount { seq_idx, step_idx, amount } => self.cmd_set_step_target_amount(seq_idx, step_idx, amount),
+            EngineCommand::SetStepDurationUnit {
+                seq_idx,
+                step_idx,
+                unit,
+            } => self.cmd_set_step_duration_unit(seq_idx, step_idx, unit),
+            EngineCommand::ToggleStepDurationUnit { seq_idx, step_idx } => {
+                self.cmd_toggle_step_duration_unit(seq_idx, step_idx)
+            }
+            EngineCommand::SetStepDurationValue {
+                seq_idx,
+                step_idx,
+                value,
+            } => self.cmd_set_step_duration_value(seq_idx, step_idx, value),
+            EngineCommand::SetStepFromCh {
+                seq_idx,
+                step_idx,
+                ch,
+            } => self.cmd_set_step_from_ch(seq_idx, step_idx, ch),
+            EngineCommand::SetStepToCh {
+                seq_idx,
+                step_idx,
+                ch,
+            } => self.cmd_set_step_to_ch(seq_idx, step_idx, ch),
+            EngineCommand::SetGoToTarget {
+                seq_idx,
+                step_idx,
+                target,
+            } => self.cmd_set_goto_target(seq_idx, step_idx, target),
+            EngineCommand::SetStepTargetAmount {
+                seq_idx,
+                step_idx,
+                amount,
+            } => self.cmd_set_step_target_amount(seq_idx, step_idx, amount),
 
             // ── Stream Library ─────────────────────────────────
-            EngineCommand::AddStreamLibraryEntry { url, mode } => self.cmd_add_stream_library_entry(url, mode),
-            EngineCommand::RemoveStreamLibraryEntry { url } => self.cmd_remove_stream_library_entry(url),
+            EngineCommand::AddStreamLibraryEntry { url, mode } => {
+                self.cmd_add_stream_library_entry(url, mode)
+            }
+            EngineCommand::RemoveStreamLibraryEntry { url } => {
+                self.cmd_remove_stream_library_entry(url)
+            }
             EngineCommand::AddHlsLibraryEntry { url } => self.cmd_add_hls_library_entry(url),
             EngineCommand::RemoveHlsLibraryEntry { url } => self.cmd_remove_hls_library_entry(url),
             EngineCommand::AddDashLibraryEntry { url } => self.cmd_add_dash_library_entry(url),
-            EngineCommand::RemoveDashLibraryEntry { url } => self.cmd_remove_dash_library_entry(url),
-            EngineCommand::AddRtmpLibraryEntry { url, mode } => self.cmd_add_rtmp_library_entry(url, mode),
-            EngineCommand::RemoveRtmpLibraryEntry { url } => self.cmd_remove_rtmp_library_entry(url),
+            EngineCommand::RemoveDashLibraryEntry { url } => {
+                self.cmd_remove_dash_library_entry(url)
+            }
+            EngineCommand::AddRtmpLibraryEntry { url, mode } => {
+                self.cmd_add_rtmp_library_entry(url, mode)
+            }
+            EngineCommand::RemoveRtmpLibraryEntry { url } => {
+                self.cmd_remove_rtmp_library_entry(url)
+            }
 
             // ── Output Management ─────────────────────────────────
-            EngineCommand::CreateHeadlessOutput { target } => self.cmd_create_headless_output(target),
+            EngineCommand::CreateHeadlessOutput { target } => {
+                self.cmd_create_headless_output(target)
+            }
             EngineCommand::StartOutput { idx } => self.cmd_start_output(idx),
             EngineCommand::StopOutput { idx } => self.cmd_stop_output(idx),
             EngineCommand::ToggleCalibration { idx } => self.cmd_toggle_calibration(idx),
-            EngineCommand::SetWarpCorner { output_idx, assignment_idx, corner_idx, position } => self.cmd_set_warp_corner(output_idx, assignment_idx, corner_idx, position),
-            EngineCommand::ResetWarp { output_idx, assignment_idx } => self.cmd_reset_warp(output_idx, assignment_idx),
-            EngineCommand::SetEdgeBlend { output_idx, config } => self.cmd_set_edge_blend(output_idx, config),
-            EngineCommand::SetEdgeBlendMode { output_idx, mode } => self.cmd_set_edge_blend_mode(output_idx, mode),
-            EngineCommand::SetOutputRotation { idx, rotation } => self.cmd_set_output_rotation(idx, rotation),
+            EngineCommand::SetWarpCorner {
+                output_idx,
+                assignment_idx,
+                corner_idx,
+                position,
+            } => self.cmd_set_warp_corner(output_idx, assignment_idx, corner_idx, position),
+            EngineCommand::ResetWarp {
+                output_idx,
+                assignment_idx,
+            } => self.cmd_reset_warp(output_idx, assignment_idx),
+            EngineCommand::SetEdgeBlend { output_idx, config } => {
+                self.cmd_set_edge_blend(output_idx, config)
+            }
+            EngineCommand::SetEdgeBlendMode { output_idx, mode } => {
+                self.cmd_set_edge_blend_mode(output_idx, mode)
+            }
+            EngineCommand::SetOutputRotation { idx, rotation } => {
+                self.cmd_set_output_rotation(idx, rotation)
+            }
 
             // ── Modulation Updates ────────────────────────────────
             EngineCommand::UpdateLfoFrequency { uuid, frequency } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO { frequency: ref mut f, .. } = s { *f = frequency; }
+                    if let ModulationSource::LFO {
+                        frequency: ref mut f,
+                        ..
+                    } = s
+                    {
+                        *f = frequency;
+                    }
                 })
             }
             EngineCommand::UpdateLfoWaveform { uuid, waveform } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO { waveform: ref mut w, .. } = s { *w = waveform; }
+                    if let ModulationSource::LFO {
+                        waveform: ref mut w,
+                        ..
+                    } = s
+                    {
+                        *w = waveform;
+                    }
                 })
             }
             EngineCommand::UpdateLfoPhase { uuid, phase } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO { phase: ref mut p, .. } = s { *p = phase; }
+                    if let ModulationSource::LFO {
+                        phase: ref mut p, ..
+                    } = s
+                    {
+                        *p = phase;
+                    }
                 })
             }
             EngineCommand::UpdateLfoAmplitude { uuid, amplitude } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO { amplitude: ref mut a, .. } = s { *a = amplitude; }
+                    if let ModulationSource::LFO {
+                        amplitude: ref mut a,
+                        ..
+                    } = s
+                    {
+                        *a = amplitude;
+                    }
                 })
             }
             EngineCommand::UpdateLfoBipolar { uuid, bipolar } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::LFO { bipolar: ref mut b, .. } = s { *b = bipolar; }
+                    if let ModulationSource::LFO {
+                        bipolar: ref mut b, ..
+                    } = s
+                    {
+                        *b = bipolar;
+                    }
                 })
             }
             EngineCommand::UpdateAudioSmoothing { uuid, smoothing } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { smoothing: ref mut sm, .. } = s { *sm = smoothing; }
+                    if let ModulationSource::AudioBand {
+                        smoothing: ref mut sm,
+                        ..
+                    } = s
+                    {
+                        *sm = smoothing;
+                    }
                 })
             }
-            EngineCommand::UpdateAudioFreqRange { uuid, freq_low, freq_high } => {
-                self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { freq_low: ref mut fl, freq_high: ref mut fh, .. } = s { *fl = freq_low; *fh = freq_high; }
-                })
-            }
+            EngineCommand::UpdateAudioFreqRange {
+                uuid,
+                freq_low,
+                freq_high,
+            } => self.exec_modulation_update(&uuid, |s| {
+                if let ModulationSource::AudioBand {
+                    freq_low: ref mut fl,
+                    freq_high: ref mut fh,
+                    ..
+                } = s
+                {
+                    *fl = freq_low;
+                    *fh = freq_high;
+                }
+            }),
             EngineCommand::UpdateAudioGain { uuid, gain } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { gain: ref mut g, .. } = s { *g = gain; }
+                    if let ModulationSource::AudioBand {
+                        gain: ref mut g, ..
+                    } = s
+                    {
+                        *g = gain;
+                    }
                 })
             }
             EngineCommand::UpdateAudioPreset { uuid, preset } => {
                 let (lo, hi) = preset.freq_range();
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { freq_low: ref mut fl, freq_high: ref mut fh, .. } = s { *fl = lo; *fh = hi; }
+                    if let ModulationSource::AudioBand {
+                        freq_low: ref mut fl,
+                        freq_high: ref mut fh,
+                        ..
+                    } = s
+                    {
+                        *fl = lo;
+                        *fh = hi;
+                    }
                 })
             }
             EngineCommand::UpdateAudioMode { uuid, mode } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { mode: ref mut m, .. } = s { *m = mode; }
+                    if let ModulationSource::AudioBand {
+                        mode: ref mut m, ..
+                    } = s
+                    {
+                        *m = mode;
+                    }
                 })
             }
             EngineCommand::UpdateAdsrAttack { uuid, attack } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::ADSR { attack: ref mut a, .. } = s { *a = attack; }
+                    if let ModulationSource::ADSR {
+                        attack: ref mut a, ..
+                    } = s
+                    {
+                        *a = attack;
+                    }
                 })
             }
             EngineCommand::UpdateAdsrDecay { uuid, decay } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::ADSR { decay: ref mut d, .. } = s { *d = decay; }
+                    if let ModulationSource::ADSR {
+                        decay: ref mut d, ..
+                    } = s
+                    {
+                        *d = decay;
+                    }
                 })
             }
             EngineCommand::UpdateAdsrSustain { uuid, sustain } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::ADSR { sustain: ref mut su, .. } = s { *su = sustain; }
+                    if let ModulationSource::ADSR {
+                        sustain: ref mut su,
+                        ..
+                    } = s
+                    {
+                        *su = sustain;
+                    }
                 })
             }
             EngineCommand::UpdateAdsrRelease { uuid, release } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::ADSR { release: ref mut r, .. } = s { *r = release; }
+                    if let ModulationSource::ADSR {
+                        release: ref mut r, ..
+                    } = s
+                    {
+                        *r = release;
+                    }
                 })
             }
             EngineCommand::TriggerAdsr { uuid } => {
@@ -1048,63 +1458,129 @@ impl VardaApp {
             }
             EngineCommand::UpdateStepSeqSteps { uuid, steps } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::StepSequencer { steps: ref mut st, .. } = s { *st = steps; }
+                    if let ModulationSource::StepSequencer {
+                        steps: ref mut st, ..
+                    } = s
+                    {
+                        *st = steps;
+                    }
                 })
             }
             EngineCommand::UpdateStepSeqRate { uuid, rate } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::StepSequencer { rate: ref mut r, .. } = s { *r = rate; }
+                    if let ModulationSource::StepSequencer {
+                        rate: ref mut r, ..
+                    } = s
+                    {
+                        *r = rate;
+                    }
                 })
             }
-            EngineCommand::UpdateStepSeqInterpolation { uuid, interpolation } => {
-                self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::StepSequencer { interpolation: ref mut i, .. } = s { *i = interpolation; }
-                })
-            }
+            EngineCommand::UpdateStepSeqInterpolation {
+                uuid,
+                interpolation,
+            } => self.exec_modulation_update(&uuid, |s| {
+                if let ModulationSource::StepSequencer {
+                    interpolation: ref mut i,
+                    ..
+                } = s
+                {
+                    *i = interpolation;
+                }
+            }),
             EngineCommand::UpdateStepSeqBipolar { uuid, bipolar } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::StepSequencer { bipolar: ref mut b, .. } = s { *b = bipolar; }
+                    if let ModulationSource::StepSequencer {
+                        bipolar: ref mut b, ..
+                    } = s
+                    {
+                        *b = bipolar;
+                    }
                 })
             }
             EngineCommand::SetStepSeqCount { uuid, count } => {
                 let count = count.max(2).min(64);
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::StepSequencer { steps, .. } = s { steps.resize(count, 0.0); }
-                })
-            }
-            EngineCommand::UpdateStepSeqValue { uuid, step_idx, value } => {
-                self.exec_modulation_update(&uuid, |s| {
                     if let ModulationSource::StepSequencer { steps, .. } = s {
-                        if step_idx < steps.len() { steps[step_idx] = value; }
+                        steps.resize(count, 0.0);
                     }
                 })
             }
+            EngineCommand::UpdateStepSeqValue {
+                uuid,
+                step_idx,
+                value,
+            } => self.exec_modulation_update(&uuid, |s| {
+                if let ModulationSource::StepSequencer { steps, .. } = s {
+                    if step_idx < steps.len() {
+                        steps[step_idx] = value;
+                    }
+                }
+            }),
             EngineCommand::UpdateAudioFreqLow { uuid, freq_low } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { freq_low: ref mut fl, .. } = s { *fl = freq_low; }
+                    if let ModulationSource::AudioBand {
+                        freq_low: ref mut fl,
+                        ..
+                    } = s
+                    {
+                        *fl = freq_low;
+                    }
                 })
             }
             EngineCommand::UpdateAudioFreqHigh { uuid, freq_high } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { freq_high: ref mut fh, .. } = s { *fh = freq_high; }
+                    if let ModulationSource::AudioBand {
+                        freq_high: ref mut fh,
+                        ..
+                    } = s
+                    {
+                        *fh = freq_high;
+                    }
                 })
             }
             EngineCommand::UpdateAudioSource { uuid, source_id } => {
                 self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { source_id: ref mut sid, .. } = s { *sid = source_id; }
+                    if let ModulationSource::AudioBand {
+                        source_id: ref mut sid,
+                        ..
+                    } = s
+                    {
+                        *sid = source_id;
+                    }
                 })
             }
-            EngineCommand::UpdateAudioNoiseGate { uuid, noise_gate } => {
-                self.exec_modulation_update(&uuid, |s| {
-                    if let ModulationSource::AudioBand { noise_gate: ref mut ng, .. } = s { *ng = noise_gate; }
-                })
-            }
-            EngineCommand::AssignModOnMod { target_source_id, param_name, modulator_id, amount } => {
-                self.mixer.modulation_mut().assign_mod_on_mod(&target_source_id, &param_name, &modulator_id, amount);
+            EngineCommand::UpdateAudioNoiseGate { uuid, noise_gate } => self
+                .exec_modulation_update(&uuid, |s| {
+                    if let ModulationSource::AudioBand {
+                        noise_gate: ref mut ng,
+                        ..
+                    } = s
+                    {
+                        *ng = noise_gate;
+                    }
+                }),
+            EngineCommand::AssignModOnMod {
+                target_source_id,
+                param_name,
+                modulator_id,
+                amount,
+            } => {
+                self.mixer.modulation_mut().assign_mod_on_mod(
+                    &target_source_id,
+                    &param_name,
+                    &modulator_id,
+                    amount,
+                );
                 CommandResult::Ok
             }
-            EngineCommand::RemoveModOnMod { target_source_id, param_name } => {
-                self.mixer.modulation_mut().clear_mod_on_mod(&target_source_id, &param_name);
+            EngineCommand::RemoveModOnMod {
+                target_source_id,
+                param_name,
+            } => {
+                self.mixer
+                    .modulation_mut()
+                    .clear_mod_on_mod(&target_source_id, &param_name);
                 CommandResult::Ok
             }
 
@@ -1126,7 +1602,10 @@ impl VardaApp {
                 if let Some(ref mut midi) = self.input.midi_devices {
                     midi.load_user_profiles(&self.session.workspace.controller_profiles_dir());
                     if let Err(e) = midi.scan_devices() {
-                        return CommandResult::Err { code: ErrorCode::InternalError, message: e.to_string() };
+                        return CommandResult::Err {
+                            code: ErrorCode::InternalError,
+                            message: e.to_string(),
+                        };
                     }
                     self.input.controller_led_mgr.sync_devices(midi);
                     self.input.auto_map_engine.sync_devices(midi);
@@ -1141,7 +1620,10 @@ impl VardaApp {
                 if enabled {
                     if let Err(e) = self.audio_manager.open_source(source_id) {
                         log::warn!("Failed to open audio source {}: {}", source_id, e);
-                        return CommandResult::Err { code: ErrorCode::InternalError, message: format!("Failed to open audio source: {}", e) };
+                        return CommandResult::Err {
+                            code: ErrorCode::InternalError,
+                            message: format!("Failed to open audio source: {}", e),
+                        };
                     }
                 } else {
                     self.audio_manager.close_source(source_id);
@@ -1171,12 +1653,19 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::SetManualBpm { bpm } => {
-                self.input.clock_manager.set_preference(crate::clock::ClockPreference::ForceManual { bpm });
+                self.input
+                    .clock_manager
+                    .set_preference(crate::clock::ClockPreference::ForceManual { bpm });
                 CommandResult::Ok
             }
 
             // ── Parameters (index-based) ────────────────────────────
-            EngineCommand::SetGeneratorParam { channel_idx, deck_idx, name, value } => {
+            EngineCommand::SetGeneratorParam {
+                channel_idx,
+                deck_idx,
+                name,
+                value,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         ch.decks[deck_idx].deck.generator_params.set(&name, value);
@@ -1184,7 +1673,13 @@ impl VardaApp {
                 }
                 CommandResult::Ok
             }
-            EngineCommand::SetEffectParam { channel_idx, deck_idx, effect_idx, name, value } => {
+            EngineCommand::SetEffectParam {
+                channel_idx,
+                deck_idx,
+                effect_idx,
+                name,
+                value,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         let deck = &mut ch.decks[deck_idx].deck;
@@ -1195,7 +1690,12 @@ impl VardaApp {
                 }
                 CommandResult::Ok
             }
-            EngineCommand::SetChannelEffectParam { channel_idx, effect_idx, name, value } => {
+            EngineCommand::SetChannelEffectParam {
+                channel_idx,
+                effect_idx,
+                name,
+                value,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if effect_idx < ch.effects.len() {
                         ch.effects[effect_idx].params.set(&name, value);
@@ -1203,13 +1703,22 @@ impl VardaApp {
                 }
                 CommandResult::Ok
             }
-            EngineCommand::SetMasterEffectParam { effect_idx, name, value } => {
+            EngineCommand::SetMasterEffectParam {
+                effect_idx,
+                name,
+                value,
+            } => {
                 if effect_idx < self.mixer.master_effects().len() {
-                    self.mixer.master_effects_mut()[effect_idx].params.set(&name, value);
+                    self.mixer.master_effects_mut()[effect_idx]
+                        .params
+                        .set(&name, value);
                 }
                 CommandResult::Ok
             }
-            EngineCommand::ResetGeneratorParamsToDefaults { channel_idx, deck_idx } => {
+            EngineCommand::ResetGeneratorParamsToDefaults {
+                channel_idx,
+                deck_idx,
+            } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
                         ch.decks[deck_idx].deck.generator_params.reset_to_defaults();
@@ -1238,32 +1747,46 @@ impl VardaApp {
             // ── History ───────────────────────────────────────────
             EngineCommand::Undo => {
                 let current = crate::persistence::snapshot_scene(
-                    &self.mixer, self.render_width, self.render_height,
+                    &self.mixer,
+                    self.render_width,
+                    self.render_height,
                 );
                 if let Some(config) = self.session.history.undo(current) {
                     let rw = self.render_width;
                     let rh = self.render_height;
                     let (warnings, _) = self.apply_scene_diff(&config, rw, rh);
                     self.mixer.clear_sub_mix_cache();
-                    for w in &warnings { log::warn!("Undo warning: {}", w); }
+                    for w in &warnings {
+                        log::warn!("Undo warning: {}", w);
+                    }
                     CommandResult::Ok
                 } else {
-                    CommandResult::Err { code: ErrorCode::InvalidInput, message: "Nothing to undo".into() }
+                    CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: "Nothing to undo".into(),
+                    }
                 }
             }
             EngineCommand::Redo => {
                 let current = crate::persistence::snapshot_scene(
-                    &self.mixer, self.render_width, self.render_height,
+                    &self.mixer,
+                    self.render_width,
+                    self.render_height,
                 );
                 if let Some(config) = self.session.history.redo(current) {
                     let rw = self.render_width;
                     let rh = self.render_height;
                     let (warnings, _) = self.apply_scene_diff(&config, rw, rh);
                     self.mixer.clear_sub_mix_cache();
-                    for w in &warnings { log::warn!("Redo warning: {}", w); }
+                    for w in &warnings {
+                        log::warn!("Redo warning: {}", w);
+                    }
                     CommandResult::Ok
                 } else {
-                    CommandResult::Err { code: ErrorCode::InvalidInput, message: "Nothing to redo".into() }
+                    CommandResult::Err {
+                        code: ErrorCode::InvalidInput,
+                        message: "Nothing to redo".into(),
+                    }
                 }
             }
 
@@ -1285,7 +1808,10 @@ impl VardaApp {
             f(source);
             CommandResult::Ok
         } else {
-            CommandResult::Err { code: ErrorCode::NotFound, message: format!("Modulation source {} not found", uuid) }
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Modulation source {} not found", uuid),
+            }
         }
     }
 
@@ -1313,7 +1839,14 @@ impl VardaApp {
         output_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
         main_output_texture: Option<egui::TextureId>,
     ) -> crate::usecases::ui::UIData {
-        snapshot::build_ui_data(self, layout, deck_preview_textures, channel_preview_textures, output_preview_textures, main_output_texture)
+        snapshot::build_ui_data(
+            self,
+            layout,
+            deck_preview_textures,
+            channel_preview_textures,
+            output_preview_textures,
+            main_output_texture,
+        )
     }
 
     // ── Public accessors (controlled access for delivery layers) ─────
@@ -1400,7 +1933,10 @@ impl VardaApp {
     /// Resolve a generator index to a cloned ISFShader.
     /// Returns None if the index is out of bounds.
     pub fn resolve_generator(&self, gen_idx: usize) -> Option<crate::isf::ISFShader> {
-        self.registry.generators().get(gen_idx).map(|s| (*s).clone())
+        self.registry
+            .generators()
+            .get(gen_idx)
+            .map(|s| (*s).clone())
     }
 
     /// Tick notification expiry timers.
@@ -1414,9 +1950,16 @@ impl VardaApp {
     }
 
     /// Close an output window by its winit WindowId. Returns the name if found.
-    pub fn close_output_window_by_id(&mut self, window_id: winit::window::WindowId) -> Option<String> {
+    pub fn close_output_window_by_id(
+        &mut self,
+        window_id: winit::window::WindowId,
+    ) -> Option<String> {
         if let Some(idx) = self.output.outputs.iter().position(|o| {
-            if let UnifiedOutput::Window(w) = o { w.window.id() == window_id } else { false }
+            if let UnifiedOutput::Window(w) = o {
+                w.window.id() == window_id
+            } else {
+                false
+            }
         }) {
             let name = self.output.outputs[idx].name().to_string();
             if let UnifiedOutput::Window(w) = self.output.outputs.remove(idx) {
@@ -1463,13 +2006,21 @@ impl VardaApp {
             log::warn!("Ignoring zero render resolution {}×{}", width, height);
             return;
         }
-        log::info!("Changing render resolution: {}×{} → {}×{}", self.render_width, self.render_height, width, height);
+        log::info!(
+            "Changing render resolution: {}×{} → {}×{}",
+            self.render_width,
+            self.render_height,
+            width,
+            height
+        );
         self.render_width = width;
         self.render_height = height;
         self.mixer.resize(&self.context, width, height);
         // Clear sub-mix cache since textures were recreated
         self.mixer.clear_sub_mix_cache();
-        self.session.notifications.info(format!("📐 Resolution changed to {}×{}", width, height));
+        self.session
+            .notifications
+            .info(format!("📐 Resolution changed to {}×{}", width, height));
     }
 }
 
@@ -1509,9 +2060,19 @@ mod tests {
 
     #[test]
     fn app_config_osc_flags() {
-        let config = parse_args(&["--osc-port", "7000", "--osc-out", "192.168.1.1:8000", "--osc-out", "10.0.0.1:9000"]);
+        let config = parse_args(&[
+            "--osc-port",
+            "7000",
+            "--osc-out",
+            "192.168.1.1:8000",
+            "--osc-out",
+            "10.0.0.1:9000",
+        ]);
         assert_eq!(config.osc_port, Some(7000));
-        assert_eq!(config.osc_targets, vec!["192.168.1.1:8000", "10.0.0.1:9000"]);
+        assert_eq!(
+            config.osc_targets,
+            vec!["192.168.1.1:8000", "10.0.0.1:9000"]
+        );
         assert!(!config.osc_disabled);
     }
 
@@ -1569,11 +2130,8 @@ mod tests {
         let cwd = tempfile::tempdir().unwrap();
         std::fs::create_dir(cwd.path().join(".varda")).unwrap();
 
-        let result = AppConfig::resolve_workspace_root(
-            Some(explicit.as_path()),
-            Some(cwd.path()),
-            None,
-        );
+        let result =
+            AppConfig::resolve_workspace_root(Some(explicit.as_path()), Some(cwd.path()), None);
         assert_eq!(result, explicit);
     }
 
@@ -1601,15 +2159,22 @@ mod tests {
             return;
         };
         let state = app.build_engine_state();
-        assert_eq!(state.mixer.channels.len(), 2, "default mixer has 2 channels");
+        assert_eq!(
+            state.mixer.channels.len(),
+            2,
+            "default mixer has 2 channels"
+        );
         assert_eq!(state.mixer.crossfader, 0.0, "crossfader starts at A");
     }
 
     #[test]
     fn smoke_add_channel_via_command() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let tx = app.command_sender();
-        tx.send((crate::engine::EngineCommand::AddChannel, None)).unwrap();
+        tx.send((crate::engine::EngineCommand::AddChannel, None))
+            .unwrap();
         app.process_commands();
         let state = app.build_engine_state();
         assert_eq!(state.mixer.channels.len(), 3);
@@ -1617,9 +2182,12 @@ mod tests {
 
     #[test]
     fn smoke_set_crossfader_via_command() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let tx = app.command_sender();
-        tx.send((crate::engine::EngineCommand::SetCrossfader(0.75), None)).unwrap();
+        tx.send((crate::engine::EngineCommand::SetCrossfader(0.75), None))
+            .unwrap();
         app.process_commands();
         let state = app.build_engine_state();
         assert!((state.mixer.crossfader - 0.75).abs() < 1e-5);
@@ -1627,7 +2195,9 @@ mod tests {
 
     #[test]
     fn smoke_render_frame_no_crash() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         // Render several frames — verify no panics and FPS stabilizes
         for _ in 0..5 {
             app.update_frame_timing();
@@ -1639,7 +2209,9 @@ mod tests {
 
     #[test]
     fn smoke_add_solid_color_deck() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let before = app.build_engine_state().mixer.channels[0].decks.len();
         let tx = app.command_sender();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -1649,22 +2221,33 @@ mod tests {
                 color: [1.0, 0.0, 0.0, 1.0],
             },
             Some(reply_tx),
-        )).unwrap();
+        ))
+        .unwrap();
         app.process_commands();
         let result = reply_rx.blocking_recv().unwrap();
-        assert!(matches!(result, crate::engine::CommandResult::Ok), "command should succeed: {:?}", result);
+        assert!(
+            matches!(result, crate::engine::CommandResult::Ok),
+            "command should succeed: {:?}",
+            result
+        );
         let after = app.build_engine_state().mixer.channels[0].decks.len();
         assert_eq!(after, before + 1, "should have one more deck");
     }
 
     #[test]
     fn smoke_set_channel_opacity() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let tx = app.command_sender();
         tx.send((
-            crate::engine::EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: 0.5 },
+            crate::engine::EngineCommand::SetChannelOpacity {
+                channel_idx: 0,
+                opacity: 0.5,
+            },
             None,
-        )).unwrap();
+        ))
+        .unwrap();
         app.process_commands();
         let state = app.build_engine_state();
         assert!((state.mixer.channels[0].opacity - 0.5).abs() < 1e-5);
@@ -1672,10 +2255,13 @@ mod tests {
 
     #[test]
     fn smoke_undo_redo_roundtrip() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let tx = app.command_sender();
         // Set crossfader to 0.5 (will trigger history push)
-        tx.send((crate::engine::EngineCommand::SetCrossfader(0.5), None)).unwrap();
+        tx.send((crate::engine::EngineCommand::SetCrossfader(0.5), None))
+            .unwrap();
         app.process_commands();
         // Undo
         tx.send((crate::engine::EngineCommand::Undo, None)).unwrap();
@@ -1688,7 +2274,9 @@ mod tests {
 
     #[test]
     fn smoke_add_lfo_modulation() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let tx = app.command_sender();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send((
@@ -1697,31 +2285,45 @@ mod tests {
                 frequency: 2.0,
             },
             Some(reply_tx),
-        )).unwrap();
+        ))
+        .unwrap();
         app.process_commands();
         let result = reply_rx.blocking_recv().unwrap();
-        assert!(matches!(result, crate::engine::CommandResult::Ok), "AddLfo failed: {:?}", result);
+        assert!(
+            matches!(result, crate::engine::CommandResult::Ok),
+            "AddLfo failed: {:?}",
+            result
+        );
         let state = app.build_engine_state();
         assert!(!state.modulation.sources.is_empty());
     }
 
     #[test]
     fn smoke_remove_channel() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let tx = app.command_sender();
         // Add a third channel first
-        tx.send((crate::engine::EngineCommand::AddChannel, None)).unwrap();
+        tx.send((crate::engine::EngineCommand::AddChannel, None))
+            .unwrap();
         app.process_commands();
         assert_eq!(app.build_engine_state().mixer.channels.len(), 3);
         // Remove the third channel
-        tx.send((crate::engine::EngineCommand::RemoveChannel { channel_idx: 2 }, None)).unwrap();
+        tx.send((
+            crate::engine::EngineCommand::RemoveChannel { channel_idx: 2 },
+            None,
+        ))
+        .unwrap();
         app.process_commands();
         assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
     }
 
     #[test]
     fn smoke_set_deck_blend_mode() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let tx = app.command_sender();
         // Add a solid color deck first
         tx.send((
@@ -1730,23 +2332,28 @@ mod tests {
                 color: [0.0, 1.0, 0.0, 1.0],
             },
             None,
-        )).unwrap();
+        ))
+        .unwrap();
         app.process_commands();
         // Set its blend mode
         tx.send((
             crate::engine::EngineCommand::SetDeckBlendMode {
-                channel_idx: 0, deck_idx: 1,
+                channel_idx: 0,
+                deck_idx: 1,
                 mode: crate::engine::BlendMode::Add,
             },
             None,
-        )).unwrap();
+        ))
+        .unwrap();
         app.process_commands();
         // Verify no crash — blend mode is GPU-level and verified through state
     }
 
     #[test]
     fn smoke_set_render_resolution() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.set_render_resolution(1280, 720);
         assert_eq!(app.render_width(), 1280);
         assert_eq!(app.render_height(), 720);
@@ -1754,7 +2361,9 @@ mod tests {
 
     #[test]
     fn smoke_set_render_resolution_zero_ignored() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.set_render_resolution(0, 0);
         // Should keep previous resolution
         assert!(app.render_width() > 0);
@@ -1763,7 +2372,9 @@ mod tests {
 
     #[test]
     fn smoke_publish_and_read_state() {
-        let Some(app) = headless_app() else { return; };
+        let Some(app) = headless_app() else {
+            return;
+        };
         let reader = app.state_reader();
         app.publish_state();
         let guard = reader.read().unwrap();
@@ -1773,7 +2384,9 @@ mod tests {
 
     #[test]
     fn smoke_notifications() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.notify_info("Test notification");
         app.update_notifications();
         // Verify no crash
@@ -1782,7 +2395,10 @@ mod tests {
     // ── Extended smoke tests ───────────────────────────────────────
 
     /// Helper: send command with reply, process, return result.
-    fn send_cmd(app: &mut VardaApp, cmd: crate::engine::EngineCommand) -> crate::engine::CommandResult {
+    fn send_cmd(
+        app: &mut VardaApp,
+        cmd: crate::engine::EngineCommand,
+    ) -> crate::engine::CommandResult {
         let tx = app.command_sender();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send((cmd, Some(reply_tx))).unwrap();
@@ -1798,12 +2414,17 @@ mod tests {
 
     #[test]
     fn smoke_auto_crossfade_lifecycle() {
-        let Some(mut app) = headless_app() else { return; };
-        fire(&mut app, crate::engine::EngineCommand::AutoCrossfade {
-            target: 1.0,
-            duration_secs: 0.05,
-            easing: crate::mixer::CrossfadeEasing::Linear,
-        });
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        fire(
+            &mut app,
+            crate::engine::EngineCommand::AutoCrossfade {
+                target: 1.0,
+                duration_secs: 0.05,
+                easing: crate::mixer::CrossfadeEasing::Linear,
+            },
+        );
         // Tick enough frames for it to complete
         for _ in 0..60 {
             app.update_frame_timing();
@@ -1815,34 +2436,54 @@ mod tests {
 
     #[test]
     fn smoke_add_video_deck_no_crash() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         // Bad path — should not panic
-        let _ = send_cmd(&mut app, crate::engine::EngineCommand::AddVideoDeck {
-            channel_idx: 0,
-            path: std::path::PathBuf::from("/nonexistent/video.mp4"),
-        });
+        let _ = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddVideoDeck {
+                channel_idx: 0,
+                path: std::path::PathBuf::from("/nonexistent/video.mp4"),
+            },
+        );
     }
 
     #[test]
     fn smoke_video_toggle_play() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         // Toggle play on a non-video deck — should handle gracefully
-        let _ = send_cmd(&mut app, crate::engine::EngineCommand::VideoTogglePlay {
-            channel_idx: 0, deck_idx: 0,
-        });
+        let _ = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::VideoTogglePlay {
+                channel_idx: 0,
+                deck_idx: 0,
+            },
+        );
     }
 
     #[test]
     fn smoke_video_set_speed() {
-        let Some(mut app) = headless_app() else { return; };
-        let _ = send_cmd(&mut app, crate::engine::EngineCommand::VideoSetSpeed {
-            channel_idx: 0, deck_idx: 0, speed: 2.0,
-        });
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let _ = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::VideoSetSpeed {
+                channel_idx: 0,
+                deck_idx: 0,
+                speed: 2.0,
+            },
+        );
     }
 
     #[test]
     fn smoke_create_sequence() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let r = send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
         assert!(matches!(r, crate::engine::CommandResult::Ok));
         let state = app.build_engine_state();
@@ -1851,76 +2492,148 @@ mod tests {
 
     #[test]
     fn smoke_sequence_add_steps() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
-        send_cmd(&mut app, crate::engine::EngineCommand::AddFadeStep { seq_idx: 0, from_ch: 0, to_ch: 1 });
-        send_cmd(&mut app, crate::engine::EngineCommand::AddWaitStep { seq_idx: 0 });
+        send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddFadeStep {
+                seq_idx: 0,
+                from_ch: 0,
+                to_ch: 1,
+            },
+        );
+        send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddWaitStep { seq_idx: 0 },
+        );
         let state = app.build_engine_state();
         assert_eq!(state.mixer.sequences[0].steps.len(), 2);
     }
 
     #[test]
     fn smoke_effect_chain_operations() {
-        let Some(mut app) = headless_app() else { return; };
-        send_cmd(&mut app, crate::engine::EngineCommand::AddSolidColorDeck {
-            channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0],
-        });
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddSolidColorDeck {
+                channel_idx: 0,
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+        );
         let target = crate::engine::EffectTarget::Deck(0, 1);
-        let r = send_cmd(&mut app, crate::engine::EngineCommand::AddEffect {
-            target: target.clone(), shader_name: "Invert".into(),
-        });
+        let r = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddEffect {
+                target: target.clone(),
+                shader_name: "Invert".into(),
+            },
+        );
         if matches!(r, crate::engine::CommandResult::Ok) {
             // Toggle
-            let _ = send_cmd(&mut app, crate::engine::EngineCommand::ToggleEffect {
-                target: target.clone(), effect_idx: 0,
-            });
+            let _ = send_cmd(
+                &mut app,
+                crate::engine::EngineCommand::ToggleEffect {
+                    target: target.clone(),
+                    effect_idx: 0,
+                },
+            );
             // Remove
-            let _ = send_cmd(&mut app, crate::engine::EngineCommand::RemoveEffect {
-                target, effect_idx: 0,
-            });
+            let _ = send_cmd(
+                &mut app,
+                crate::engine::EngineCommand::RemoveEffect {
+                    target,
+                    effect_idx: 0,
+                },
+            );
         }
     }
 
     #[test]
     fn smoke_multiple_modulation_sources() {
-        let Some(mut app) = headless_app() else { return; };
-        send_cmd(&mut app, crate::engine::EngineCommand::AddLfo {
-            waveform: crate::modulation::LFOWaveform::Sine, frequency: 1.0,
-        });
-        send_cmd(&mut app, crate::engine::EngineCommand::AddStepSequencer {
-            num_steps: 8, rate: 2.0,
-        });
-        send_cmd(&mut app, crate::engine::EngineCommand::AddAdsr {
-            attack: 0.1, decay: 0.2, sustain: 0.7, release: 0.3,
-        });
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddLfo {
+                waveform: crate::modulation::LFOWaveform::Sine,
+                frequency: 1.0,
+            },
+        );
+        send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddStepSequencer {
+                num_steps: 8,
+                rate: 2.0,
+            },
+        );
+        send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddAdsr {
+                attack: 0.1,
+                decay: 0.2,
+                sustain: 0.7,
+                release: 0.3,
+            },
+        );
         let state = app.build_engine_state();
         assert_eq!(state.modulation.sources.len(), 3);
     }
 
     #[test]
     fn smoke_adsr_trigger_release() {
-        let Some(mut app) = headless_app() else { return; };
-        let r = send_cmd(&mut app, crate::engine::EngineCommand::AddAdsr {
-            attack: 0.01, decay: 0.01, sustain: 0.5, release: 0.01,
-        });
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let r = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddAdsr {
+                attack: 0.01,
+                decay: 0.01,
+                sustain: 0.5,
+                release: 0.01,
+            },
+        );
         assert!(matches!(r, crate::engine::CommandResult::Ok));
         let state = app.build_engine_state();
         let uuid = state.modulation.sources[0].uuid.clone();
         // Trigger
-        fire(&mut app, crate::engine::EngineCommand::TriggerAdsr { uuid: uuid.clone() });
-        for _ in 0..5 { app.update_frame_timing(); app.render_mixer_frame(); }
+        fire(
+            &mut app,
+            crate::engine::EngineCommand::TriggerAdsr { uuid: uuid.clone() },
+        );
+        for _ in 0..5 {
+            app.update_frame_timing();
+            app.render_mixer_frame();
+        }
         // Release
         fire(&mut app, crate::engine::EngineCommand::ReleaseAdsr { uuid });
-        for _ in 0..5 { app.update_frame_timing(); app.render_mixer_frame(); }
+        for _ in 0..5 {
+            app.update_frame_timing();
+            app.render_mixer_frame();
+        }
     }
 
     #[test]
     fn smoke_set_channel_blend_mode() {
-        let Some(mut app) = headless_app() else { return; };
-        fire(&mut app, crate::engine::EngineCommand::SetChannelBlendMode {
-            channel_idx: 0, mode: crate::engine::BlendMode::Add,
-        });
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        fire(
+            &mut app,
+            crate::engine::EngineCommand::SetChannelBlendMode {
+                channel_idx: 0,
+                mode: crate::engine::BlendMode::Add,
+            },
+        );
         let state = app.build_engine_state();
-        assert_eq!(state.mixer.channels[0].blend_mode, crate::engine::BlendMode::Add);
+        assert_eq!(
+            state.mixer.channels[0].blend_mode,
+            crate::engine::BlendMode::Add
+        );
     }
 }

@@ -7,7 +7,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
-use crate::usecases::api::{SharedState, command_response};
+use crate::usecases::api::{command_response, SharedState};
 
 #[derive(Deserialize, ToSchema)]
 pub struct SetDisplayBody {
@@ -43,7 +43,13 @@ pub async fn set_display(
     Path(idx): Path<usize>,
     Json(b): Json<SetDisplayBody>,
 ) -> impl IntoResponse {
-    match s.send_command(EngineCommand::SetOutputDisplay { idx, monitor_name: b.monitor_name }).await {
+    match s
+        .send_command(EngineCommand::SetOutputDisplay {
+            idx,
+            monitor_name: b.monitor_name,
+        })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -55,10 +61,13 @@ pub async fn assign_surface(
     Path(output_uuid): Path<String>,
     Json(b): Json<AssignSurfaceBody>,
 ) -> impl IntoResponse {
-    match s.send_command(EngineCommand::AssignSurfaceToOutput {
-        output_uuid,
-        surface_uuid: b.surface_uuid,
-    }).await {
+    match s
+        .send_command(EngineCommand::AssignSurfaceToOutput {
+            output_uuid,
+            surface_uuid: b.surface_uuid,
+        })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -69,10 +78,13 @@ pub async fn unassign_surface(
     State(s): State<SharedState>,
     Path((output_uuid, assignment_idx)): Path<(String, usize)>,
 ) -> impl IntoResponse {
-    match s.send_command(EngineCommand::UnassignSurfaceFromOutput {
-        output_uuid,
-        assignment_idx,
-    }).await {
+    match s
+        .send_command(EngineCommand::UnassignSurfaceFromOutput {
+            output_uuid,
+            assignment_idx,
+        })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -87,27 +99,43 @@ pub struct CreateHeadlessBody {
 }
 
 #[utoipa::path(post, path = "/api/outputs/headless", request_body = CreateHeadlessBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn create_headless(State(s): State<SharedState>, Json(b): Json<CreateHeadlessBody>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::CreateHeadlessOutput { target: b.target }).await {
-        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn create_headless(
+    State(s): State<SharedState>,
+    Json(b): Json<CreateHeadlessBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::CreateHeadlessOutput { target: b.target })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/outputs/{idx}/start", params(("idx" = usize, Path, description = "Output index")), responses((status = 200, body = CommandResult)), tag = "Outputs")]
 pub async fn start(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
     match s.send_command(EngineCommand::StartOutput { idx }).await {
-        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/outputs/{idx}/stop", params(("idx" = usize, Path, description = "Output index")), responses((status = 200, body = CommandResult)), tag = "Outputs")]
 pub async fn stop(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
     match s.send_command(EngineCommand::StopOutput { idx }).await {
-        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/outputs/{idx}/calibration", params(("idx" = usize, Path, description = "Output index")), responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn toggle_calibration(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::ToggleCalibration { idx }).await {
-        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn toggle_calibration(
+    State(s): State<SharedState>,
+    Path(idx): Path<usize>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ToggleCalibration { idx })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -122,9 +150,22 @@ pub struct SetWarpBody {
 }
 
 #[utoipa::path(put, path = "/api/outputs/{idx}/warp", params(("idx" = usize, Path, description = "Output index")), request_body = SetWarpBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn set_warp(State(s): State<SharedState>, Path(idx): Path<usize>, Json(b): Json<SetWarpBody>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::SetWarpCorner { output_idx: idx, assignment_idx: b.assignment_idx, corner_idx: b.corner_idx, position: b.position }).await {
-        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn set_warp(
+    State(s): State<SharedState>,
+    Path(idx): Path<usize>,
+    Json(b): Json<SetWarpBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetWarpCorner {
+            output_idx: idx,
+            assignment_idx: b.assignment_idx,
+            corner_idx: b.corner_idx,
+            position: b.position,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -135,9 +176,20 @@ pub struct ResetWarpBody {
 }
 
 #[utoipa::path(post, path = "/api/outputs/{idx}/reset-warp", params(("idx" = usize, Path, description = "Output index")), request_body = ResetWarpBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn reset_warp(State(s): State<SharedState>, Path(idx): Path<usize>, Json(b): Json<ResetWarpBody>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::ResetWarp { output_idx: idx, assignment_idx: b.assignment_idx }).await {
-        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn reset_warp(
+    State(s): State<SharedState>,
+    Path(idx): Path<usize>,
+    Json(b): Json<ResetWarpBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ResetWarp {
+            output_idx: idx,
+            assignment_idx: b.assignment_idx,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -150,12 +202,22 @@ pub struct SetOutputTargetBody {
 }
 
 #[utoipa::path(put, path = "/api/outputs/{idx}/target", params(("idx" = usize, Path, description = "Output index")), request_body = SetOutputTargetBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn set_target(State(s): State<SharedState>, Path(idx): Path<usize>, Json(b): Json<SetOutputTargetBody>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::SetOutputTarget { idx, target: b.target }).await {
-        Ok(r) => command_response(r), Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn set_target(
+    State(s): State<SharedState>,
+    Path(idx): Path<usize>,
+    Json(b): Json<SetOutputTargetBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetOutputTarget {
+            idx,
+            target: b.target,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-
 
 // ── Edge Blending ────────────────────────────────────────────────────
 
@@ -178,7 +240,13 @@ pub async fn set_edge_blend(
     Path(idx): Path<usize>,
     Json(b): Json<SetEdgeBlendBody>,
 ) -> impl IntoResponse {
-    match s.send_command(EngineCommand::SetEdgeBlend { output_idx: idx, config: b.config }).await {
+    match s
+        .send_command(EngineCommand::SetEdgeBlend {
+            output_idx: idx,
+            config: b.config,
+        })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
@@ -203,7 +271,13 @@ pub async fn set_edge_blend_mode(
     Path(idx): Path<usize>,
     Json(b): Json<SetEdgeBlendModeBody>,
 ) -> impl IntoResponse {
-    match s.send_command(EngineCommand::SetEdgeBlendMode { output_idx: idx, mode: b.mode }).await {
+    match s
+        .send_command(EngineCommand::SetEdgeBlendMode {
+            output_idx: idx,
+            mode: b.mode,
+        })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }

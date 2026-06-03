@@ -137,9 +137,7 @@ pub fn detect_contours(img: &image::GrayImage, params: &DetectionParams) -> Dete
             let canny_hi = f32::from(params.canny_high).max(canny_lo);
             imageproc::edges::canny(&blurred, canny_lo, canny_hi)
         }
-        DetectionMethod::Threshold => {
-            threshold_binary(&blurred, params.threshold, params.invert)
-        }
+        DetectionMethod::Threshold => threshold_binary(&blurred, params.threshold, params.invert),
     };
 
     // 3. Optional morphological close
@@ -209,7 +207,11 @@ pub fn detect_contours(img: &image::GrayImage, params: &DetectionParams) -> Dete
     }
 
     // Sort by area descending
-    contours.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+    contours.sort_by(|a, b| {
+        b.area
+            .partial_cmp(&a.area)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     DetectionResult {
         contours,
@@ -284,7 +286,11 @@ fn threshold_binary(img: &image::GrayImage, threshold: u8, invert: bool) -> imag
     for y in 0..h {
         for x in 0..w {
             let px = img.get_pixel(x, y).0[0];
-            let is_fg = if invert { px < threshold } else { px >= threshold };
+            let is_fg = if invert {
+                px < threshold
+            } else {
+                px >= threshold
+            };
             out.put_pixel(x, y, image::Luma([if is_fg { 255 } else { 0 }]));
         }
     }
@@ -365,7 +371,6 @@ fn is_border_pixel(img: &image::GrayImage, x: u32, y: u32, w: u32, h: u32) -> bo
     false
 }
 
-
 /// Follow borders using Moore neighbor tracing to extract ordered contour points.
 ///
 /// Scans the binary image (0=bg, 255=fg) in raster order. For each unvisited
@@ -397,9 +402,8 @@ fn follow_borders(binary: &image::GrayImage) -> Vec<Vec<(u32, u32)>> {
                 continue;
             }
 
-            let contour = trace_single_border(
-                binary, x, y, w, h, &DX, &DY, &mut visited, max_steps,
-            );
+            let contour =
+                trace_single_border(binary, x, y, w, h, &DX, &DY, &mut visited, max_steps);
             if !contour.is_empty() {
                 contours.push(contour);
             }
@@ -682,9 +686,7 @@ mod tests {
 
     #[test]
     fn check_circularity_rejects_rectangle() {
-        let verts = vec![
-            [0.0, 0.0], [1.0, 0.0], [1.0, 0.1], [0.0, 0.1],
-        ];
+        let verts = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 0.1], [0.0, 0.1]];
         let area = shoelace_area(&verts);
         assert!(check_circularity(&verts, area).is_none());
     }
@@ -777,13 +779,22 @@ mod tests {
             }
         }
         let contours = follow_borders(&img);
-        assert_eq!(contours.len(), 1, "Expected exactly 1 contour, got {}", contours.len());
+        assert_eq!(
+            contours.len(),
+            1,
+            "Expected exactly 1 contour, got {}",
+            contours.len()
+        );
         // All contour points should be border pixels
         for &(x, y) in &contours[0] {
             assert!(is_border_pixel(&img, x, y, 100, 100));
         }
         // Contour should have many points (perimeter of 40x40 rect)
-        assert!(contours[0].len() > 10, "Contour too short: {}", contours[0].len());
+        assert!(
+            contours[0].len() > 10,
+            "Contour too short: {}",
+            contours[0].len()
+        );
     }
 
     #[test]
@@ -802,7 +813,12 @@ mod tests {
             }
         }
         let contours = follow_borders(&img);
-        assert_eq!(contours.len(), 2, "Expected 2 contours, got {}", contours.len());
+        assert_eq!(
+            contours.len(),
+            2,
+            "Expected 2 contours, got {}",
+            contours.len()
+        );
     }
 
     #[test]
@@ -833,10 +849,20 @@ mod tests {
             }
         }
         let contours = follow_borders(&img);
-        assert!(!contours.is_empty(), "Expected at least 1 contour from L-shape");
-        assert!(contours.len() <= 2, "Expected at most 2 contours from L-shape, got {}", contours.len());
+        assert!(
+            !contours.is_empty(),
+            "Expected at least 1 contour from L-shape"
+        );
+        assert!(
+            contours.len() <= 2,
+            "Expected at most 2 contours from L-shape, got {}",
+            contours.len()
+        );
         let total_points: usize = contours.iter().map(|c| c.len()).sum();
-        assert!(total_points > 20, "L-shape border too short: {total_points} total points");
+        assert!(
+            total_points > 20,
+            "L-shape border too short: {total_points} total points"
+        );
     }
 
     #[test]
@@ -854,7 +880,11 @@ mod tests {
         }
         let closed = morphological_close(&img, 1);
         // The gap pixel (8, 5) should now be filled
-        assert_eq!(closed.get_pixel(8, 5).0[0], 255, "Gap should be filled by morph close");
+        assert_eq!(
+            closed.get_pixel(8, 5).0[0],
+            255,
+            "Gap should be filled by morph close"
+        );
     }
 
     #[test]
@@ -868,16 +898,29 @@ mod tests {
     fn convex_hull_concave() {
         // L-shape vertices — hull should remove the concavity
         let pts = vec![
-            [0.0, 0.0], [1.0, 0.0], [1.0, 0.5],
-            [0.5, 0.5], [0.5, 1.0], [0.0, 1.0],
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 0.5],
+            [0.5, 0.5],
+            [0.5, 1.0],
+            [0.0, 1.0],
         ];
         let hull = convex_hull(&pts);
         // Convex hull of an L should have 4-5 vertices (bounding box corners + one more)
-        assert!(hull.len() <= 5, "Hull should have removed concavity, got {} verts", hull.len());
+        assert!(
+            hull.len() <= 5,
+            "Hull should have removed concavity, got {} verts",
+            hull.len()
+        );
         // Area of hull should be larger than area of L
         let l_area = shoelace_area(&pts);
         let hull_area = shoelace_area(&hull);
-        assert!(hull_area > l_area, "Hull area {} should be > L area {}", hull_area, l_area);
+        assert!(
+            hull_area > l_area,
+            "Hull area {} should be > L area {}",
+            hull_area,
+            l_area
+        );
     }
 
     #[test]

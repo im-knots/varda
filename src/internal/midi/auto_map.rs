@@ -42,9 +42,13 @@ impl DeviceAutoMapState {
     fn new(config: AutoMapConfig, profile: Arc<ControllerProfileData>) -> Self {
         let grid_range = Self::lookup_range(&profile, &config.grid_control);
         let fader_range = Self::lookup_range(&profile, &config.fader_control);
-        let shift_note = config.shift_control.as_ref()
+        let shift_note = config
+            .shift_control
+            .as_ref()
             .map(|name| Self::lookup_range(&profile, name)[0]);
-        let page_range = config.page_buttons_control.as_ref()
+        let page_range = config
+            .page_buttons_control
+            .as_ref()
             .map(|name| Self::lookup_range(&profile, name));
 
         Self {
@@ -63,7 +67,9 @@ impl DeviceAutoMapState {
     }
 
     fn lookup_range(profile: &ControllerProfileData, control_name: &str) -> [u8; 2] {
-        profile.controls.iter()
+        profile
+            .controls
+            .iter()
             .find(|c| c.name == control_name)
             .map(|c| c.range)
             .unwrap_or([0, 0])
@@ -82,7 +88,8 @@ impl DeviceAutoMapState {
     }
 
     fn is_page_button(&self, note: u8) -> bool {
-        self.page_range.map_or(false, |r| note >= r[0] && note <= r[1])
+        self.page_range
+            .map_or(false, |r| note >= r[0] && note <= r[1])
     }
 }
 
@@ -108,14 +115,21 @@ pub struct AutoMapEngine {
 
 impl AutoMapEngine {
     pub fn new() -> Self {
-        Self { devices: HashMap::new() }
+        Self {
+            devices: HashMap::new(),
+        }
     }
 
     /// Register a device for auto-mapping if its profile has an `auto_map` section.
     pub fn register_device(&mut self, device_id: DeviceId, profile: Arc<ControllerProfileData>) {
         if let Some(config) = profile.auto_map.clone() {
-            log::info!("Auto-map: registered device {} with profile '{}'", device_id, profile.profile.name);
-            self.devices.insert(device_id, DeviceAutoMapState::new(config, profile));
+            log::info!(
+                "Auto-map: registered device {} with profile '{}'",
+                device_id,
+                profile.profile.name
+            );
+            self.devices
+                .insert(device_id, DeviceAutoMapState::new(config, profile));
         }
     }
 
@@ -168,7 +182,13 @@ impl AutoMapEngine {
     }
 
     /// Process a note-off event: tap/hold detection, paging.
-    pub fn process_note_off(&mut self, device_id: DeviceId, note: u8, _channel: u8, mixer: &mut Mixer) {
+    pub fn process_note_off(
+        &mut self,
+        device_id: DeviceId,
+        note: u8,
+        _channel: u8,
+        mixer: &mut Mixer,
+    ) {
         if let Some(state) = self.devices.get_mut(&device_id) {
             if state.is_shift_note(note) {
                 state.shift_held = false;
@@ -190,9 +210,8 @@ impl AutoMapEngine {
                 if let Some(press_time) = state.press_times.remove(&note) {
                     let duration = press_time.elapsed();
                     let threshold = Duration::from_millis(state.config.tap_hold_threshold_ms);
-                    let (ch_idx, dk_idx) = grid_note_to_channel_deck(
-                        note, state.page_offset, state.config.columns,
-                    );
+                    let (ch_idx, dk_idx) =
+                        grid_note_to_channel_deck(note, state.page_offset, state.config.columns);
 
                     if duration < threshold {
                         // Tap → mute/solo based on tap_action
@@ -210,13 +229,21 @@ impl AutoMapEngine {
     /// Applies a hysteresis filter to reject hardware glitch spikes.
     pub fn process_cc(&mut self, device_id: DeviceId, cc: u8, value: u8, mixer: &mut Mixer) {
         if let Some(state) = self.devices.get_mut(&device_id) {
-            if !state.is_fader_cc(cc) { return; }
+            if !state.is_fader_cc(cc) {
+                return;
+            }
 
             // Hysteresis filter: reject suspicious jumps (dirty fader protection)
             if let Some(&last) = state.last_cc_values.get(&cc) {
                 let delta = (value as i16 - last as i16).unsigned_abs() as u8;
                 if delta > MAX_CC_JUMP {
-                    log::debug!("Auto-map: rejected CC {} spike {} → {} (Δ{})", cc, last, value, delta);
+                    log::debug!(
+                        "Auto-map: rejected CC {} spike {} → {} (Δ{})",
+                        cc,
+                        last,
+                        value,
+                        delta
+                    );
                     return;
                 }
             }
@@ -227,7 +254,9 @@ impl AutoMapEngine {
             let normalized = value as f32 / 127.0;
 
             // Last fader → crossfader (if configured)
-            if fader_idx == fader_count - 1 && state.config.last_fader_target.as_deref() == Some("crossfader") {
+            if fader_idx == fader_count - 1
+                && state.config.last_fader_target.as_deref() == Some("crossfader")
+            {
                 mixer.set_crossfader(normalized);
                 return;
             }
@@ -279,7 +308,8 @@ impl AutoMapEngine {
                     }
 
                     let ch_idx = col + state.page_offset * columns;
-                    let color = Self::determine_led_color(mixer, &state.config, ch_idx, rows - 1 - row);
+                    let color =
+                        Self::determine_led_color(mixer, &state.config, ch_idx, rows - 1 - row);
                     let velocity = state.profile.color_value(&color);
 
                     // Only send if changed
@@ -293,7 +323,12 @@ impl AutoMapEngine {
     }
 
     /// Determine the LED color for a grid position.
-    fn determine_led_color(mixer: &Mixer, config: &AutoMapConfig, ch_idx: usize, dk_idx: usize) -> String {
+    fn determine_led_color(
+        mixer: &Mixer,
+        config: &AutoMapConfig,
+        ch_idx: usize,
+        dk_idx: usize,
+    ) -> String {
         let channel = match mixer.channel(ch_idx) {
             Some(ch) => ch,
             None => return config.led_rules.empty.clone(),
@@ -322,9 +357,7 @@ impl AutoMapEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal::midi::controller_profile::{
-        builtin_apc_mini, AutoMapLedRules,
-    };
+    use crate::internal::midi::controller_profile::{builtin_apc_mini, AutoMapLedRules};
 
     fn test_config() -> AutoMapConfig {
         AutoMapConfig {
@@ -519,7 +552,12 @@ mod tests {
         for value in (0u8..=60).step_by(5) {
             if let Some(&last) = state.last_cc_values.get(&48) {
                 let delta = (value as i16 - last as i16).unsigned_abs() as u8;
-                assert!(delta <= MAX_CC_JUMP, "Normal step {} → {} should be accepted", last, value);
+                assert!(
+                    delta <= MAX_CC_JUMP,
+                    "Normal step {} → {} should be accepted",
+                    last,
+                    value
+                );
             }
             state.last_cc_values.insert(48, value);
         }

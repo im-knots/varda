@@ -19,7 +19,11 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         }
         ["deck", uuid, "opacity"] => {
             if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                let v = if value.is_finite() { value.clamp(0.0, 1.0) } else { 1.0 };
+                let v = if value.is_finite() {
+                    value.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
                 mixer.channels_mut()[ch].decks[dk].opacity = v;
                 return true;
             }
@@ -57,7 +61,11 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         ["deck", uuid, "at", "play_duration"] => {
             if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
                 if let Some(ref mut at) = mixer.channels_mut()[ch].decks[dk].auto_transition {
-                    let max = if at.play_duration.is_beats() { 128.0 } else { 300.0 };
+                    let max = if at.play_duration.is_beats() {
+                        128.0
+                    } else {
+                        300.0
+                    };
                     at.play_duration.set_value(0.5 + value as f64 * (max - 0.5));
                     return true;
                 }
@@ -67,8 +75,13 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         ["deck", uuid, "at", "trans_duration"] => {
             if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
                 if let Some(ref mut at) = mixer.channels_mut()[ch].decks[dk].auto_transition {
-                    let max = if at.transition_duration.is_beats() { 32.0 } else { 30.0 };
-                    at.transition_duration.set_value(0.1 + value as f64 * (max - 0.1));
+                    let max = if at.transition_duration.is_beats() {
+                        32.0
+                    } else {
+                        30.0
+                    };
+                    at.transition_duration
+                        .set_value(0.1 + value as f64 * (max - 0.1));
                     return true;
                 }
             }
@@ -77,7 +90,9 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         ["deck", uuid, "param", name] => {
             if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
                 apply_float_param_scaled(
-                    &mut mixer.channels_mut()[ch].decks[dk].deck.generator_params, name, value,
+                    &mut mixer.channels_mut()[ch].decks[dk].deck.generator_params,
+                    name,
+                    value,
                 );
                 return true;
             }
@@ -89,7 +104,9 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
                     let decks = &mut mixer.channels_mut()[ch].decks;
                     if ek < decks[dk].deck.effects.len() {
                         apply_float_param_scaled(
-                            &mut decks[dk].deck.effects[ek].params, name, value,
+                            &mut decks[dk].deck.effects[ek].params,
+                            name,
+                            value,
                         );
                         return true;
                     }
@@ -99,7 +116,11 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
         }
         ["ch", ch_uuid, "opacity"] => {
             if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
-                let v = if value.is_finite() { value.clamp(0.0, 1.0) } else { 1.0 };
+                let v = if value.is_finite() {
+                    value.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
                 mixer.channels_mut()[ch].opacity = v;
                 return true;
             }
@@ -110,7 +131,9 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
                 if let Ok(ek) = ek_s.parse::<usize>() {
                     if ek < mixer.channels_mut()[ch].effects.len() {
                         apply_float_param_scaled(
-                            &mut mixer.channels_mut()[ch].effects[ek].params, name, value,
+                            &mut mixer.channels_mut()[ch].effects[ek].params,
+                            name,
+                            value,
                         );
                         return true;
                     }
@@ -122,7 +145,9 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
             if let Ok(ek) = ek_s.parse::<usize>() {
                 if ek < mixer.master_effects().len() {
                     apply_float_param_scaled(
-                        &mut mixer.master_effects_mut()[ek].params, name, value,
+                        &mut mixer.master_effects_mut()[ek].params,
+                        name,
+                        value,
                     );
                     return true;
                 }
@@ -133,7 +158,9 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
             if let Ok(idx) = idx_s.parse::<usize>() {
                 if idx < mixer.modulation_mut().sources.len() {
                     apply_mod_param(
-                        &mut mixer.modulation_mut().sources[idx].source, param_name, value,
+                        &mut mixer.modulation_mut().sources[idx].source,
+                        param_name,
+                        value,
                     );
                     return true;
                 }
@@ -162,11 +189,15 @@ pub fn apply_param_by_path(mixer: &mut Mixer, path: &str, value: f32) -> bool {
     }
 }
 
-
 /// Apply a normalized value to a modulation source parameter.
 fn apply_mod_param(source: &mut ModulationSource, param_name: &str, value: f32) {
     match source {
-        ModulationSource::LFO { frequency, amplitude, phase, .. } => match param_name {
+        ModulationSource::LFO {
+            frequency,
+            amplitude,
+            phase,
+            ..
+        } => match param_name {
             "frequency" => *frequency = 0.01 + value * 9.99,
             "amplitude" => *amplitude = value.clamp(0.0, 1.0),
             "phase" => *phase = value.clamp(0.0, 1.0),
@@ -176,13 +207,23 @@ fn apply_mod_param(source: &mut ModulationSource, param_name: &str, value: f32) 
             "smoothing" => *smoothing = (value * 0.99).clamp(0.0, 0.99),
             _ => log::warn!("Unknown Audio param: {}", param_name),
         },
-        ModulationSource::ADSR { attack, decay, sustain, release, .. } => match param_name {
+        ModulationSource::ADSR {
+            attack,
+            decay,
+            sustain,
+            release,
+            ..
+        } => match param_name {
             "attack" => *attack = 0.001 + value * 4.999,
             "decay" => *decay = 0.001 + value * 4.999,
             "sustain" => *sustain = value.clamp(0.0, 1.0),
             "release" => *release = 0.001 + value * 4.999,
             "gate" => {
-                if value > 0.5 { source.gate_on(); } else { source.gate_off(); }
+                if value > 0.5 {
+                    source.gate_on();
+                } else {
+                    source.gate_off();
+                }
             }
             _ => log::warn!("Unknown ADSR param: {}", param_name),
         },

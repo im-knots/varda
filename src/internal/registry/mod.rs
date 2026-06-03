@@ -99,7 +99,11 @@ impl ShaderRegistry {
             }
         }
 
-        log::info!("Loaded {} shaders from {} libraries", count, self.library_paths.len());
+        log::info!(
+            "Loaded {} shaders from {} libraries",
+            count,
+            self.library_paths.len()
+        );
         Ok(count)
     }
 
@@ -107,12 +111,13 @@ impl ShaderRegistry {
     pub fn start_watching(&mut self) -> Result<()> {
         let (tx, rx) = mpsc::channel();
 
-        let mut watcher = notify::recommended_watcher(tx)
-            .context("Failed to create file watcher")?;
+        let mut watcher =
+            notify::recommended_watcher(tx).context("Failed to create file watcher")?;
 
         for lib_path in &self.library_paths {
             if lib_path.exists() {
-                watcher.watch(lib_path, RecursiveMode::Recursive)
+                watcher
+                    .watch(lib_path, RecursiveMode::Recursive)
                     .with_context(|| format!("Failed to watch path: {}", lib_path.display()))?;
                 log::info!("Watching library path: {}", lib_path.display());
             }
@@ -179,7 +184,11 @@ impl ShaderRegistry {
                             }
                             Err(e) => {
                                 let err_msg = format!("{}", e);
-                                log::warn!("Failed to reload shader {}: {}", path.display(), err_msg);
+                                log::warn!(
+                                    "Failed to reload shader {}: {}",
+                                    path.display(),
+                                    err_msg
+                                );
                                 shader_events.push(ShaderEvent::Error(path, err_msg));
                             }
                         }
@@ -318,8 +327,6 @@ pub fn get_default_library_paths() -> Vec<PathBuf> {
 
     paths
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -516,7 +523,10 @@ void main() {}"#;
         // Should have exactly 1 shader named "Glow" (user version wins)
         assert_eq!(reg.count(), 1);
         let glow = reg.get("Glow").unwrap();
-        assert!(glow.metadata.is_filter(), "User shader should override builtin");
+        assert!(
+            glow.metadata.is_filter(),
+            "User shader should override builtin"
+        );
     }
 
     #[test]

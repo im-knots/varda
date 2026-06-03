@@ -1,8 +1,8 @@
 //! Deck add/remove/move, effect CRUD, and transition sequence mutations.
 
+use super::super::VardaApp;
 use crate::deck::{Deck, Effect};
 use crate::usecases::ui::UIActions;
-use super::super::VardaApp;
 
 impl VardaApp {
     /// Apply deck add/remove and effect add/remove/toggle actions.
@@ -20,10 +20,14 @@ impl VardaApp {
         // Remove deck if requested
         if let Some((ch_idx, deck_idx)) = actions.deck_to_remove {
             // Capture UUIDs before removal for modulation cleanup
-            let deck_uuid = mixer.channels().get(ch_idx)
+            let deck_uuid = mixer
+                .channels()
+                .get(ch_idx)
                 .and_then(|ch| ch.decks.get(deck_idx))
                 .map(|slot| slot.deck.uuid().to_string());
-            let effect_uuids: Vec<String> = mixer.channels().get(ch_idx)
+            let effect_uuids: Vec<String> = mixer
+                .channels()
+                .get(ch_idx)
                 .and_then(|ch| ch.decks.get(deck_idx))
                 .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
                 .unwrap_or_default();
@@ -52,7 +56,8 @@ impl VardaApp {
                     did_remove = true;
                     log::info!("Removed deck {} from channel {}", deck_idx, ch_idx);
 
-                    let keys_to_remove: Vec<_> = deck_preview_textures.keys()
+                    let keys_to_remove: Vec<_> = deck_preview_textures
+                        .keys()
                         .filter(|(c, _)| *c == ch_idx)
                         .copied()
                         .collect();
@@ -74,27 +79,43 @@ impl VardaApp {
             // Clean up orphaned modulation assignments (outside channel borrow)
             if did_remove {
                 if let Some(ref uuid) = deck_uuid {
-                    mixer.modulation_mut().remove_assignments_with_prefix(&format!("deck_{}:", uuid));
+                    mixer
+                        .modulation_mut()
+                        .remove_assignments_with_prefix(&format!("deck_{}:", uuid));
                 }
                 for fx_uuid in &effect_uuids {
-                    mixer.modulation_mut().remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
+                    mixer
+                        .modulation_mut()
+                        .remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
                 }
             }
         }
 
         // Move deck between channels if requested
         if let Some((src_ch, src_deck, dst_ch)) = actions.deck_to_move {
-            if src_ch != dst_ch && src_ch < mixer.channel_count() && dst_ch < mixer.channel_count() {
+            if src_ch != dst_ch && src_ch < mixer.channel_count() && dst_ch < mixer.channel_count()
+            {
                 if src_deck < mixer.channels_mut()[src_ch].decks.len() {
                     let Some(slot) = mixer.channels_mut()[src_ch].remove_deck_slot(src_deck) else {
-                        log::warn!("deck_to_move: deck {} not found in channel {}", src_deck, src_ch);
+                        log::warn!(
+                            "deck_to_move: deck {} not found in channel {}",
+                            src_deck,
+                            src_ch
+                        );
                         return;
                     };
                     let new_idx = mixer.channels_mut()[dst_ch].add_deck_slot(slot);
 
-                    log::info!("Moved deck {} from channel {} to channel {} (new index {})", src_deck, src_ch, dst_ch, new_idx);
+                    log::info!(
+                        "Moved deck {} from channel {} to channel {} (new index {})",
+                        src_deck,
+                        src_ch,
+                        dst_ch,
+                        new_idx
+                    );
 
-                    let src_keys: Vec<_> = deck_preview_textures.keys()
+                    let src_keys: Vec<_> = deck_preview_textures
+                        .keys()
                         .filter(|(c, _)| *c == src_ch)
                         .copied()
                         .collect();
@@ -112,7 +133,8 @@ impl VardaApp {
                         deck_preview_textures.insert((src_ch, i), tex_id);
                     }
 
-                    let dst_keys: Vec<_> = deck_preview_textures.keys()
+                    let dst_keys: Vec<_> = deck_preview_textures
+                        .keys()
                         .filter(|(c, _)| *c == dst_ch)
                         .copied()
                         .collect();
@@ -143,7 +165,8 @@ impl VardaApp {
                         log::info!("Reordered deck in ch{}: {} -> {}", ch_idx, from_idx, to_idx);
 
                         // Re-register preview textures for the affected channel
-                        let keys: Vec<_> = deck_preview_textures.keys()
+                        let keys: Vec<_> = deck_preview_textures
+                            .keys()
                             .filter(|(c, _)| *c == ch_idx)
                             .copied()
                             .collect();
@@ -152,7 +175,8 @@ impl VardaApp {
                                 egui_renderer.free_texture(&tex_id);
                             }
                         }
-                        for (i, deck_slot) in mixer.channels_mut()[ch_idx].decks.iter().enumerate() {
+                        for (i, deck_slot) in mixer.channels_mut()[ch_idx].decks.iter().enumerate()
+                        {
                             let tex_id = egui_renderer.register_native_texture(
                                 &context.device,
                                 &deck_slot.deck.texture_view,
@@ -208,45 +232,89 @@ impl VardaApp {
             }
         }
 
-
         // Add NDI source deck if requested
         if let Some((ch_idx, ndi_name)) = actions.ndi_to_add.take() {
-            match self.external_io.ndi_manager.start_receive(&ndi_name, &context.device) {
+            match self
+                .external_io
+                .ndi_manager
+                .start_receive(&ndi_name, &context.device)
+            {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.external_io.ndi_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                    match Deck::new_from_ndi(context, receiver_idx, &ndi_name, src_w, src_h, self.render_width, self.render_height) {
+                    let (src_w, src_h) = self
+                        .external_io
+                        .ndi_manager
+                        .receiver_dimensions(receiver_idx)
+                        .unwrap_or((1920, 1080));
+                    match Deck::new_from_ndi(
+                        context,
+                        receiver_idx,
+                        &ndi_name,
+                        src_w,
+                        src_h,
+                        self.render_width,
+                        self.render_height,
+                    ) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
                                 let idx = ch.add_deck(deck);
-                                log::info!("Added NDI deck {} to channel {}: {}", idx, ch_idx, ndi_name);
+                                log::info!(
+                                    "Added NDI deck {} to channel {}: {}",
+                                    idx,
+                                    ch_idx,
+                                    ndi_name
+                                );
                                 let texture_id = egui_renderer.register_native_texture(
                                     &context.device,
                                     &ch.decks[idx].deck.texture_view,
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.session.notifications.info(format!("📡 NDI '{}' added to Ch {}", ndi_name, ch_idx + 1));
+                                self.session.notifications.info(format!(
+                                    "📡 NDI '{}' added to Ch {}",
+                                    ndi_name,
+                                    ch_idx + 1
+                                ));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create NDI deck: {}", e);
-                            self.session.notifications.error(format!("Failed to create NDI deck: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to create NDI deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start NDI receive for '{}'", ndi_name);
-                    self.session.notifications.error(format!("Failed to receive NDI source '{}'", ndi_name));
+                    self.session
+                        .notifications
+                        .error(format!("Failed to receive NDI source '{}'", ndi_name));
                 }
             }
         }
 
         // Add SRT source deck if requested
         if let Some((ch_idx, url, mode)) = actions.srt_to_add.take() {
-            match self.external_io.stream_manager.start_srt_receive(&url, mode, &context.device) {
+            match self
+                .external_io
+                .stream_manager
+                .start_srt_receive(&url, mode, &context.device)
+            {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                    match Deck::new_from_srt(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                    let (src_w, src_h) = self
+                        .external_io
+                        .stream_manager
+                        .receiver_dimensions(receiver_idx)
+                        .unwrap_or((1920, 1080));
+                    match Deck::new_from_srt(
+                        context,
+                        receiver_idx,
+                        &url,
+                        src_w,
+                        src_h,
+                        self.render_width,
+                        self.render_height,
+                    ) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
                                 let idx = ch.add_deck(deck);
@@ -257,25 +325,38 @@ impl VardaApp {
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.session.notifications.info(format!("📺 SRT '{}' added to Ch {}", url, ch_idx + 1));
+                                self.session.notifications.info(format!(
+                                    "📺 SRT '{}' added to Ch {}",
+                                    url,
+                                    ch_idx + 1
+                                ));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create SRT deck: {}", e);
-                            self.session.notifications.error(format!("Failed to create SRT deck: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to create SRT deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start SRT receive for '{}'", url);
-                    self.session.notifications.error(format!("Failed to receive SRT source '{}'", url));
+                    self.session
+                        .notifications
+                        .error(format!("Failed to receive SRT source '{}'", url));
                 }
             }
         }
 
         // Add stream source to library (no deck created — user drags to channel)
         if let Some((url, mode)) = actions.srt_library_add.take() {
-            if !self.external_io.stream_library.iter().any(|(u, _)| u == &url) {
+            if !self
+                .external_io
+                .stream_library
+                .iter()
+                .any(|(u, _)| u == &url)
+            {
                 log::info!("Added stream source to library: {} ({})", url, mode);
                 self.external_io.stream_library.push((url, mode));
             }
@@ -289,10 +370,26 @@ impl VardaApp {
 
         // Add HLS source deck if requested
         if let Some((ch_idx, url)) = actions.hls_to_add.take() {
-            match self.external_io.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Hls, &context.device) {
+            match self.external_io.stream_manager.start_receive(
+                &url,
+                crate::stream::StreamProtocol::Hls,
+                &context.device,
+            ) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                    match Deck::new_from_hls(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                    let (src_w, src_h) = self
+                        .external_io
+                        .stream_manager
+                        .receiver_dimensions(receiver_idx)
+                        .unwrap_or((1920, 1080));
+                    match Deck::new_from_hls(
+                        context,
+                        receiver_idx,
+                        &url,
+                        src_w,
+                        src_h,
+                        self.render_width,
+                        self.render_height,
+                    ) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
                                 let idx = ch.add_deck(deck);
@@ -303,82 +400,149 @@ impl VardaApp {
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.session.notifications.info(format!("📡 HLS '{}' added to Ch {}", url, ch_idx + 1));
+                                self.session.notifications.info(format!(
+                                    "📡 HLS '{}' added to Ch {}",
+                                    url,
+                                    ch_idx + 1
+                                ));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create HLS deck: {}", e);
-                            self.session.notifications.error(format!("Failed to create HLS deck: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to create HLS deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start HLS receive for '{}'", url);
-                    self.session.notifications.error(format!("Failed to receive HLS source '{}'", url));
+                    self.session
+                        .notifications
+                        .error(format!("Failed to receive HLS source '{}'", url));
                 }
             }
         }
 
         // Add DASH source deck if requested
         if let Some((ch_idx, url)) = actions.dash_to_add.take() {
-            match self.external_io.stream_manager.start_receive(&url, crate::stream::StreamProtocol::Dash, &context.device) {
+            match self.external_io.stream_manager.start_receive(
+                &url,
+                crate::stream::StreamProtocol::Dash,
+                &context.device,
+            ) {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                    match Deck::new_from_dash(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                    let (src_w, src_h) = self
+                        .external_io
+                        .stream_manager
+                        .receiver_dimensions(receiver_idx)
+                        .unwrap_or((1920, 1080));
+                    match Deck::new_from_dash(
+                        context,
+                        receiver_idx,
+                        &url,
+                        src_w,
+                        src_h,
+                        self.render_width,
+                        self.render_height,
+                    ) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
                                 let idx = ch.add_deck(deck);
-                                log::info!("Added DASH deck {} to channel {}: {}", idx, ch_idx, url);
+                                log::info!(
+                                    "Added DASH deck {} to channel {}: {}",
+                                    idx,
+                                    ch_idx,
+                                    url
+                                );
                                 let texture_id = egui_renderer.register_native_texture(
                                     &context.device,
                                     &ch.decks[idx].deck.texture_view,
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.session.notifications.info(format!("📡 DASH '{}' added to Ch {}", url, ch_idx + 1));
+                                self.session.notifications.info(format!(
+                                    "📡 DASH '{}' added to Ch {}",
+                                    url,
+                                    ch_idx + 1
+                                ));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create DASH deck: {}", e);
-                            self.session.notifications.error(format!("Failed to create DASH deck: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to create DASH deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start DASH receive for '{}'", url);
-                    self.session.notifications.error(format!("Failed to receive DASH source '{}'", url));
+                    self.session
+                        .notifications
+                        .error(format!("Failed to receive DASH source '{}'", url));
                 }
             }
         }
 
         // Add RTMP source deck if requested
         if let Some((ch_idx, url, mode)) = actions.rtmp_to_add.take() {
-            match self.external_io.stream_manager.start_rtmp_receive(&url, mode, &context.device) {
+            match self
+                .external_io
+                .stream_manager
+                .start_rtmp_receive(&url, mode, &context.device)
+            {
                 Some(receiver_idx) => {
-                    let (src_w, src_h) = self.external_io.stream_manager.receiver_dimensions(receiver_idx).unwrap_or((1920, 1080));
-                    match Deck::new_from_rtmp(context, receiver_idx, &url, src_w, src_h, self.render_width, self.render_height) {
+                    let (src_w, src_h) = self
+                        .external_io
+                        .stream_manager
+                        .receiver_dimensions(receiver_idx)
+                        .unwrap_or((1920, 1080));
+                    match Deck::new_from_rtmp(
+                        context,
+                        receiver_idx,
+                        &url,
+                        src_w,
+                        src_h,
+                        self.render_width,
+                        self.render_height,
+                    ) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
                                 let idx = ch.add_deck(deck);
-                                log::info!("Added RTMP deck {} to channel {}: {} ({})", idx, ch_idx, url, mode);
+                                log::info!(
+                                    "Added RTMP deck {} to channel {}: {} ({})",
+                                    idx,
+                                    ch_idx,
+                                    url,
+                                    mode
+                                );
                                 let texture_id = egui_renderer.register_native_texture(
                                     &context.device,
                                     &ch.decks[idx].deck.texture_view,
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.session.notifications.info(format!("📺 RTMP '{}' added to Ch {}", url, ch_idx + 1));
+                                self.session.notifications.info(format!(
+                                    "📺 RTMP '{}' added to Ch {}",
+                                    url,
+                                    ch_idx + 1
+                                ));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create RTMP deck: {}", e);
-                            self.session.notifications.error(format!("Failed to create RTMP deck: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to create RTMP deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start RTMP receive for '{}'", url);
-                    self.session.notifications.error(format!("Failed to receive RTMP source '{}'", url));
+                    self.session
+                        .notifications
+                        .error(format!("Failed to receive RTMP source '{}'", url));
                 }
             }
         }
@@ -422,32 +586,61 @@ impl VardaApp {
         // Add Syphon server deck if requested
         #[cfg(target_os = "macos")]
         if let Some((ch_idx, syph_name)) = actions.syphon_to_add.take() {
-            match self.external_io.syphon_manager.start_receive(&syph_name, &context.device) {
+            match self
+                .external_io
+                .syphon_manager
+                .start_receive(&syph_name, &context.device)
+            {
                 Some(client_idx) => {
-                    let (src_w, src_h) = self.external_io.syphon_manager.client_dimensions(client_idx).unwrap_or((1920, 1080));
-                    match Deck::new_from_syphon(context, client_idx, &syph_name, src_w, src_h, self.render_width, self.render_height) {
+                    let (src_w, src_h) = self
+                        .external_io
+                        .syphon_manager
+                        .client_dimensions(client_idx)
+                        .unwrap_or((1920, 1080));
+                    match Deck::new_from_syphon(
+                        context,
+                        client_idx,
+                        &syph_name,
+                        src_w,
+                        src_h,
+                        self.render_width,
+                        self.render_height,
+                    ) {
                         Ok(deck) => {
                             if let Some(ch) = mixer.channel_mut(ch_idx) {
                                 let idx = ch.add_deck(deck);
-                                log::info!("Added Syphon deck {} to channel {}: {}", idx, ch_idx, syph_name);
+                                log::info!(
+                                    "Added Syphon deck {} to channel {}: {}",
+                                    idx,
+                                    ch_idx,
+                                    syph_name
+                                );
                                 let texture_id = egui_renderer.register_native_texture(
                                     &context.device,
                                     &ch.decks[idx].deck.texture_view,
                                     wgpu::FilterMode::Linear,
                                 );
                                 deck_preview_textures.insert((ch_idx, idx), texture_id);
-                                self.session.notifications.info(format!("🔗 Syphon '{}' added to Ch {}", syph_name, ch_idx + 1));
+                                self.session.notifications.info(format!(
+                                    "🔗 Syphon '{}' added to Ch {}",
+                                    syph_name,
+                                    ch_idx + 1
+                                ));
                             }
                         }
                         Err(e) => {
                             log::error!("Failed to create Syphon deck: {}", e);
-                            self.session.notifications.error(format!("Failed to create Syphon deck: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to create Syphon deck: {}", e));
                         }
                     }
                 }
                 None => {
                     log::error!("Failed to start Syphon receive for '{}'", syph_name);
-                    self.session.notifications.error(format!("Failed to receive Syphon server '{}'", syph_name));
+                    self.session
+                        .notifications
+                        .error(format!("Failed to receive Syphon server '{}'", syph_name));
                 }
             }
         }
@@ -457,15 +650,28 @@ impl VardaApp {
             if preset_idx < self.session.preset_library.deck_presets.len() {
                 let preset = self.session.preset_library.deck_presets[preset_idx].clone();
                 match Self::restore_deck_into_channel(
-                    &preset.config, ch_idx, context, &self.registry,
-                    &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager,
-                    self.render_width, self.render_height,
-                    mixer, egui_renderer, deck_preview_textures,
+                    &preset.config,
+                    ch_idx,
+                    context,
+                    &self.registry,
+                    &mut self.camera_manager,
+                    &mut self.external_io.ndi_manager,
+                    &mut self.external_io.stream_manager,
+                    self.render_width,
+                    self.render_height,
+                    mixer,
+                    egui_renderer,
+                    deck_preview_textures,
                 ) {
-                    Ok(()) => self.session.notifications.info(format!("💾 Loaded deck preset '{}'", preset.name)),
+                    Ok(()) => self
+                        .session
+                        .notifications
+                        .info(format!("💾 Loaded deck preset '{}'", preset.name)),
                     Err(e) => {
                         log::warn!("Failed to load deck preset '{}': {}", preset.name, e);
-                        self.session.notifications.warn(format!("Failed to load preset '{}': {}", preset.name, e));
+                        self.session
+                            .notifications
+                            .warn(format!("Failed to load preset '{}': {}", preset.name, e));
                     }
                 }
             }
@@ -479,7 +685,10 @@ impl VardaApp {
                 // Only fill into the target channel if it's empty (no decks);
                 // otherwise create a new channel to avoid clobbering existing content.
                 let use_existing = target_ch.and_then(|idx| {
-                    mixer.channel_mut(idx).filter(|ch| ch.decks.is_empty()).map(|_| idx)
+                    mixer
+                        .channel_mut(idx)
+                        .filter(|ch| ch.decks.is_empty())
+                        .map(|_| idx)
                 });
 
                 let resolved = if let Some(ch_idx) = use_existing {
@@ -493,8 +702,10 @@ impl VardaApp {
                     // Create a new channel
                     let ch_name = mixer.take_next_channel_name();
                     match crate::channel::Channel::new(
-                        ch_name, context,
-                        self.render_width, self.render_height,
+                        ch_name,
+                        context,
+                        self.render_width,
+                        self.render_height,
                     ) {
                         Ok(mut channel) => {
                             channel.opacity = preset.config.opacity;
@@ -505,76 +716,113 @@ impl VardaApp {
                         }
                         Err(e) => {
                             log::error!("Failed to create channel for preset: {}", e);
-                            self.session.notifications.error(format!("Failed to load channel preset: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to load channel preset: {}", e));
                             None
                         }
                     }
                 };
 
                 if let Some((ch_idx, created_new)) = resolved {
+                    let mut had_errors = false;
 
-                let mut had_errors = false;
-
-                // Restore channel effects (only for new channels to avoid duplicating effects)
-                if created_new {
-                    for eff_config in &preset.config.effects {
-                        match crate::persistence::restore_effect(eff_config, context, context.texture_format) {
-                            Ok(eff) => {
-                                if let Some(ch) = mixer.channel_mut(ch_idx) {
-                                    ch.add_effect(eff);
+                    // Restore channel effects (only for new channels to avoid duplicating effects)
+                    if created_new {
+                        for eff_config in &preset.config.effects {
+                            match crate::persistence::restore_effect(
+                                eff_config,
+                                context,
+                                context.texture_format,
+                            ) {
+                                Ok(eff) => {
+                                    if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                        ch.add_effect(eff);
+                                    }
                                 }
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to restore channel effect '{}': {}", eff_config.path, e);
-                                had_errors = true;
+                                Err(e) => {
+                                    log::warn!(
+                                        "Failed to restore channel effect '{}': {}",
+                                        eff_config.path,
+                                        e
+                                    );
+                                    had_errors = true;
+                                }
                             }
                         }
                     }
-                }
 
-                // Bulk-load decks into the channel
-                for deck_config in &preset.config.decks {
-                    if let Err(e) = Self::restore_deck_into_channel(
-                        deck_config, ch_idx, context, &self.registry,
-                        &mut self.camera_manager, &mut self.external_io.ndi_manager, &mut self.external_io.stream_manager,
-                        self.render_width, self.render_height,
-                        mixer, egui_renderer, deck_preview_textures,
-                    ) {
-                        log::warn!("Failed to restore deck '{}' in channel preset: {}", deck_config.name, e);
-                        had_errors = true;
+                    // Bulk-load decks into the channel
+                    for deck_config in &preset.config.decks {
+                        if let Err(e) = Self::restore_deck_into_channel(
+                            deck_config,
+                            ch_idx,
+                            context,
+                            &self.registry,
+                            &mut self.camera_manager,
+                            &mut self.external_io.ndi_manager,
+                            &mut self.external_io.stream_manager,
+                            self.render_width,
+                            self.render_height,
+                            mixer,
+                            egui_renderer,
+                            deck_preview_textures,
+                        ) {
+                            log::warn!(
+                                "Failed to restore deck '{}' in channel preset: {}",
+                                deck_config.name,
+                                e
+                            );
+                            had_errors = true;
+                        }
                     }
-                }
 
-                let target_desc = if created_new { "new channel".to_string() } else { format!("ch{}", ch_idx) };
-                let msg = if had_errors {
-                    format!("💾 Loaded channel preset '{}' into {} (with warnings)", preset.name, target_desc)
-                } else {
-                    format!("💾 Loaded channel preset '{}' into {}", preset.name, target_desc)
-                };
-                self.session.notifications.info(msg);
+                    let target_desc = if created_new {
+                        "new channel".to_string()
+                    } else {
+                        format!("ch{}", ch_idx)
+                    };
+                    let msg = if had_errors {
+                        format!(
+                            "💾 Loaded channel preset '{}' into {} (with warnings)",
+                            preset.name, target_desc
+                        )
+                    } else {
+                        format!(
+                            "💾 Loaded channel preset '{}' into {}",
+                            preset.name, target_desc
+                        )
+                    };
+                    self.session.notifications.info(msg);
                 }
             }
         }
 
         // Save deck preset
         if let Some((ch_idx, deck_idx, name)) = actions.save_deck_preset.take() {
-            let scene = crate::persistence::snapshot_scene(mixer, self.render_width, self.render_height);
+            let scene =
+                crate::persistence::snapshot_scene(mixer, self.render_width, self.render_height);
             if let Some(ch_config) = scene.channels.get(ch_idx) {
                 if let Some(deck_config) = ch_config.decks.get(deck_idx) {
                     let mut preset_config = deck_config.clone();
                     preset_config.name = name.clone();
-                    let deck_uuid = mixer.channel(ch_idx)
+                    let deck_uuid = mixer
+                        .channel(ch_idx)
                         .and_then(|ch| ch.decks.get(deck_idx))
                         .map(|slot| slot.deck.uuid().to_string())
                         .unwrap_or_default();
-                    let effect_uuids: Vec<String> = mixer.channel(ch_idx)
+                    let effect_uuids: Vec<String> = mixer
+                        .channel(ch_idx)
                         .and_then(|ch| ch.decks.get(deck_idx))
                         .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
                         .unwrap_or_default();
                     let prefix = format!("deck_{}", deck_uuid);
-                    preset_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
+                    preset_config.modulation =
+                        extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
                     match crate::persistence::presets::PresetLibrary::save_deck_preset(
-                        &self.session.workspace, &name, &preset_config,
+                        &self.session.workspace,
+                        &name,
+                        &preset_config,
                     ) {
                         Ok(()) => {
                             // Update the deck's display name to match the saved preset name
@@ -584,11 +832,15 @@ impl VardaApp {
                                 }
                             }
                             self.session.preset_library.refresh(&self.session.workspace);
-                            self.session.notifications.info(format!("💾 Saved deck preset '{}'", name));
+                            self.session
+                                .notifications
+                                .info(format!("💾 Saved deck preset '{}'", name));
                         }
                         Err(e) => {
                             log::error!("Failed to save deck preset: {}", e);
-                            self.session.notifications.error(format!("Failed to save preset: {}", e));
+                            self.session
+                                .notifications
+                                .error(format!("Failed to save preset: {}", e));
                         }
                     }
                 }
@@ -597,31 +849,41 @@ impl VardaApp {
 
         // Save channel preset
         if let Some((ch_idx, name)) = actions.save_channel_preset.take() {
-            let scene = crate::persistence::snapshot_scene(mixer, self.render_width, self.render_height);
+            let scene =
+                crate::persistence::snapshot_scene(mixer, self.render_width, self.render_height);
             if let Some(ch_config) = scene.channels.get(ch_idx) {
                 let mut preset_ch_config = ch_config.clone();
                 for (deck_idx, deck_config) in preset_ch_config.decks.iter_mut().enumerate() {
-                    let deck_uuid = mixer.channel(ch_idx)
+                    let deck_uuid = mixer
+                        .channel(ch_idx)
                         .and_then(|ch| ch.decks.get(deck_idx))
                         .map(|slot| slot.deck.uuid().to_string())
                         .unwrap_or_default();
-                    let effect_uuids: Vec<String> = mixer.channel(ch_idx)
+                    let effect_uuids: Vec<String> = mixer
+                        .channel(ch_idx)
                         .and_then(|ch| ch.decks.get(deck_idx))
                         .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
                         .unwrap_or_default();
                     let prefix = format!("deck_{}", deck_uuid);
-                    deck_config.modulation = extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
+                    deck_config.modulation =
+                        extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
                 }
                 match crate::persistence::presets::PresetLibrary::save_channel_preset(
-                    &self.session.workspace, &name, &preset_ch_config,
+                    &self.session.workspace,
+                    &name,
+                    &preset_ch_config,
                 ) {
                     Ok(()) => {
                         self.session.preset_library.refresh(&self.session.workspace);
-                        self.session.notifications.info(format!("💾 Saved channel preset '{}'", name));
+                        self.session
+                            .notifications
+                            .info(format!("💾 Saved channel preset '{}'", name));
                     }
                     Err(e) => {
                         log::error!("Failed to save channel preset: {}", e);
-                        self.session.notifications.error(format!("Failed to save preset: {}", e));
+                        self.session
+                            .notifications
+                            .error(format!("Failed to save preset: {}", e));
                     }
                 }
             }
@@ -637,7 +899,12 @@ impl VardaApp {
                         match Effect::new(context, filter_shader.clone()) {
                             Ok(effect) => {
                                 ch.decks[deck_idx].deck.add_effect(effect);
-                                log::info!("Added effect {} to ch{} deck {}", filter_shader.name(), ch_idx, deck_idx);
+                                log::info!(
+                                    "Added effect {} to ch{} deck {}",
+                                    filter_shader.name(),
+                                    ch_idx,
+                                    deck_idx
+                                );
                             }
                             Err(e) => log::error!("Failed to create effect: {}", e),
                         }
@@ -651,7 +918,12 @@ impl VardaApp {
             if let Some(ch) = mixer.channel_mut(ch_idx) {
                 if deck_idx < ch.decks.len() {
                     if let Some(_removed) = ch.decks[deck_idx].deck.remove_effect(effect_idx) {
-                        log::info!("Removed effect {} from ch{} deck {}", effect_idx, ch_idx, deck_idx);
+                        log::info!(
+                            "Removed effect {} from ch{} deck {}",
+                            effect_idx,
+                            ch_idx,
+                            deck_idx
+                        );
                     }
                 }
             }
@@ -664,7 +936,12 @@ impl VardaApp {
                     let deck = &mut ch.decks[deck_idx].deck;
                     if effect_idx < deck.effects.len() {
                         deck.effects[effect_idx].enabled = !deck.effects[effect_idx].enabled;
-                        log::info!("Toggled effect {} on ch{} deck {}", effect_idx, ch_idx, deck_idx);
+                        log::info!(
+                            "Toggled effect {} on ch{} deck {}",
+                            effect_idx,
+                            ch_idx,
+                            deck_idx
+                        );
                     }
                 }
             }
@@ -676,12 +953,24 @@ impl VardaApp {
             if filter_idx < filters.len() {
                 let filter_shader = filters[filter_idx].clone();
                 if let Some(ch) = mixer.channel_mut(ch_idx) {
-                    match Effect::new_with_format(context, filter_shader.clone(), context.texture_format) {
+                    match Effect::new_with_format(
+                        context,
+                        filter_shader.clone(),
+                        context.texture_format,
+                    ) {
                         Ok(effect) => {
                             ch.add_effect(effect);
-                            log::info!("Added channel effect {} to ch{}", filter_shader.name(), ch_idx);
+                            log::info!(
+                                "Added channel effect {} to ch{}",
+                                filter_shader.name(),
+                                ch_idx
+                            );
                         }
-                        Err(e) => log::error!("Failed to create channel effect '{}': {}", filter_shader.name(), e),
+                        Err(e) => log::error!(
+                            "Failed to create channel effect '{}': {}",
+                            filter_shader.name(),
+                            e
+                        ),
                     }
                 }
             }
@@ -717,7 +1006,9 @@ impl VardaApp {
                         mixer.add_master_effect(effect);
                         log::info!("Added master effect: {}", filter_name);
                     }
-                    Err(e) => log::error!("Failed to create master effect '{}': {}", filter_name, e),
+                    Err(e) => {
+                        log::error!("Failed to create master effect '{}': {}", filter_name, e)
+                    }
                 }
             }
         }
@@ -725,7 +1016,8 @@ impl VardaApp {
         // Toggle master effect
         if let Some(effect_idx) = actions.master_effect_to_toggle {
             if effect_idx < mixer.master_effects().len() {
-                mixer.master_effects_mut()[effect_idx].enabled = !mixer.master_effects_mut()[effect_idx].enabled;
+                mixer.master_effects_mut()[effect_idx].enabled =
+                    !mixer.master_effects_mut()[effect_idx].enabled;
             }
         }
 
@@ -744,7 +1036,13 @@ impl VardaApp {
                     if from_idx < effects.len() && to_idx < effects.len() && from_idx != to_idx {
                         let effect = effects.remove(from_idx);
                         effects.insert(to_idx, effect);
-                        log::info!("Moved deck effect {} -> {} on ch{} deck{}", from_idx, to_idx, ch_idx, deck_idx);
+                        log::info!(
+                            "Moved deck effect {} -> {} on ch{} deck{}",
+                            from_idx,
+                            to_idx,
+                            ch_idx,
+                            deck_idx
+                        );
                     }
                 }
             }
@@ -756,14 +1054,22 @@ impl VardaApp {
                 if from_idx < ch.effects.len() && to_idx < ch.effects.len() && from_idx != to_idx {
                     let effect = ch.effects.remove(from_idx);
                     ch.effects.insert(to_idx, effect);
-                    log::info!("Moved channel effect {} -> {} on ch{}", from_idx, to_idx, ch_idx);
+                    log::info!(
+                        "Moved channel effect {} -> {} on ch{}",
+                        from_idx,
+                        to_idx,
+                        ch_idx
+                    );
                 }
             }
         }
 
         // Move (reorder) master effect
         if let Some((from_idx, to_idx)) = actions.master_effect_to_move {
-            if from_idx < mixer.master_effects().len() && to_idx < mixer.master_effects().len() && from_idx != to_idx {
+            if from_idx < mixer.master_effects().len()
+                && to_idx < mixer.master_effects().len()
+                && from_idx != to_idx
+            {
                 let effect = mixer.master_effects_mut().remove(from_idx);
                 mixer.master_effects_mut().insert(to_idx, effect);
                 log::info!("Moved master effect {} -> {}", from_idx, to_idx);
@@ -782,33 +1088,110 @@ impl VardaApp {
                 SequenceAction::ToggleEnabled(idx) => EngineCommand::ToggleSequence { idx: *idx },
                 SequenceAction::Play(idx) => EngineCommand::PlaySequence { idx: *idx },
                 SequenceAction::Stop(idx) => EngineCommand::StopSequence { idx: *idx },
-                SequenceAction::AddFade { seq_idx, from_ch, to_ch } =>
-                    EngineCommand::AddFadeStep { seq_idx: *seq_idx, from_ch: *from_ch, to_ch: *to_ch },
+                SequenceAction::AddFade {
+                    seq_idx,
+                    from_ch,
+                    to_ch,
+                } => EngineCommand::AddFadeStep {
+                    seq_idx: *seq_idx,
+                    from_ch: *from_ch,
+                    to_ch: *to_ch,
+                },
                 SequenceAction::AddWait(idx) => EngineCommand::AddWaitStep { seq_idx: *idx },
-                SequenceAction::AddGoTo { seq_idx, step_index } =>
-                    EngineCommand::AddGoToStep { seq_idx: *seq_idx, step_index: *step_index },
-                SequenceAction::RemoveStep { seq_idx, step_idx } =>
-                    EngineCommand::RemoveStep { seq_idx: *seq_idx, step_idx: *step_idx },
-                SequenceAction::MoveStep { seq_idx, from, to } =>
-                    EngineCommand::MoveStep { seq_idx: *seq_idx, from: *from, to: *to },
-                SequenceAction::SetStepDuration { seq_idx, step_idx, value } =>
-                    EngineCommand::SetStepDurationValue { seq_idx: *seq_idx, step_idx: *step_idx, value: *value },
-                SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx } =>
-                    EngineCommand::ToggleStepDurationUnit { seq_idx: *seq_idx, step_idx: *step_idx },
-                SequenceAction::SetStepDurationUnit { seq_idx, step_idx, unit } =>
-                    EngineCommand::SetStepDurationUnit { seq_idx: *seq_idx, step_idx: *step_idx, unit: *unit },
-                SequenceAction::SetStepEasing { seq_idx, step_idx, easing } =>
-                    EngineCommand::SetStepEasing { seq_idx: *seq_idx, step_idx: *step_idx, easing: easing.clone() },
-                SequenceAction::SetStepFromCh { seq_idx, step_idx, ch } =>
-                    EngineCommand::SetStepFromCh { seq_idx: *seq_idx, step_idx: *step_idx, ch: *ch },
-                SequenceAction::SetStepToCh { seq_idx, step_idx, ch } =>
-                    EngineCommand::SetStepToCh { seq_idx: *seq_idx, step_idx: *step_idx, ch: *ch },
-                SequenceAction::SetGoToTarget { seq_idx, step_idx, target } =>
-                    EngineCommand::SetGoToTarget { seq_idx: *seq_idx, step_idx: *step_idx, target: *target },
-                SequenceAction::SetStepTransitionShader { seq_idx, step_idx, shader } =>
-                    EngineCommand::SetStepTransitionShader { seq_idx: *seq_idx, step_idx: *step_idx, shader_name: shader.clone() },
-                SequenceAction::SetStepTargetAmount { seq_idx, step_idx, amount } =>
-                    EngineCommand::SetStepTargetAmount { seq_idx: *seq_idx, step_idx: *step_idx, amount: *amount },
+                SequenceAction::AddGoTo {
+                    seq_idx,
+                    step_index,
+                } => EngineCommand::AddGoToStep {
+                    seq_idx: *seq_idx,
+                    step_index: *step_index,
+                },
+                SequenceAction::RemoveStep { seq_idx, step_idx } => EngineCommand::RemoveStep {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                },
+                SequenceAction::MoveStep { seq_idx, from, to } => EngineCommand::MoveStep {
+                    seq_idx: *seq_idx,
+                    from: *from,
+                    to: *to,
+                },
+                SequenceAction::SetStepDuration {
+                    seq_idx,
+                    step_idx,
+                    value,
+                } => EngineCommand::SetStepDurationValue {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                    value: *value,
+                },
+                SequenceAction::ToggleStepDurationUnit { seq_idx, step_idx } => {
+                    EngineCommand::ToggleStepDurationUnit {
+                        seq_idx: *seq_idx,
+                        step_idx: *step_idx,
+                    }
+                }
+                SequenceAction::SetStepDurationUnit {
+                    seq_idx,
+                    step_idx,
+                    unit,
+                } => EngineCommand::SetStepDurationUnit {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                    unit: *unit,
+                },
+                SequenceAction::SetStepEasing {
+                    seq_idx,
+                    step_idx,
+                    easing,
+                } => EngineCommand::SetStepEasing {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                    easing: easing.clone(),
+                },
+                SequenceAction::SetStepFromCh {
+                    seq_idx,
+                    step_idx,
+                    ch,
+                } => EngineCommand::SetStepFromCh {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                    ch: *ch,
+                },
+                SequenceAction::SetStepToCh {
+                    seq_idx,
+                    step_idx,
+                    ch,
+                } => EngineCommand::SetStepToCh {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                    ch: *ch,
+                },
+                SequenceAction::SetGoToTarget {
+                    seq_idx,
+                    step_idx,
+                    target,
+                } => EngineCommand::SetGoToTarget {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                    target: *target,
+                },
+                SequenceAction::SetStepTransitionShader {
+                    seq_idx,
+                    step_idx,
+                    shader,
+                } => EngineCommand::SetStepTransitionShader {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                    shader_name: shader.clone(),
+                },
+                SequenceAction::SetStepTargetAmount {
+                    seq_idx,
+                    step_idx,
+                    amount,
+                } => EngineCommand::SetStepTargetAmount {
+                    seq_idx: *seq_idx,
+                    step_idx: *step_idx,
+                    amount: *amount,
+                },
             };
             self.execute_command(cmd);
         }
@@ -832,16 +1215,22 @@ impl VardaApp {
         deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
     ) -> anyhow::Result<()> {
         let mut deck = crate::persistence::restore_deck(
-            config, context, registry,
-            camera_manager, ndi_manager, stream_manager,
-            render_width, render_height,
+            config,
+            context,
+            registry,
+            camera_manager,
+            ndi_manager,
+            stream_manager,
+            render_width,
+            render_height,
         )?;
         // Apply the preset's display name (overrides the generator/source name)
         if !config.name.is_empty() {
             deck.set_source_name(config.name.clone());
         }
         let dk_idx = {
-            let ch = mixer.channel_mut(ch_idx)
+            let ch = mixer
+                .channel_mut(ch_idx)
                 .ok_or_else(|| anyhow::anyhow!("Channel {} not found", ch_idx))?;
             let mut slot = crate::channel::DeckSlot::new(deck);
             slot.opacity = config.opacity;
@@ -861,7 +1250,8 @@ impl VardaApp {
         };
         // Apply modulation recipes with deduplication
         if !config.modulation.is_empty() {
-            let deck_uuid = mixer.channel(ch_idx)
+            let deck_uuid = mixer
+                .channel(ch_idx)
                 .and_then(|ch| ch.decks.get(dk_idx))
                 .map(|slot| slot.deck.uuid().to_string())
                 .unwrap_or_default();
@@ -881,8 +1271,10 @@ fn extract_modulation_recipes(
     effect_uuids: &[String],
 ) -> Vec<crate::scene::ModulationRecipe> {
     let prefix_colon = format!("{}:", prefix);
-    let mut source_map: std::collections::HashMap<String, Vec<crate::scene::ModulationRecipeAssignment>> =
-        std::collections::HashMap::new();
+    let mut source_map: std::collections::HashMap<
+        String,
+        Vec<crate::scene::ModulationRecipeAssignment>,
+    > = std::collections::HashMap::new();
 
     // Build a set of effect key prefixes for this deck's effects
     let fx_prefixes: Vec<String> = effect_uuids.iter().map(|u| format!("fx_{}:", u)).collect();
@@ -894,31 +1286,37 @@ fn extract_modulation_recipes(
         } else {
             // Match effect params: "fx_{fx_uuid}:param" → relative "fx_{fx_uuid}:param"
             // We store the full effect key as-is so it can be re-applied with the same UUID
-            fx_prefixes.iter().find(|p| key.starts_with(p.as_str())).map(|_| key.clone())
+            fx_prefixes
+                .iter()
+                .find(|p| key.starts_with(p.as_str()))
+                .map(|_| key.clone())
         };
 
         if let Some(relative_param) = relative_param {
             for m in mods {
-                source_map.entry(m.source_id.clone())
-                    .or_default()
-                    .push(crate::scene::ModulationRecipeAssignment {
+                source_map.entry(m.source_id.clone()).or_default().push(
+                    crate::scene::ModulationRecipeAssignment {
                         param: relative_param.clone(),
                         amount: m.amount,
                         component: m.component,
-                    });
+                    },
+                );
             }
         }
     }
 
-    source_map.into_iter().filter_map(|(source_uuid, assignments)| {
-        engine.find_source_by_uuid(&source_uuid).map(|entry| {
-            crate::scene::ModulationRecipe {
-                source_uuid: entry.uuid.clone(),
-                source: entry.source.clone(),
-                assignments,
-            }
+    source_map
+        .into_iter()
+        .filter_map(|(source_uuid, assignments)| {
+            engine
+                .find_source_by_uuid(&source_uuid)
+                .map(|entry| crate::scene::ModulationRecipe {
+                    source_uuid: entry.uuid.clone(),
+                    source: entry.source.clone(),
+                    assignments,
+                })
         })
-    }).collect()
+        .collect()
 }
 
 /// Apply modulation recipes to the global engine for a newly loaded deck.
@@ -933,7 +1331,8 @@ fn apply_modulation_recipes(
         let source_uuid = if engine.has_source(&recipe.source_uuid) {
             recipe.source_uuid.clone()
         } else {
-            let uuid = engine.add_source_with_uuid(recipe.source_uuid.clone(), recipe.source.clone());
+            let uuid =
+                engine.add_source_with_uuid(recipe.source_uuid.clone(), recipe.source.clone());
             log::info!("Created new modulation source {} for preset", uuid);
             uuid
         };
@@ -945,7 +1344,12 @@ fn apply_modulation_recipes(
             } else {
                 format!("{}:{}", prefix, assignment.param)
             };
-            engine.assign(&full_key, &source_uuid, assignment.amount, assignment.component);
+            engine.assign(
+                &full_key,
+                &source_uuid,
+                assignment.amount,
+                assignment.component,
+            );
         }
     }
 }
@@ -969,9 +1373,17 @@ mod tests {
 
         let effect_uuids = vec!["effuuid1".to_string()];
         let recipes = extract_modulation_recipes(&engine, "deck_abc12345", &effect_uuids);
-        assert_eq!(recipes.len(), 1, "should group into one recipe (one source)");
+        assert_eq!(
+            recipes.len(),
+            1,
+            "should group into one recipe (one source)"
+        );
         let recipe = &recipes[0];
-        let mut params: Vec<&str> = recipe.assignments.iter().map(|a| a.param.as_str()).collect();
+        let mut params: Vec<&str> = recipe
+            .assignments
+            .iter()
+            .map(|a| a.param.as_str())
+            .collect();
         params.sort();
         assert_eq!(params, vec!["brightness", "fx_effuuid1:amount"]);
     }
@@ -983,16 +1395,30 @@ mod tests {
             source_uuid: "test0001".to_string(),
             source: ModulationSource::sine_lfo(2.0),
             assignments: vec![
-                ModulationRecipeAssignment { param: "brightness".into(), amount: 0.5, component: None },
-                ModulationRecipeAssignment { param: "fx_effuuid1:amount".into(), amount: 0.3, component: None },
+                ModulationRecipeAssignment {
+                    param: "brightness".into(),
+                    amount: 0.5,
+                    component: None,
+                },
+                ModulationRecipeAssignment {
+                    param: "fx_effuuid1:amount".into(),
+                    amount: 0.3,
+                    component: None,
+                },
             ],
         }];
 
         apply_modulation_recipes(&recipes, "deck_newuuid1", &mut engine);
 
         assert_eq!(engine.source_count(), 1);
-        assert!(engine.has_modulation("deck_newuuid1:brightness"), "generator key missing");
-        assert!(engine.has_modulation("fx_effuuid1:amount"), "effect key missing");
+        assert!(
+            engine.has_modulation("deck_newuuid1:brightness"),
+            "generator key missing"
+        );
+        assert!(
+            engine.has_modulation("fx_effuuid1:amount"),
+            "effect key missing"
+        );
     }
 
     #[test]
@@ -1015,4 +1441,3 @@ mod tests {
         assert!(load_engine.has_modulation("fx_fxuuid01:mix"));
     }
 }
-

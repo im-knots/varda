@@ -54,7 +54,9 @@ pub struct SceneConfig {
     pub render_height: Option<u32>,
 }
 
-fn default_version() -> u32 { 3 }
+fn default_version() -> u32 {
+    3
+}
 
 // ── Channel ────────────────────────────────────────────────────────
 
@@ -80,8 +82,12 @@ pub struct ChannelConfig {
     pub effects: Vec<EffectConfig>,
 }
 
-fn default_opacity() -> f32 { 1.0 }
-fn default_video_speed() -> f64 { 1.0 }
+fn default_opacity() -> f32 {
+    1.0
+}
+fn default_video_speed() -> f64 {
+    1.0
+}
 
 // ── Deck ───────────────────────────────────────────────────────────
 
@@ -200,7 +206,9 @@ pub enum TriggerConfig {
     ClipEnd,
 }
 
-fn default_timer_trigger() -> TriggerConfig { TriggerConfig::Timer }
+fn default_timer_trigger() -> TriggerConfig {
+    TriggerConfig::Timer
+}
 
 // ── Transition Sequence ──────────────────────────────────────────────
 
@@ -217,7 +225,9 @@ pub struct TransitionSequenceConfig {
     pub steps: Vec<TransitionStepConfig>,
 }
 
-fn default_sequence_name() -> String { "Sequence 1".to_string() }
+fn default_sequence_name() -> String {
+    "Sequence 1".to_string()
+}
 
 /// A single step in a transition sequence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,8 +261,12 @@ pub enum EasingConfig {
     EaseOut,
 }
 
-fn default_easing() -> EasingConfig { EasingConfig::EaseInOut }
-fn default_target_amount() -> f32 { 1.0 }
+fn default_easing() -> EasingConfig {
+    EasingConfig::EaseInOut
+}
+fn default_target_amount() -> f32 {
+    1.0
+}
 
 impl From<crate::mixer::CrossfadeEasing> for EasingConfig {
     fn from(e: crate::mixer::CrossfadeEasing) -> Self {
@@ -305,43 +319,23 @@ pub enum SourceConfig {
         out_point: f64,
     },
     /// Static image
-    Image {
-        path: String,
-    },
+    Image { path: String },
     /// Solid color fill
-    SolidColor {
-        color: [f32; 4],
-    },
+    SolidColor { color: [f32; 4] },
     /// Live camera feed (matched by name on restore)
-    Camera {
-        name: String,
-    },
+    Camera { name: String },
     /// NDI network video source (matched by name on restore)
-    Ndi {
-        name: String,
-    },
+    Ndi { name: String },
     /// Syphon inter-app video source (matched by server name on restore, macOS only)
-    Syphon {
-        name: String,
-    },
+    Syphon { name: String },
     /// SRT network video source (url + mode, reconnected on restore)
-    Srt {
-        url: String,
-        mode: String,
-    },
+    Srt { url: String, mode: String },
     /// HLS stream source (reconnected on restore)
-    Hls {
-        url: String,
-    },
+    Hls { url: String },
     /// DASH stream source (reconnected on restore)
-    Dash {
-        url: String,
-    },
+    Dash { url: String },
     /// RTMP stream source (reconnected on restore)
-    Rtmp {
-        url: String,
-        mode: String,
-    },
+    Rtmp { url: String, mode: String },
 }
 
 // ── Effect ─────────────────────────────────────────────────────────
@@ -362,7 +356,9 @@ pub struct EffectConfig {
     pub params: HashMap<String, ParamValue>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 // ── Output ─────────────────────────────────────────────────────────
 
@@ -371,18 +367,47 @@ fn default_true() -> bool { true }
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutputTargetConfig {
     Windowed,
-    Display { name: String },
-    Recording { path: String, codec: String },
-    SrtStream { url: String, #[serde(default)] codec: String },
-    HlsStream { name: String, #[serde(default)] codec: String, #[serde(default)] low_latency: bool },
-    DashStream { name: String, #[serde(default)] codec: String },
-    RtmpStream { url: String, #[serde(default)] codec: String },
-    NdiSend { sender_name: String },
-    SyphonServer { server_name: String },
+    Display {
+        name: String,
+    },
+    Recording {
+        path: String,
+        codec: String,
+    },
+    SrtStream {
+        url: String,
+        #[serde(default)]
+        codec: String,
+    },
+    HlsStream {
+        name: String,
+        #[serde(default)]
+        codec: String,
+        #[serde(default)]
+        low_latency: bool,
+    },
+    DashStream {
+        name: String,
+        #[serde(default)]
+        codec: String,
+    },
+    RtmpStream {
+        url: String,
+        #[serde(default)]
+        codec: String,
+    },
+    NdiSend {
+        sender_name: String,
+    },
+    SyphonServer {
+        server_name: String,
+    },
 }
 
 impl Default for OutputTargetConfig {
-    fn default() -> Self { Self::Windowed }
+    fn default() -> Self {
+        Self::Windowed
+    }
 }
 
 /// Serializable output configuration (unified model).
@@ -436,7 +461,6 @@ impl OutputConfig {
         }
     }
 }
-
 
 /// Per-surface warp calibration in an output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -604,7 +628,10 @@ impl DeckConfig {
     pub fn validate(&self, prefix: &str) -> Vec<String> {
         let mut errors = Vec::new();
         if !(0.0..=1.0).contains(&self.opacity) {
-            errors.push(format!("{}: opacity {} out of range 0.0-1.0", prefix, self.opacity));
+            errors.push(format!(
+                "{}: opacity {} out of range 0.0-1.0",
+                prefix, self.opacity
+            ));
         }
         errors.extend(self.source.validate(&format!("{}/source", prefix)));
         for (i, fx) in self.effects.iter().enumerate() {
@@ -619,7 +646,10 @@ impl ChannelConfig {
     pub fn validate(&self, prefix: &str) -> Vec<String> {
         let mut errors = Vec::new();
         if !(0.0..=1.0).contains(&self.opacity) {
-            errors.push(format!("{}: opacity {} out of range 0.0-1.0", prefix, self.opacity));
+            errors.push(format!(
+                "{}: opacity {} out of range 0.0-1.0",
+                prefix, self.opacity
+            ));
         }
         for (i, deck) in self.decks.iter().enumerate() {
             errors.extend(deck.validate(&format!("{}/decks[{}]", prefix, i)));
@@ -639,7 +669,10 @@ impl SceneConfig {
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         if !(0.0..=1.0).contains(&self.crossfader) {
-            errors.push(format!("crossfader {} out of range 0.0-1.0", self.crossfader));
+            errors.push(format!(
+                "crossfader {} out of range 0.0-1.0",
+                self.crossfader
+            ));
         }
         if let Some(w) = self.render_width {
             if w == 0 {
@@ -679,8 +712,7 @@ impl SceneConfig {
         for e in &errors {
             log::error!("Scene config save: {}", e);
         }
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize scene")?;
+        let content = serde_json::to_string_pretty(self).context("Failed to serialize scene")?;
         crate::persistence::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
@@ -716,33 +748,29 @@ mod tests {
     fn scene_config_roundtrip_with_channels() {
         let scene = SceneConfig {
             version: 2,
-            channels: vec![
-                ChannelConfig {
+            channels: vec![ChannelConfig {
+                uuid: crate::deck::generate_short_uuid(),
+                name: "Ch 0".into(),
+                opacity: 1.0,
+                blend_mode: BlendModeConfig::Normal,
+                decks: vec![DeckConfig {
                     uuid: crate::deck::generate_short_uuid(),
-                    name: "Ch 0".into(),
-                    opacity: 1.0,
-                    blend_mode: BlendModeConfig::Normal,
-                    decks: vec![
-                        DeckConfig {
-                            uuid: crate::deck::generate_short_uuid(),
-                            name: "Color Burn".into(),
-                            source: SourceConfig::Shader {
-                                path: "shaders/color_burn.fs".into(),
-                                params: HashMap::new(),
-                            },
-                            effects: vec![],
-                            opacity: 0.8,
-                            blend_mode: BlendModeConfig::Add,
-                            mute: false,
-                            solo: false,
-                            z_index: 0,
-                            auto_transition: None,
-                            modulation: vec![],
-                        },
-                    ],
+                    name: "Color Burn".into(),
+                    source: SourceConfig::Shader {
+                        path: "shaders/color_burn.fs".into(),
+                        params: HashMap::new(),
+                    },
                     effects: vec![],
-                },
-            ],
+                    opacity: 0.8,
+                    blend_mode: BlendModeConfig::Add,
+                    mute: false,
+                    solo: false,
+                    z_index: 0,
+                    auto_transition: None,
+                    modulation: vec![],
+                }],
+                effects: vec![],
+            }],
             crossfader: 0.0,
             active_transition: Some("dissolve".into()),
             master_effects: vec![],
@@ -791,7 +819,9 @@ mod tests {
 
     #[test]
     fn scene_config_roundtrip_solid_color_source() {
-        let source = SourceConfig::SolidColor { color: [1.0, 0.0, 0.0, 1.0] };
+        let source = SourceConfig::SolidColor {
+            color: [1.0, 0.0, 0.0, 1.0],
+        };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
         match restored {
@@ -814,7 +844,13 @@ mod tests {
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
         match restored {
-            SourceConfig::Video { path, loop_mode, speed, in_point, out_point } => {
+            SourceConfig::Video {
+                path,
+                loop_mode,
+                speed,
+                in_point,
+                out_point,
+            } => {
                 assert_eq!(path, "clips/intro.mov");
                 assert_eq!(loop_mode, crate::video::LoopMode::Loop);
                 assert!((speed - 1.0).abs() < 1e-5);
@@ -827,7 +863,9 @@ mod tests {
 
     #[test]
     fn scene_config_roundtrip_image_source() {
-        let source = SourceConfig::Image { path: "images/logo.png".into() };
+        let source = SourceConfig::Image {
+            path: "images/logo.png".into(),
+        };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
         match restored {
@@ -838,7 +876,9 @@ mod tests {
 
     #[test]
     fn scene_config_roundtrip_camera_source() {
-        let source = SourceConfig::Camera { name: "FaceTime HD".into() };
+        let source = SourceConfig::Camera {
+            name: "FaceTime HD".into(),
+        };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
         match restored {
@@ -995,12 +1035,18 @@ mod tests {
                 decks: vec![DeckConfig {
                     uuid: crate::deck::generate_short_uuid(),
                     name: "Deck".into(),
-                    source: SourceConfig::Shader { path: "test.fs".into(), params: HashMap::new() },
+                    source: SourceConfig::Shader {
+                        path: "test.fs".into(),
+                        params: HashMap::new(),
+                    },
                     effects: vec![],
                     opacity: 0.5,
                     blend_mode: BlendModeConfig::Normal,
-                    mute: false, solo: false, z_index: 0,
-                    auto_transition: None, modulation: vec![],
+                    mute: false,
+                    solo: false,
+                    z_index: 0,
+                    auto_transition: None,
+                    modulation: vec![],
                 }],
                 effects: vec![],
             }],
@@ -1018,10 +1064,15 @@ mod tests {
     #[test]
     fn validate_crossfader_out_of_range() {
         let mut scene = SceneConfig {
-            version: 2, channels: vec![], crossfader: 1.5,
-            active_transition: None, master_effects: vec![],
-            modulation: Default::default(), transition_sequences: vec![],
-            render_width: None, render_height: None,
+            version: 2,
+            channels: vec![],
+            crossfader: 1.5,
+            active_transition: None,
+            master_effects: vec![],
+            modulation: Default::default(),
+            transition_sequences: vec![],
+            render_width: None,
+            render_height: None,
         };
         let errors = scene.validate();
         assert!(errors.iter().any(|e| e.contains("crossfader")));
@@ -1032,10 +1083,15 @@ mod tests {
     #[test]
     fn validate_render_dims_zero() {
         let scene = SceneConfig {
-            version: 2, channels: vec![], crossfader: 0.0,
-            active_transition: None, master_effects: vec![],
-            modulation: Default::default(), transition_sequences: vec![],
-            render_width: Some(0), render_height: Some(0),
+            version: 2,
+            channels: vec![],
+            crossfader: 0.0,
+            active_transition: None,
+            master_effects: vec![],
+            modulation: Default::default(),
+            transition_sequences: vec![],
+            render_width: Some(0),
+            render_height: Some(0),
         };
         let errors = scene.validate();
         assert!(errors.iter().any(|e| e.contains("render_width")));
@@ -1046,8 +1102,11 @@ mod tests {
     fn validate_channel_opacity_out_of_range() {
         let ch = ChannelConfig {
             uuid: crate::deck::generate_short_uuid(),
-            name: "Bad".into(), opacity: 2.0,
-            blend_mode: BlendModeConfig::Normal, decks: vec![], effects: vec![],
+            name: "Bad".into(),
+            opacity: 2.0,
+            blend_mode: BlendModeConfig::Normal,
+            decks: vec![],
+            effects: vec![],
         };
         let errors = ch.validate("ch[0]");
         assert!(errors.iter().any(|e| e.contains("opacity")));
@@ -1058,11 +1117,18 @@ mod tests {
         let deck = DeckConfig {
             uuid: crate::deck::generate_short_uuid(),
             name: "D".into(),
-            source: SourceConfig::Shader { path: "ok.fs".into(), params: HashMap::new() },
-            effects: vec![], opacity: -0.5,
+            source: SourceConfig::Shader {
+                path: "ok.fs".into(),
+                params: HashMap::new(),
+            },
+            effects: vec![],
+            opacity: -0.5,
             blend_mode: BlendModeConfig::Normal,
-            mute: false, solo: false, z_index: 0,
-            auto_transition: None, modulation: vec![],
+            mute: false,
+            solo: false,
+            z_index: 0,
+            auto_transition: None,
+            modulation: vec![],
         };
         let errors = deck.validate("d[0]");
         assert!(errors.iter().any(|e| e.contains("opacity")));
@@ -1070,9 +1136,18 @@ mod tests {
 
     #[test]
     fn validate_source_empty_path() {
-        let s = SourceConfig::Shader { path: "".into(), params: HashMap::new() };
+        let s = SourceConfig::Shader {
+            path: "".into(),
+            params: HashMap::new(),
+        };
         assert!(!s.validate("src").is_empty());
-        let s = SourceConfig::Video { path: " ".into(), loop_mode: Default::default(), speed: 1.0, in_point: 0.0, out_point: 0.0 };
+        let s = SourceConfig::Video {
+            path: " ".into(),
+            loop_mode: Default::default(),
+            speed: 1.0,
+            in_point: 0.0,
+            out_point: 0.0,
+        };
         assert!(!s.validate("src").is_empty());
         let s = SourceConfig::Image { path: "".into() };
         assert!(!s.validate("src").is_empty());
@@ -1080,21 +1155,31 @@ mod tests {
 
     #[test]
     fn validate_source_solid_color_non_finite() {
-        let s = SourceConfig::SolidColor { color: [1.0, f32::NAN, 0.0, 1.0] };
+        let s = SourceConfig::SolidColor {
+            color: [1.0, f32::NAN, 0.0, 1.0],
+        };
         let errors = s.validate("src");
         assert!(errors.iter().any(|e| e.contains("color[1]")));
     }
 
     #[test]
     fn validate_effect_empty_path() {
-        let fx = EffectConfig { uuid: "test0001".into(), path: "".into(), enabled: true, params: HashMap::new() };
+        let fx = EffectConfig {
+            uuid: "test0001".into(),
+            path: "".into(),
+            enabled: true,
+            params: HashMap::new(),
+        };
         let errors = fx.validate("fx[0]");
         assert!(!errors.is_empty());
     }
 
     #[test]
     fn scene_config_roundtrip_rtmp_source() {
-        let source = SourceConfig::Rtmp { url: "rtmp://live.example.com/app/stream".to_string(), mode: "pull".to_string() };
+        let source = SourceConfig::Rtmp {
+            url: "rtmp://live.example.com/app/stream".to_string(),
+            mode: "pull".to_string(),
+        };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
         match restored {
@@ -1108,7 +1193,10 @@ mod tests {
 
     #[test]
     fn scene_config_roundtrip_rtmp_output() {
-        let target = OutputTargetConfig::RtmpStream { url: "rtmp://live.twitch.tv/app/key".to_string(), codec: "H.264".to_string() };
+        let target = OutputTargetConfig::RtmpStream {
+            url: "rtmp://live.twitch.tv/app/key".to_string(),
+            codec: "H.264".to_string(),
+        };
         let json = serde_json::to_string(&target).unwrap();
         let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
         match restored {

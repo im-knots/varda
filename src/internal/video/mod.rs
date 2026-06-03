@@ -18,7 +18,17 @@ use ffmpeg::software::scaling::{context::Context as Scaler, flag::Flags};
 use ffmpeg::util::frame::video::Video;
 
 /// Loop mode for video playback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
 pub enum LoopMode {
     /// Standard loop — restart from in-point when reaching out-point.
     #[default]
@@ -90,7 +100,11 @@ impl PlaybackState {
 
     /// Effective out-point (uses duration if out_point is 0).
     pub fn effective_out(&self) -> f64 {
-        if self.out_point > 0.0 { self.out_point } else { self.duration }
+        if self.out_point > 0.0 {
+            self.out_point
+        } else {
+            self.duration
+        }
     }
 
     /// Advance playback position using real wall-clock time.
@@ -99,7 +113,10 @@ impl PlaybackState {
         self.reached_end = false;
         if !self.playing {
             self.last_advance = std::time::Instant::now();
-            return AdvanceResult { needs_seek: false, frames_to_decode: 0 };
+            return AdvanceResult {
+                needs_seek: false,
+                frames_to_decode: 0,
+            };
         }
 
         let now = std::time::Instant::now();
@@ -124,22 +141,45 @@ impl PlaybackState {
             self.reached_end = true;
             self.frame_accumulator = 0.0;
             match self.loop_mode {
-                LoopMode::Loop => { self.position = in_pt; return AdvanceResult { needs_seek: true, frames_to_decode: 1 }; }
-                LoopMode::PingPong => { self.reverse = true; self.position = out_pt - frame_time; }
-                LoopMode::OneShot => { self.playing = false; self.position = out_pt; }
-                LoopMode::HoldLast => { self.position = out_pt; }
+                LoopMode::Loop => {
+                    self.position = in_pt;
+                    return AdvanceResult {
+                        needs_seek: true,
+                        frames_to_decode: 1,
+                    };
+                }
+                LoopMode::PingPong => {
+                    self.reverse = true;
+                    self.position = out_pt - frame_time;
+                }
+                LoopMode::OneShot => {
+                    self.playing = false;
+                    self.position = out_pt;
+                }
+                LoopMode::HoldLast => {
+                    self.position = out_pt;
+                }
             }
         } else if self.position < in_pt {
             self.frame_accumulator = 0.0;
             match self.loop_mode {
                 LoopMode::Loop | LoopMode::OneShot | LoopMode::HoldLast => {
                     self.position = in_pt;
-                    return AdvanceResult { needs_seek: true, frames_to_decode: 1 };
+                    return AdvanceResult {
+                        needs_seek: true,
+                        frames_to_decode: 1,
+                    };
                 }
-                LoopMode::PingPong => { self.reverse = false; self.position = in_pt + frame_time; }
+                LoopMode::PingPong => {
+                    self.reverse = false;
+                    self.position = in_pt + frame_time;
+                }
             }
         }
-        AdvanceResult { needs_seek: false, frames_to_decode }
+        AdvanceResult {
+            needs_seek: false,
+            frames_to_decode,
+        }
     }
 }
 
@@ -278,9 +318,13 @@ impl VideoPlayer {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         ffmpeg::init().context("Failed to initialize FFmpeg")?;
         let ictx = input(&path).context("Failed to open video file")?;
-        let video_stream = ictx.streams().best(Type::Video).context("No video stream found")?;
+        let video_stream = ictx
+            .streams()
+            .best(Type::Video)
+            .context("No video stream found")?;
         let video_stream_index = video_stream.index();
-        let context_decoder = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())?;
+        let context_decoder =
+            ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())?;
         let decoder = context_decoder.decoder().video()?;
         let width = decoder.width();
         let height = decoder.height();
@@ -288,18 +332,36 @@ impl VideoPlayer {
         let fps = rate.0 as f64 / rate.1 as f64;
         let duration = if ictx.duration() > 0 {
             ictx.duration() as f64 / ffmpeg::ffi::AV_TIME_BASE as f64
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         let scaler = Scaler::get(
-            decoder.format(), width, height,
-            Pixel::RGBA, width, height, Flags::BILINEAR,
+            decoder.format(),
+            width,
+            height,
+            Pixel::RGBA,
+            width,
+            height,
+            Flags::BILINEAR,
         )?;
         let frame_byte_size = (width * height * 4) as usize;
         let frame_data = vec![0u8; frame_byte_size];
         let max_cached_frames = MAX_CACHE_BYTES / frame_byte_size.max(1);
-        log::info!("Loaded video: {}x{} @ {:.2} fps, duration: {:.2}s (ping-pong cache: {} frames)",
-            width, height, fps, duration, max_cached_frames);
+        log::info!(
+            "Loaded video: {}x{} @ {:.2} fps, duration: {:.2}s (ping-pong cache: {} frames)",
+            width,
+            height,
+            fps,
+            duration,
+            max_cached_frames
+        );
         Ok(Self {
-            ictx, decoder, scaler, video_stream_index, width, height,
+            ictx,
+            decoder,
+            scaler,
+            video_stream_index,
+            width,
+            height,
             playback: PlaybackState::new(duration, fps),
             frame_data,
             frame_cache: Vec::new(),
@@ -354,7 +416,8 @@ impl VideoPlayer {
             let skip = result.frames_to_decode.max(1) as usize;
             if self.cache_read_idx >= skip {
                 self.cache_read_idx -= skip;
-                self.frame_data.copy_from_slice(&self.frame_cache[self.cache_read_idx]);
+                self.frame_data
+                    .copy_from_slice(&self.frame_cache[self.cache_read_idx]);
                 return Ok(Some(&self.frame_data));
             }
             // Cache exhausted before position reached in_point.
@@ -455,7 +518,8 @@ impl VideoPlayer {
                             // No cache: hold current frame at boundary.
                             // advance_frame will walk position backward until in_point,
                             // then flip back to forward on the next pass.
-                            self.playback.position = self.playback.effective_out() - (1.0 / self.playback.frame_rate);
+                            self.playback.position =
+                                self.playback.effective_out() - (1.0 / self.playback.frame_rate);
                             return Ok(Some(&self.frame_data));
                         }
                         LoopMode::OneShot => {
@@ -491,19 +555,35 @@ impl VideoPlayer {
         self.seek(time_secs)
     }
 
-    pub fn width(&self) -> u32 { self.width }
-    pub fn height(&self) -> u32 { self.height }
-    pub fn frame_rate(&self) -> f64 { self.playback.frame_rate }
-    pub fn duration(&self) -> f64 { self.playback.duration }
-    pub fn is_playing(&self) -> bool { self.playback.playing }
-    pub fn set_playing(&mut self, playing: bool) { self.playback.playing = playing; }
-    pub fn is_looping(&self) -> bool { self.playback.loop_mode == LoopMode::Loop }
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+    pub fn frame_rate(&self) -> f64 {
+        self.playback.frame_rate
+    }
+    pub fn duration(&self) -> f64 {
+        self.playback.duration
+    }
+    pub fn is_playing(&self) -> bool {
+        self.playback.playing
+    }
+    pub fn set_playing(&mut self, playing: bool) {
+        self.playback.playing = playing;
+    }
+    pub fn is_looping(&self) -> bool {
+        self.playback.loop_mode == LoopMode::Loop
+    }
     pub fn set_looping(&mut self, looping: bool) {
-        self.playback.loop_mode = if looping { LoopMode::Loop } else { LoopMode::OneShot };
+        self.playback.loop_mode = if looping {
+            LoopMode::Loop
+        } else {
+            LoopMode::OneShot
+        };
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -538,7 +618,7 @@ mod tests {
     fn test_playback_state_loop_restart() {
         let mut ps = PlaybackState::new(1.0, 30.0);
         ps.position = 1.1; // already past out-point
-        // Ensure some dt elapses
+                           // Ensure some dt elapses
         std::thread::sleep(std::time::Duration::from_millis(5));
         let result = ps.advance_frame();
         assert!(result.needs_seek);
@@ -599,8 +679,12 @@ mod tests {
         ps_slow.advance_frame();
         ps_fast.advance_frame();
         // Fast should advance ~3x further
-        assert!(ps_fast.position > ps_slow.position * 2.0,
-            "fast={} should be > 2x slow={}", ps_fast.position, ps_slow.position);
+        assert!(
+            ps_fast.position > ps_slow.position * 2.0,
+            "fast={} should be > 2x slow={}",
+            ps_fast.position,
+            ps_slow.position
+        );
     }
 
     #[test]
@@ -655,19 +739,28 @@ mod tests {
     #[test]
     fn playback_state_zero_frame_rate_clamped() {
         let ps = PlaybackState::new(10.0, 0.0);
-        assert_eq!(ps.frame_rate, 30.0, "zero frame_rate should be clamped to 30.0");
+        assert_eq!(
+            ps.frame_rate, 30.0,
+            "zero frame_rate should be clamped to 30.0"
+        );
     }
 
     #[test]
     fn playback_state_negative_frame_rate_clamped() {
         let ps = PlaybackState::new(10.0, -24.0);
-        assert_eq!(ps.frame_rate, 30.0, "negative frame_rate should be clamped to 30.0");
+        assert_eq!(
+            ps.frame_rate, 30.0,
+            "negative frame_rate should be clamped to 30.0"
+        );
     }
 
     #[test]
     fn playback_state_nan_frame_rate_clamped() {
         let ps = PlaybackState::new(10.0, f64::NAN);
-        assert_eq!(ps.frame_rate, 30.0, "NaN frame_rate should be clamped to 30.0");
+        assert_eq!(
+            ps.frame_rate, 30.0,
+            "NaN frame_rate should be clamped to 30.0"
+        );
     }
 
     #[test]
@@ -698,7 +791,10 @@ mod tests {
         assert!(!ps.position.is_nan(), "position NaN at extreme speed");
         assert!(!ps.position.is_infinite(), "position Inf at extreme speed");
         // frames_to_decode should be finite (even if large)
-        assert!(result.frames_to_decode < u32::MAX, "frames_to_decode wrapped");
+        assert!(
+            result.frames_to_decode < u32::MAX,
+            "frames_to_decode wrapped"
+        );
     }
 
     #[test]
@@ -708,8 +804,14 @@ mod tests {
         ps.position = 50.0;
         std::thread::sleep(std::time::Duration::from_millis(10));
         let result = ps.advance_frame();
-        assert!(!ps.position.is_nan(), "position NaN at negative extreme speed");
-        assert!(!ps.position.is_infinite(), "position Inf at negative extreme speed");
+        assert!(
+            !ps.position.is_nan(),
+            "position NaN at negative extreme speed"
+        );
+        assert!(
+            !ps.position.is_infinite(),
+            "position Inf at negative extreme speed"
+        );
         // Should trigger loop/clamp logic
         assert!(result.frames_to_decode < u32::MAX);
     }

@@ -9,14 +9,14 @@ pub struct ISFUniforms {
     pub time: f32,
     pub time_delta: f32,
     pub frame_index: u32,
-    pub pass_index: i32,  // PASSINDEX for multi-pass rendering
+    pub pass_index: i32, // PASSINDEX for multi-pass rendering
     pub render_size: [f32; 2],
     // Audio uniforms
-    pub audio_level: f32,   // Overall audio level (0.0 to 1.0)
-    pub audio_bass: f32,    // Low frequency level
-    pub audio_mid: f32,     // Mid frequency level
-    pub audio_treble: f32,  // High frequency level
-    pub audio_bpm: f32,     // Detected BPM (0.0 if not detected)
+    pub audio_level: f32,      // Overall audio level (0.0 to 1.0)
+    pub audio_bass: f32,       // Low frequency level
+    pub audio_mid: f32,        // Mid frequency level
+    pub audio_treble: f32,     // High frequency level
+    pub audio_bpm: f32,        // Detected BPM (0.0 if not detected)
     pub audio_beat_phase: f32, // Phase within beat cycle (0.0 to 1.0)
     pub date: [f32; 4],
     /// Engine-side phase accumulators (accumulated dt * param * scale per frame)
@@ -77,7 +77,6 @@ pub struct UnifiedPipeline {
     pub surface_format: wgpu::TextureFormat,
 }
 
-
 impl UnifiedPipeline {
     /// Create a unified pipeline from SPIR-V bytecode.
     ///
@@ -96,23 +95,18 @@ impl UnifiedPipeline {
         num_imported_textures: usize,
     ) -> Result<Self> {
         // Convert SPIR-V to WGSL using naga
-        let spirv_bytes: Vec<u8> = spirv
-            .iter()
-            .flat_map(|word| word.to_le_bytes())
-            .collect();
+        let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
 
-        let module = naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())?;
+        let module =
+            naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())?;
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)?;
 
-        let wgsl = naga::back::wgsl::write_string(
-            &module,
-            &info,
-            naga::back::wgsl::WriterFlags::empty(),
-        )?;
+        let wgsl =
+            naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())?;
 
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ISF Unified Shader Module"),
@@ -140,7 +134,9 @@ impl UnifiedPipeline {
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<ISFUniforms>() as u64),
+                min_binding_size: std::num::NonZeroU64::new(
+                    std::mem::size_of::<ISFUniforms>() as u64
+                ),
             },
             count: None,
         });
@@ -221,7 +217,9 @@ impl UnifiedPipeline {
                 binding: next_binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: imported_filterable },
+                    sample_type: wgpu::TextureSampleType::Float {
+                        filterable: imported_filterable,
+                    },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -250,11 +248,12 @@ impl UnifiedPipeline {
 
         // Default user params buffer
         let default_user_params = [0u8; 256];
-        let default_user_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Default User Params Buffer"),
-            contents: &default_user_params,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let default_user_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Default User Params Buffer"),
+                contents: &default_user_params,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
 
         // Pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -316,18 +315,25 @@ impl UnifiedPipeline {
 
         let pipeline = create_pipeline(surface_format, "ISF Unified Render Pipeline");
         let float_pipeline = if needs_float_pipeline {
-            Some(create_pipeline(wgpu::TextureFormat::Rgba32Float, "ISF Unified Float Pipeline"))
+            Some(create_pipeline(
+                wgpu::TextureFormat::Rgba32Float,
+                "ISF Unified Float Pipeline",
+            ))
         } else {
             None
         };
         // Create Rgba8Unorm pipeline for intermediate pass buffers when the primary
         // format is not Rgba8Unorm (e.g. master effects use Bgra8UnormSrgb but pass
         // buffers use Rgba8Unorm)
-        let rgba8_pipeline = if num_pass_buffers > 0 && surface_format != wgpu::TextureFormat::Rgba8Unorm {
-            Some(create_pipeline(wgpu::TextureFormat::Rgba8Unorm, "ISF Unified Rgba8 Pipeline"))
-        } else {
-            None
-        };
+        let rgba8_pipeline =
+            if num_pass_buffers > 0 && surface_format != wgpu::TextureFormat::Rgba8Unorm {
+                Some(create_pipeline(
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    "ISF Unified Rgba8 Pipeline",
+                ))
+            } else {
+                None
+            };
 
         Ok(Self {
             pipeline,

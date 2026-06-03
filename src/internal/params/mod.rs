@@ -22,25 +22,29 @@ impl ParamValue {
     pub fn from_isf_input(input: &ISFInput) -> Self {
         match input.input_type.as_str() {
             "float" => {
-                let val = input.default.as_ref()
+                let val = input
+                    .default
+                    .as_ref()
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0) as f32;
                 ParamValue::Float(val)
             }
             "bool" => {
-                let val = input.default.as_ref()
+                let val = input
+                    .default
+                    .as_ref()
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 ParamValue::Bool(val)
             }
             "long" => {
-                let val = input.default.as_ref()
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0) as i32;
+                let val = input.default.as_ref().and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 ParamValue::Long(val)
             }
             "color" => {
-                let arr = input.default.as_ref()
+                let arr = input
+                    .default
+                    .as_ref()
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         let mut color = [1.0f32; 4];
@@ -53,7 +57,9 @@ impl ParamValue {
                 ParamValue::Color(arr)
             }
             "point2D" => {
-                let arr = input.default.as_ref()
+                let arr = input
+                    .default
+                    .as_ref()
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         let mut point = [0.0f32; 2];
@@ -73,7 +79,7 @@ impl ParamValue {
     pub fn byte_size(&self) -> usize {
         match self {
             ParamValue::Float(_) => 4,
-            ParamValue::Bool(_) => 4,  // Stored as u32
+            ParamValue::Bool(_) => 4, // Stored as u32
             ParamValue::Long(_) => 4,
             ParamValue::Color(_) => 16,
             ParamValue::Point2D(_) => 8,
@@ -84,13 +90,19 @@ impl ParamValue {
     pub fn write_bytes(&self, buffer: &mut Vec<u8>) {
         match self {
             ParamValue::Float(v) => buffer.extend_from_slice(&v.to_le_bytes()),
-            ParamValue::Bool(v) => buffer.extend_from_slice(&(if *v { 1u32 } else { 0u32 }).to_le_bytes()),
+            ParamValue::Bool(v) => {
+                buffer.extend_from_slice(&(if *v { 1u32 } else { 0u32 }).to_le_bytes())
+            }
             ParamValue::Long(v) => buffer.extend_from_slice(&v.to_le_bytes()),
             ParamValue::Color(v) => {
-                for f in v { buffer.extend_from_slice(&f.to_le_bytes()); }
+                for f in v {
+                    buffer.extend_from_slice(&f.to_le_bytes());
+                }
             }
             ParamValue::Point2D(v) => {
-                for f in v { buffer.extend_from_slice(&f.to_le_bytes()); }
+                for f in v {
+                    buffer.extend_from_slice(&f.to_le_bytes());
+                }
             }
         }
     }
@@ -258,14 +270,20 @@ impl ShaderParams {
                     ParamValue::Color(_) => 16,
                 };
                 // Pad to required alignment
-                while data.len() % alignment != 0 { data.push(0); }
+                while data.len() % alignment != 0 {
+                    data.push(0);
+                }
                 value.write_bytes(&mut data);
             }
         }
         // Pad to minimum 16 bytes
-        while data.len() < 16 { data.push(0); }
+        while data.len() < 16 {
+            data.push(0);
+        }
         // Align to 16 bytes (uniform buffer requirement)
-        while data.len() % 16 != 0 { data.push(0); }
+        while data.len() % 16 != 0 {
+            data.push(0);
+        }
         data
     }
 
@@ -273,14 +291,18 @@ impl ShaderParams {
     pub fn ensure_buffer(&mut self, device: &wgpu::Device) -> &wgpu::Buffer {
         if self.buffer.is_none() {
             let data = self.build_buffer_data();
-            self.buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Shader Params Buffer"),
-                contents: &data,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }));
+            self.buffer = Some(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Shader Params Buffer"),
+                    contents: &data,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                }),
+            );
             self.dirty = false;
         }
-        self.buffer.as_ref().expect("ensure_buffer must be called before buffer() access")
+        self.buffer
+            .as_ref()
+            .expect("ensure_buffer must be called before buffer() access")
     }
 
     /// Update GPU buffer if dirty
@@ -326,7 +348,11 @@ impl ShaderParams {
     /// Build byte buffer with modulation applied
     /// This creates a temporary modulated value for GPU upload without modifying base values
     /// `param_prefix` is used to look up modulation (e.g., "deck0" to look up "deck0:paramname")
-    pub fn build_modulated_buffer_data(&self, modulation: &ModulationEngine, param_prefix: Option<&str>) -> Vec<u8> {
+    pub fn build_modulated_buffer_data(
+        &self,
+        modulation: &ModulationEngine,
+        param_prefix: Option<&str>,
+    ) -> Vec<u8> {
         let mut data = Vec::with_capacity(self.buffer_size());
 
         for name in &self.param_order {
@@ -338,23 +364,36 @@ impl ShaderParams {
                     ParamValue::Color(_) => 16,
                 };
                 // Pad to required alignment
-                while data.len() % alignment != 0 { data.push(0); }
+                while data.len() % alignment != 0 {
+                    data.push(0);
+                }
 
                 // Apply modulation and write
-                let modulated = self.apply_modulation_to_value(name, value, modulation, param_prefix);
+                let modulated =
+                    self.apply_modulation_to_value(name, value, modulation, param_prefix);
                 modulated.write_bytes(&mut data);
             }
         }
         // Pad to minimum 16 bytes
-        while data.len() < 16 { data.push(0); }
+        while data.len() < 16 {
+            data.push(0);
+        }
         // Align to 16 bytes (uniform buffer requirement)
-        while data.len() % 16 != 0 { data.push(0); }
+        while data.len() % 16 != 0 {
+            data.push(0);
+        }
         data
     }
 
     /// Apply modulation to a parameter value
     /// `param_prefix` is used to look up modulation (e.g., "deck0" to look up "deck0:paramname")
-    fn apply_modulation_to_value(&self, name: &str, value: &ParamValue, modulation: &ModulationEngine, param_prefix: Option<&str>) -> ParamValue {
+    fn apply_modulation_to_value(
+        &self,
+        name: &str,
+        value: &ParamValue,
+        modulation: &ModulationEngine,
+        param_prefix: Option<&str>,
+    ) -> ParamValue {
         // Get min/max from definition for clamping
         let definition = self.definitions.get(name);
 
@@ -409,7 +448,12 @@ impl ShaderParams {
 
     /// Update GPU buffer with modulation applied
     /// `param_prefix` is used to look up modulation (e.g., "deck0" to look up "deck0:paramname")
-    pub fn update_buffer_with_modulation(&mut self, queue: &wgpu::Queue, modulation: &ModulationEngine, param_prefix: Option<&str>) {
+    pub fn update_buffer_with_modulation(
+        &mut self,
+        queue: &wgpu::Queue,
+        modulation: &ModulationEngine,
+        param_prefix: Option<&str>,
+    ) {
         if let Some(buffer) = &self.buffer {
             let data = self.build_modulated_buffer_data(modulation, param_prefix);
             queue.write_buffer(buffer, 0, &data);
@@ -442,7 +486,12 @@ mod tests {
             name: name.to_string(),
             input_type: "bool".to_string(),
             default: Some(serde_json::json!(default)),
-            min: None, max: None, label: None, values: None, labels: None, identity: None,
+            min: None,
+            max: None,
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
         }
     }
 
@@ -451,7 +500,12 @@ mod tests {
             name: name.to_string(),
             input_type: "color".to_string(),
             default: Some(serde_json::json!([1.0, 0.0, 0.0, 1.0])),
-            min: None, max: None, label: None, values: None, labels: None, identity: None,
+            min: None,
+            max: None,
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
         }
     }
 
@@ -460,8 +514,14 @@ mod tests {
             name: name.to_string(),
             input_type: "long".to_string(),
             default: Some(serde_json::json!(default)),
-            min: None, max: None, label: None,
-            values: Some(vec![serde_json::json!(0), serde_json::json!(1), serde_json::json!(2)]),
+            min: None,
+            max: None,
+            label: None,
+            values: Some(vec![
+                serde_json::json!(0),
+                serde_json::json!(1),
+                serde_json::json!(2),
+            ]),
             labels: Some(vec!["A".into(), "B".into(), "C".into()]),
             identity: None,
         }
@@ -472,7 +532,12 @@ mod tests {
             name: name.to_string(),
             input_type: "point2D".to_string(),
             default: Some(serde_json::json!([0.5, 0.5])),
-            min: None, max: None, label: None, values: None, labels: None, identity: None,
+            min: None,
+            max: None,
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
         }
     }
 
@@ -588,8 +653,13 @@ mod tests {
             ISFInput {
                 name: "inputImage".to_string(),
                 input_type: "image".to_string(),
-                default: None, min: None, max: None, label: None,
-                values: None, labels: None, identity: None,
+                default: None,
+                min: None,
+                max: None,
+                label: None,
+                values: None,
+                labels: None,
+                identity: None,
             },
         ];
         let params = ShaderParams::from_inputs(&inputs);
@@ -721,7 +791,10 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(crate::modulation::ModulationSource::LFO {
             waveform: crate::modulation::LFOWaveform::Sine,
-            frequency: 1.0, phase: 0.0, amplitude: 1.0, bipolar: true,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         });
         engine.update(0.25, &crate::modulation::AudioValues::default());
         engine.assign("brightness", &uuid, 0.5, None);
@@ -752,7 +825,7 @@ mod tests {
         // Point2D requires 8-byte alignment
         let inputs = vec![
             make_float_input("a", 1.0, 0.0, 1.0), // 4 bytes at offset 0
-            make_point2d_input("center"),           // should align to offset 8
+            make_point2d_input("center"),         // should align to offset 8
         ];
         let params = ShaderParams::from_inputs(&inputs);
         let data = params.build_buffer_data();
@@ -771,7 +844,7 @@ mod tests {
         // Color requires 16-byte alignment
         let inputs = vec![
             make_float_input("a", 1.0, 0.0, 1.0), // 4 bytes at offset 0
-            make_color_input("tint"),               // should align to offset 16
+            make_color_input("tint"),             // should align to offset 16
         ];
         let params = ShaderParams::from_inputs(&inputs);
         let data = params.build_buffer_data();
@@ -781,4 +854,3 @@ mod tests {
         assert!((r - 1.0).abs() < 1e-5); // red = 1.0
     }
 }
-

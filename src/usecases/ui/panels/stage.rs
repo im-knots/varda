@@ -1,11 +1,13 @@
 //! Surface editor and stage editor panels.
 
+use super::super::{
+    CameraDetectAction, CameraDetectMode, DomeAction, SurfaceAction, UIActions, UIData,
+};
+use super::geometry::polygon_shape;
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::DomePreset;
-use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 use crate::surface::detect::{DetectionMethod, HullMode};
-use super::super::{UIData, UIActions, SurfaceAction, DomeAction, CameraDetectMode, CameraDetectAction};
-use super::geometry::polygon_shape;
+use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 
 /// Stage editor mode: 2D polygon editing or 3D dome mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -18,7 +20,11 @@ enum StageEditorMode {
 pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     // Open/Close Editor button
     ui.horizontal(|ui| {
-        let editor_label = if data.stage_editor_open { "✏ Close Editor" } else { "✏ Open Editor" };
+        let editor_label = if data.stage_editor_open {
+            "✏ Close Editor"
+        } else {
+            "✏ Open Editor"
+        };
         if ui.button(editor_label).clicked() {
             actions.toggle_stage_editor = true;
         }
@@ -38,20 +44,31 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
     // Canvas background (dark stage)
     painter.rect_filled(canvas_rect, 4.0, egui::Color32::from_rgb(15, 15, 25));
-    painter.rect_stroke(canvas_rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 80)), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        canvas_rect,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 80)),
+        egui::StrokeKind::Outside,
+    );
 
     // Grid lines
     for i in 1..4 {
         let x = canvas_rect.left() + canvas_width * (i as f32 / 4.0);
         painter.line_segment(
-            [egui::pos2(x, canvas_rect.top()), egui::pos2(x, canvas_rect.bottom())],
+            [
+                egui::pos2(x, canvas_rect.top()),
+                egui::pos2(x, canvas_rect.bottom()),
+            ],
             egui::Stroke::new(0.5, egui::Color32::from_rgb(30, 30, 45)),
         );
     }
     for i in 1..3 {
         let y = canvas_rect.top() + canvas_height * (i as f32 / 3.0);
         painter.line_segment(
-            [egui::pos2(canvas_rect.left(), y), egui::pos2(canvas_rect.right(), y)],
+            [
+                egui::pos2(canvas_rect.left(), y),
+                egui::pos2(canvas_rect.right(), y),
+            ],
             egui::Stroke::new(0.5, egui::Color32::from_rgb(30, 30, 45)),
         );
     }
@@ -68,42 +85,77 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
     for (i, surface) in data.surfaces.iter().enumerate() {
         let color = surface_colors[i % surface_colors.len()];
-        let fill = egui::Color32::from_rgba_premultiplied(color.r() / 4, color.g() / 4, color.b() / 4, 160);
+        let fill = egui::Color32::from_rgba_premultiplied(
+            color.r() / 4,
+            color.g() / 4,
+            color.b() / 4,
+            160,
+        );
 
         // Convert normalized vertices to canvas pixel positions
-        let pixel_verts: Vec<egui::Pos2> = surface.vertices.iter().map(|v| {
-            egui::pos2(
-                canvas_rect.left() + v[0] * canvas_width,
-                canvas_rect.top() + v[1] * canvas_height,
-            )
-        }).collect();
+        let pixel_verts: Vec<egui::Pos2> = surface
+            .vertices
+            .iter()
+            .map(|v| {
+                egui::pos2(
+                    canvas_rect.left() + v[0] * canvas_width,
+                    canvas_rect.top() + v[1] * canvas_height,
+                )
+            })
+            .collect();
 
         if pixel_verts.len() >= 3 {
-            painter.add(polygon_shape(&pixel_verts, fill, egui::Stroke::new(1.5, color)));
+            painter.add(polygon_shape(
+                &pixel_verts,
+                fill,
+                egui::Stroke::new(1.5, color),
+            ));
         } else if pixel_verts.len() == 2 {
-            painter.line_segment([pixel_verts[0], pixel_verts[1]], egui::Stroke::new(1.5, color));
+            painter.line_segment(
+                [pixel_verts[0], pixel_verts[1]],
+                egui::Stroke::new(1.5, color),
+            );
         }
         // Draw extra contours (combined non-overlapping surfaces)
         for ec in &surface.extra_contours {
-            let ec_verts: Vec<egui::Pos2> = ec.iter().map(|v| {
-                egui::pos2(canvas_rect.left() + v[0] * canvas_width, canvas_rect.top() + v[1] * canvas_height)
-            }).collect();
+            let ec_verts: Vec<egui::Pos2> = ec
+                .iter()
+                .map(|v| {
+                    egui::pos2(
+                        canvas_rect.left() + v[0] * canvas_width,
+                        canvas_rect.top() + v[1] * canvas_height,
+                    )
+                })
+                .collect();
             if ec_verts.len() >= 3 {
-                painter.add(polygon_shape(&ec_verts, fill, egui::Stroke::new(1.5, color)));
+                painter.add(polygon_shape(
+                    &ec_verts,
+                    fill,
+                    egui::Stroke::new(1.5, color),
+                ));
             }
         }
 
         // Surface label at center
         let n = surface.vertices.len().max(1) as f32;
-        let center = surface.vertices.iter().fold(egui::pos2(0.0, 0.0), |acc, v| {
-            egui::pos2(acc.x + v[0] / n, acc.y + v[1] / n)
-        });
+        let center = surface
+            .vertices
+            .iter()
+            .fold(egui::pos2(0.0, 0.0), |acc, v| {
+                egui::pos2(acc.x + v[0] / n, acc.y + v[1] / n)
+            });
         let center_px = egui::pos2(
             canvas_rect.left() + center.x * canvas_width,
             canvas_rect.top() + center.y * canvas_height,
         );
         let label = format!("{}\n{}", surface.name, surface.source);
-        painter.text(center_px, egui::Align2::CENTER_CENTER, &label, egui::FontId::proportional(10.0), egui::Color32::WHITE);
+        painter.text(
+            center_px,
+            egui::Align2::CENTER_CENTER,
+            &label,
+            egui::FontId::proportional(10.0),
+            egui::Color32::WHITE,
+        );
 
         // Output type + mapping mode indicators
         let type_label = match surface.output_type {
@@ -128,16 +180,15 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
         // Vertex handles
         let handle_size = 5.0;
         for v in &pixel_verts {
-            let handle_rect = egui::Rect::from_center_size(*v, egui::vec2(handle_size, handle_size));
+            let handle_rect =
+                egui::Rect::from_center_size(*v, egui::vec2(handle_size, handle_size));
             painter.rect_filled(handle_rect, 1.0, color);
         }
     }
 
     // Handle drag interactions on the canvas
     let drag_id = ui.id().with("surface_drag");
-    let _drag_state = ui.memory(|mem| {
-        mem.data.get_temp::<SurfaceDragState>(drag_id)
-    });
+    let _drag_state = ui.memory(|mem| mem.data.get_temp::<SurfaceDragState>(drag_id));
 
     if canvas_response.drag_started() {
         if let Some(pos) = canvas_response.interact_pointer_pos() {
@@ -151,7 +202,10 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             let mut found_surface = None;
 
             for (i, surface) in data.surfaces.iter().enumerate().rev() {
-                if let Some(vert_idx) = surface.vertices.iter().enumerate()
+                if let Some(vert_idx) = surface
+                    .vertices
+                    .iter()
+                    .enumerate()
                     .map(|(vi, v)| {
                         let dx_px = (nx - v[0]) * canvas_width;
                         let dy_px = (ny - v[1]) * canvas_height;
@@ -174,7 +228,9 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         for k in 0..n {
                             let (xi, yi) = (verts[k][0], verts[k][1]);
                             let (xj, yj) = (verts[j][0], verts[j][1]);
-                            if ((yi > ny) != (yj > ny)) && (nx < (xj - xi) * (ny - yi) / (yj - yi) + xi) {
+                            if ((yi > ny) != (yj > ny))
+                                && (nx < (xj - xi) * (ny - yi) / (yj - yi) + xi)
+                            {
                                 inside = !inside;
                             }
                             j = k;
@@ -191,7 +247,11 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                 SurfaceDragState::DraggingVertex { uuid, vert_idx }
             } else if let Some((surf_idx, start_x, start_y)) = found_surface {
                 let uuid = data.surfaces[surf_idx].uuid.clone();
-                SurfaceDragState::Moving { uuid, last_x: start_x, last_y: start_y }
+                SurfaceDragState::Moving {
+                    uuid,
+                    last_x: start_x,
+                    last_y: start_y,
+                }
             } else {
                 SurfaceDragState::None
             };
@@ -206,19 +266,35 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             let ny = ((pos.y - canvas_rect.top()) / canvas_height).clamp(0.0, 1.0);
 
             let state = ui.memory(|mem| {
-                mem.data.get_temp::<SurfaceDragState>(drag_id).unwrap_or(SurfaceDragState::None)
+                mem.data
+                    .get_temp::<SurfaceDragState>(drag_id)
+                    .unwrap_or(SurfaceDragState::None)
             });
 
             match state {
-                SurfaceDragState::Moving { ref uuid, last_x, last_y } => {
+                SurfaceDragState::Moving {
+                    ref uuid,
+                    last_x,
+                    last_y,
+                } => {
                     if data.surfaces.iter().any(|s| s.uuid == *uuid) {
                         let dx = nx - last_x;
                         let dy = ny - last_y;
                         actions.surface_actions.push(SurfaceAction::MoveDelta {
-                            uuid: uuid.clone(), dx, dy,
+                            uuid: uuid.clone(),
+                            dx,
+                            dy,
                         });
-                        ui.memory_mut(|mem| mem.data.insert_temp(drag_id,
-                            SurfaceDragState::Moving { uuid: uuid.clone(), last_x: nx, last_y: ny }));
+                        ui.memory_mut(|mem| {
+                            mem.data.insert_temp(
+                                drag_id,
+                                SurfaceDragState::Moving {
+                                    uuid: uuid.clone(),
+                                    last_x: nx,
+                                    last_y: ny,
+                                },
+                            )
+                        });
                     }
                 }
                 SurfaceDragState::DraggingVertex { ref uuid, vert_idx } => {
@@ -227,7 +303,9 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         if vert_idx < new_verts.len() {
                             new_verts[vert_idx] = [nx, ny];
                             actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                uuid: uuid.clone(), contour: 0, vertices: new_verts,
+                                uuid: uuid.clone(),
+                                contour: 0,
+                                vertices: new_verts,
                             });
                         }
                     }
@@ -253,14 +331,17 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Color swatch
-                    let (swatch_rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 16.0), egui::Sense::hover());
+                    let (swatch_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(8.0, 16.0), egui::Sense::hover());
                     ui.painter().rect_filled(swatch_rect, 2.0, color);
 
                     ui.label(egui::RichText::new(&surface.name).strong().size(11.0));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("x").clicked() {
-                            actions.surface_actions.push(SurfaceAction::Remove { uuid: surface.uuid.clone() });
+                            actions.surface_actions.push(SurfaceAction::Remove {
+                                uuid: surface.uuid.clone(),
+                            });
                         }
                     });
                 });
@@ -275,48 +356,57 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         ui.memory_mut(|mem| mem.toggle_popup(popup_id));
                     }
                     #[allow(deprecated)]
-                    egui::popup_below_widget(ui, popup_id, &response, egui::PopupCloseBehavior::CloseOnClick, |ui| {
-                        ui.set_min_width(150.0);
-                        // Master option
-                        if ui.selectable_label(surface.source == OutputSource::Master, "Master").clicked() {
-                            actions.surface_actions.push(SurfaceAction::SetSource {
-                                uuid: surface.uuid.clone(),
-                                source: OutputSource::Master,
-                            });
-                        }
-                        ui.separator();
-                        ui.label(egui::RichText::new("Channels:").weak().size(10.0));
-                        // Get currently selected channel indices
-                        let selected_indices: Vec<usize> = match &surface.source {
-                            OutputSource::Channel(idx) => vec![*idx],
-                            OutputSource::Channels(indices) => indices.clone(),
-                            _ => vec![],
-                        };
-                        for ch in &data.channels {
-                            let is_selected = selected_indices.contains(&ch.ch_idx);
-                            let mut checked = is_selected;
-                            if ui.checkbox(&mut checked, &ch.name).changed() {
-                                let mut new_indices = selected_indices.clone();
-                                if checked {
-                                    if !new_indices.contains(&ch.ch_idx) {
-                                        new_indices.push(ch.ch_idx);
-                                    }
-                                } else {
-                                    new_indices.retain(|&idx| idx != ch.ch_idx);
-                                }
-                                new_indices.sort();
-                                let new_source = match new_indices.len() {
-                                    0 => OutputSource::Master,
-                                    1 => OutputSource::Channel(new_indices[0]),
-                                    _ => OutputSource::Channels(new_indices),
-                                };
+                    egui::popup_below_widget(
+                        ui,
+                        popup_id,
+                        &response,
+                        egui::PopupCloseBehavior::CloseOnClick,
+                        |ui| {
+                            ui.set_min_width(150.0);
+                            // Master option
+                            if ui
+                                .selectable_label(surface.source == OutputSource::Master, "Master")
+                                .clicked()
+                            {
                                 actions.surface_actions.push(SurfaceAction::SetSource {
                                     uuid: surface.uuid.clone(),
-                                    source: new_source,
+                                    source: OutputSource::Master,
                                 });
                             }
-                        }
-                    });
+                            ui.separator();
+                            ui.label(egui::RichText::new("Channels:").weak().size(10.0));
+                            // Get currently selected channel indices
+                            let selected_indices: Vec<usize> = match &surface.source {
+                                OutputSource::Channel(idx) => vec![*idx],
+                                OutputSource::Channels(indices) => indices.clone(),
+                                _ => vec![],
+                            };
+                            for ch in &data.channels {
+                                let is_selected = selected_indices.contains(&ch.ch_idx);
+                                let mut checked = is_selected;
+                                if ui.checkbox(&mut checked, &ch.name).changed() {
+                                    let mut new_indices = selected_indices.clone();
+                                    if checked {
+                                        if !new_indices.contains(&ch.ch_idx) {
+                                            new_indices.push(ch.ch_idx);
+                                        }
+                                    } else {
+                                        new_indices.retain(|&idx| idx != ch.ch_idx);
+                                    }
+                                    new_indices.sort();
+                                    let new_source = match new_indices.len() {
+                                        0 => OutputSource::Master,
+                                        1 => OutputSource::Channel(new_indices[0]),
+                                        _ => OutputSource::Channels(new_indices),
+                                    };
+                                    actions.surface_actions.push(SurfaceAction::SetSource {
+                                        uuid: surface.uuid.clone(),
+                                        source: new_source,
+                                    });
+                                }
+                            }
+                        },
+                    );
                 });
 
                 ui.horizontal(|ui| {
@@ -325,25 +415,35 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         .selected_text(format!("{}", surface.content_mapping))
                         .width(80.0)
                         .show_ui(ui, |ui| {
-                            if ui.selectable_label(
-                                surface.content_mapping == ContentMapping::Fill,
-                                "Fill",
-                            ).on_hover_text("Entire source scaled to fill this surface")
-                            .clicked() {
-                                actions.surface_actions.push(SurfaceAction::SetContentMapping {
-                                    uuid: surface.uuid.clone(),
-                                    mapping: ContentMapping::Fill,
-                                });
+                            if ui
+                                .selectable_label(
+                                    surface.content_mapping == ContentMapping::Fill,
+                                    "Fill",
+                                )
+                                .on_hover_text("Entire source scaled to fill this surface")
+                                .clicked()
+                            {
+                                actions
+                                    .surface_actions
+                                    .push(SurfaceAction::SetContentMapping {
+                                        uuid: surface.uuid.clone(),
+                                        mapping: ContentMapping::Fill,
+                                    });
                             }
-                            if ui.selectable_label(
-                                surface.content_mapping == ContentMapping::Mapped,
-                                "Mapped",
-                            ).on_hover_text("Surface position on canvas = UV crop into source")
-                            .clicked() {
-                                actions.surface_actions.push(SurfaceAction::SetContentMapping {
-                                    uuid: surface.uuid.clone(),
-                                    mapping: ContentMapping::Mapped,
-                                });
+                            if ui
+                                .selectable_label(
+                                    surface.content_mapping == ContentMapping::Mapped,
+                                    "Mapped",
+                                )
+                                .on_hover_text("Surface position on canvas = UV crop into source")
+                                .clicked()
+                            {
+                                actions
+                                    .surface_actions
+                                    .push(SurfaceAction::SetContentMapping {
+                                        uuid: surface.uuid.clone(),
+                                        mapping: ContentMapping::Mapped,
+                                    });
                             }
                         });
                 });
@@ -354,19 +454,25 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         .selected_text(format!("{}", surface.output_type))
                         .width(100.0)
                         .show_ui(ui, |ui| {
-                            if ui.selectable_label(
-                                surface.output_type == SurfaceOutputType::Projection,
-                                "📽 Projection",
-                            ).clicked() {
+                            if ui
+                                .selectable_label(
+                                    surface.output_type == SurfaceOutputType::Projection,
+                                    "📽 Projection",
+                                )
+                                .clicked()
+                            {
                                 actions.surface_actions.push(SurfaceAction::SetOutputType {
                                     uuid: surface.uuid.clone(),
                                     output_type: SurfaceOutputType::Projection,
                                 });
                             }
-                            if ui.selectable_label(
-                                surface.output_type == SurfaceOutputType::LEDDirect,
-                                "💡 LED Direct",
-                            ).clicked() {
+                            if ui
+                                .selectable_label(
+                                    surface.output_type == SurfaceOutputType::LEDDirect,
+                                    "💡 LED Direct",
+                                )
+                                .clicked()
+                            {
                                 actions.surface_actions.push(SurfaceAction::SetOutputType {
                                     uuid: surface.uuid.clone(),
                                     output_type: SurfaceOutputType::LEDDirect,
@@ -379,7 +485,11 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
     }
 
     if data.surfaces.is_empty() {
-        ui.label(egui::RichText::new("No surfaces. Add one to define your stage layout.").weak().small());
+        ui.label(
+            egui::RichText::new("No surfaces. Add one to define your stage layout.")
+                .weak()
+                .small(),
+        );
     }
 }
 
@@ -388,8 +498,15 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 enum SurfaceDragState {
     #[default]
     None,
-    Moving { uuid: String, last_x: f32, last_y: f32 },
-    DraggingVertex { uuid: String, vert_idx: usize },
+    Moving {
+        uuid: String,
+        last_x: f32,
+        last_y: f32,
+    },
+    DraggingVertex {
+        uuid: String,
+        vert_idx: usize,
+    },
 }
 
 /// Drawing tool for the stage editor
@@ -433,7 +550,9 @@ struct StageEditorState {
 pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let state_id = ui.id().with("stage_editor_state");
     let mut state = ui.memory(|mem| {
-        mem.data.get_temp::<StageEditorState>(state_id).unwrap_or_default()
+        mem.data
+            .get_temp::<StageEditorState>(state_id)
+            .unwrap_or_default()
     });
 
     // Toolbar at top
@@ -443,10 +562,26 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
         // Tool buttons
         let tools = [
-            (DrawingTool::Select, "⬚ Select", "Select and edit surfaces (S)"),
-            (DrawingTool::Rectangle, "▭ Rectangle", "Draw rectangle surfaces (R)"),
-            (DrawingTool::Polygon, "⬠ Polygon", "Draw polygon surfaces — click to add vertices, double-click to finish (P)"),
-            (DrawingTool::Circle, "⬤ Circle", "Draw circle/N-gon surfaces (C)"),
+            (
+                DrawingTool::Select,
+                "⬚ Select",
+                "Select and edit surfaces (S)",
+            ),
+            (
+                DrawingTool::Rectangle,
+                "▭ Rectangle",
+                "Draw rectangle surfaces (R)",
+            ),
+            (
+                DrawingTool::Polygon,
+                "⬠ Polygon",
+                "Draw polygon surfaces — click to add vertices, double-click to finish (P)",
+            ),
+            (
+                DrawingTool::Circle,
+                "⬤ Circle",
+                "Draw circle/N-gon surfaces (C)",
+            ),
         ];
         for (tool, label, tooltip) in &tools {
             let selected = state.tool == *tool;
@@ -463,7 +598,11 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         ui.separator();
 
         // Grid controls
-        let snap_label = if data.stage_editor_snap { "🧲 Snap: ON" } else { "🧲 Snap: OFF" };
+        let snap_label = if data.stage_editor_snap {
+            "🧲 Snap: ON"
+        } else {
+            "🧲 Snap: OFF"
+        };
         if ui.button(snap_label).clicked() {
             actions.toggle_snap = true;
         }
@@ -480,7 +619,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             .width(90.0)
             .show_ui(ui, |ui| {
                 for (size, label) in &grid_sizes {
-                    if ui.selectable_value(&mut actions.set_grid_size, Some(*size), *label).clicked() {
+                    if ui
+                        .selectable_value(&mut actions.set_grid_size, Some(*size), *label)
+                        .clicked()
+                    {
                         // handled by set_grid_size
                     }
                 }
@@ -490,14 +632,22 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         if state.tool == DrawingTool::Circle {
             ui.separator();
             ui.label("Sides:");
-            if state.circle_sides == 0 { state.circle_sides = 32; }
-            ui.add(egui::DragValue::new(&mut state.circle_sides).range(3..=128).speed(1));
+            if state.circle_sides == 0 {
+                state.circle_sides = 32;
+            }
+            ui.add(
+                egui::DragValue::new(&mut state.circle_sides)
+                    .range(3..=128)
+                    .speed(1),
+            );
         }
 
         // Circle-specific toolbar: when exactly one circle is selected, show radius/sides/convert
         let selected_circle = if state.selected_surfaces.len() == 1 {
             let sel_uuid = state.selected_surfaces.iter().next().unwrap().clone();
-            data.surfaces.iter().find(|s| s.uuid == sel_uuid)
+            data.surfaces
+                .iter()
+                .find(|s| s.uuid == sel_uuid)
                 .and_then(|s| s.circle_hint.map(|h| (sel_uuid, h)))
         } else {
             None
@@ -506,15 +656,45 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             ui.separator();
             ui.label("⬤ Circle:");
             let mut radius = hint.radius;
-            if ui.add(egui::DragValue::new(&mut radius).prefix("R: ").range(0.01..=1.0).speed(0.005)).changed() {
-                actions.surface_actions.push(SurfaceAction::SetCircleRadius { uuid: sel_uuid.clone(), radius });
+            if ui
+                .add(
+                    egui::DragValue::new(&mut radius)
+                        .prefix("R: ")
+                        .range(0.01..=1.0)
+                        .speed(0.005),
+                )
+                .changed()
+            {
+                actions
+                    .surface_actions
+                    .push(SurfaceAction::SetCircleRadius {
+                        uuid: sel_uuid.clone(),
+                        radius,
+                    });
             }
             let mut sides = hint.sides;
-            if ui.add(egui::DragValue::new(&mut sides).prefix("Sides: ").range(3..=128).speed(1)).changed() {
-                actions.surface_actions.push(SurfaceAction::SetCircleSides { uuid: sel_uuid.clone(), sides });
+            if ui
+                .add(
+                    egui::DragValue::new(&mut sides)
+                        .prefix("Sides: ")
+                        .range(3..=128)
+                        .speed(1),
+                )
+                .changed()
+            {
+                actions.surface_actions.push(SurfaceAction::SetCircleSides {
+                    uuid: sel_uuid.clone(),
+                    sides,
+                });
             }
-            if ui.button("⬠ Convert to Polygon").on_hover_text("Drop circle identity, keep vertices as polygon").clicked() {
-                actions.surface_actions.push(SurfaceAction::ConvertToPolygon { uuid: sel_uuid });
+            if ui
+                .button("⬠ Convert to Polygon")
+                .on_hover_text("Drop circle identity, keep vertices as polygon")
+                .clicked()
+            {
+                actions
+                    .surface_actions
+                    .push(SurfaceAction::ConvertToPolygon { uuid: sel_uuid });
             }
         }
 
@@ -522,25 +702,49 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         ui.separator();
         let has_sel = !state.selected_surfaces.is_empty();
         ui.add_enabled_ui(has_sel, |ui| {
-            if ui.button("📋 Dup").on_hover_text("Duplicate selected (D)").clicked() {
+            if ui
+                .button("📋 Dup")
+                .on_hover_text("Duplicate selected (D)")
+                .clicked()
+            {
                 for uuid in &state.selected_surfaces {
-                    actions.surface_actions.push(SurfaceAction::Duplicate { uuid: uuid.clone() });
+                    actions
+                        .surface_actions
+                        .push(SurfaceAction::Duplicate { uuid: uuid.clone() });
                 }
             }
-            if ui.button("↔ Flip H").on_hover_text("Flip horizontal (H)").clicked() {
+            if ui
+                .button("↔ Flip H")
+                .on_hover_text("Flip horizontal (H)")
+                .clicked()
+            {
                 for uuid in &state.selected_surfaces {
-                    actions.surface_actions.push(SurfaceAction::FlipHorizontal { uuid: uuid.clone() });
+                    actions
+                        .surface_actions
+                        .push(SurfaceAction::FlipHorizontal { uuid: uuid.clone() });
                 }
             }
-            if ui.button("↕ Flip V").on_hover_text("Flip vertical (V)").clicked() {
+            if ui
+                .button("↕ Flip V")
+                .on_hover_text("Flip vertical (V)")
+                .clicked()
+            {
                 for uuid in &state.selected_surfaces {
-                    actions.surface_actions.push(SurfaceAction::FlipVertical { uuid: uuid.clone() });
+                    actions
+                        .surface_actions
+                        .push(SurfaceAction::FlipVertical { uuid: uuid.clone() });
                 }
             }
             if state.selected_surfaces.len() >= 2 {
-                if ui.button("🔗 Combine").on_hover_text("Combine selected surfaces (G)").clicked() {
+                if ui
+                    .button("🔗 Combine")
+                    .on_hover_text("Combine selected surfaces (G)")
+                    .clicked()
+                {
                     let uuids: Vec<String> = state.selected_surfaces.iter().cloned().collect();
-                    actions.surface_actions.push(SurfaceAction::Combine { uuids });
+                    actions
+                        .surface_actions
+                        .push(SurfaceAction::Combine { uuids });
                     state.selected_surfaces.clear();
                 }
             }
@@ -555,36 +759,52 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .add_filter("DXF", &["dxf"])
                 .pick_file()
             {
-                actions.surface_actions.push(SurfaceAction::ImportFromFile { path });
+                actions
+                    .surface_actions
+                    .push(SurfaceAction::ImportFromFile { path });
             }
         }
 
         // Camera detect button — 0 cameras: hidden; 1: direct click; N: dropdown
         let active_cameras = &data.cameras;
         if active_cameras.len() == 1 {
-            if ui.button("📷 Detect").on_hover_text("Enter camera detection mode").clicked() {
-                actions.camera_detect_actions.push(CameraDetectAction::Enter {
-                    camera_id: active_cameras[0].1,
-                });
+            if ui
+                .button("📷 Detect")
+                .on_hover_text("Enter camera detection mode")
+                .clicked()
+            {
+                actions
+                    .camera_detect_actions
+                    .push(CameraDetectAction::Enter {
+                        camera_id: active_cameras[0].1,
+                    });
             }
         } else if active_cameras.len() > 1 {
-            let cam_btn = ui.button("📷 Detect ▼").on_hover_text("Enter camera detection mode");
+            let cam_btn = ui
+                .button("📷 Detect ▼")
+                .on_hover_text("Enter camera detection mode");
             let cam_popup_id = cam_btn.id.with("cam_detect_popup");
             if cam_btn.clicked() {
                 #[allow(deprecated)]
                 ui.memory_mut(|mem| mem.toggle_popup(cam_popup_id));
             }
             #[allow(deprecated)]
-            egui::popup_below_widget(ui, cam_popup_id, &cam_btn, egui::PopupCloseBehavior::CloseOnClick, |ui| {
-                ui.set_min_width(150.0);
-                for (name, cam_id) in active_cameras {
-                    if ui.button(name).clicked() {
-                        actions.camera_detect_actions.push(CameraDetectAction::Enter {
-                            camera_id: *cam_id,
-                        });
+            egui::popup_below_widget(
+                ui,
+                cam_popup_id,
+                &cam_btn,
+                egui::PopupCloseBehavior::CloseOnClick,
+                |ui| {
+                    ui.set_min_width(150.0);
+                    for (name, cam_id) in active_cameras {
+                        if ui.button(name).clicked() {
+                            actions
+                                .camera_detect_actions
+                                .push(CameraDetectAction::Enter { camera_id: *cam_id });
+                        }
                     }
-                }
-            });
+                },
+            );
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -593,11 +813,23 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             }
             ui.separator();
             // Mode toggle: 2D Polygon / 3D Dome
-            let mode = if data.dome_mode_active { StageEditorMode::Dome3D } else { StageEditorMode::Polygon2D };
-            if ui.selectable_label(mode == StageEditorMode::Polygon2D, "⬡ 2D").on_hover_text("2D Polygon mode").clicked() {
+            let mode = if data.dome_mode_active {
+                StageEditorMode::Dome3D
+            } else {
+                StageEditorMode::Polygon2D
+            };
+            if ui
+                .selectable_label(mode == StageEditorMode::Polygon2D, "⬡ 2D")
+                .on_hover_text("2D Polygon mode")
+                .clicked()
+            {
                 actions.dome_actions.push(DomeAction::SetMode(false));
             }
-            if ui.selectable_label(mode == StageEditorMode::Dome3D, "🔮 3D Dome").on_hover_text("3D Dome mode").clicked() {
+            if ui
+                .selectable_label(mode == StageEditorMode::Dome3D, "🔮 3D Dome")
+                .on_hover_text("3D Dome mode")
+                .clicked()
+            {
                 actions.dome_actions.push(DomeAction::SetMode(true));
             }
         });
@@ -618,7 +850,11 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         CameraDetectMode::Off => {} // continue normal rendering
     }
 
-    let mode = if data.dome_mode_active { StageEditorMode::Dome3D } else { StageEditorMode::Polygon2D };
+    let mode = if data.dome_mode_active {
+        StageEditorMode::Dome3D
+    } else {
+        StageEditorMode::Polygon2D
+    };
 
     // Dome config toolbar (second row, only in Dome3D mode)
     if mode == StageEditorMode::Dome3D {
@@ -628,8 +864,13 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
             // Preset dropdown
             let presets = [
-                DomePreset::Single, DomePreset::Dual, DomePreset::Triple,
-                DomePreset::Quad, DomePreset::Penta, DomePreset::Hexa, DomePreset::Octa,
+                DomePreset::Single,
+                DomePreset::Dual,
+                DomePreset::Triple,
+                DomePreset::Quad,
+                DomePreset::Penta,
+                DomePreset::Hexa,
+                DomePreset::Octa,
             ];
             let mut current_preset = data.dome_preset;
             egui::ComboBox::from_id_salt("dome_preset")
@@ -637,7 +878,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .width(100.0)
                 .show_ui(ui, |ui| {
                     for preset in &presets {
-                        if ui.selectable_value(&mut current_preset, *preset, format!("{}", preset)).clicked() {
+                        if ui
+                            .selectable_value(&mut current_preset, *preset, format!("{}", preset))
+                            .clicked()
+                        {
                             actions.dome_actions.push(DomeAction::SetPreset(*preset));
                         }
                     }
@@ -648,21 +892,44 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // Radius slider
             let mut radius = data.dome_geometry.radius;
             ui.label("R:");
-            if ui.add(egui::DragValue::new(&mut radius).range(0.5..=5.0).speed(0.01)).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut radius)
+                        .range(0.5..=5.0)
+                        .speed(0.01),
+                )
+                .changed()
+            {
                 actions.dome_actions.push(DomeAction::SetRadius(radius));
             }
 
             // Truncation angle slider
             let mut trunc = data.dome_geometry.truncation_degrees;
             ui.label("Trunc:");
-            if ui.add(egui::DragValue::new(&mut trunc).range(30.0..=90.0).speed(0.5).suffix("°")).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut trunc)
+                        .range(30.0..=90.0)
+                        .speed(0.5)
+                        .suffix("°"),
+                )
+                .changed()
+            {
                 actions.dome_actions.push(DomeAction::SetTruncation(trunc));
             }
 
             // Tilt slider
             let mut tilt = data.dome_geometry.tilt_degrees;
             ui.label("Tilt:");
-            if ui.add(egui::DragValue::new(&mut tilt).range(0.0..=45.0).speed(0.5).suffix("°")).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut tilt)
+                        .range(0.0..=45.0)
+                        .speed(0.5)
+                        .suffix("°"),
+                )
+                .changed()
+            {
                 actions.dome_actions.push(DomeAction::SetTilt(tilt));
             }
 
@@ -671,28 +938,64 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // Content rotation controls
             let mut c_az = data.dome_geometry.content_azimuth_degrees;
             ui.label("Content Az:");
-            if ui.add(egui::DragValue::new(&mut c_az).range(-180.0..=180.0).speed(1.0).suffix("°")).changed() {
-                actions.dome_actions.push(DomeAction::SetContentAzimuth(c_az));
+            if ui
+                .add(
+                    egui::DragValue::new(&mut c_az)
+                        .range(-180.0..=180.0)
+                        .speed(1.0)
+                        .suffix("°"),
+                )
+                .changed()
+            {
+                actions
+                    .dome_actions
+                    .push(DomeAction::SetContentAzimuth(c_az));
             }
 
             let mut c_el = data.dome_geometry.content_elevation_degrees;
             ui.label("Content El:");
-            if ui.add(egui::DragValue::new(&mut c_el).range(-90.0..=90.0).speed(1.0).suffix("°")).changed() {
-                actions.dome_actions.push(DomeAction::SetContentElevation(c_el));
+            if ui
+                .add(
+                    egui::DragValue::new(&mut c_el)
+                        .range(-90.0..=90.0)
+                        .speed(1.0)
+                        .suffix("°"),
+                )
+                .changed()
+            {
+                actions
+                    .dome_actions
+                    .push(DomeAction::SetContentElevation(c_el));
             }
 
             let mut c_roll = data.dome_geometry.content_roll_degrees;
             ui.label("Content Roll:");
-            if ui.add(egui::DragValue::new(&mut c_roll).range(-180.0..=180.0).speed(1.0).suffix("°")).changed() {
-                actions.dome_actions.push(DomeAction::SetContentRoll(c_roll));
+            if ui
+                .add(
+                    egui::DragValue::new(&mut c_roll)
+                        .range(-180.0..=180.0)
+                        .speed(1.0)
+                        .suffix("°"),
+                )
+                .changed()
+            {
+                actions
+                    .dome_actions
+                    .push(DomeAction::SetContentRoll(c_roll));
             }
 
             ui.separator();
 
             // Generate Slices button
-            if ui.button("🎯 Generate Slices").on_hover_text("Create per-projector surfaces with warp meshes").clicked() {
+            if ui
+                .button("🎯 Generate Slices")
+                .on_hover_text("Create per-projector surfaces with warp meshes")
+                .clicked()
+            {
                 let setup = current_preset.to_setup_with_geometry(data.dome_geometry);
-                actions.surface_actions.push(SurfaceAction::GenerateDomeSlices { setup });
+                actions
+                    .surface_actions
+                    .push(SurfaceAction::GenerateDomeSlices { setup });
             }
         });
     }
@@ -730,13 +1033,19 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             let y = canvas_rect.top() + t * canvas_height;
             if x < canvas_rect.right() {
                 painter.line_segment(
-                    [egui::pos2(x, canvas_rect.top()), egui::pos2(x, canvas_rect.bottom())],
+                    [
+                        egui::pos2(x, canvas_rect.top()),
+                        egui::pos2(x, canvas_rect.bottom()),
+                    ],
                     egui::Stroke::new(0.5, egui::Color32::from_rgb(25, 25, 38)),
                 );
             }
             if y < canvas_rect.bottom() {
                 painter.line_segment(
-                    [egui::pos2(canvas_rect.left(), y), egui::pos2(canvas_rect.right(), y)],
+                    [
+                        egui::pos2(canvas_rect.left(), y),
+                        egui::pos2(canvas_rect.right(), y),
+                    ],
                     egui::Stroke::new(0.5, egui::Color32::from_rgb(25, 25, 38)),
                 );
             }
@@ -757,26 +1066,49 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         let color = surface_colors[i % surface_colors.len()];
         let is_selected = state.selected_surfaces.contains(&surface.uuid);
         let fill_alpha = if is_selected { 120 } else { 60 };
-        let fill = egui::Color32::from_rgba_premultiplied(color.r() / 3, color.g() / 3, color.b() / 3, fill_alpha);
+        let fill = egui::Color32::from_rgba_premultiplied(
+            color.r() / 3,
+            color.g() / 3,
+            color.b() / 3,
+            fill_alpha,
+        );
         let stroke_width = if is_selected { 2.5 } else { 1.5 };
 
-        let pixel_verts: Vec<egui::Pos2> = surface.vertices.iter().map(|v| {
-            egui::pos2(
-                canvas_rect.left() + v[0] * canvas_width,
-                canvas_rect.top() + v[1] * canvas_height,
-            )
-        }).collect();
+        let pixel_verts: Vec<egui::Pos2> = surface
+            .vertices
+            .iter()
+            .map(|v| {
+                egui::pos2(
+                    canvas_rect.left() + v[0] * canvas_width,
+                    canvas_rect.top() + v[1] * canvas_height,
+                )
+            })
+            .collect();
 
         if pixel_verts.len() >= 3 {
-            painter.add(polygon_shape(&pixel_verts, fill, egui::Stroke::new(stroke_width, color)));
+            painter.add(polygon_shape(
+                &pixel_verts,
+                fill,
+                egui::Stroke::new(stroke_width, color),
+            ));
         }
         // Draw extra contours (combined non-overlapping surfaces)
         for ec in &surface.extra_contours {
-            let ec_verts: Vec<egui::Pos2> = ec.iter().map(|v| {
-                egui::pos2(canvas_rect.left() + v[0] * canvas_width, canvas_rect.top() + v[1] * canvas_height)
-            }).collect();
+            let ec_verts: Vec<egui::Pos2> = ec
+                .iter()
+                .map(|v| {
+                    egui::pos2(
+                        canvas_rect.left() + v[0] * canvas_width,
+                        canvas_rect.top() + v[1] * canvas_height,
+                    )
+                })
+                .collect();
             if ec_verts.len() >= 3 {
-                painter.add(polygon_shape(&ec_verts, fill, egui::Stroke::new(stroke_width, color)));
+                painter.add(polygon_shape(
+                    &ec_verts,
+                    fill,
+                    egui::Stroke::new(stroke_width, color),
+                ));
             }
         }
 
@@ -789,11 +1121,19 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             canvas_rect.left() + center[0] * canvas_width,
             canvas_rect.top() + center[1] * canvas_height,
         );
-        painter.text(center_px, egui::Align2::CENTER_CENTER, &surface.name, egui::FontId::proportional(13.0), egui::Color32::WHITE);
+        painter.text(
+            center_px,
+            egui::Align2::CENTER_CENTER,
+            &surface.name,
+            egui::FontId::proportional(13.0),
+            egui::Color32::WHITE,
+        );
 
         // For circles: render radius handle instead of vertex handles
         if is_selected && surface.circle_hint.is_some() {
-            let Some(hint) = surface.circle_hint else { continue; };
+            let Some(hint) = surface.circle_hint else {
+                continue;
+            };
             let cx_px = canvas_rect.left() + hint.center[0] * canvas_width;
             let cy_px = canvas_rect.top() + hint.center[1] * canvas_height;
             let center_pos = egui::pos2(cx_px, cy_px);
@@ -804,27 +1144,51 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // Center dot (white)
             painter.circle_filled(center_pos, 4.0, egui::Color32::WHITE);
             // Radius ring (yellow, dashed look via stroke)
-            painter.circle_stroke(center_pos, avg_radius_px, egui::Stroke::new(1.0, egui::Color32::YELLOW));
+            painter.circle_stroke(
+                center_pos,
+                avg_radius_px,
+                egui::Stroke::new(1.0, egui::Color32::YELLOW),
+            );
             // Radius handle at angle=0 (yellow dot on the right)
             let handle_pos = egui::pos2(cx_px + radius_px_x, cy_px);
             painter.circle_filled(handle_pos, 6.0, egui::Color32::YELLOW);
-            painter.circle_stroke(handle_pos, 6.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+            painter.circle_stroke(
+                handle_pos,
+                6.0,
+                egui::Stroke::new(1.0, egui::Color32::BLACK),
+            );
         } else {
             // Regular vertex handles (primary + extra contours)
             let handle_size = if is_selected { 10.0 } else { 7.0 };
-            let handle_color = if is_selected { egui::Color32::WHITE } else { color };
+            let handle_color = if is_selected {
+                egui::Color32::WHITE
+            } else {
+                color
+            };
             let draw_handles = |verts: &[egui::Pos2]| {
                 for v in verts {
-                    let handle_rect = egui::Rect::from_center_size(*v, egui::vec2(handle_size, handle_size));
+                    let handle_rect =
+                        egui::Rect::from_center_size(*v, egui::vec2(handle_size, handle_size));
                     painter.rect_filled(handle_rect, 2.0, handle_color);
-                    painter.rect_stroke(handle_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::BLACK), egui::StrokeKind::Outside);
+                    painter.rect_stroke(
+                        handle_rect,
+                        2.0,
+                        egui::Stroke::new(1.0, egui::Color32::BLACK),
+                        egui::StrokeKind::Outside,
+                    );
                 }
             };
             draw_handles(&pixel_verts);
             for ec in &surface.extra_contours {
-                let ec_px: Vec<egui::Pos2> = ec.iter().map(|v| {
-                    egui::pos2(canvas_rect.left() + v[0] * canvas_width, canvas_rect.top() + v[1] * canvas_height)
-                }).collect();
+                let ec_px: Vec<egui::Pos2> = ec
+                    .iter()
+                    .map(|v| {
+                        egui::pos2(
+                            canvas_rect.left() + v[0] * canvas_width,
+                            canvas_rect.top() + v[1] * canvas_height,
+                        )
+                    })
+                    .collect();
                 draw_handles(&ec_px);
             }
         }
@@ -832,16 +1196,32 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
     // Draw in-progress polygon
     if !state.polygon_verts.is_empty() && state.tool == DrawingTool::Polygon {
-        let pixel_verts: Vec<egui::Pos2> = state.polygon_verts.iter().map(|v| {
-            egui::pos2(canvas_rect.left() + v[0] * canvas_width, canvas_rect.top() + v[1] * canvas_height)
-        }).collect();
+        let pixel_verts: Vec<egui::Pos2> = state
+            .polygon_verts
+            .iter()
+            .map(|v| {
+                egui::pos2(
+                    canvas_rect.left() + v[0] * canvas_width,
+                    canvas_rect.top() + v[1] * canvas_height,
+                )
+            })
+            .collect();
         for i in 0..pixel_verts.len() - 1 {
-            painter.line_segment([pixel_verts[i], pixel_verts[i + 1]], egui::Stroke::new(2.0, egui::Color32::YELLOW));
+            painter.line_segment(
+                [pixel_verts[i], pixel_verts[i + 1]],
+                egui::Stroke::new(2.0, egui::Color32::YELLOW),
+            );
         }
         // Draw line from last vertex to cursor
         if let Some(pos) = canvas_response.hover_pos() {
             if let Some(last) = pixel_verts.last() {
-                painter.line_segment([*last, pos], egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 255, 0, 128)));
+                painter.line_segment(
+                    [*last, pos],
+                    egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgba_premultiplied(255, 255, 0, 128),
+                    ),
+                );
             }
         }
         for v in &pixel_verts {
@@ -858,10 +1238,21 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 let end_y = (pos.y - canvas_rect.top()) / canvas_height;
                 let (sx, sy) = (start[0], start[1]);
                 let preview_rect = egui::Rect::from_two_pos(
-                    egui::pos2(canvas_rect.left() + sx * canvas_width, canvas_rect.top() + sy * canvas_height),
-                    egui::pos2(canvas_rect.left() + end_x * canvas_width, canvas_rect.top() + end_y * canvas_height),
+                    egui::pos2(
+                        canvas_rect.left() + sx * canvas_width,
+                        canvas_rect.top() + sy * canvas_height,
+                    ),
+                    egui::pos2(
+                        canvas_rect.left() + end_x * canvas_width,
+                        canvas_rect.top() + end_y * canvas_height,
+                    ),
                 );
-                painter.rect_stroke(preview_rect, 0.0, egui::Stroke::new(2.0, egui::Color32::YELLOW), egui::StrokeKind::Outside);
+                painter.rect_stroke(
+                    preview_rect,
+                    0.0,
+                    egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                    egui::StrokeKind::Outside,
+                );
             }
         }
     }
@@ -873,7 +1264,11 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 let cx_px = canvas_rect.left() + center[0] * canvas_width;
                 let cy_px = canvas_rect.top() + center[1] * canvas_height;
                 let radius = ((pos.x - cx_px).powi(2) + (pos.y - cy_px).powi(2)).sqrt();
-                painter.circle_stroke(egui::pos2(cx_px, cy_px), radius, egui::Stroke::new(2.0, egui::Color32::YELLOW));
+                painter.circle_stroke(
+                    egui::pos2(cx_px, cy_px),
+                    radius,
+                    egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                );
             }
         }
     }
@@ -909,7 +1304,9 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     }
                     j = k;
                 }
-                if inside { return Some(surface.uuid.clone()); }
+                if inside {
+                    return Some(surface.uuid.clone());
+                }
             }
         }
         None
@@ -926,11 +1323,14 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
             // Helper: find the closest edge of a specific surface within a threshold.
             // Returns (contour_idx, edge_start_idx, projected_point, distance_px).
-            let find_closest_edge = |nx: f32, ny: f32, surface: &super::super::SurfaceUI, threshold: f32|
-                -> Option<(usize, usize, [f32; 2], f32)>
-            {
+            let find_closest_edge = |nx: f32,
+                                     ny: f32,
+                                     surface: &super::super::SurfaceUI,
+                                     threshold: f32|
+             -> Option<(usize, usize, [f32; 2], f32)> {
                 let contours: Vec<&Vec<[f32; 2]>> = std::iter::once(&surface.vertices)
-                    .chain(surface.extra_contours.iter()).collect();
+                    .chain(surface.extra_contours.iter())
+                    .collect();
                 let mut best: Option<(usize, usize, [f32; 2], f32)> = None;
                 for (ci, verts) in contours.iter().enumerate() {
                     let n = verts.len();
@@ -941,7 +1341,9 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         let dx = (bx - ax) * canvas_width;
                         let dy = (by - ay) * canvas_height;
                         let len_sq = dx * dx + dy * dy;
-                        if len_sq < 1e-6 { continue; }
+                        if len_sq < 1e-6 {
+                            continue;
+                        }
                         let px_nx = (nx - ax) * canvas_width;
                         let px_ny = (ny - ay) * canvas_height;
                         let t = ((px_nx * dx + px_ny * dy) / len_sq).clamp(0.0, 1.0);
@@ -962,7 +1364,13 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // vertex: (surface_uuid, contour_idx, vertex_idx)
             // edge: (surface_uuid, contour_idx, edge_start_idx, projected_point)
             // surface: (surface_uuid, nx, ny)
-            let hit_test = |nx: f32, ny: f32| -> (Option<(String, usize, usize)>, Option<(String, usize, usize, [f32; 2])>, Option<(String, f32, f32)>) {
+            let hit_test = |nx: f32,
+                            ny: f32|
+             -> (
+                Option<(String, usize, usize)>,
+                Option<(String, usize, usize, [f32; 2])>,
+                Option<(String, f32, f32)>,
+            ) {
                 let vertex_threshold_px = 14.0;
                 let edge_threshold_px = 10.0;
                 // Wider threshold for edges when cursor is inside the surface.
@@ -976,7 +1384,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     let uid = &surface.uuid;
                     // Check all contours for vertex/edge hits
                     let contours: Vec<&Vec<[f32; 2]>> = std::iter::once(&surface.vertices)
-                        .chain(surface.extra_contours.iter()).collect();
+                        .chain(surface.extra_contours.iter())
+                        .collect();
                     for (ci, verts) in contours.iter().enumerate() {
                         for (vi, v) in verts.iter().enumerate() {
                             if pixel_dist(nx, ny, v[0], v[1]) < vertex_threshold_px {
@@ -988,7 +1397,9 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
                     // Standard edge detection (narrow threshold, works from outside)
                     if found_edge.is_none() {
-                        if let Some((ci, ei, proj, _d)) = find_closest_edge(nx, ny, surface, edge_threshold_px) {
+                        if let Some((ci, ei, proj, _d)) =
+                            find_closest_edge(nx, ny, surface, edge_threshold_px)
+                        {
                             found_edge = Some((uid.clone(), ci, ei, proj));
                         }
                     }
@@ -997,25 +1408,33 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     if found_surface.is_none() {
                         let point_in = |verts: &[[f32; 2]]| -> bool {
                             let n = verts.len();
-                            if n < 3 { return false; }
+                            if n < 3 {
+                                return false;
+                            }
                             let mut inside = false;
                             let mut j = n - 1;
                             for k in 0..n {
                                 let (xi, yi) = (verts[k][0], verts[k][1]);
                                 let (xj, yj) = (verts[j][0], verts[j][1]);
-                                if ((yi > ny) != (yj > ny)) && (nx < (xj - xi) * (ny - yi) / (yj - yi) + xi) {
+                                if ((yi > ny) != (yj > ny))
+                                    && (nx < (xj - xi) * (ny - yi) / (yj - yi) + xi)
+                                {
                                     inside = !inside;
                                 }
                                 j = k;
                             }
                             inside
                         };
-                        if point_in(&surface.vertices) || surface.extra_contours.iter().any(|c| point_in(c)) {
+                        if point_in(&surface.vertices)
+                            || surface.extra_contours.iter().any(|c| point_in(c))
+                        {
                             found_surface = Some((uid.clone(), nx, ny));
                             // If cursor is inside the surface but no edge found yet,
                             // try again with a wider threshold to catch edges from inside.
                             if found_edge.is_none() {
-                                if let Some((ci, ei, proj, _d)) = find_closest_edge(nx, ny, surface, edge_inner_threshold_px) {
+                                if let Some((ci, ei, proj, _d)) =
+                                    find_closest_edge(nx, ny, surface, edge_inner_threshold_px)
+                                {
                                     found_edge = Some((uid.clone(), ci, ei, proj));
                                 }
                             }
@@ -1119,8 +1538,15 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
                         if let Some((uuid, ci, vi)) = found_vertex {
                             // If vertex drag on a circle, auto-convert to polygon first
-                            if data.surfaces.iter().find(|s| s.uuid == uuid).map_or(false, |s| s.circle_hint.is_some()) {
-                                actions.surface_actions.push(SurfaceAction::ConvertToPolygon { uuid: uuid.clone() });
+                            if data
+                                .surfaces
+                                .iter()
+                                .find(|s| s.uuid == uuid)
+                                .map_or(false, |s| s.circle_hint.is_some())
+                            {
+                                actions
+                                    .surface_actions
+                                    .push(SurfaceAction::ConvertToPolygon { uuid: uuid.clone() });
                             }
                             if !shift_held {
                                 state.selected_surfaces.clear();
@@ -1133,13 +1559,21 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         } else if let Some((uuid, ci, ei, grab_pt)) = found_edge {
                             // Edge drag: store original edge endpoints + grab point
                             if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == uuid) {
-                                let verts = if ci == 0 { &surface.vertices } else { &surface.extra_contours[ci - 1] };
+                                let verts = if ci == 0 {
+                                    &surface.vertices
+                                } else {
+                                    &surface.extra_contours[ci - 1]
+                                };
                                 let ej = (ei + 1) % verts.len();
                                 let v0 = verts[ei];
                                 let v1 = verts[ej];
                                 // Auto-convert circle to polygon before edge drag
                                 if surface.circle_hint.is_some() {
-                                    actions.surface_actions.push(SurfaceAction::ConvertToPolygon { uuid: uuid.clone() });
+                                    actions
+                                        .surface_actions
+                                        .push(SurfaceAction::ConvertToPolygon {
+                                            uuid: uuid.clone(),
+                                        });
                                 }
                                 if !shift_held {
                                     state.selected_surfaces.clear();
@@ -1183,31 +1617,46 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                 let dx = nx - hint.center[0];
                                 let dy = ny - hint.center[1];
                                 let new_radius = (dx * dx + dy * dy).sqrt().max(0.01);
-                                actions.surface_actions.push(SurfaceAction::SetCircleRadius {
-                                    uuid: uuid.clone(), radius: new_radius,
-                                });
+                                actions
+                                    .surface_actions
+                                    .push(SurfaceAction::SetCircleRadius {
+                                        uuid: uuid.clone(),
+                                        radius: new_radius,
+                                    });
                             }
                         }
                     } else if let Some((ref uuid, ci, vi)) = state.dragging_vertex {
                         if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
-                            let contour_verts = if ci == 0 { Some(&surface.vertices) } else { surface.extra_contours.get(ci - 1) };
+                            let contour_verts = if ci == 0 {
+                                Some(&surface.vertices)
+                            } else {
+                                surface.extra_contours.get(ci - 1)
+                            };
                             if let Some(verts) = contour_verts {
                                 let mut new_verts = verts.clone();
                                 if vi < new_verts.len() {
                                     new_verts[vi] = [nx, ny];
                                     actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                        uuid: uuid.clone(), contour: ci, vertices: new_verts,
+                                        uuid: uuid.clone(),
+                                        contour: ci,
+                                        vertices: new_verts,
                                     });
                                 }
                             }
                         }
-                    } else if let Some((ref uuid, ci, ei, orig_v0, orig_v1, grab_pt)) = state.dragging_edge {
+                    } else if let Some((ref uuid, ci, ei, orig_v0, orig_v1, grab_pt)) =
+                        state.dragging_edge
+                    {
                         // Edge drag: move both edge endpoints by the cursor displacement
                         // relative to where the user first grabbed the edge.
                         let dx = nx - grab_pt[0];
                         let dy = ny - grab_pt[1];
                         if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
-                            let contour_verts = if ci == 0 { Some(&surface.vertices) } else { surface.extra_contours.get(ci - 1) };
+                            let contour_verts = if ci == 0 {
+                                Some(&surface.vertices)
+                            } else {
+                                surface.extra_contours.get(ci - 1)
+                            };
                             if let Some(verts) = contour_verts {
                                 let mut new_verts = verts.clone();
                                 let ej = (ei + 1) % new_verts.len();
@@ -1220,7 +1669,9 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                     (orig_v1[1] + dy).clamp(0.0, 1.0),
                                 ];
                                 actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                    uuid: uuid.clone(), contour: ci, vertices: new_verts,
+                                    uuid: uuid.clone(),
+                                    contour: ci,
+                                    vertices: new_verts,
                                 });
                             }
                         }
@@ -1231,7 +1682,9 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         for surf_uuid in &state.selected_surfaces {
                             if data.surfaces.iter().any(|s| s.uuid == *surf_uuid) {
                                 actions.surface_actions.push(SurfaceAction::MoveDelta {
-                                    uuid: surf_uuid.clone(), dx, dy,
+                                    uuid: surf_uuid.clone(),
+                                    dx,
+                                    dy,
                                 });
                             }
                         }
@@ -1242,12 +1695,19 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         let y0 = canvas_rect.top() + start[1] * canvas_height;
                         let x1 = canvas_rect.left() + nx * canvas_width;
                         let y1 = canvas_rect.top() + ny * canvas_height;
-                        let sel_rect = egui::Rect::from_two_pos(
-                            egui::pos2(x0, y0),
-                            egui::pos2(x1, y1),
+                        let sel_rect =
+                            egui::Rect::from_two_pos(egui::pos2(x0, y0), egui::pos2(x1, y1));
+                        painter.rect_filled(
+                            sel_rect,
+                            0.0,
+                            egui::Color32::from_rgba_premultiplied(80, 130, 255, 40),
                         );
-                        painter.rect_filled(sel_rect, 0.0, egui::Color32::from_rgba_premultiplied(80, 130, 255, 40));
-                        painter.rect_stroke(sel_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 255)), egui::StrokeKind::Outside);
+                        painter.rect_stroke(
+                            sel_rect,
+                            0.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 255)),
+                            egui::StrokeKind::Outside,
+                        );
                     }
                 }
             }
@@ -1273,8 +1733,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                 bb_max_y = bb_max_y.max(v[1]);
                             }
                             // Check if surface bounding box overlaps the selection rect
-                            let intersects = bb_min_x < sel_max_x && bb_max_x > sel_min_x &&
-                                bb_min_y < sel_max_y && bb_max_y > sel_min_y;
+                            let intersects = bb_min_x < sel_max_x
+                                && bb_max_x > sel_min_x
+                                && bb_min_y < sel_max_y
+                                && bb_max_y > sel_min_y;
                             if intersects {
                                 state.selected_surfaces.insert(surface.uuid.clone());
                             }
@@ -1421,14 +1883,16 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
     // Keyboard shortcuts (data-driven via keymap)
     if !data.keyboard_learn_active {
-        use crate::keymap::{KeyCombo, KeyTarget, ActionId, collect_pressed_keys};
+        use crate::keymap::{collect_pressed_keys, ActionId, KeyCombo, KeyTarget};
         let pressed = collect_pressed_keys(ui.ctx());
         for (key, mods) in &pressed {
             let combo = KeyCombo::from_egui(*key, mods);
             if let Some(target) = data.keymap_bindings.get(&combo) {
                 match target {
                     KeyTarget::Action(ActionId::ToolSelect) => state.tool = DrawingTool::Select,
-                    KeyTarget::Action(ActionId::ToolRectangle) => state.tool = DrawingTool::Rectangle,
+                    KeyTarget::Action(ActionId::ToolRectangle) => {
+                        state.tool = DrawingTool::Rectangle
+                    }
                     KeyTarget::Action(ActionId::ToolPolygon) => state.tool = DrawingTool::Polygon,
                     KeyTarget::Action(ActionId::ToolCircle) => state.tool = DrawingTool::Circle,
                     KeyTarget::Action(ActionId::ClearDrawing) => {
@@ -1438,7 +1902,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     }
                     KeyTarget::Action(ActionId::DeleteSurface) => {
                         if !state.selected_surfaces.is_empty() {
-                            let uuids: Vec<String> = state.selected_surfaces.iter().cloned().collect();
+                            let uuids: Vec<String> =
+                                state.selected_surfaces.iter().cloned().collect();
                             for uuid in uuids {
                                 actions.surface_actions.push(SurfaceAction::Remove { uuid });
                             }
@@ -1447,23 +1912,32 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     }
                     KeyTarget::Action(ActionId::DuplicateSurface) => {
                         for uuid in &state.selected_surfaces {
-                            actions.surface_actions.push(SurfaceAction::Duplicate { uuid: uuid.clone() });
+                            actions
+                                .surface_actions
+                                .push(SurfaceAction::Duplicate { uuid: uuid.clone() });
                         }
                     }
                     KeyTarget::Action(ActionId::FlipHorizontal) => {
                         for uuid in &state.selected_surfaces {
-                            actions.surface_actions.push(SurfaceAction::FlipHorizontal { uuid: uuid.clone() });
+                            actions
+                                .surface_actions
+                                .push(SurfaceAction::FlipHorizontal { uuid: uuid.clone() });
                         }
                     }
                     KeyTarget::Action(ActionId::FlipVertical) => {
                         for uuid in &state.selected_surfaces {
-                            actions.surface_actions.push(SurfaceAction::FlipVertical { uuid: uuid.clone() });
+                            actions
+                                .surface_actions
+                                .push(SurfaceAction::FlipVertical { uuid: uuid.clone() });
                         }
                     }
                     KeyTarget::Action(ActionId::CombineSurfaces) => {
                         if state.selected_surfaces.len() >= 2 {
-                            let uuids: Vec<String> = state.selected_surfaces.iter().cloned().collect();
-                            actions.surface_actions.push(SurfaceAction::Combine { uuids });
+                            let uuids: Vec<String> =
+                                state.selected_surfaces.iter().cloned().collect();
+                            actions
+                                .surface_actions
+                                .push(SurfaceAction::Combine { uuids });
                             state.selected_surfaces.clear();
                         }
                     }
@@ -1477,17 +1951,16 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
     ui.memory_mut(|mem| mem.data.insert_temp(state_id, state));
 }
 
-
 /// Fixed 8-color palette for dome projector slices.
 const SLICE_COLORS: [egui::Color32; 8] = [
-    egui::Color32::from_rgb(230, 57, 70),    // Red
-    egui::Color32::from_rgb(42, 157, 143),    // Green/Teal
-    egui::Color32::from_rgb(69, 123, 157),    // Blue
-    egui::Color32::from_rgb(241, 196, 15),    // Yellow
-    egui::Color32::from_rgb(230, 126, 34),    // Orange
-    egui::Color32::from_rgb(155, 89, 182),    // Purple
-    egui::Color32::from_rgb(26, 188, 156),    // Cyan
-    egui::Color32::from_rgb(232, 67, 147),    // Pink
+    egui::Color32::from_rgb(230, 57, 70),  // Red
+    egui::Color32::from_rgb(42, 157, 143), // Green/Teal
+    egui::Color32::from_rgb(69, 123, 157), // Blue
+    egui::Color32::from_rgb(241, 196, 15), // Yellow
+    egui::Color32::from_rgb(230, 126, 34), // Orange
+    egui::Color32::from_rgb(155, 89, 182), // Purple
+    egui::Color32::from_rgb(26, 188, 156), // Cyan
+    egui::Color32::from_rgb(232, 67, 147), // Pink
 ];
 
 /// Render the 3D dome canvas (Dome3D mode).
@@ -1508,7 +1981,8 @@ fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
         }
         if let Some(tex_id) = data.dome_preview_texture {
             let img = egui::Image::new(egui::load::SizedTexture::new(
-                tex_id, egui::vec2(dome_size, dome_size),
+                tex_id,
+                egui::vec2(dome_size, dome_size),
             ));
             let response = ui.add(img.sense(egui::Sense::click_and_drag()));
 
@@ -1525,7 +1999,9 @@ fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
             if response.hovered() {
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll.abs() > 0.1 {
-                    actions.dome_actions.push(DomeAction::ZoomCamera { delta: scroll });
+                    actions
+                        .dome_actions
+                        .push(DomeAction::ZoomCamera { delta: scroll });
                 }
             }
 
@@ -1555,7 +2031,11 @@ fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
                 );
             }
         } else {
-            ui.label(egui::RichText::new("3D dome: waiting for renderer…").weak().italics());
+            ui.label(
+                egui::RichText::new("3D dome: waiting for renderer…")
+                    .weak()
+                    .italics(),
+            );
         }
     });
 }
@@ -1577,11 +2057,23 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
 
         // Detection method toggle
         ui.label("Method:");
-        if ui.selectable_label(matches!(new_params.detection_method, DetectionMethod::Canny), "Canny").clicked() {
+        if ui
+            .selectable_label(
+                matches!(new_params.detection_method, DetectionMethod::Canny),
+                "Canny",
+            )
+            .clicked()
+        {
             new_params.detection_method = DetectionMethod::Canny;
             params_changed = true;
         }
-        if ui.selectable_label(matches!(new_params.detection_method, DetectionMethod::Threshold), "Threshold").clicked() {
+        if ui
+            .selectable_label(
+                matches!(new_params.detection_method, DetectionMethod::Threshold),
+                "Threshold",
+            )
+            .clicked()
+        {
             new_params.detection_method = DetectionMethod::Threshold;
             params_changed = true;
         }
@@ -1593,14 +2085,28 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
             DetectionMethod::Canny => {
                 ui.label("Canny Lo:");
                 let mut canny_low = new_params.canny_low as f32;
-                if ui.add(egui::DragValue::new(&mut canny_low).range(0.0..=255.0).speed(1.0)).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut canny_low)
+                            .range(0.0..=255.0)
+                            .speed(1.0),
+                    )
+                    .changed()
+                {
                     new_params.canny_low = canny_low as u8;
                     params_changed = true;
                 }
 
                 ui.label("Hi:");
                 let mut canny_high = new_params.canny_high as f32;
-                if ui.add(egui::DragValue::new(&mut canny_high).range(0.0..=255.0).speed(1.0)).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut canny_high)
+                            .range(0.0..=255.0)
+                            .speed(1.0),
+                    )
+                    .changed()
+                {
                     new_params.canny_high = canny_high as u8;
                     params_changed = true;
                 }
@@ -1608,7 +2114,14 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
             DetectionMethod::Threshold => {
                 ui.label("Thresh:");
                 let mut thresh = new_params.threshold as f32;
-                if ui.add(egui::DragValue::new(&mut thresh).range(0.0..=255.0).speed(1.0)).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut thresh)
+                            .range(0.0..=255.0)
+                            .speed(1.0),
+                    )
+                    .changed()
+                {
                     new_params.threshold = thresh as u8;
                     params_changed = true;
                 }
@@ -1621,31 +2134,62 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
 
         ui.label("Blur:");
         let mut blur = new_params.blur_radius as f32;
-        if ui.add(egui::DragValue::new(&mut blur).range(0.0..=10.0).speed(0.1)).changed() {
+        if ui
+            .add(egui::DragValue::new(&mut blur).range(0.0..=10.0).speed(0.1))
+            .changed()
+        {
             new_params.blur_radius = blur as u32;
             params_changed = true;
         }
 
         ui.label("Morph:");
         let mut morph = new_params.morph_size as f32;
-        if ui.add(egui::DragValue::new(&mut morph).range(0.0..=10.0).speed(0.5)).changed() {
+        if ui
+            .add(
+                egui::DragValue::new(&mut morph)
+                    .range(0.0..=10.0)
+                    .speed(0.5),
+            )
+            .changed()
+        {
             new_params.morph_size = morph as u32;
             params_changed = true;
         }
 
         ui.label("Min Area:");
-        if ui.add(egui::DragValue::new(&mut new_params.min_area).range(0.0001..=0.1).speed(0.001)).changed() {
+        if ui
+            .add(
+                egui::DragValue::new(&mut new_params.min_area)
+                    .range(0.0001..=0.1)
+                    .speed(0.001),
+            )
+            .changed()
+        {
             params_changed = true;
         }
 
         ui.label("Simplify:");
-        if ui.add(egui::DragValue::new(&mut new_params.simplify_tolerance).range(0.001..=0.05).speed(0.001)).changed() {
+        if ui
+            .add(
+                egui::DragValue::new(&mut new_params.simplify_tolerance)
+                    .range(0.001..=0.05)
+                    .speed(0.001),
+            )
+            .changed()
+        {
             params_changed = true;
         }
 
         ui.label("Min Verts:");
         let mut min_verts = new_params.min_vertices as f32;
-        if ui.add(egui::DragValue::new(&mut min_verts).range(3.0..=20.0).speed(0.5)).changed() {
+        if ui
+            .add(
+                egui::DragValue::new(&mut min_verts)
+                    .range(3.0..=20.0)
+                    .speed(0.5),
+            )
+            .changed()
+        {
             new_params.min_vertices = min_verts as usize;
             params_changed = true;
         }
@@ -1654,11 +2198,20 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
 
         // Hull mode toggle
         ui.label("Hull:");
-        if ui.selectable_label(matches!(new_params.hull_mode, HullMode::None), "None").clicked() {
+        if ui
+            .selectable_label(matches!(new_params.hull_mode, HullMode::None), "None")
+            .clicked()
+        {
             new_params.hull_mode = HullMode::None;
             params_changed = true;
         }
-        if ui.selectable_label(matches!(new_params.hull_mode, HullMode::ConvexHull), "Convex").clicked() {
+        if ui
+            .selectable_label(
+                matches!(new_params.hull_mode, HullMode::ConvexHull),
+                "Convex",
+            )
+            .clicked()
+        {
             new_params.hull_mode = HullMode::ConvexHull;
             params_changed = true;
         }
@@ -1667,7 +2220,9 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
 
         // Camera picker (if multiple cameras)
         if data.cameras.len() > 1 {
-            let current_name = data.cameras.iter()
+            let current_name = data
+                .cameras
+                .iter()
                 .find(|(_, id)| *id == *camera_id)
                 .map(|(n, _)| n.as_str())
                 .unwrap_or("Unknown");
@@ -1678,23 +2233,37 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                     for (name, cam_id) in &data.cameras {
                         if ui.selectable_label(*cam_id == *camera_id, name).clicked() {
                             actions.camera_detect_actions.push(CameraDetectAction::Exit);
-                            actions.camera_detect_actions.push(CameraDetectAction::Enter { camera_id: *cam_id });
+                            actions
+                                .camera_detect_actions
+                                .push(CameraDetectAction::Enter { camera_id: *cam_id });
                         }
                     }
                 });
             ui.separator();
         }
 
-        if ui.button("📸 Capture").on_hover_text("Freeze frame and select contours").clicked() {
-            actions.camera_detect_actions.push(CameraDetectAction::Capture);
+        if ui
+            .button("📸 Capture")
+            .on_hover_text("Freeze frame and select contours")
+            .clicked()
+        {
+            actions
+                .camera_detect_actions
+                .push(CameraDetectAction::Capture);
         }
-        if ui.button("✕ Cancel").on_hover_text("Exit detection mode").clicked() {
+        if ui
+            .button("✕ Cancel")
+            .on_hover_text("Exit detection mode")
+            .clicked()
+        {
             actions.camera_detect_actions.push(CameraDetectAction::Exit);
         }
     });
 
     if params_changed {
-        actions.camera_detect_actions.push(CameraDetectAction::UpdateParams(new_params));
+        actions
+            .camera_detect_actions
+            .push(CameraDetectAction::UpdateParams(new_params));
     }
 
     ui.add_space(4.0);
@@ -1738,28 +2307,41 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
     ];
     for (i, contour) in data.camera_detect_contours.iter().enumerate() {
         let color = contour_colors[i % contour_colors.len()];
-        let points: Vec<egui::Pos2> = contour.vertices.iter().map(|v| {
-            egui::pos2(
-                canvas_rect.min.x + v[0] * canvas_rect.width(),
-                canvas_rect.min.y + v[1] * canvas_rect.height(),
-            )
-        }).collect();
+        let points: Vec<egui::Pos2> = contour
+            .vertices
+            .iter()
+            .map(|v| {
+                egui::pos2(
+                    canvas_rect.min.x + v[0] * canvas_rect.width(),
+                    canvas_rect.min.y + v[1] * canvas_rect.height(),
+                )
+            })
+            .collect();
         if points.len() >= 2 {
             let mut closed_points = points.clone();
             closed_points.push(points[0]);
-            painter.add(egui::Shape::line(closed_points, egui::Stroke::new(2.0, color)));
+            painter.add(egui::Shape::line(
+                closed_points,
+                egui::Stroke::new(2.0, color),
+            ));
         }
     }
 
     // Info bar
     ui.horizontal(|ui| {
-        ui.label(format!("{} contours detected", data.camera_detect_contours.len()));
+        ui.label(format!(
+            "{} contours detected",
+            data.camera_detect_contours.len()
+        ));
     });
 }
 
 /// Preview mode: frozen frame with selectable contours.
 fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
-    let CameraDetectMode::Preview { contours, selected, .. } = &data.camera_detect_mode else {
+    let CameraDetectMode::Preview {
+        contours, selected, ..
+    } = &data.camera_detect_mode
+    else {
         return;
     };
 
@@ -1772,13 +2354,20 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
         ui.label(egui::RichText::new("📷 Preview — Select Contours").strong());
         ui.separator();
 
-        if ui.button(format!("✓ Accept ({}/{})", selected_count, total))
+        if ui
+            .button(format!("✓ Accept ({}/{})", selected_count, total))
             .on_hover_text("Create surfaces from selected contours")
             .clicked()
         {
-            actions.camera_detect_actions.push(CameraDetectAction::Accept);
+            actions
+                .camera_detect_actions
+                .push(CameraDetectAction::Accept);
         }
-        if ui.button("✕ Cancel").on_hover_text("Return to live view").clicked() {
+        if ui
+            .button("✕ Cancel")
+            .on_hover_text("Return to live view")
+            .clicked()
+        {
             actions.camera_detect_actions.push(CameraDetectAction::Exit);
         }
         ui.separator();
@@ -1786,11 +2375,15 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
         let all_selected = selected.iter().all(|&s| s);
         if all_selected {
             if ui.button("Deselect All").clicked() {
-                actions.camera_detect_actions.push(CameraDetectAction::SelectAll(false));
+                actions
+                    .camera_detect_actions
+                    .push(CameraDetectAction::SelectAll(false));
             }
         } else {
             if ui.button("Select All").clicked() {
-                actions.camera_detect_actions.push(CameraDetectAction::SelectAll(true));
+                actions
+                    .camera_detect_actions
+                    .push(CameraDetectAction::SelectAll(true));
             }
         }
     });
@@ -1800,7 +2393,8 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
     // Canvas: frozen frame + contour overlay
     let canvas_width = ui.available_width();
     let list_height = 120.0_f32; // reserve for contour list
-    let canvas_height = (canvas_width * 9.0 / 16.0).min((ui.available_height() - list_height).max(200.0));
+    let canvas_height =
+        (canvas_width * 9.0 / 16.0).min((ui.available_height() - list_height).max(200.0));
     let (canvas_rect, _canvas_response) = ui.allocate_exact_size(
         egui::vec2(canvas_width, canvas_height),
         egui::Sense::hover(),
@@ -1829,33 +2423,44 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
             egui::Color32::from_gray(100)
         };
         let stroke_width = if is_selected { 2.5 } else { 1.5 };
-        let points: Vec<egui::Pos2> = contour.vertices.iter().map(|v| {
-            egui::pos2(
-                canvas_rect.min.x + v[0] * canvas_rect.width(),
-                canvas_rect.min.y + v[1] * canvas_rect.height(),
-            )
-        }).collect();
+        let points: Vec<egui::Pos2> = contour
+            .vertices
+            .iter()
+            .map(|v| {
+                egui::pos2(
+                    canvas_rect.min.x + v[0] * canvas_rect.width(),
+                    canvas_rect.min.y + v[1] * canvas_rect.height(),
+                )
+            })
+            .collect();
         if points.len() >= 2 {
             let mut closed_points = points.clone();
             closed_points.push(points[0]);
-            painter.add(egui::Shape::line(closed_points, egui::Stroke::new(stroke_width, color)));
+            painter.add(egui::Shape::line(
+                closed_points,
+                egui::Stroke::new(stroke_width, color),
+            ));
         }
     }
 
     // Contour list with checkboxes
     ui.add_space(4.0);
-    egui::ScrollArea::vertical().max_height(list_height).show(ui, |ui| {
-        for (i, contour) in contours.iter().enumerate() {
-            let mut is_sel = selected.get(i).copied().unwrap_or(false);
-            let label = format!(
-                "{} — area: {:.4} ({} verts)",
-                contour.suggested_name,
-                contour.area,
-                contour.vertices.len(),
-            );
-            if ui.checkbox(&mut is_sel, label).changed() {
-                actions.camera_detect_actions.push(CameraDetectAction::ToggleContour(i));
+    egui::ScrollArea::vertical()
+        .max_height(list_height)
+        .show(ui, |ui| {
+            for (i, contour) in contours.iter().enumerate() {
+                let mut is_sel = selected.get(i).copied().unwrap_or(false);
+                let label = format!(
+                    "{} — area: {:.4} ({} verts)",
+                    contour.suggested_name,
+                    contour.area,
+                    contour.vertices.len(),
+                );
+                if ui.checkbox(&mut is_sel, label).changed() {
+                    actions
+                        .camera_detect_actions
+                        .push(CameraDetectAction::ToggleContour(i));
+                }
             }
-        }
-    });
+        });
 }

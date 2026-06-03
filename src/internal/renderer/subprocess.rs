@@ -6,8 +6,8 @@
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 
 use crate::renderer::context::RecordingCodec;
@@ -39,7 +39,11 @@ fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, low_laten
             ),
         ),
     };
-    let title = if low_latency { format!("LL-{}", kind.to_uppercase()) } else { kind.to_uppercase() };
+    let title = if low_latency {
+        format!("LL-{}", kind.to_uppercase())
+    } else {
+        kind.to_uppercase()
+    };
     let html = format!(
         r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Varda — {title} stream</title>
@@ -91,10 +95,10 @@ const FRAME_CHANNEL_CAPACITY: usize = 2;
 fn compute_rtmp_bitrate(width: u32, height: u32, fps: u32) -> (u32, u32) {
     let pixels = width * height;
     let base = match pixels {
-        p if p <= 921_600 => 3000,    // ≤720p
-        p if p <= 2_073_600 => 6000,  // ≤1080p
-        p if p <= 3_686_400 => 9000,  // ≤1440p
-        _ => 15000,                    // 4K+
+        p if p <= 921_600 => 3000,   // ≤720p
+        p if p <= 2_073_600 => 6000, // ≤1080p
+        p if p <= 3_686_400 => 9000, // ≤1440p
+        _ => 15000,                  // 4K+
     };
     let maxrate = if fps > 30 { base * 3 / 2 } else { base };
     (maxrate, maxrate * 2)
@@ -116,7 +120,11 @@ impl FfmpegSubprocess {
                 for frame in rx {
                     if let Err(e) = stdin.write_all(&frame) {
                         if shutting_down.load(Ordering::SeqCst) {
-                            log::debug!("ffmpeg pipe closed during shutdown for '{}': {}", label, e);
+                            log::debug!(
+                                "ffmpeg pipe closed during shutdown for '{}': {}",
+                                label,
+                                e
+                            );
                         } else {
                             log::error!("ffmpeg write error for '{}': {}", label, e);
                             write_failed.store(true, Ordering::SeqCst);
@@ -140,9 +148,18 @@ impl FfmpegSubprocess {
         fps: u32,
     ) -> anyhow::Result<Self> {
         let (codec_args, needs_yuv420p): (Vec<&str>, bool) = match codec {
-            RecordingCodec::H264 => (vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18"], true),
-            RecordingCodec::H265 => (vec!["-c:v", "libx265", "-preset", "ultrafast", "-crf", "20"], true),
-            RecordingCodec::AV1 => (vec!["-c:v", "libsvtav1", "-preset", "10", "-crf", "28"], true),
+            RecordingCodec::H264 => (
+                vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18"],
+                true,
+            ),
+            RecordingCodec::H265 => (
+                vec!["-c:v", "libx265", "-preset", "ultrafast", "-crf", "20"],
+                true,
+            ),
+            RecordingCodec::AV1 => (
+                vec!["-c:v", "libsvtav1", "-preset", "10", "-crf", "28"],
+                true,
+            ),
             RecordingCodec::ProRes => (vec!["-c:v", "prores_ks", "-profile:v", "2"], true),
             RecordingCodec::Hap => (vec!["-c:v", "hap", "-format", "hap"], false),
             RecordingCodec::HapAlpha => (vec!["-c:v", "hap", "-format", "hap_alpha"], false),
@@ -165,10 +182,18 @@ impl FfmpegSubprocess {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg: {}. Is ffmpeg installed?", e))?;
 
-        log::info!("Recording started: {} ({}, {}x{} @ {}fps)", path, codec, width, height, fps);
+        log::info!(
+            "Recording started: {} ({}, {}x{} @ {}fps)",
+            path,
+            codec,
+            width,
+            height,
+            fps
+        );
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -176,7 +201,12 @@ impl FfmpegSubprocess {
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), path.to_string(),
+            stdin,
+            rx,
+            frames_written.clone(),
+            write_failed.clone(),
+            shutting_down.clone(),
+            path.to_string(),
         );
 
         Ok(Self {
@@ -232,10 +262,20 @@ impl FfmpegSubprocess {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg for SRT: {}. Is ffmpeg installed?", e))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to spawn ffmpeg for SRT: {}. Is ffmpeg installed?",
+                e
+            )
+        })?;
 
-        log::info!("SRT server started: {} ({}x{} @ {}fps)", srt_url, width, height, fps);
+        log::info!(
+            "SRT server started: {} ({}x{} @ {}fps)",
+            srt_url,
+            width,
+            height,
+            fps
+        );
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -243,7 +283,12 @@ impl FfmpegSubprocess {
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), url.to_string(),
+            stdin,
+            rx,
+            frames_written.clone(),
+            write_failed.clone(),
+            shutting_down.clone(),
+            url.to_string(),
         );
 
         Ok(Self {
@@ -276,7 +321,10 @@ impl FfmpegSubprocess {
         write_stream_player(&dir, "hls", "index.m3u8", low_latency);
 
         let (encoder, extra): (&str, Vec<&str>) = match codec {
-            super::context::StreamingCodec::H264 => ("libx264", vec!["-preset", "ultrafast", "-tune", "zerolatency"]),
+            super::context::StreamingCodec::H264 => (
+                "libx264",
+                vec!["-preset", "ultrafast", "-tune", "zerolatency"],
+            ),
             super::context::StreamingCodec::H265 => ("libx265", vec!["-preset", "ultrafast"]),
             super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
         };
@@ -312,11 +360,22 @@ impl FfmpegSubprocess {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg for HLS: {}. Is ffmpeg installed?", e))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to spawn ffmpeg for HLS: {}. Is ffmpeg installed?",
+                e
+            )
+        })?;
 
         let mode = if low_latency { "LL-HLS" } else { "HLS" };
-        log::info!("{} output started: {} ({}x{} @ {}fps)", mode, playlist, width, height, fps);
+        log::info!(
+            "{} output started: {} ({}x{} @ {}fps)",
+            mode,
+            playlist,
+            width,
+            height,
+            fps
+        );
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -324,7 +383,12 @@ impl FfmpegSubprocess {
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), name.to_string(),
+            stdin,
+            rx,
+            frames_written.clone(),
+            write_failed.clone(),
+            shutting_down.clone(),
+            name.to_string(),
         );
 
         Ok(Self {
@@ -349,8 +413,13 @@ impl FfmpegSubprocess {
         fps: u32,
     ) -> anyhow::Result<Self> {
         let (encoder, extra): (&str, Vec<&str>) = match codec {
-            super::context::StreamingCodec::H264 => ("libx264", vec!["-preset", "ultrafast", "-tune", "zerolatency"]),
-            super::context::StreamingCodec::H265 => ("libx265", vec!["-preset", "ultrafast", "-vtag", "hvc1"]),
+            super::context::StreamingCodec::H264 => (
+                "libx264",
+                vec!["-preset", "ultrafast", "-tune", "zerolatency"],
+            ),
+            super::context::StreamingCodec::H265 => {
+                ("libx265", vec!["-preset", "ultrafast", "-vtag", "hvc1"])
+            }
             super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
         };
 
@@ -377,10 +446,21 @@ impl FfmpegSubprocess {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg for RTMP: {}. Is ffmpeg installed?", e))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to spawn ffmpeg for RTMP: {}. Is ffmpeg installed?",
+                e
+            )
+        })?;
 
-        log::info!("RTMP output started: {} ({}x{} @ {}fps, {}kbps)", url, width, height, fps, maxrate);
+        log::info!(
+            "RTMP output started: {} ({}x{} @ {}fps, {}kbps)",
+            url,
+            width,
+            height,
+            fps,
+            maxrate
+        );
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -389,7 +469,12 @@ impl FfmpegSubprocess {
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let label = url.to_string();
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), label.clone(),
+            stdin,
+            rx,
+            frames_written.clone(),
+            write_failed.clone(),
+            shutting_down.clone(),
+            label.clone(),
         );
 
         Ok(Self {
@@ -421,7 +506,10 @@ impl FfmpegSubprocess {
         write_stream_player(&dir, "dash", "manifest.mpd", false);
 
         let (encoder, extra): (&str, Vec<&str>) = match codec {
-            super::context::StreamingCodec::H264 => ("libx264", vec!["-preset", "ultrafast", "-tune", "zerolatency"]),
+            super::context::StreamingCodec::H264 => (
+                "libx264",
+                vec!["-preset", "ultrafast", "-tune", "zerolatency"],
+            ),
             super::context::StreamingCodec::H265 => ("libx265", vec!["-preset", "ultrafast"]),
             super::context::StreamingCodec::AV1 => ("libsvtav1", vec!["-preset", "10"]),
         };
@@ -445,10 +533,20 @@ impl FfmpegSubprocess {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg for DASH: {}. Is ffmpeg installed?", e))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to spawn ffmpeg for DASH: {}. Is ffmpeg installed?",
+                e
+            )
+        })?;
 
-        log::info!("DASH output started: {} ({}x{} @ {}fps)", manifest, width, height, fps);
+        log::info!(
+            "DASH output started: {} ({}x{} @ {}fps)",
+            manifest,
+            width,
+            height,
+            fps
+        );
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -456,7 +554,12 @@ impl FfmpegSubprocess {
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
-            stdin, rx, frames_written.clone(), write_failed.clone(), shutting_down.clone(), name.to_string(),
+            stdin,
+            rx,
+            frames_written.clone(),
+            write_failed.clone(),
+            shutting_down.clone(),
+            name.to_string(),
         );
 
         Ok(Self {
@@ -485,7 +588,11 @@ impl FfmpegSubprocess {
         if let Some(status) = self.child.try_wait().ok().flatten() {
             if !status.success() {
                 self.drain_stderr();
-                log::error!("ffmpeg exited with status {} for '{}' before frame could be written", status, self.label);
+                log::error!(
+                    "ffmpeg exited with status {} for '{}' before frame could be written",
+                    status,
+                    self.label
+                );
             }
             return false;
         }
@@ -518,8 +625,10 @@ impl FfmpegSubprocess {
             if !buf.is_empty() {
                 for line in buf.lines().take(30) {
                     let lower = line.to_ascii_lowercase();
-                    if lower.contains("error") || lower.contains("failed")
-                        || lower.contains("invalid") || lower.contains("fatal")
+                    if lower.contains("error")
+                        || lower.contains("failed")
+                        || lower.contains("invalid")
+                        || lower.contains("fatal")
                     {
                         log::error!("ffmpeg [{}]: {}", self.label, line);
                     } else {
@@ -564,8 +673,12 @@ impl FfmpegSubprocess {
         match self.child.wait() {
             Ok(_status) => {
                 self.drain_stderr();
-                log::info!("ffmpeg finished: {} ({} frames, {:.1}s)",
-                    self.label, frames, duration.as_secs_f32());
+                log::info!(
+                    "ffmpeg finished: {} ({} frames, {:.1}s)",
+                    self.label,
+                    frames,
+                    duration.as_secs_f32()
+                );
             }
             Err(e) => {
                 log::error!("Failed to wait for ffmpeg '{}': {}", self.label, e);
@@ -594,7 +707,6 @@ impl Drop for FfmpegSubprocess {
         self.stop();
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -677,9 +789,9 @@ mod tests {
         let path = dir.join("varda_test_recording.mp4");
         let path_str = path.to_str().unwrap();
 
-        let mut sub = FfmpegSubprocess::spawn_recording(
-            path_str, &RecordingCodec::H264, 64, 64, 30,
-        ).expect("failed to spawn recording");
+        let mut sub =
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30)
+                .expect("failed to spawn recording");
 
         assert_eq!(sub.label(), path_str);
         assert_eq!(sub.frames_written(), 0);
@@ -710,9 +822,8 @@ mod tests {
         let path = dir.join("varda_test_idempotent.mp4");
         let path_str = path.to_str().unwrap();
 
-        let mut sub = FfmpegSubprocess::spawn_recording(
-            path_str, &RecordingCodec::H264, 64, 64, 30,
-        ).unwrap();
+        let mut sub =
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30).unwrap();
 
         // Stop twice — should not panic
         sub.stop();
@@ -729,8 +840,9 @@ mod tests {
         }
         // Use a high port unlikely to conflict
         let url = "srt://127.0.0.1:19876";
-        let mut sub = FfmpegSubprocess::spawn_srt(url, &crate::renderer::context::SrtCodec::H264, 64, 64, 30)
-            .expect("failed to spawn SRT");
+        let mut sub =
+            FfmpegSubprocess::spawn_srt(url, &crate::renderer::context::SrtCodec::H264, 64, 64, 30)
+                .expect("failed to spawn SRT");
 
         assert_eq!(sub.label(), url);
         assert_eq!(sub.frames_written(), 0);
@@ -753,9 +865,8 @@ mod tests {
         let path = dir.join("varda_test_after_stop.mp4");
         let path_str = path.to_str().unwrap();
 
-        let mut sub = FfmpegSubprocess::spawn_recording(
-            path_str, &RecordingCodec::H264, 64, 64, 30,
-        ).unwrap();
+        let mut sub =
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30).unwrap();
 
         sub.stop();
 
@@ -776,9 +887,9 @@ mod tests {
         let path = dir.join("varda_test_prores.mov");
         let path_str = path.to_str().unwrap();
 
-        let mut sub = FfmpegSubprocess::spawn_recording(
-            path_str, &RecordingCodec::ProRes, 64, 64, 30,
-        ).expect("failed to spawn ProRes recording");
+        let mut sub =
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::ProRes, 64, 64, 30)
+                .expect("failed to spawn ProRes recording");
 
         let frame = vec![0u8; 64 * 64 * 4];
         for _ in 0..3 {

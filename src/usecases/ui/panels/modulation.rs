@@ -1,7 +1,7 @@
 //! Modulation sources panel.
 
+use super::super::{modulator_color, widgets, ModSourceUI, ModulationAction, UIActions, UIData};
 use crate::modulation::{LFOWaveform, StepInterpolation};
-use super::super::{UIData, UIActions, ModulationAction, ModSourceUI, modulator_color, widgets};
 
 pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.horizontal(|ui| {
@@ -12,23 +12,30 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
             });
         }
         if ui.button("➕ Audio").clicked() {
-            actions.modulation_actions.push(ModulationAction::AddAudioFFT {
-                preset: crate::modulation::AudioBandPreset::Low,
-                source_id: None,
-            });
+            actions
+                .modulation_actions
+                .push(ModulationAction::AddAudioFFT {
+                    preset: crate::modulation::AudioBandPreset::Low,
+                    source_id: None,
+                });
         }
         if ui.button("➕ ADSR").clicked() {
             actions.modulation_actions.push(ModulationAction::AddADSR {
-                attack: 0.1, decay: 0.3, sustain: 0.7, release: 0.5,
+                attack: 0.1,
+                decay: 0.3,
+                sustain: 0.7,
+                release: 0.5,
             });
         }
         if ui.button("➕ StepSeq").clicked() {
-            actions.modulation_actions.push(ModulationAction::AddStepSequencer {
-                num_steps: 8, rate: 2.0,
-            });
+            actions
+                .modulation_actions
+                .push(ModulationAction::AddStepSequencer {
+                    num_steps: 8,
+                    rate: 2.0,
+                });
         }
     });
-
 
     if data.modulation_sources.is_empty() {
         ui.label(egui::RichText::new("No modulation sources").small().weak());
@@ -424,7 +431,6 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
     }
 }
 
-
 /// Render step sequencer controls: rate, interpolation, bipolar, step count, and painted bar grid.
 fn render_step_sequencer_controls(
     ui: &mut egui::Ui,
@@ -443,8 +449,21 @@ fn render_step_sequencer_controls(
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rate:").small());
         let path = format!("mod/{}/rate", idx);
-        if render_mod_learn_slider(ui, &mut r, 0.1..=20.0, |s| s.logarithmic(true).suffix("Hz").show_value(true), &path, data, actions) {
-            actions.modulation_actions.push(ModulationAction::UpdateStepRate { source_id: sid.to_string(), rate: r });
+        if render_mod_learn_slider(
+            ui,
+            &mut r,
+            0.1..=20.0,
+            |s| s.logarithmic(true).suffix("Hz").show_value(true),
+            &path,
+            data,
+            actions,
+        ) {
+            actions
+                .modulation_actions
+                .push(ModulationAction::UpdateStepRate {
+                    source_id: sid.to_string(),
+                    rate: r,
+                });
         }
         render_mod_on_mod_dropdown(ui, data, actions, sid, "rate");
     });
@@ -452,7 +471,9 @@ fn render_step_sequencer_controls(
         ui.label(egui::RichText::new("Interp:").small());
         let interp_names = ["None", "Linear", "Smooth"];
         let current_interp = match interpolation {
-            StepInterpolation::None => 0, StepInterpolation::Linear => 1, StepInterpolation::Smooth => 2,
+            StepInterpolation::None => 0,
+            StepInterpolation::Linear => 1,
+            StepInterpolation::Smooth => 2,
         };
         let mut selected_interp = current_interp;
         egui::ComboBox::from_id_salt(format!("step_interp_{}", idx))
@@ -460,36 +481,77 @@ fn render_step_sequencer_controls(
             .width(60.0)
             .show_ui(ui, |ui| {
                 for (i, name) in interp_names.iter().enumerate() {
-                    if ui.selectable_value(&mut selected_interp, i, *name).changed() {
+                    if ui
+                        .selectable_value(&mut selected_interp, i, *name)
+                        .changed()
+                    {
                         let new_interp = match i {
-                            0 => StepInterpolation::None, 1 => StepInterpolation::Linear, _ => StepInterpolation::Smooth,
+                            0 => StepInterpolation::None,
+                            1 => StepInterpolation::Linear,
+                            _ => StepInterpolation::Smooth,
                         };
-                        actions.modulation_actions.push(ModulationAction::UpdateStepInterpolation { source_id: sid.to_string(), interpolation: new_interp });
+                        actions.modulation_actions.push(
+                            ModulationAction::UpdateStepInterpolation {
+                                source_id: sid.to_string(),
+                                interpolation: new_interp,
+                            },
+                        );
                     }
                 }
             });
         ui.add_space(4.0);
         let mut bp = bipolar;
-        if ui.checkbox(&mut bp, egui::RichText::new("Bipolar").small()).changed() {
-            actions.modulation_actions.push(ModulationAction::UpdateStepBipolar { source_id: sid.to_string(), bipolar: bp });
+        if ui
+            .checkbox(&mut bp, egui::RichText::new("Bipolar").small())
+            .changed()
+        {
+            actions
+                .modulation_actions
+                .push(ModulationAction::UpdateStepBipolar {
+                    source_id: sid.to_string(),
+                    bipolar: bp,
+                });
         }
     });
     // Step count controls
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(format!("Steps: {}", steps.len())).small());
         if ui.small_button("−").clicked() && steps.len() > 2 {
-            actions.modulation_actions.push(ModulationAction::SetStepCount { source_id: sid.to_string(), count: steps.len() - 1 });
+            actions
+                .modulation_actions
+                .push(ModulationAction::SetStepCount {
+                    source_id: sid.to_string(),
+                    count: steps.len() - 1,
+                });
         }
         if ui.small_button("+").clicked() && steps.len() < 64 {
-            actions.modulation_actions.push(ModulationAction::SetStepCount { source_id: sid.to_string(), count: steps.len() + 1 });
+            actions
+                .modulation_actions
+                .push(ModulationAction::SetStepCount {
+                    source_id: sid.to_string(),
+                    count: steps.len() + 1,
+                });
         }
         for &preset in &[4, 8, 16, 32] {
             if steps.len() != preset {
-                if ui.small_button(egui::RichText::new(format!("{}", preset)).small()).clicked() {
-                    actions.modulation_actions.push(ModulationAction::SetStepCount { source_id: sid.to_string(), count: preset });
+                if ui
+                    .small_button(egui::RichText::new(format!("{}", preset)).small())
+                    .clicked()
+                {
+                    actions
+                        .modulation_actions
+                        .push(ModulationAction::SetStepCount {
+                            source_id: sid.to_string(),
+                            count: preset,
+                        });
                 }
             } else {
-                ui.label(egui::RichText::new(format!("[{}]", preset)).small().strong().color(mod_color));
+                ui.label(
+                    egui::RichText::new(format!("[{}]", preset))
+                        .small()
+                        .strong()
+                        .color(mod_color),
+                );
             }
         }
     });
@@ -505,10 +567,17 @@ fn render_step_sequencer_controls(
 
     // Background
     painter.rect_filled(rect, 3.0, egui::Color32::from_gray(18));
-    painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, egui::Color32::from_gray(40)), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        rect,
+        3.0,
+        egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
+        egui::StrokeKind::Outside,
+    );
 
     let num_steps = steps.len();
-    if num_steps == 0 { return; }
+    if num_steps == 0 {
+        return;
+    }
     let step_w = rect.width() / num_steps as f32;
     let bar_pad = 1.0_f32;
 
@@ -533,11 +602,18 @@ fn render_step_sequencer_controls(
     let bar_color = mod_color.linear_multiply(0.7);
     let bar_hover_color = mod_color;
     let hover_step = if response.hovered() || response.dragged() {
-        response.hover_pos().or_else(|| response.interact_pointer_pos()).and_then(|pos| {
-            let local_x = pos.x - rect.left();
-            let s = (local_x / step_w).floor() as usize;
-            if s < num_steps { Some(s) } else { None }
-        })
+        response
+            .hover_pos()
+            .or_else(|| response.interact_pointer_pos())
+            .and_then(|pos| {
+                let local_x = pos.x - rect.left();
+                let s = (local_x / step_w).floor() as usize;
+                if s < num_steps {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
     } else {
         None
     };
@@ -550,13 +626,21 @@ fn render_step_sequencer_controls(
             egui::pos2(x0, rect.bottom() - bar_h),
             egui::pos2(x1, rect.bottom()),
         );
-        let color = if hover_step == Some(i) { bar_hover_color } else { bar_color };
+        let color = if hover_step == Some(i) {
+            bar_hover_color
+        } else {
+            bar_color
+        };
         painter.rect_filled(bar_rect, 1.0, color);
     }
 
     // Current value indicator line
     if let Some(&cur_val) = data.modulation_current_values.get(sid) {
-        let display_val = if bipolar { (cur_val + 1.0) / 2.0 } else { cur_val };
+        let display_val = if bipolar {
+            (cur_val + 1.0) / 2.0
+        } else {
+            cur_val
+        };
         let y = rect.bottom() - display_val.clamp(0.0, 1.0) * rect.height();
         painter.line_segment(
             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
@@ -568,12 +652,19 @@ fn render_step_sequencer_controls(
     let any_learn = data.midi_learn_active || data.keyboard_learn_active;
     if !any_learn {
         if (response.clicked() || response.dragged()) && hover_step.is_some() {
-            if let Some(pos) = response.hover_pos().or_else(|| response.interact_pointer_pos()) {
+            if let Some(pos) = response
+                .hover_pos()
+                .or_else(|| response.interact_pointer_pos())
+            {
                 let step_idx = hover_step.unwrap();
                 let val = 1.0 - ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
-                actions.modulation_actions.push(ModulationAction::UpdateStepValue {
-                    source_id: sid.to_string(), step_idx, value: val,
-                });
+                actions
+                    .modulation_actions
+                    .push(ModulationAction::UpdateStepValue {
+                        source_id: sid.to_string(),
+                        step_idx,
+                        value: val,
+                    });
             }
         }
     }
@@ -582,24 +673,40 @@ fn render_step_sequencer_controls(
     if any_learn {
         for (step_idx, _) in steps.iter().enumerate() {
             let x0 = rect.left() + step_idx as f32 * step_w;
-            let step_rect = egui::Rect::from_min_size(egui::pos2(x0, rect.top()), egui::vec2(step_w, rect.height()));
+            let step_rect = egui::Rect::from_min_size(
+                egui::pos2(x0, rect.top()),
+                egui::vec2(step_w, rect.height()),
+            );
             let step_path = format!("mod/{}/step/{}", idx, step_idx);
             if data.midi_learn_active {
                 let is_target = data.midi_learn_target.as_deref() == Some(step_path.as_str());
-                if is_target { widgets::draw_midi_learn_selected(ui, step_rect); }
-                else { widgets::draw_midi_learn_glow(ui, step_rect); }
+                if is_target {
+                    widgets::draw_midi_learn_selected(ui, step_rect);
+                } else {
+                    widgets::draw_midi_learn_glow(ui, step_rect);
+                }
                 let click_id = ui.id().with(("midi_learn_step", idx, step_idx));
-                if ui.interact(step_rect, click_id, egui::Sense::click()).clicked() {
+                if ui
+                    .interact(step_rect, click_id, egui::Sense::click())
+                    .clicked()
+                {
                     actions.midi_learn_select = Some(step_path.clone());
                 }
             }
             if data.keyboard_learn_active {
                 let is_target = data.keyboard_learn_target.as_deref() == Some(step_path.as_str());
-                if is_target { widgets::draw_keyboard_learn_selected(ui, step_rect); }
-                else { widgets::draw_keyboard_learn_glow(ui, step_rect); }
+                if is_target {
+                    widgets::draw_keyboard_learn_selected(ui, step_rect);
+                } else {
+                    widgets::draw_keyboard_learn_glow(ui, step_rect);
+                }
                 let click_id = ui.id().with(("kb_learn_step", idx, step_idx));
-                if ui.interact(step_rect, click_id, egui::Sense::click()).clicked() {
-                    actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(step_path));
+                if ui
+                    .interact(step_rect, click_id, egui::Sense::click())
+                    .clicked()
+                {
+                    actions.keyboard_learn_select =
+                        Some(crate::keymap::KeyTarget::ParamPath(step_path));
                 }
             }
         }
@@ -648,11 +755,15 @@ pub(super) fn render_mod_learn_slider(
             let click_id = ui.id().with(("kb_learn_mod", midi_path));
             let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
             if click_resp.clicked() {
-                actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(midi_path.to_string()));
+                actions.keyboard_learn_select =
+                    Some(crate::keymap::KeyTarget::ParamPath(midi_path.to_string()));
             }
         }
     } else {
-        if ui.add(slider_opts(egui::Slider::new(value, range))).changed() {
+        if ui
+            .add(slider_opts(egui::Slider::new(value, range)))
+            .changed()
+        {
             changed = true;
         }
     }
@@ -671,13 +782,20 @@ pub(super) fn render_mod_on_mod_dropdown(
     param_name: &str,
 ) {
     let key = format!("mod:{}:{}", target_uuid, param_name);
-    let has_assignment = data.modulation_assignments.get(&key).map_or(false, |v| !v.is_empty());
+    let has_assignment = data
+        .modulation_assignments
+        .get(&key)
+        .map_or(false, |v| !v.is_empty());
     let btn_text = if has_assignment { "〰" } else { "〰" };
     let btn_color = if has_assignment {
-        let source_id = data.modulation_assignments.get(&key)
+        let source_id = data
+            .modulation_assignments
+            .get(&key)
             .and_then(|v| v.first())
             .map(|a| &a.source_id);
-        let color_idx = source_id.and_then(|sid| data.modulation_sources.iter().position(|e| &e.uuid == sid)).unwrap_or(0);
+        let color_idx = source_id
+            .and_then(|sid| data.modulation_sources.iter().position(|e| &e.uuid == sid))
+            .unwrap_or(0);
         modulator_color(color_idx)
     } else {
         egui::Color32::GRAY
@@ -687,37 +805,64 @@ pub(super) fn render_mod_on_mod_dropdown(
         .selected_text(egui::RichText::new(btn_text).color(btn_color).small())
         .width(30.0)
         .show_ui(ui, |ui| {
-            ui.label(egui::RichText::new(format!("Modulate {}", param_name)).small().strong());
+            ui.label(
+                egui::RichText::new(format!("Modulate {}", param_name))
+                    .small()
+                    .strong(),
+            );
             for (src_idx, entry) in data.modulation_sources.iter().enumerate() {
-                if entry.uuid == target_uuid { continue; } // can't modulate yourself
+                if entry.uuid == target_uuid {
+                    continue;
+                } // can't modulate yourself
                 let color = modulator_color(src_idx);
                 let src_name = match &entry.source {
                     ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                    ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
+                    ModSourceUI::Audio {
+                        freq_low,
+                        freq_high,
+                        ..
+                    } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
                     ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                     ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
                 };
-                if ui.button(egui::RichText::new(format!("+ {}", src_name)).color(color).small()).clicked() {
-                    actions.modulation_actions.push(ModulationAction::AssignModOnMod {
-                        target_source_id: target_uuid.to_string(),
-                        param_name: param_name.to_string(),
-                        modulator_id: entry.uuid.clone(),
-                        amount: 1.0,
-                    });
+                if ui
+                    .button(
+                        egui::RichText::new(format!("+ {}", src_name))
+                            .color(color)
+                            .small(),
+                    )
+                    .clicked()
+                {
+                    actions
+                        .modulation_actions
+                        .push(ModulationAction::AssignModOnMod {
+                            target_source_id: target_uuid.to_string(),
+                            param_name: param_name.to_string(),
+                            modulator_id: entry.uuid.clone(),
+                            amount: 1.0,
+                        });
                 }
             }
             if has_assignment {
                 ui.separator();
-                if ui.button(egui::RichText::new("x Remove").small().color(egui::Color32::from_rgb(255, 100, 100))).clicked() {
-                    actions.modulation_actions.push(ModulationAction::RemoveModOnMod {
-                        target_source_id: target_uuid.to_string(),
-                        param_name: param_name.to_string(),
-                    });
+                if ui
+                    .button(
+                        egui::RichText::new("x Remove")
+                            .small()
+                            .color(egui::Color32::from_rgb(255, 100, 100)),
+                    )
+                    .clicked()
+                {
+                    actions
+                        .modulation_actions
+                        .push(ModulationAction::RemoveModOnMod {
+                            target_source_id: target_uuid.to_string(),
+                            param_name: param_name.to_string(),
+                        });
                 }
             }
         });
 }
-
 
 #[cfg(test)]
 mod tests {

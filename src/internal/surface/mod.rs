@@ -38,7 +38,8 @@ impl CircleHint {
                 let angle = 2.0 * std::f32::consts::PI * i as f32 / sides as f32;
                 [
                     (self.center[0] + angle.cos() * self.radius).clamp(0.0, 1.0),
-                    (self.center[1] + angle.sin() * self.radius * self.aspect_ratio).clamp(0.0, 1.0),
+                    (self.center[1] + angle.sin() * self.radius * self.aspect_ratio)
+                        .clamp(0.0, 1.0),
                 ]
             })
             .collect()
@@ -128,12 +129,7 @@ impl Surface {
         Self {
             uuid: generate_short_uuid(),
             name,
-            vertices: vec![
-                [x, y],
-                [x + w, y],
-                [x + w, y + h],
-                [x, y + h],
-            ],
+            vertices: vec![[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
             extra_contours: Vec::new(),
             source,
             content_mapping: ContentMapping::default(),
@@ -180,7 +176,9 @@ impl Surface {
 
     /// Iterate over all vertices across all contours.
     pub fn all_vertices(&self) -> impl Iterator<Item = &[f32; 2]> {
-        self.vertices.iter().chain(self.extra_contours.iter().flat_map(|c| c.iter()))
+        self.vertices
+            .iter()
+            .chain(self.extra_contours.iter().flat_map(|c| c.iter()))
     }
 
     /// Center of the polygon (average of all vertices).
@@ -189,22 +187,28 @@ impl Surface {
             return [0.0, 0.0];
         }
         let n = self.vertices.len() as f32;
-        let sum = self.vertices.iter().fold([0.0f32, 0.0f32], |acc, v| {
-            [acc[0] + v[0], acc[1] + v[1]]
-        });
+        let sum = self
+            .vertices
+            .iter()
+            .fold([0.0f32, 0.0f32], |acc, v| [acc[0] + v[0], acc[1] + v[1]]);
         [sum[0] / n, sum[1] / n]
     }
 
     /// Check if a point is inside this surface (any contour, ray-casting algorithm).
     pub fn contains(&self, px: f32, py: f32) -> bool {
         Self::point_in_polygon(&self.vertices, px, py)
-            || self.extra_contours.iter().any(|c| Self::point_in_polygon(c, px, py))
+            || self
+                .extra_contours
+                .iter()
+                .any(|c| Self::point_in_polygon(c, px, py))
     }
 
     /// Ray-casting point-in-polygon test for a single contour.
     fn point_in_polygon(verts: &[[f32; 2]], px: f32, py: f32) -> bool {
         let n = verts.len();
-        if n < 3 { return false; }
+        if n < 3 {
+            return false;
+        }
         let mut inside = false;
         let mut j = n - 1;
         for i in 0..n {
@@ -225,7 +229,9 @@ impl Surface {
 
     /// Return the vertex index closest to a point, or None if not within threshold.
     pub fn nearest_vertex(&self, px: f32, py: f32, threshold: f32) -> Option<usize> {
-        self.vertices.iter().enumerate()
+        self.vertices
+            .iter()
+            .enumerate()
             .map(|(i, v)| {
                 let dx = px - v[0];
                 let dy = py - v[1];
@@ -308,7 +314,10 @@ pub struct SurfaceManager {
 
 impl SurfaceManager {
     pub fn new() -> Self {
-        Self { surfaces: Vec::new(), dome_setup: None }
+        Self {
+            surfaces: Vec::new(),
+            dome_setup: None,
+        }
     }
 
     /// Add a new rectangular surface with default positioning. Returns the new surface's UUID.
@@ -327,7 +336,12 @@ impl SurfaceManager {
     }
 
     /// Add a surface with pre-defined vertices. Returns the new surface's UUID.
-    pub fn add_polygon_surface(&mut self, name: String, vertices: Vec<[f32; 2]>, source: OutputSource) -> String {
+    pub fn add_polygon_surface(
+        &mut self,
+        name: String,
+        vertices: Vec<[f32; 2]>,
+        source: OutputSource,
+    ) -> String {
         let uuid = generate_short_uuid();
         self.surfaces.push(Surface {
             uuid: uuid.clone(),
@@ -344,7 +358,12 @@ impl SurfaceManager {
     }
 
     /// Add a circle surface with a `CircleHint`. Vertices are generated from the hint. Returns the new surface's UUID.
-    pub fn add_circle_surface(&mut self, name: String, hint: CircleHint, source: OutputSource) -> String {
+    pub fn add_circle_surface(
+        &mut self,
+        name: String,
+        hint: CircleHint,
+        source: OutputSource,
+    ) -> String {
         let uuid = generate_short_uuid();
         let vertices = hint.generate_vertices();
         self.surfaces.push(Surface {
@@ -374,19 +393,27 @@ impl SurfaceManager {
     /// Find a surface at a given canvas position (normalized coords). Returns UUID.
     pub fn surface_at(&self, px: f32, py: f32) -> Option<String> {
         // Search in reverse so topmost (last added) surfaces are found first
-        self.surfaces.iter().rev()
+        self.surfaces
+            .iter()
+            .rev()
             .find(|s| s.contains(px, py))
             .map(|s| s.uuid.clone())
     }
 
     /// Find a surface by UUID, returning its index and a reference.
     pub fn find_by_uuid(&self, uuid: &str) -> Option<(usize, &Surface)> {
-        self.surfaces.iter().enumerate().find(|(_, s)| s.uuid == uuid)
+        self.surfaces
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.uuid == uuid)
     }
 
     /// Find a surface by UUID, returning its index and a mutable reference.
     pub fn find_by_uuid_mut(&mut self, uuid: &str) -> Option<(usize, &mut Surface)> {
-        self.surfaces.iter_mut().enumerate().find(|(_, s)| s.uuid == uuid)
+        self.surfaces
+            .iter_mut()
+            .enumerate()
+            .find(|(_, s)| s.uuid == uuid)
     }
 
     /// Duplicate a surface by UUID. Returns the new surface's UUID if found.
@@ -409,20 +436,27 @@ impl SurfaceManager {
     /// Overlapping regions merge into a single outline. Disjoint regions
     /// become extra_contours. Returns the UUID of the combined surface.
     pub fn combine_surfaces(&mut self, uuids: &[String]) -> Option<String> {
-        if uuids.len() < 2 { return None; }
+        if uuids.len() < 2 {
+            return None;
+        }
 
         // Resolve UUIDs to indices
-        let indices: Vec<usize> = uuids.iter()
+        let indices: Vec<usize> = uuids
+            .iter()
             .filter_map(|uuid| self.surfaces.iter().position(|s| s.uuid == *uuid))
             .collect();
-        if indices.len() < 2 { return None; }
+        if indices.len() < 2 {
+            return None;
+        }
 
         let first_idx = *indices.iter().min().unwrap();
 
         // Collect all contours as geo polygons
         let mut geo_polys: Vec<geo::Polygon<f64>> = Vec::new();
         for &idx in &indices {
-            if idx >= self.surfaces.len() { return None; }
+            if idx >= self.surfaces.len() {
+                return None;
+            }
             let surface = &self.surfaces[idx];
             if let Some(p) = verts_to_geo(&surface.vertices) {
                 geo_polys.push(p);
@@ -434,7 +468,9 @@ impl SurfaceManager {
             }
         }
 
-        if geo_polys.is_empty() { return None; }
+        if geo_polys.is_empty() {
+            return None;
+        }
 
         // Iteratively union all polygons
         use geo::BooleanOps;
@@ -445,15 +481,20 @@ impl SurfaceManager {
         }
 
         // Convert back to vertex arrays
-        let mut all_contours: Vec<Vec<[f32; 2]>> = result.0.iter()
+        let mut all_contours: Vec<Vec<[f32; 2]>> = result
+            .0
+            .iter()
             .map(|p| geo_to_verts(p.exterior()))
             .collect();
 
-        if all_contours.is_empty() { return None; }
+        if all_contours.is_empty() {
+            return None;
+        }
 
         // Build combined surface name and properties from first selected
         let name = {
-            let names: Vec<&str> = indices.iter()
+            let names: Vec<&str> = indices
+                .iter()
                 .filter_map(|&i| self.surfaces.get(i).map(|s| s.name.as_str()))
                 .collect();
             names.join(" + ")
@@ -496,8 +537,11 @@ impl SurfaceManager {
 
 /// Convert `[f32; 2]` vertices to a `geo::Polygon<f64>`.
 pub(crate) fn verts_to_geo(verts: &[[f32; 2]]) -> Option<geo::Polygon<f64>> {
-    if verts.len() < 3 { return None; }
-    let coords: Vec<geo::Coord<f64>> = verts.iter()
+    if verts.len() < 3 {
+        return None;
+    }
+    let coords: Vec<geo::Coord<f64>> = verts
+        .iter()
         .map(|v| geo::coord! { x: v[0] as f64, y: v[1] as f64 })
         .collect();
     let ring = geo::LineString::new(coords);
@@ -507,9 +551,7 @@ pub(crate) fn verts_to_geo(verts: &[[f32; 2]]) -> Option<geo::Polygon<f64>> {
 /// Convert a `geo::LineString` exterior ring back to `Vec<[f32; 2]>`.
 fn geo_to_verts(ring: &geo::LineString<f64>) -> Vec<[f32; 2]> {
     // geo rings are closed (last == first), drop the duplicate
-    let pts: Vec<[f32; 2]> = ring.coords()
-        .map(|c| [c.x as f32, c.y as f32])
-        .collect();
+    let pts: Vec<[f32; 2]> = ring.coords().map(|c| [c.x as f32, c.y as f32]).collect();
     if pts.len() > 1 && pts.first() == pts.last() {
         pts[..pts.len() - 1].to_vec()
     } else {
@@ -559,9 +601,15 @@ mod tests {
     #[test]
     fn center_empty_vertices() {
         let s = Surface {
-            uuid: generate_short_uuid(), name: "E".into(), vertices: vec![], extra_contours: vec![],
-            source: master_source(), content_mapping: ContentMapping::default(),
-            output_type: SurfaceOutputType::Projection, circle_hint: None, default_warp: None,
+            uuid: generate_short_uuid(),
+            name: "E".into(),
+            vertices: vec![],
+            extra_contours: vec![],
+            source: master_source(),
+            content_mapping: ContentMapping::default(),
+            output_type: SurfaceOutputType::Projection,
+            circle_hint: None,
+            default_warp: None,
         };
         assert_eq!(s.center(), [0.0, 0.0]);
     }
@@ -584,10 +632,15 @@ mod tests {
     #[test]
     fn contains_fewer_than_3_vertices() {
         let s = Surface {
-            uuid: generate_short_uuid(), name: "Line".into(), vertices: vec![[0.0, 0.0], [1.0, 1.0]],
-            extra_contours: vec![], source: master_source(),
+            uuid: generate_short_uuid(),
+            name: "Line".into(),
+            vertices: vec![[0.0, 0.0], [1.0, 1.0]],
+            extra_contours: vec![],
+            source: master_source(),
             content_mapping: ContentMapping::default(),
-            output_type: SurfaceOutputType::Projection, circle_hint: None, default_warp: None,
+            output_type: SurfaceOutputType::Projection,
+            circle_hint: None,
+            default_warp: None,
         };
         assert!(!s.contains(0.5, 0.5));
     }
@@ -654,7 +707,12 @@ mod tests {
 
     #[test]
     fn circle_hint_generates_vertices() {
-        let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 8, aspect_ratio: 1.0 };
+        let hint = CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.2,
+            sides: 8,
+            aspect_ratio: 1.0,
+        };
         let verts = hint.generate_vertices();
         assert_eq!(verts.len(), 8);
         // All vertices should be within canvas bounds
@@ -666,15 +724,30 @@ mod tests {
 
     #[test]
     fn circle_hint_min_3_sides() {
-        let hint = CircleHint { center: [0.5, 0.5], radius: 0.1, sides: 1, aspect_ratio: 1.0 };
+        let hint = CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.1,
+            sides: 1,
+            aspect_ratio: 1.0,
+        };
         let verts = hint.generate_vertices();
         assert_eq!(verts.len(), 3); // Clamped to min 3
     }
 
     #[test]
     fn circle_hint_aspect_ratio() {
-        let hint_square = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 4, aspect_ratio: 1.0 };
-        let hint_wide = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 4, aspect_ratio: 2.0 };
+        let hint_square = CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.2,
+            sides: 4,
+            aspect_ratio: 1.0,
+        };
+        let hint_wide = CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.2,
+            sides: 4,
+            aspect_ratio: 2.0,
+        };
         let verts_sq = hint_square.generate_vertices();
         let verts_wide = hint_wide.generate_vertices();
         // With wider aspect ratio, y spread should be larger
@@ -687,13 +760,22 @@ mod tests {
 
     #[test]
     fn surface_regenerate_circle_vertices() {
-        let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 6, aspect_ratio: 1.0 };
+        let hint = CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.2,
+            sides: 6,
+            aspect_ratio: 1.0,
+        };
         let mut s = Surface {
-            uuid: generate_short_uuid(), name: "C".into(), vertices: vec![[0.0, 0.0]], // dummy
-            extra_contours: vec![], source: master_source(),
+            uuid: generate_short_uuid(),
+            name: "C".into(),
+            vertices: vec![[0.0, 0.0]], // dummy
+            extra_contours: vec![],
+            source: master_source(),
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
-            circle_hint: Some(hint), default_warp: None,
+            circle_hint: Some(hint),
+            default_warp: None,
         };
         s.regenerate_circle_vertices();
         assert_eq!(s.vertices.len(), 6);
@@ -701,13 +783,22 @@ mod tests {
 
     #[test]
     fn surface_convert_to_polygon() {
-        let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 6, aspect_ratio: 1.0 };
+        let hint = CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.2,
+            sides: 6,
+            aspect_ratio: 1.0,
+        };
         let mut s = Surface {
-            uuid: generate_short_uuid(), name: "C".into(), vertices: hint.generate_vertices(),
-            extra_contours: vec![], source: master_source(),
+            uuid: generate_short_uuid(),
+            name: "C".into(),
+            vertices: hint.generate_vertices(),
+            extra_contours: vec![],
+            source: master_source(),
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
-            circle_hint: Some(hint), default_warp: None,
+            circle_hint: Some(hint),
+            default_warp: None,
         };
         assert!(s.is_circle());
         s.convert_to_polygon();
@@ -721,14 +812,16 @@ mod tests {
     fn contour_count() {
         let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 0.5, 0.5, master_source());
         assert_eq!(s.contour_count(), 1);
-        s.extra_contours.push(vec![[0.6, 0.6], [0.8, 0.6], [0.7, 0.8]]);
+        s.extra_contours
+            .push(vec![[0.6, 0.6], [0.8, 0.6], [0.7, 0.8]]);
         assert_eq!(s.contour_count(), 2);
     }
 
     #[test]
     fn contour_access() {
         let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 0.5, 0.5, master_source());
-        s.extra_contours.push(vec![[0.6, 0.6], [0.8, 0.6], [0.7, 0.8]]);
+        s.extra_contours
+            .push(vec![[0.6, 0.6], [0.8, 0.6], [0.7, 0.8]]);
         assert!(s.contour(0).is_some());
         assert!(s.contour(1).is_some());
         assert!(s.contour(2).is_none());
@@ -739,7 +832,8 @@ mod tests {
     #[test]
     fn contains_in_extra_contour() {
         let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 0.1, 0.1, master_source());
-        s.extra_contours.push(vec![[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]]);
+        s.extra_contours
+            .push(vec![[0.5, 0.5], [0.9, 0.5], [0.9, 0.9], [0.5, 0.9]]);
         assert!(s.contains(0.7, 0.7)); // Inside extra contour
         assert!(!s.contains(0.3, 0.3)); // Between contours
     }
@@ -792,8 +886,22 @@ mod tests {
     fn manager_surface_at_returns_topmost() {
         let mut mgr = SurfaceManager::new();
         // Two overlapping surfaces
-        mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.5, 0.5, master_source()));
-        mgr.surfaces.push(Surface::new_rect("B".into(), 0.1, 0.1, 0.5, 0.5, master_source()));
+        mgr.surfaces.push(Surface::new_rect(
+            "A".into(),
+            0.0,
+            0.0,
+            0.5,
+            0.5,
+            master_source(),
+        ));
+        mgr.surfaces.push(Surface::new_rect(
+            "B".into(),
+            0.1,
+            0.1,
+            0.5,
+            0.5,
+            master_source(),
+        ));
         let b_uuid = mgr.surfaces[1].uuid.clone();
         // At (0.2, 0.2) both contain, but B is topmost (last added)
         assert_eq!(mgr.surface_at(0.2, 0.2), Some(b_uuid));
@@ -811,7 +919,12 @@ mod tests {
     #[test]
     fn manager_add_circle_surface() {
         let mut mgr = SurfaceManager::new();
-        let hint = CircleHint { center: [0.5, 0.5], radius: 0.2, sides: 16, aspect_ratio: 1.0 };
+        let hint = CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.2,
+            sides: 16,
+            aspect_ratio: 1.0,
+        };
         let uuid = mgr.add_circle_surface("Circle".into(), hint, master_source());
         assert_eq!(uuid.len(), 8);
         assert!(mgr.surfaces[0].is_circle());
@@ -841,8 +954,22 @@ mod tests {
     #[test]
     fn manager_combine_surfaces() {
         let mut mgr = SurfaceManager::new();
-        mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.3, 0.3, master_source()));
-        mgr.surfaces.push(Surface::new_rect("B".into(), 0.2, 0.2, 0.3, 0.3, master_source()));
+        mgr.surfaces.push(Surface::new_rect(
+            "A".into(),
+            0.0,
+            0.0,
+            0.3,
+            0.3,
+            master_source(),
+        ));
+        mgr.surfaces.push(Surface::new_rect(
+            "B".into(),
+            0.2,
+            0.2,
+            0.3,
+            0.3,
+            master_source(),
+        ));
         let uuid_a = mgr.surfaces[0].uuid.clone();
         let uuid_b = mgr.surfaces[1].uuid.clone();
         let result = mgr.combine_surfaces(&[uuid_a, uuid_b]);
@@ -855,7 +982,14 @@ mod tests {
     #[test]
     fn manager_combine_fewer_than_2() {
         let mut mgr = SurfaceManager::new();
-        mgr.surfaces.push(Surface::new_rect("A".into(), 0.0, 0.0, 0.3, 0.3, master_source()));
+        mgr.surfaces.push(Surface::new_rect(
+            "A".into(),
+            0.0,
+            0.0,
+            0.3,
+            0.3,
+            master_source(),
+        ));
         let uuid = mgr.surfaces[0].uuid.clone();
         assert_eq!(mgr.combine_surfaces(&[uuid]), None);
         assert_eq!(mgr.combine_surfaces(&[]), None);

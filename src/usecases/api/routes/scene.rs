@@ -5,12 +5,17 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 
-use crate::usecases::api::SharedState;
 use crate::usecases::api::projection::{self, StateReadError};
+use crate::usecases::api::SharedState;
 
-fn read_or_error(state: &SharedState) -> Result<crate::engine::EngineState, (StatusCode, &'static str)> {
+fn read_or_error(
+    state: &SharedState,
+) -> Result<crate::engine::EngineState, (StatusCode, &'static str)> {
     projection::read_state(&state.engine_state).map_err(|e| match e {
-        StateReadError::NotInitialized => (StatusCode::SERVICE_UNAVAILABLE, "Engine not yet initialized"),
+        StateReadError::NotInitialized => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Engine not yet initialized",
+        ),
         StateReadError::LockPoisoned => (StatusCode::INTERNAL_SERVER_ERROR, "State lock poisoned"),
     })
 }

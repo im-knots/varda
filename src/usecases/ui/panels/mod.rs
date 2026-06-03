@@ -3,26 +3,26 @@
 //! Each sub-module renders a specific panel or UI section.
 //! The `render_ui` function orchestrates the top-level layout.
 
-mod geometry;
-pub(crate) mod utils;
-mod library;
-mod notifications_overlay;
-mod right_panel;
-mod stage;
-mod outputs;
 mod deck_detail;
 mod effects;
-mod modulation;
+mod geometry;
+mod library;
 mod midi;
 mod mixer;
+mod modulation;
+mod notifications_overlay;
+mod outputs;
+mod right_panel;
 mod sequence;
+mod stage;
+pub(crate) mod utils;
 
-use super::{UIData, UIActions, LibraryDrag, EffectDrag};
-use library::render_library_panel;
-use right_panel::render_right_panel;
+use super::{EffectDrag, LibraryDrag, UIActions, UIData};
 use deck_detail::render_bottom_panel;
+use library::render_library_panel;
 use mixer::render_central_panel;
 use notifications_overlay::render_notifications;
+use right_panel::render_right_panel;
 
 /// Top-level UI rendering entry point. Orchestrates all panels.
 pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
@@ -49,7 +49,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
-                    if ui.small_button("▶").on_hover_text("Open library (L)").clicked() {
+                    if ui
+                        .small_button("▶")
+                        .on_hover_text("Open library (L)")
+                        .clicked()
+                    {
                         actions.toggle_library_panel = true;
                     }
                 });
@@ -72,7 +76,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
-                    if ui.small_button("«").on_hover_text("Open master panel").clicked() {
+                    if ui
+                        .small_button("«")
+                        .on_hover_text("Open master panel")
+                        .clicked()
+                    {
                         actions.toggle_right_panel = true;
                     }
                 });
@@ -101,18 +109,33 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                 // Outside learn mode: normal action on click.
                 {
                     let undo_enabled = if any_learn { true } else { data.can_undo };
-                    let undo_resp = ui.add_enabled(undo_enabled, egui::Button::new("↩ Undo")).on_hover_text("Undo (⌘Z)");
+                    let undo_resp = ui
+                        .add_enabled(undo_enabled, egui::Button::new("↩ Undo"))
+                        .on_hover_text("Undo (⌘Z)");
                     if any_learn {
                         if data.midi_learn_active {
-                            let is_target = data.midi_learn_target.as_deref() == Some("action/undo");
-                            if is_target { super::widgets::draw_midi_learn_selected(ui, undo_resp.rect); }
-                            else { super::widgets::draw_midi_learn_glow(ui, undo_resp.rect); }
-                            if undo_resp.clicked() { actions.midi_learn_select = Some("action/undo".to_string()); }
+                            let is_target =
+                                data.midi_learn_target.as_deref() == Some("action/undo");
+                            if is_target {
+                                super::widgets::draw_midi_learn_selected(ui, undo_resp.rect);
+                            } else {
+                                super::widgets::draw_midi_learn_glow(ui, undo_resp.rect);
+                            }
+                            if undo_resp.clicked() {
+                                actions.midi_learn_select = Some("action/undo".to_string());
+                            }
                         } else {
                             let is_target = data.keyboard_learn_target.as_deref() == Some("Undo");
-                            if is_target { super::widgets::draw_keyboard_learn_selected(ui, undo_resp.rect); }
-                            else { super::widgets::draw_keyboard_learn_glow(ui, undo_resp.rect); }
-                            if undo_resp.clicked() { actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Undo)); }
+                            if is_target {
+                                super::widgets::draw_keyboard_learn_selected(ui, undo_resp.rect);
+                            } else {
+                                super::widgets::draw_keyboard_learn_glow(ui, undo_resp.rect);
+                            }
+                            if undo_resp.clicked() {
+                                actions.keyboard_learn_select = Some(
+                                    crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Undo),
+                                );
+                            }
                         }
                     } else if undo_resp.clicked() {
                         actions.undo_requested = true;
@@ -120,18 +143,33 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                 }
                 {
                     let redo_enabled = if any_learn { true } else { data.can_redo };
-                    let redo_resp = ui.add_enabled(redo_enabled, egui::Button::new("↪ Redo")).on_hover_text("Redo (⌘⇧Z)");
+                    let redo_resp = ui
+                        .add_enabled(redo_enabled, egui::Button::new("↪ Redo"))
+                        .on_hover_text("Redo (⌘⇧Z)");
                     if any_learn {
                         if data.midi_learn_active {
-                            let is_target = data.midi_learn_target.as_deref() == Some("action/redo");
-                            if is_target { super::widgets::draw_midi_learn_selected(ui, redo_resp.rect); }
-                            else { super::widgets::draw_midi_learn_glow(ui, redo_resp.rect); }
-                            if redo_resp.clicked() { actions.midi_learn_select = Some("action/redo".to_string()); }
+                            let is_target =
+                                data.midi_learn_target.as_deref() == Some("action/redo");
+                            if is_target {
+                                super::widgets::draw_midi_learn_selected(ui, redo_resp.rect);
+                            } else {
+                                super::widgets::draw_midi_learn_glow(ui, redo_resp.rect);
+                            }
+                            if redo_resp.clicked() {
+                                actions.midi_learn_select = Some("action/redo".to_string());
+                            }
                         } else {
                             let is_target = data.keyboard_learn_target.as_deref() == Some("Redo");
-                            if is_target { super::widgets::draw_keyboard_learn_selected(ui, redo_resp.rect); }
-                            else { super::widgets::draw_keyboard_learn_glow(ui, redo_resp.rect); }
-                            if redo_resp.clicked() { actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Redo)); }
+                            if is_target {
+                                super::widgets::draw_keyboard_learn_selected(ui, redo_resp.rect);
+                            } else {
+                                super::widgets::draw_keyboard_learn_glow(ui, redo_resp.rect);
+                            }
+                            if redo_resp.clicked() {
+                                actions.keyboard_learn_select = Some(
+                                    crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Redo),
+                                );
+                            }
                         }
                     } else if redo_resp.clicked() {
                         actions.redo_requested = true;
@@ -141,15 +179,28 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     let save_resp = ui.button("💾 Save").on_hover_text("Save workspace (⌘S)");
                     if any_learn {
                         if data.midi_learn_active {
-                            let is_target = data.midi_learn_target.as_deref() == Some("action/save");
-                            if is_target { super::widgets::draw_midi_learn_selected(ui, save_resp.rect); }
-                            else { super::widgets::draw_midi_learn_glow(ui, save_resp.rect); }
-                            if save_resp.clicked() { actions.midi_learn_select = Some("action/save".to_string()); }
+                            let is_target =
+                                data.midi_learn_target.as_deref() == Some("action/save");
+                            if is_target {
+                                super::widgets::draw_midi_learn_selected(ui, save_resp.rect);
+                            } else {
+                                super::widgets::draw_midi_learn_glow(ui, save_resp.rect);
+                            }
+                            if save_resp.clicked() {
+                                actions.midi_learn_select = Some("action/save".to_string());
+                            }
                         } else {
                             let is_target = data.keyboard_learn_target.as_deref() == Some("Save");
-                            if is_target { super::widgets::draw_keyboard_learn_selected(ui, save_resp.rect); }
-                            else { super::widgets::draw_keyboard_learn_glow(ui, save_resp.rect); }
-                            if save_resp.clicked() { actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Save)); }
+                            if is_target {
+                                super::widgets::draw_keyboard_learn_selected(ui, save_resp.rect);
+                            } else {
+                                super::widgets::draw_keyboard_learn_glow(ui, save_resp.rect);
+                            }
+                            if save_resp.clicked() {
+                                actions.keyboard_learn_select = Some(
+                                    crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Save),
+                                );
+                            }
                         }
                     } else if save_resp.clicked() {
                         actions.save_requested = true;
@@ -161,7 +212,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     let text = egui::RichText::new("🎹 MIDI LEARN")
                         .color(egui::Color32::from_rgb(180, 100, 255))
                         .strong();
-                    if ui.button(text).on_hover_text("Click to exit MIDI learn mode").clicked() {
+                    if ui
+                        .button(text)
+                        .on_hover_text("Click to exit MIDI learn mode")
+                        .clicked()
+                    {
                         actions.midi_learn_toggle = true;
                     }
                 }
@@ -169,7 +224,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     let text = egui::RichText::new("⌨ KB LEARN")
                         .color(egui::Color32::from_rgb(255, 165, 0))
                         .strong();
-                    if ui.button(text).on_hover_text("Click to exit keyboard learn mode").clicked() {
+                    if ui
+                        .button(text)
+                        .on_hover_text("Click to exit keyboard learn mode")
+                        .clicked()
+                    {
                         actions.keyboard_learn_toggle = true;
                     }
                 }
@@ -185,10 +244,12 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         ui.label(egui::RichText::new(format!("({})", dev)).weak().small());
                     }
                     // Clickable BPM label → opens clock source popover
-                    let bpm_response = ui.add(
-                        egui::Label::new(egui::RichText::new(&bpm_text).monospace())
-                            .sense(egui::Sense::click()),
-                    ).on_hover_text("Click to select clock source");
+                    let bpm_response = ui
+                        .add(
+                            egui::Label::new(egui::RichText::new(&bpm_text).monospace())
+                                .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Click to select clock source");
                     egui::Popup::from_toggle_button_response(&bpm_response)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
@@ -205,10 +266,16 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     } else {
                         egui::Color32::from_rgb(220, 60, 60)
                     };
-                    let fps_response = ui.add(
-                        egui::Label::new(egui::RichText::new(format!("{:.0} FPS", fps)).color(fps_color).monospace())
+                    let fps_response = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{:.0} FPS", fps))
+                                    .color(fps_color)
+                                    .monospace(),
+                            )
                             .sense(egui::Sense::click()),
-                    ).on_hover_text("Click for render timing details");
+                        )
+                        .on_hover_text("Click for render timing details");
                     egui::Popup::from_toggle_button_response(&fps_response)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
@@ -218,7 +285,11 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     ui.separator();
 
                     // GPU load — render budget % (total render time / 16.67ms target)
-                    let total_render_ms: f32 = data.channel_render_stats.iter().map(|s| s.render_time_ms).sum();
+                    let total_render_ms: f32 = data
+                        .channel_render_stats
+                        .iter()
+                        .map(|s| s.render_time_ms)
+                        .sum();
                     let gpu_load_pct = (total_render_ms / 16.67) * 100.0;
                     let gpu_color = if gpu_load_pct < 50.0 {
                         egui::Color32::from_rgb(100, 220, 100)
@@ -227,11 +298,16 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     } else {
                         egui::Color32::from_rgb(220, 60, 60)
                     };
-                    let gpu_response = ui.add(
-                        egui::Label::new(egui::RichText::new(format!("🖥 {:.0}%", gpu_load_pct))
-                            .color(gpu_color).monospace())
+                    let gpu_response = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("🖥 {:.0}%", gpu_load_pct))
+                                    .color(gpu_color)
+                                    .monospace(),
+                            )
                             .sense(egui::Sense::click()),
-                    ).on_hover_text("GPU render load — click for details");
+                        )
+                        .on_hover_text("GPU render load — click for details");
                     egui::Popup::from_toggle_button_response(&gpu_response)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
@@ -248,12 +324,20 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     } else {
                         egui::Color32::from_rgb(220, 60, 60)
                     };
-                    ui.label(egui::RichText::new(format!("CPU {:.0}%", data.cpu_usage))
-                        .color(cpu_color).monospace().small());
+                    ui.label(
+                        egui::RichText::new(format!("CPU {:.0}%", data.cpu_usage))
+                            .color(cpu_color)
+                            .monospace()
+                            .small(),
+                    );
 
                     let ram_gb = data.ram_used as f64 / (1024.0 * 1024.0 * 1024.0);
                     let ram_total_gb = data.ram_total as f64 / (1024.0 * 1024.0 * 1024.0);
-                    let ram_pct = if data.ram_total > 0 { data.ram_used as f32 / data.ram_total as f32 * 100.0 } else { 0.0 };
+                    let ram_pct = if data.ram_total > 0 {
+                        data.ram_used as f32 / data.ram_total as f32 * 100.0
+                    } else {
+                        0.0
+                    };
                     let ram_color = if ram_pct < 50.0 {
                         egui::Color32::from_rgb(100, 220, 100)
                     } else if ram_pct < 80.0 {
@@ -261,17 +345,23 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     } else {
                         egui::Color32::from_rgb(220, 60, 60)
                     };
-                    ui.label(egui::RichText::new(format!("RAM {:.1}/{:.0}G", ram_gb, ram_total_gb))
-                        .color(ram_color).monospace().small());
+                    ui.label(
+                        egui::RichText::new(format!("RAM {:.1}/{:.0}G", ram_gb, ram_total_gb))
+                            .color(ram_color)
+                            .monospace()
+                            .small(),
+                    );
 
                     ui.separator();
 
                     // Resolution selector
                     let res_label = format!("📐 {}×{}", data.render_width, data.render_height);
-                    let res_response = ui.add(
-                        egui::Label::new(egui::RichText::new(&res_label).monospace())
-                            .sense(egui::Sense::click()),
-                    ).on_hover_text("Click to change render resolution");
+                    let res_response = ui
+                        .add(
+                            egui::Label::new(egui::RichText::new(&res_label).monospace())
+                                .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Click to change render resolution");
                     egui::Popup::from_toggle_button_response(&res_response)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
@@ -303,7 +393,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 
     // === KEYBOARD SHORTCUTS (data-driven via keymap) ===
     {
-        use crate::keymap::{KeyCombo, KeyTarget, ActionId, collect_pressed_keys};
+        use crate::keymap::{collect_pressed_keys, ActionId, KeyCombo, KeyTarget};
         let pressed = collect_pressed_keys(ui);
 
         if data.keyboard_learn_active {
@@ -418,22 +508,31 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
             });
         }
     } else {
-        let had_payload: bool = ctx.memory(|mem| mem.data.get_temp(had_payload_id).unwrap_or(false));
+        let had_payload: bool =
+            ctx.memory(|mem| mem.data.get_temp(had_payload_id).unwrap_or(false));
         if had_payload {
-            let hover_ch: Option<usize> = ctx.memory(|mem| mem.data.get_temp(hover_ch_id).unwrap_or(None));
-            let hover_fx: Option<(String, usize, usize)> = ctx.memory(|mem| mem.data.get_temp(hover_fx_target_id).unwrap_or(None));
-            let on_new_ch_zone: bool = ctx.memory(|mem| mem.data.get_temp(on_new_ch_id).unwrap_or(false));
+            let hover_ch: Option<usize> =
+                ctx.memory(|mem| mem.data.get_temp(hover_ch_id).unwrap_or(None));
+            let hover_fx: Option<(String, usize, usize)> =
+                ctx.memory(|mem| mem.data.get_temp(hover_fx_target_id).unwrap_or(None));
+            let on_new_ch_zone: bool =
+                ctx.memory(|mem| mem.data.get_temp(on_new_ch_id).unwrap_or(false));
 
             if let Some(ch_idx) = hover_ch {
                 let gen_key = egui::Id::new("__lib_dnd_gen_idx");
                 let gen_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(gen_key));
                 if let Some(gen_idx) = gen_idx {
-                    log::info!("Library drop (deferred): generator {} -> ch{}", gen_idx, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): generator {} -> ch{}",
+                        gen_idx,
+                        ch_idx
+                    );
                     actions.shader_to_add = Some((ch_idx, gen_idx));
                 }
 
                 let cam_key = egui::Id::new("__lib_dnd_cam_id");
-                let cam_id: Option<crate::camera::CameraId> = ctx.memory(|mem| mem.data.get_temp(cam_key));
+                let cam_id: Option<crate::camera::CameraId> =
+                    ctx.memory(|mem| mem.data.get_temp(cam_key));
                 if let Some(cam_id) = cam_id {
                     log::info!("Library drop (deferred): camera {} -> ch{}", cam_id, ch_idx);
                     actions.camera_to_add = Some((ch_idx, cam_id));
@@ -442,21 +541,35 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
                 let ndi_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(ndi_key));
                 if let Some(ndi_name) = ndi_name {
-                    log::info!("Library drop (deferred): NDI '{}' -> ch{}", ndi_name, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): NDI '{}' -> ch{}",
+                        ndi_name,
+                        ch_idx
+                    );
                     actions.ndi_to_add = Some((ch_idx, ndi_name));
                 }
 
                 let syph_key = egui::Id::new("__lib_dnd_syph_name");
                 let syph_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(syph_key));
                 if let Some(syph_name) = syph_name {
-                    log::info!("Library drop (deferred): Syphon '{}' -> ch{}", syph_name, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): Syphon '{}' -> ch{}",
+                        syph_name,
+                        ch_idx
+                    );
                     actions.syphon_to_add = Some((ch_idx, syph_name));
                 }
 
                 let srt_key = egui::Id::new("__lib_dnd_srt_config");
-                let srt_config: Option<(String, crate::stream::SrtMode)> = ctx.memory(|mem| mem.data.get_temp(srt_key));
+                let srt_config: Option<(String, crate::stream::SrtMode)> =
+                    ctx.memory(|mem| mem.data.get_temp(srt_key));
                 if let Some((url, mode)) = srt_config {
-                    log::info!("Library drop (deferred): SRT '{}' ({:?}) -> ch{}", url, mode, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): SRT '{}' ({:?}) -> ch{}",
+                        url,
+                        mode,
+                        ch_idx
+                    );
                     actions.srt_to_add = Some((ch_idx, url, mode));
                 }
 
@@ -473,16 +586,29 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 }
 
                 let rtmp_key = egui::Id::new("__lib_dnd_rtmp_config");
-                if let Some((url, mode)) = ctx.memory(|mem| mem.data.get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)) {
-                    log::info!("Library drop (deferred): RTMP '{}' ({}) -> ch{}", url, mode, ch_idx);
+                if let Some((url, mode)) = ctx.memory(|mem| {
+                    mem.data
+                        .get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)
+                }) {
+                    log::info!(
+                        "Library drop (deferred): RTMP '{}' ({}) -> ch{}",
+                        url,
+                        mode,
+                        ch_idx
+                    );
                     actions.rtmp_to_add = Some((ch_idx, url, mode));
                 }
 
                 // Deck preset dropped on a channel
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
-                let deck_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(deck_preset_key));
+                let deck_preset_idx: Option<usize> =
+                    ctx.memory(|mem| mem.data.get_temp(deck_preset_key));
                 if let Some(preset_idx) = deck_preset_idx {
-                    log::info!("Library drop (deferred): deck preset {} -> ch{}", preset_idx, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): deck preset {} -> ch{}",
+                        preset_idx,
+                        ch_idx
+                    );
                     actions.deck_preset_to_add = Some((ch_idx, preset_idx));
                 }
             } else if on_new_ch_zone {
@@ -492,55 +618,103 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
 
                 let gen_key = egui::Id::new("__lib_dnd_gen_idx");
                 if let Some(gen_idx) = ctx.memory(|mem| mem.data.get_temp::<usize>(gen_key)) {
-                    log::info!("Library drop (deferred): generator {} -> new ch{}", gen_idx, new_ch_idx);
+                    log::info!(
+                        "Library drop (deferred): generator {} -> new ch{}",
+                        gen_idx,
+                        new_ch_idx
+                    );
                     actions.shader_to_add = Some((new_ch_idx, gen_idx));
                 }
 
                 let cam_key = egui::Id::new("__lib_dnd_cam_id");
-                if let Some(cam_id) = ctx.memory(|mem| mem.data.get_temp::<crate::camera::CameraId>(cam_key)) {
-                    log::info!("Library drop (deferred): camera {} -> new ch{}", cam_id, new_ch_idx);
+                if let Some(cam_id) =
+                    ctx.memory(|mem| mem.data.get_temp::<crate::camera::CameraId>(cam_key))
+                {
+                    log::info!(
+                        "Library drop (deferred): camera {} -> new ch{}",
+                        cam_id,
+                        new_ch_idx
+                    );
                     actions.camera_to_add = Some((new_ch_idx, cam_id));
                 }
 
                 let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
                 if let Some(ndi_name) = ctx.memory(|mem| mem.data.get_temp::<String>(ndi_key)) {
-                    log::info!("Library drop (deferred): NDI '{}' -> new ch{}", ndi_name, new_ch_idx);
+                    log::info!(
+                        "Library drop (deferred): NDI '{}' -> new ch{}",
+                        ndi_name,
+                        new_ch_idx
+                    );
                     actions.ndi_to_add = Some((new_ch_idx, ndi_name));
                 }
 
                 let syph_key = egui::Id::new("__lib_dnd_syph_name");
                 if let Some(syph_name) = ctx.memory(|mem| mem.data.get_temp::<String>(syph_key)) {
-                    log::info!("Library drop (deferred): Syphon '{}' -> new ch{}", syph_name, new_ch_idx);
+                    log::info!(
+                        "Library drop (deferred): Syphon '{}' -> new ch{}",
+                        syph_name,
+                        new_ch_idx
+                    );
                     actions.syphon_to_add = Some((new_ch_idx, syph_name));
                 }
 
                 let srt_key = egui::Id::new("__lib_dnd_srt_config");
-                if let Some((url, mode)) = ctx.memory(|mem| mem.data.get_temp::<(String, crate::stream::SrtMode)>(srt_key)) {
-                    log::info!("Library drop (deferred): SRT '{}' ({:?}) -> new ch{}", url, mode, new_ch_idx);
+                if let Some((url, mode)) = ctx.memory(|mem| {
+                    mem.data
+                        .get_temp::<(String, crate::stream::SrtMode)>(srt_key)
+                }) {
+                    log::info!(
+                        "Library drop (deferred): SRT '{}' ({:?}) -> new ch{}",
+                        url,
+                        mode,
+                        new_ch_idx
+                    );
                     actions.srt_to_add = Some((new_ch_idx, url, mode));
                 }
 
                 let hls_key = egui::Id::new("__lib_dnd_hls_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(hls_key)) {
-                    log::info!("Library drop (deferred): HLS '{}' -> new ch{}", url, new_ch_idx);
+                    log::info!(
+                        "Library drop (deferred): HLS '{}' -> new ch{}",
+                        url,
+                        new_ch_idx
+                    );
                     actions.hls_to_add = Some((new_ch_idx, url));
                 }
 
                 let dash_key = egui::Id::new("__lib_dnd_dash_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
-                    log::info!("Library drop (deferred): DASH '{}' -> new ch{}", url, new_ch_idx);
+                    log::info!(
+                        "Library drop (deferred): DASH '{}' -> new ch{}",
+                        url,
+                        new_ch_idx
+                    );
                     actions.dash_to_add = Some((new_ch_idx, url));
                 }
 
                 let rtmp_key = egui::Id::new("__lib_dnd_rtmp_config");
-                if let Some((url, mode)) = ctx.memory(|mem| mem.data.get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)) {
-                    log::info!("Library drop (deferred): RTMP '{}' ({}) -> new ch{}", url, mode, new_ch_idx);
+                if let Some((url, mode)) = ctx.memory(|mem| {
+                    mem.data
+                        .get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)
+                }) {
+                    log::info!(
+                        "Library drop (deferred): RTMP '{}' ({}) -> new ch{}",
+                        url,
+                        mode,
+                        new_ch_idx
+                    );
                     actions.rtmp_to_add = Some((new_ch_idx, url, mode));
                 }
 
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
-                if let Some(preset_idx) = ctx.memory(|mem| mem.data.get_temp::<usize>(deck_preset_key)) {
-                    log::info!("Library drop (deferred): deck preset {} -> new ch{}", preset_idx, new_ch_idx);
+                if let Some(preset_idx) =
+                    ctx.memory(|mem| mem.data.get_temp::<usize>(deck_preset_key))
+                {
+                    log::info!(
+                        "Library drop (deferred): deck preset {} -> new ch{}",
+                        preset_idx,
+                        new_ch_idx
+                    );
                     actions.deck_preset_to_add = Some((new_ch_idx, preset_idx));
                 }
             }
@@ -550,10 +724,17 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
             let ch_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(ch_preset_key));
             if let Some(preset_idx) = ch_preset_idx {
                 if let Some(ch_idx) = hover_ch {
-                    log::info!("Library drop (deferred): channel preset {} -> existing ch{}", preset_idx, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): channel preset {} -> existing ch{}",
+                        preset_idx,
+                        ch_idx
+                    );
                     actions.channel_preset_to_add = Some((Some(ch_idx), preset_idx));
                 } else {
-                    log::info!("Library drop (deferred): channel preset {} -> new channel", preset_idx);
+                    log::info!(
+                        "Library drop (deferred): channel preset {} -> new channel",
+                        preset_idx
+                    );
                     actions.channel_preset_to_add = Some((None, preset_idx));
                 }
             }
@@ -564,15 +745,27 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 if let Some(filter_idx) = filter_idx {
                     match target_type.as_str() {
                         "deck" => {
-                            log::info!("Library drop (deferred): effect {} -> ch{} deck{}", filter_idx, ch_idx, deck_idx);
+                            log::info!(
+                                "Library drop (deferred): effect {} -> ch{} deck{}",
+                                filter_idx,
+                                ch_idx,
+                                deck_idx
+                            );
                             actions.effect_to_add = Some((ch_idx, deck_idx, filter_idx));
                         }
                         "channel" => {
-                            log::info!("Library drop (deferred): effect {} -> ch{} channel fx", filter_idx, ch_idx);
+                            log::info!(
+                                "Library drop (deferred): effect {} -> ch{} channel fx",
+                                filter_idx,
+                                ch_idx
+                            );
                             actions.ch_effect_to_add = Some((ch_idx, filter_idx));
                         }
                         "master" => {
-                            log::info!("Library drop (deferred): effect {} -> master fx", filter_idx);
+                            log::info!(
+                                "Library drop (deferred): effect {} -> master fx",
+                                filter_idx
+                            );
                             actions.master_effect_to_add = Some(filter_idx);
                         }
                         _ => {}
@@ -583,24 +776,37 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
             ctx.memory_mut(|mem| {
                 mem.data.remove::<bool>(had_payload_id);
                 mem.data.remove::<Option<usize>>(hover_ch_id);
-                mem.data.remove::<Option<(String, usize, usize)>>(hover_fx_target_id);
+                mem.data
+                    .remove::<Option<(String, usize, usize)>>(hover_fx_target_id);
                 mem.data.remove::<bool>(on_new_ch_id);
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_gen_idx"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
-                mem.data.remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));
-                mem.data.remove::<String>(egui::Id::new("__lib_dnd_ndi_name"));
-                mem.data.remove::<String>(egui::Id::new("__lib_dnd_syph_name"));
-                mem.data.remove::<(String, crate::stream::SrtMode)>(egui::Id::new("__lib_dnd_srt_config"));
-                mem.data.remove::<String>(egui::Id::new("__lib_dnd_hls_url"));
-                mem.data.remove::<String>(egui::Id::new("__lib_dnd_dash_url"));
-                mem.data.remove::<(String, crate::stream::RtmpMode)>(egui::Id::new("__lib_dnd_rtmp_config"));
-                mem.data.remove::<usize>(egui::Id::new("__lib_dnd_deck_preset_idx"));
-                mem.data.remove::<usize>(egui::Id::new("__lib_dnd_ch_preset_idx"));
+                mem.data
+                    .remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));
+                mem.data
+                    .remove::<String>(egui::Id::new("__lib_dnd_ndi_name"));
+                mem.data
+                    .remove::<String>(egui::Id::new("__lib_dnd_syph_name"));
+                mem.data
+                    .remove::<(String, crate::stream::SrtMode)>(egui::Id::new(
+                        "__lib_dnd_srt_config",
+                    ));
+                mem.data
+                    .remove::<String>(egui::Id::new("__lib_dnd_hls_url"));
+                mem.data
+                    .remove::<String>(egui::Id::new("__lib_dnd_dash_url"));
+                mem.data
+                    .remove::<(String, crate::stream::RtmpMode)>(egui::Id::new(
+                        "__lib_dnd_rtmp_config",
+                    ));
+                mem.data
+                    .remove::<usize>(egui::Id::new("__lib_dnd_deck_preset_idx"));
+                mem.data
+                    .remove::<usize>(egui::Id::new("__lib_dnd_ch_preset_idx"));
             });
         }
     }
 }
-
 
 /// Deferred effect reorder drag-and-drop handler.
 /// Same pattern as library drops — tracks which drop zone the pointer is over,
@@ -614,7 +820,10 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
         if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
             let mut found_dz: Option<(String, usize)> = None;
 
-            let check_chain = |chain_key: &str, ctx: &egui::Context, pos: egui::Pos2| -> Option<(String, usize)> {
+            let check_chain = |chain_key: &str,
+                               ctx: &egui::Context,
+                               pos: egui::Pos2|
+             -> Option<(String, usize)> {
                 let count_key = egui::Id::new("eff_dz_count").with(chain_key.to_string());
                 let count: usize = ctx.memory(|mem| mem.data.get_temp(count_key).unwrap_or(0));
                 for p in 0..count {
@@ -639,7 +848,9 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
             if found_dz.is_none() {
                 for ch_idx in 0..data.channels.len() {
                     found_dz = check_chain(&format!("ch_{}", ch_idx), ctx, pos);
-                    if found_dz.is_some() { break; }
+                    if found_dz.is_some() {
+                        break;
+                    }
                 }
             }
 
@@ -651,7 +862,8 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
     } else {
         let had: bool = ctx.memory(|mem| mem.data.get_temp(had_eff_id).unwrap_or(false));
         if had {
-            let hover_dz: Option<(String, usize)> = ctx.memory(|mem| mem.data.get_temp(hover_dz_id).unwrap_or(None));
+            let hover_dz: Option<(String, usize)> =
+                ctx.memory(|mem| mem.data.get_temp(hover_dz_id).unwrap_or(None));
             let src_key = egui::Id::new("__eff_dnd_src");
             let src: Option<EffectDrag> = ctx.memory(|mem| mem.data.get_temp(src_key));
 
@@ -660,9 +872,19 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                     EffectDrag::Deck(src_ch, src_dk, src_eff) => {
                         let expected_key = format!("deck_{}_{}", src_ch, src_dk);
                         if chain_key == expected_key {
-                            let to = if src_eff < target_pos { target_pos - 1 } else { target_pos };
+                            let to = if src_eff < target_pos {
+                                target_pos - 1
+                            } else {
+                                target_pos
+                            };
                             if to != src_eff {
-                                log::info!("Effect reorder (deferred): deck {}/{} effect {} -> {}", src_ch, src_dk, src_eff, to);
+                                log::info!(
+                                    "Effect reorder (deferred): deck {}/{} effect {} -> {}",
+                                    src_ch,
+                                    src_dk,
+                                    src_eff,
+                                    to
+                                );
                                 actions.effect_to_move = Some((src_ch, src_dk, src_eff, to));
                             }
                         }
@@ -670,18 +892,35 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                     EffectDrag::Channel(src_ch, src_eff) => {
                         let expected_key = format!("ch_{}", src_ch);
                         if chain_key == expected_key {
-                            let to = if src_eff < target_pos { target_pos - 1 } else { target_pos };
+                            let to = if src_eff < target_pos {
+                                target_pos - 1
+                            } else {
+                                target_pos
+                            };
                             if to != src_eff {
-                                log::info!("Effect reorder (deferred): ch{} effect {} -> {}", src_ch, src_eff, to);
+                                log::info!(
+                                    "Effect reorder (deferred): ch{} effect {} -> {}",
+                                    src_ch,
+                                    src_eff,
+                                    to
+                                );
                                 actions.ch_effect_to_move = Some((src_ch, src_eff, to));
                             }
                         }
                     }
                     EffectDrag::Master(src_eff) => {
                         if chain_key == "master" {
-                            let to = if src_eff < target_pos { target_pos - 1 } else { target_pos };
+                            let to = if src_eff < target_pos {
+                                target_pos - 1
+                            } else {
+                                target_pos
+                            };
                             if to != src_eff {
-                                log::info!("Effect reorder (deferred): master effect {} -> {}", src_eff, to);
+                                log::info!(
+                                    "Effect reorder (deferred): master effect {} -> {}",
+                                    src_eff,
+                                    to
+                                );
                                 actions.master_effect_to_move = Some((src_eff, to));
                             }
                         }
@@ -724,11 +963,13 @@ fn handle_sequence_step_dnd(ctx: &egui::Context, _data: &UIData, actions: &mut U
                 // After remove(from), indices shift: adjust for insert.
                 let insert_idx = if to > payload.step_idx { to - 1 } else { to };
                 if insert_idx != payload.step_idx {
-                    actions.sequence_actions.push(super::SequenceAction::MoveStep {
-                        seq_idx: payload.seq_idx,
-                        from: payload.step_idx,
-                        to: insert_idx,
-                    });
+                    actions
+                        .sequence_actions
+                        .push(super::SequenceAction::MoveStep {
+                            seq_idx: payload.seq_idx,
+                            from: payload.step_idx,
+                            to: insert_idx,
+                        });
                 }
             }
             ctx.memory_mut(|mem| {
@@ -766,7 +1007,11 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
 
     let popup_pos: Option<egui::Pos2> = ctx.memory(|mem| mem.data.get_temp(popup_id));
     if let Some(pos) = popup_pos {
-        let label = if data.midi_learn_active { "🎹 Exit MIDI Learn" } else { "🎹 Enter MIDI Learn" };
+        let label = if data.midi_learn_active {
+            "🎹 Exit MIDI Learn"
+        } else {
+            "🎹 Enter MIDI Learn"
+        };
 
         let area_resp = egui::Area::new(popup_id)
             .order(egui::Order::Foreground)
@@ -781,7 +1026,11 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
                             mem.data.remove::<bool>(popup_fresh_id);
                         });
                     }
-                    let kb_label = if data.keyboard_learn_active { "⌨ Exit Keyboard Learn" } else { "⌨ Enter Keyboard Learn" };
+                    let kb_label = if data.keyboard_learn_active {
+                        "⌨ Exit Keyboard Learn"
+                    } else {
+                        "⌨ Enter Keyboard Learn"
+                    };
                     if ui.button(kb_label).clicked() {
                         actions.keyboard_learn_toggle = true;
                         ctx.memory_mut(|mem| {
@@ -813,7 +1062,6 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
     }
 }
 
-
 /// Render the FPS details popover (shown when clicking FPS in the top bar).
 fn render_fps_popover(ui: &mut egui::Ui, data: &UIData) {
     ui.set_min_width(220.0);
@@ -821,49 +1069,75 @@ fn render_fps_popover(ui: &mut egui::Ui, data: &UIData) {
     ui.separator();
 
     let fps_color = |fps: f32| {
-        if fps > 55.0 { egui::Color32::from_rgb(100, 220, 100) }
-        else if fps > 30.0 { egui::Color32::from_rgb(220, 200, 60) }
-        else { egui::Color32::from_rgb(220, 60, 60) }
+        if fps > 55.0 {
+            egui::Color32::from_rgb(100, 220, 100)
+        } else if fps > 30.0 {
+            egui::Color32::from_rgb(220, 200, 60)
+        } else {
+            egui::Color32::from_rgb(220, 60, 60)
+        }
     };
 
     ui.horizontal(|ui| {
         ui.label("Avg pipeline FPS:");
-        ui.label(egui::RichText::new(format!("{:.0}", data.fps)).color(fps_color(data.fps)).monospace().strong());
+        ui.label(
+            egui::RichText::new(format!("{:.0}", data.fps))
+                .color(fps_color(data.fps))
+                .monospace()
+                .strong(),
+        );
     });
     ui.add_space(4.0);
 
     if data.channel_render_stats.is_empty() {
         ui.label(egui::RichText::new("No channels").weak());
     } else {
-        egui::Grid::new("fps_channel_grid").striped(true).show(ui, |ui| {
-            ui.label(egui::RichText::new("Channel").strong().small());
-            ui.label(egui::RichText::new("Avg FPS").strong().small());
-            ui.label(egui::RichText::new("Decks").strong().small());
-            ui.label(egui::RichText::new("Time").strong().small());
-            ui.end_row();
-
-            for stat in &data.channel_render_stats {
-                ui.label(&stat.name);
-                if stat.avg_deck_fps > 0.0 {
-                    ui.label(egui::RichText::new(format!("{:.0}", stat.avg_deck_fps))
-                        .color(fps_color(stat.avg_deck_fps)).monospace());
-                } else {
-                    ui.label(egui::RichText::new("--").weak());
-                }
-                ui.label(format!("{}", stat.active_deck_count));
-                ui.label(egui::RichText::new(format!("{:.1}ms", stat.render_time_ms)).monospace());
+        egui::Grid::new("fps_channel_grid")
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Channel").strong().small());
+                ui.label(egui::RichText::new("Avg FPS").strong().small());
+                ui.label(egui::RichText::new("Decks").strong().small());
+                ui.label(egui::RichText::new("Time").strong().small());
                 ui.end_row();
-            }
-        });
 
-        let total_active: u32 = data.channel_render_stats.iter().map(|s| s.active_deck_count).sum();
-        let total_ms: f32 = data.channel_render_stats.iter().map(|s| s.render_time_ms).sum();
+                for stat in &data.channel_render_stats {
+                    ui.label(&stat.name);
+                    if stat.avg_deck_fps > 0.0 {
+                        ui.label(
+                            egui::RichText::new(format!("{:.0}", stat.avg_deck_fps))
+                                .color(fps_color(stat.avg_deck_fps))
+                                .monospace(),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new("--").weak());
+                    }
+                    ui.label(format!("{}", stat.active_deck_count));
+                    ui.label(
+                        egui::RichText::new(format!("{:.1}ms", stat.render_time_ms)).monospace(),
+                    );
+                    ui.end_row();
+                }
+            });
+
+        let total_active: u32 = data
+            .channel_render_stats
+            .iter()
+            .map(|s| s.active_deck_count)
+            .sum();
+        let total_ms: f32 = data
+            .channel_render_stats
+            .iter()
+            .map(|s| s.render_time_ms)
+            .sum();
         ui.add_space(4.0);
         ui.separator();
-        ui.label(format!("{} active decks · {:.1}ms total render", total_active, total_ms));
+        ui.label(format!(
+            "{} active decks · {:.1}ms total render",
+            total_active, total_ms
+        ));
     }
 }
-
 
 /// Render the GPU details popover (shown when clicking GPU device in the top bar).
 fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
@@ -896,7 +1170,11 @@ fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
             ui.end_row();
         }
 
-        let total_render_ms: f32 = data.channel_render_stats.iter().map(|s| s.render_time_ms).sum();
+        let total_render_ms: f32 = data
+            .channel_render_stats
+            .iter()
+            .map(|s| s.render_time_ms)
+            .sum();
         let load_pct = (total_render_ms / 16.67) * 100.0;
         ui.label(egui::RichText::new("Render load").strong().small());
         let load_color = if load_pct < 50.0 {
@@ -906,12 +1184,17 @@ fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
         } else {
             egui::Color32::from_rgb(220, 60, 60)
         };
-        ui.label(egui::RichText::new(format!("{:.1}ms / 16.7ms ({:.0}%)", total_render_ms, load_pct))
-            .color(load_color).monospace());
+        ui.label(
+            egui::RichText::new(format!(
+                "{:.1}ms / 16.7ms ({:.0}%)",
+                total_render_ms, load_pct
+            ))
+            .color(load_color)
+            .monospace(),
+        );
         ui.end_row();
     });
 }
-
 
 /// Render the clock source popover (shown when clicking BPM in the top bar).
 fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
@@ -941,7 +1224,9 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     // OSC option (only shown if OSC is active)
     if data.clock_osc_active {
         let is_osc = data.clock_preference == "ForceOsc";
-        let bpm_str = data.clock_osc_bpm.map_or("--".to_string(), |b| format!("{:.0}", b));
+        let bpm_str = data
+            .clock_osc_bpm
+            .map_or("--".to_string(), |b| format!("{:.0}", b));
         let label = format!("🔵 OSC  {} BPM", bpm_str);
         if ui.radio(is_osc, label).clicked() && !is_osc {
             actions.clock_preference = Some(crate::clock::ClockPreference::ForceOsc);
@@ -950,7 +1235,9 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
 
     // Audio only option
     let is_audio = data.clock_preference == "ForceAudio";
-    let audio_bpm_str = data.clock_audio_bpm.map_or("--".to_string(), |b| format!("{:.0}", b));
+    let audio_bpm_str = data
+        .clock_audio_bpm
+        .map_or("--".to_string(), |b| format!("{:.0}", b));
     let label = format!("🟢 Audio only  {} BPM", audio_bpm_str);
     if ui.radio(is_audio, label).clicked() && !is_audio {
         actions.clock_preference = Some(crate::clock::ClockPreference::ForceAudio);
@@ -961,7 +1248,8 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     let mut manual_bpm = data.clock_manual_bpm.unwrap_or(120.0);
     ui.horizontal(|ui| {
         if ui.radio(is_manual, "🟠 Manual").clicked() && !is_manual {
-            actions.clock_preference = Some(crate::clock::ClockPreference::ForceManual { bpm: manual_bpm });
+            actions.clock_preference =
+                Some(crate::clock::ClockPreference::ForceManual { bpm: manual_bpm });
         }
         if is_manual {
             let drag = ui.add(
@@ -981,16 +1269,25 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     let status = match data.clock_source.as_str() {
         "MIDI" => {
             let dev = data.clock_device_name.as_deref().unwrap_or("Unknown");
-            format!("Currently: {} ({})", dev, if is_auto { "auto" } else { "forced" })
+            format!(
+                "Currently: {} ({})",
+                dev,
+                if is_auto { "auto" } else { "forced" }
+            )
         }
-        "OSC" => format!("Currently: OSC ({})", if is_auto { "auto" } else { "forced" }),
-        "Audio" => format!("Currently: Audio ({})", if is_auto { "auto" } else { "forced" }),
+        "OSC" => format!(
+            "Currently: OSC ({})",
+            if is_auto { "auto" } else { "forced" }
+        ),
+        "Audio" => format!(
+            "Currently: Audio ({})",
+            if is_auto { "auto" } else { "forced" }
+        ),
         "Manual" => format!("Currently: Manual ({:.0} BPM)", manual_bpm),
         _ => "Currently: No clock".to_string(),
     };
     ui.label(egui::RichText::new(status).weak().small());
 }
-
 
 /// Render the resolution popover (shown when clicking resolution in the top bar).
 fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
@@ -1028,9 +1325,17 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
 
     ui.horizontal(|ui| {
         ui.label("W:");
-        ui.add(egui::DragValue::new(&mut custom_w).range(64..=7680).speed(16));
+        ui.add(
+            egui::DragValue::new(&mut custom_w)
+                .range(64..=7680)
+                .speed(16),
+        );
         ui.label("H:");
-        ui.add(egui::DragValue::new(&mut custom_h).range(64..=4320).speed(16));
+        ui.add(
+            egui::DragValue::new(&mut custom_h)
+                .range(64..=4320)
+                .speed(16),
+        );
     });
 
     ui.data_mut(|d| {
@@ -1039,16 +1344,23 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
     });
 
     let is_custom_different = custom_w != current_w || custom_h != current_h;
-    if ui.add_enabled(is_custom_different && custom_w > 0 && custom_h > 0,
-        egui::Button::new("Apply")).clicked()
+    if ui
+        .add_enabled(
+            is_custom_different && custom_w > 0 && custom_h > 0,
+            egui::Button::new("Apply"),
+        )
+        .clicked()
     {
         actions.resolution_change = Some((custom_w, custom_h));
     }
 
     ui.separator();
-    ui.label(egui::RichText::new(format!("Current: {}×{}", current_w, current_h)).weak().small());
+    ui.label(
+        egui::RichText::new(format!("Current: {}×{}", current_w, current_h))
+            .weak()
+            .small(),
+    );
 }
-
 
 #[cfg(test)]
 mod tests {

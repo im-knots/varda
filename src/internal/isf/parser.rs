@@ -7,13 +7,13 @@ use std::path::Path;
 pub struct ISFShader {
     /// Parsed metadata from JSON header
     pub metadata: ISFMetadata,
-    
+
     /// GLSL fragment shader source code
     pub fragment_source: String,
-    
+
     /// Optional vertex shader source code
     pub vertex_source: Option<String>,
-    
+
     /// File path (for debugging/hot-reload)
     pub file_path: Option<String>,
 }
@@ -24,7 +24,7 @@ impl ISFShader {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read ISF file: {}", path.display()))?;
-        
+
         let mut shader = Self::from_string(&content)?;
         shader.file_path = Some(path.to_string_lossy().to_string());
         Ok(shader)
@@ -35,7 +35,7 @@ impl ISFShader {
         // ISF files have a JSON comment block at the top
         // Format: /*{ ... }*/
         let (metadata, fragment_source) = extract_json_and_glsl(content)?;
-        
+
         Ok(ISFShader {
             metadata,
             fragment_source,
@@ -77,23 +77,25 @@ impl ISFShader {
 /// Extract JSON metadata and GLSL code from ISF file content
 fn extract_json_and_glsl(content: &str) -> Result<(ISFMetadata, String)> {
     // Find the JSON comment block: /*{ ... }*/
-    let json_start = content.find("/*{")
+    let json_start = content
+        .find("/*{")
         .context("ISF file must start with JSON comment block /*{ ... }*/")?;
-    
-    let json_end = content[json_start..].find("}*/")
+
+    let json_end = content[json_start..]
+        .find("}*/")
         .context("ISF JSON comment block not properly closed with }*/")?;
-    
+
     // Extract JSON (including the braces)
     let json_str = &content[json_start + 2..json_start + json_end + 1]; // Skip "/*" and include "}"
-    
+
     // Parse JSON metadata
-    let metadata: ISFMetadata = serde_json::from_str(json_str)
-        .context("Failed to parse ISF JSON metadata")?;
-    
+    let metadata: ISFMetadata =
+        serde_json::from_str(json_str).context("Failed to parse ISF JSON metadata")?;
+
     // Extract GLSL code (everything after the JSON block)
     let glsl_start = json_start + json_end + 3; // Skip "}*/"
     let fragment_source = content[glsl_start..].trim().to_string();
-    
+
     Ok((metadata, fragment_source))
 }
 

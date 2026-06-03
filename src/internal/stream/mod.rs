@@ -7,7 +7,10 @@
 //! Architecture mirrors `NdiManager`: background thread decodes frames into
 //! `Arc<Mutex<Option<Vec<u8>>>>`, main thread uploads to GPU each frame.
 
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread::JoinHandle;
 
 /// Serializes ffmpeg context creation (input_with_interrupt + decoder open).
@@ -31,7 +34,9 @@ pub enum StreamProtocol {
 }
 
 /// SRT connection mode — listener waits for connections, caller connects out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 pub enum SrtMode {
     /// Bind to a port and wait for incoming connections.
     Listener,
@@ -49,7 +54,9 @@ impl std::fmt::Display for SrtMode {
 }
 
 /// RTMP connection mode: pull from a remote server or listen for incoming pushes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 pub enum RtmpMode {
     /// Connect to a remote RTMP server and pull the stream.
     Pull,
@@ -98,9 +105,18 @@ impl StreamManager {
     /// Start receiving from a stream URL. Spawns a background ffmpeg decode thread.
     /// Returns receiver index on success. If an active receiver for the same URL
     /// already exists, returns its index.
-    pub fn start_receive(&mut self, url: &str, protocol: StreamProtocol, device: &wgpu::Device) -> Option<usize> {
+    pub fn start_receive(
+        &mut self,
+        url: &str,
+        protocol: StreamProtocol,
+        device: &wgpu::Device,
+    ) -> Option<usize> {
         // Reuse existing receiver for the same URL if it's still alive
-        if let Some(idx) = self.receivers.iter().position(|r| r.url == url && !r.stop_flag.load(Ordering::SeqCst)) {
+        if let Some(idx) = self
+            .receivers
+            .iter()
+            .position(|r| r.url == url && !r.stop_flag.load(Ordering::SeqCst))
+        {
             log::info!("Reusing existing stream receiver {} for '{}'", idx, url);
             return Some(idx);
         }
@@ -126,8 +142,13 @@ impl StreamManager {
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&label),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
@@ -151,7 +172,13 @@ impl StreamManager {
         let thread = std::thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
-                stream_receive_thread(url_for_thread, url_display, frame_clone, stop_clone, connected_clone);
+                stream_receive_thread(
+                    url_for_thread,
+                    url_display,
+                    frame_clone,
+                    stop_clone,
+                    connected_clone,
+                );
             })
             .ok();
 
@@ -177,12 +204,22 @@ impl StreamManager {
     }
 
     /// Start receiving from an SRT URL (convenience wrapper).
-    pub fn start_srt_receive(&mut self, url: &str, mode: SrtMode, device: &wgpu::Device) -> Option<usize> {
+    pub fn start_srt_receive(
+        &mut self,
+        url: &str,
+        mode: SrtMode,
+        device: &wgpu::Device,
+    ) -> Option<usize> {
         self.start_receive(url, StreamProtocol::Srt { mode }, device)
     }
 
     /// Start receiving from an RTMP URL (convenience wrapper).
-    pub fn start_rtmp_receive(&mut self, url: &str, mode: RtmpMode, device: &wgpu::Device) -> Option<usize> {
+    pub fn start_rtmp_receive(
+        &mut self,
+        url: &str,
+        mode: RtmpMode,
+        device: &wgpu::Device,
+    ) -> Option<usize> {
         self.start_receive(url, StreamProtocol::Rtmp { mode }, device)
     }
 
@@ -195,15 +232,22 @@ impl StreamManager {
                     if frame.len() >= expected {
                         queue.write_texture(
                             wgpu::TexelCopyTextureInfo {
-                                texture: &self.textures[i].0, mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                                texture: &self.textures[i].0,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
                             },
                             &frame[..expected],
                             wgpu::TexelCopyBufferLayout {
-                                offset: 0, bytes_per_row: Some(receiver.width * 4),
+                                offset: 0,
+                                bytes_per_row: Some(receiver.width * 4),
                                 rows_per_image: Some(receiver.height),
                             },
-                            wgpu::Extent3d { width: receiver.width, height: receiver.height, depth_or_array_layers: 1 },
+                            wgpu::Extent3d {
+                                width: receiver.width,
+                                height: receiver.height,
+                                depth_or_array_layers: 1,
+                            },
                         );
                     }
                 }
@@ -221,7 +265,8 @@ impl StreamManager {
 
     /// Whether the receiver at `idx` has successfully connected and received a frame.
     pub fn is_connected(&self, idx: usize) -> bool {
-        self.receivers.get(idx)
+        self.receivers
+            .get(idx)
             .map(|r| r.connected.load(Ordering::SeqCst))
             .unwrap_or(false)
     }
@@ -322,7 +367,9 @@ fn stream_receive_thread(
     const MAX_BACKOFF_MS: u64 = 10_000;
 
     loop {
-        if stop_flag.load(Ordering::SeqCst) { return; }
+        if stop_flag.load(Ordering::SeqCst) {
+            return;
+        }
 
         // Serialize ffmpeg context creation — avcodec_open2 is not thread-safe.
         // Hold the lock through input open + decoder creation, release before
@@ -332,42 +379,79 @@ fn stream_receive_thread(
 
             let stop_for_interrupt = Arc::clone(&stop_flag);
             (|| -> Option<_> {
-                let ctx = match ffmpeg_next::format::input_with_interrupt(
-                    &url,
-                    move || stop_for_interrupt.load(Ordering::SeqCst),
-                ) {
+                let ctx = match ffmpeg_next::format::input_with_interrupt(&url, move || {
+                    stop_for_interrupt.load(Ordering::SeqCst)
+                }) {
                     Ok(c) => c,
                     Err(e) => {
-                        log::warn!("Stream '{}' connection failed: {}, retrying in {}ms...", url_display, e, backoff_ms);
+                        log::warn!(
+                            "Stream '{}' connection failed: {}, retrying in {}ms...",
+                            url_display,
+                            e,
+                            backoff_ms
+                        );
                         return None;
                     }
                 };
 
-                let stream_idx = ctx.streams().best(ffmpeg_next::media::Type::Video)
+                let stream_idx = ctx
+                    .streams()
+                    .best(ffmpeg_next::media::Type::Video)
                     .map(|s| s.index())
                     .or_else(|| {
-                        log::warn!("Stream '{}': no video stream found, retrying in {}ms...", url_display, backoff_ms);
+                        log::warn!(
+                            "Stream '{}': no video stream found, retrying in {}ms...",
+                            url_display,
+                            backoff_ms
+                        );
                         None
                     })?;
 
-                let codec_params = ctx.stream(stream_idx)
+                let codec_params = ctx
+                    .stream(stream_idx)
                     .or_else(|| {
-                        log::warn!("Stream '{}': stream index {} not found, retrying in {}ms...", url_display, stream_idx, backoff_ms);
+                        log::warn!(
+                            "Stream '{}': stream index {} not found, retrying in {}ms...",
+                            url_display,
+                            stream_idx,
+                            backoff_ms
+                        );
                         None
                     })?
                     .parameters();
                 let codec_ctx = ffmpeg_next::codec::Context::from_parameters(codec_params)
-                    .map_err(|e| log::warn!("Stream '{}': failed to create codec context: {}, retrying in {}ms...", url_display, e, backoff_ms))
+                    .map_err(|e| {
+                        log::warn!(
+                            "Stream '{}': failed to create codec context: {}, retrying in {}ms...",
+                            url_display,
+                            e,
+                            backoff_ms
+                        )
+                    })
                     .ok()?;
-                let decoder = codec_ctx.decoder().video()
-                    .map_err(|e| log::warn!("Stream '{}': failed to create video decoder: {}, retrying in {}ms...", url_display, e, backoff_ms))
+                let decoder = codec_ctx
+                    .decoder()
+                    .video()
+                    .map_err(|e| {
+                        log::warn!(
+                            "Stream '{}': failed to create video decoder: {}, retrying in {}ms...",
+                            url_display,
+                            e,
+                            backoff_ms
+                        )
+                    })
                     .ok()?;
 
                 let scaler = ffmpeg_next::software::scaling::Context::get(
-                    decoder.format(), decoder.width(), decoder.height(),
-                    ffmpeg_next::format::Pixel::RGBA, 1920, 1080,
+                    decoder.format(),
+                    decoder.width(),
+                    decoder.height(),
+                    ffmpeg_next::format::Pixel::RGBA,
+                    1920,
+                    1080,
                     ffmpeg_next::software::scaling::Flags::BILINEAR,
-                ).ok();
+                )
+                .ok();
 
                 Some((ctx, stream_idx, decoder, scaler))
             })()
@@ -385,8 +469,10 @@ fn stream_receive_thread(
 
         let mut last_frame_time = std::time::Instant::now();
         // HLS/DASH segments can have multi-second gaps; use a longer timeout
-        let is_segment_protocol = url.contains(".m3u8") || url.contains(".mpd")
-            || url.starts_with("http://") || url.starts_with("https://");
+        let is_segment_protocol = url.contains(".m3u8")
+            || url.contains(".mpd")
+            || url.starts_with("http://")
+            || url.starts_with("https://");
         let stall_timeout = if is_segment_protocol {
             std::time::Duration::from_secs(15)
         } else {
@@ -396,13 +482,21 @@ fn stream_receive_thread(
         const MAX_CONSECUTIVE_ERRORS: u32 = 50;
 
         for (stream, packet) in input_ctx.packets() {
-            if stop_flag.load(Ordering::SeqCst) { return; }
-            if stream.index() != stream_idx { continue; }
+            if stop_flag.load(Ordering::SeqCst) {
+                return;
+            }
+            if stream.index() != stream_idx {
+                continue;
+            }
 
             if decoder.send_packet(&packet).is_err() {
                 consecutive_errors += 1;
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                    log::warn!("Stream '{}': {} consecutive decode errors, reconnecting", url_display, consecutive_errors);
+                    log::warn!(
+                        "Stream '{}': {} consecutive decode errors, reconnecting",
+                        url_display,
+                        consecutive_errors
+                    );
                     break;
                 }
                 continue;
@@ -411,15 +505,22 @@ fn stream_receive_thread(
 
             let mut decoded = ffmpeg_next::frame::Video::empty();
             while decoder.receive_frame(&mut decoded).is_ok() {
-                if stop_flag.load(Ordering::SeqCst) { return; }
+                if stop_flag.load(Ordering::SeqCst) {
+                    return;
+                }
 
                 // Lazily init/reinit scaler if dimensions changed
                 if scaler.is_none() || decoded.width() != 1920 || decoded.height() != 1080 {
                     scaler = ffmpeg_next::software::scaling::Context::get(
-                        decoded.format(), decoded.width(), decoded.height(),
-                        ffmpeg_next::format::Pixel::RGBA, 1920, 1080,
+                        decoded.format(),
+                        decoded.width(),
+                        decoded.height(),
+                        ffmpeg_next::format::Pixel::RGBA,
+                        1920,
+                        1080,
                         ffmpeg_next::software::scaling::Flags::BILINEAR,
-                    ).ok();
+                    )
+                    .ok();
                 }
 
                 if let Some(ref mut sws) = scaler {
@@ -443,10 +544,14 @@ fn stream_receive_thread(
                             for row in 0..height {
                                 let start = row * stride;
                                 let end = start + row_bytes;
-                                if end > data.len() { break; }
+                                if end > data.len() {
+                                    break;
+                                }
                                 buf.extend_from_slice(&data[start..end]);
                             }
-                            if buf.len() != expected { continue; }
+                            if buf.len() != expected {
+                                continue;
+                            }
                             buf
                         };
 
@@ -458,8 +563,13 @@ fn stream_receive_thread(
                         backoff_ms = MIN_BACKOFF_MS;
                         if !connected.load(Ordering::SeqCst) {
                             connected.store(true, Ordering::SeqCst);
-                            log::info!("Stream '{}' first frame received ({}x{}, stride={})",
-                                url_display, width, height, stride);
+                            log::info!(
+                                "Stream '{}' first frame received ({}x{}, stride={})",
+                                url_display,
+                                width,
+                                height,
+                                stride
+                            );
                         }
                     }
                 }
@@ -468,13 +578,20 @@ fn stream_receive_thread(
             // If we haven't produced a frame in a while, the demuxer is
             // likely stuck (e.g. HLS segments deleted). Force reconnect.
             if last_frame_time.elapsed() > stall_timeout {
-                log::warn!("Stream '{}': no frames for {:.1}s, reconnecting",
-                    url_display, last_frame_time.elapsed().as_secs_f32());
+                log::warn!(
+                    "Stream '{}': no frames for {:.1}s, reconnecting",
+                    url_display,
+                    last_frame_time.elapsed().as_secs_f32()
+                );
                 break;
             }
         }
 
-        log::warn!("Stream '{}' ended, reconnecting in {}ms...", url_display, backoff_ms);
+        log::warn!(
+            "Stream '{}' ended, reconnecting in {}ms...",
+            url_display,
+            backoff_ms
+        );
         connected.store(false, Ordering::SeqCst);
         std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
         backoff_ms = (backoff_ms * 2).min(MAX_BACKOFF_MS);
@@ -537,10 +654,17 @@ mod tests {
 
     #[test]
     fn stream_protocol_srt_serialization() {
-        let proto = StreamProtocol::Srt { mode: SrtMode::Listener };
+        let proto = StreamProtocol::Srt {
+            mode: SrtMode::Listener,
+        };
         let json = serde_json::to_string(&proto).unwrap();
         let restored: StreamProtocol = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored, StreamProtocol::Srt { mode: SrtMode::Listener });
+        assert_eq!(
+            restored,
+            StreamProtocol::Srt {
+                mode: SrtMode::Listener
+            }
+        );
     }
 
     #[test]
@@ -647,13 +771,21 @@ mod tests {
 
     #[test]
     fn build_srt_url_multiple_existing_params() {
-        let url = build_srt_url("srt://host:9000?latency=0&passphrase=test", SrtMode::Listener);
-        assert_eq!(url, "srt://host:9000?latency=0&passphrase=test&mode=listener");
+        let url = build_srt_url(
+            "srt://host:9000?latency=0&passphrase=test",
+            SrtMode::Listener,
+        );
+        assert_eq!(
+            url,
+            "srt://host:9000?latency=0&passphrase=test&mode=listener"
+        );
     }
 
     #[test]
     fn stream_protocol_rtmp_serialization() {
-        let protocol = StreamProtocol::Rtmp { mode: RtmpMode::Pull };
+        let protocol = StreamProtocol::Rtmp {
+            mode: RtmpMode::Pull,
+        };
         let json = serde_json::to_string(&protocol).unwrap();
         let deserialized: StreamProtocol = serde_json::from_str(&json).unwrap();
         assert_eq!(protocol, deserialized);
@@ -672,6 +804,9 @@ mod tests {
         let pull_json = serde_json::to_string(&pull).unwrap();
         let listen_json = serde_json::to_string(&listen).unwrap();
         assert_eq!(serde_json::from_str::<RtmpMode>(&pull_json).unwrap(), pull);
-        assert_eq!(serde_json::from_str::<RtmpMode>(&listen_json).unwrap(), listen);
+        assert_eq!(
+            serde_json::from_str::<RtmpMode>(&listen_json).unwrap(),
+            listen
+        );
     }
 }

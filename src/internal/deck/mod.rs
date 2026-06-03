@@ -1,13 +1,13 @@
 mod effect;
-mod source;
 mod render;
+mod source;
 
 pub use render::get_current_date;
 
-use crate::isf::{ISFShader, ISFPass};
+use crate::isf::{ISFPass, ISFShader};
 use crate::params::ShaderParams;
-use crate::renderer::{UnifiedPipeline, BlitPipeline, HapConvertPipeline};
-use crate::video::{VideoPlayer, HapTextureFormat, hap::HapPlayer};
+use crate::renderer::{BlitPipeline, HapConvertPipeline, UnifiedPipeline};
+use crate::video::{hap::HapPlayer, HapTextureFormat, VideoPlayer};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -40,16 +40,16 @@ impl ScalingMode {
     /// Returns (uv_scale, uv_offset) to transform target UVs to source UVs
     pub fn compute_uv_transform(
         &self,
-        source_w: u32, source_h: u32,
-        target_w: u32, target_h: u32,
+        source_w: u32,
+        source_h: u32,
+        target_w: u32,
+        target_h: u32,
     ) -> ([f32; 2], [f32; 2]) {
         let src_aspect = source_w as f32 / source_h as f32;
         let tgt_aspect = target_w as f32 / target_h as f32;
 
         match self {
-            ScalingMode::Stretch => {
-                ([1.0, 1.0], [0.0, 0.0])
-            }
+            ScalingMode::Stretch => ([1.0, 1.0], [0.0, 0.0]),
             ScalingMode::Fill => {
                 if src_aspect > tgt_aspect {
                     let scale_x = tgt_aspect / src_aspect;
@@ -123,9 +123,7 @@ pub enum DeckSource {
         scaling_mode: ScalingMode,
     },
     /// Solid color fill
-    SolidColor {
-        color: [f64; 4],
-    },
+    SolidColor { color: [f64; 4] },
     /// External live source (camera, NDI, Syphon, SRT, HLS, DASH, RTMP)
     ExternalSource {
         kind: ExternalSourceKind,
@@ -338,7 +336,12 @@ impl Deck {
     /// Get the solid color value (if source is a solid color)
     pub fn solid_color(&self) -> Option<[f32; 4]> {
         match &self.source {
-            DeckSource::SolidColor { color } => Some([color[0] as f32, color[1] as f32, color[2] as f32, color[3] as f32]),
+            DeckSource::SolidColor { color } => Some([
+                color[0] as f32,
+                color[1] as f32,
+                color[2] as f32,
+                color[3] as f32,
+            ]),
             _ => None,
         }
     }
@@ -346,7 +349,12 @@ impl Deck {
     /// Set the solid color value (only applies to SolidColor sources)
     pub fn set_solid_color(&mut self, new_color: [f32; 4]) {
         if let DeckSource::SolidColor { color } = &mut self.source {
-            *color = [new_color[0] as f64, new_color[1] as f64, new_color[2] as f64, new_color[3] as f64];
+            *color = [
+                new_color[0] as f64,
+                new_color[1] as f64,
+                new_color[2] as f64,
+                new_color[3] as f64,
+            ];
         }
     }
 
@@ -379,7 +387,10 @@ impl Deck {
     /// Get the NDI receiver index (if source is NDI)
     pub fn ndi_receiver_idx(&self) -> Option<usize> {
         match &self.source {
-            DeckSource::ExternalSource { kind: ExternalSourceKind::Ndi(idx), .. } => Some(*idx),
+            DeckSource::ExternalSource {
+                kind: ExternalSourceKind::Ndi(idx),
+                ..
+            } => Some(*idx),
             _ => None,
         }
     }
@@ -387,7 +398,10 @@ impl Deck {
     /// Get the Syphon client index (if source is Syphon)
     pub fn syphon_client_idx(&self) -> Option<usize> {
         match &self.source {
-            DeckSource::ExternalSource { kind: ExternalSourceKind::Syphon(idx), .. } => Some(*idx),
+            DeckSource::ExternalSource {
+                kind: ExternalSourceKind::Syphon(idx),
+                ..
+            } => Some(*idx),
             _ => None,
         }
     }
@@ -395,10 +409,22 @@ impl Deck {
     /// Get the SRT/HLS/DASH/RTMP receiver index (if source is a stream)
     pub fn srt_receiver_idx(&self) -> Option<usize> {
         match &self.source {
-            DeckSource::ExternalSource { kind: ExternalSourceKind::Srt(idx), .. }
-            | DeckSource::ExternalSource { kind: ExternalSourceKind::Hls(idx), .. }
-            | DeckSource::ExternalSource { kind: ExternalSourceKind::Dash(idx), .. }
-            | DeckSource::ExternalSource { kind: ExternalSourceKind::Rtmp(idx), .. } => Some(*idx),
+            DeckSource::ExternalSource {
+                kind: ExternalSourceKind::Srt(idx),
+                ..
+            }
+            | DeckSource::ExternalSource {
+                kind: ExternalSourceKind::Hls(idx),
+                ..
+            }
+            | DeckSource::ExternalSource {
+                kind: ExternalSourceKind::Dash(idx),
+                ..
+            }
+            | DeckSource::ExternalSource {
+                kind: ExternalSourceKind::Rtmp(idx),
+                ..
+            } => Some(*idx),
             _ => None,
         }
     }
@@ -406,7 +432,10 @@ impl Deck {
     /// Get the camera ID (if source is a camera)
     pub fn camera_id(&self) -> Option<crate::camera::CameraId> {
         match &self.source {
-            DeckSource::ExternalSource { kind: ExternalSourceKind::Camera(id), .. } => Some(*id),
+            DeckSource::ExternalSource {
+                kind: ExternalSourceKind::Camera(id),
+                ..
+            } => Some(*id),
             _ => None,
         }
     }
@@ -424,7 +453,6 @@ impl Deck {
         self.fps_smoothed
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -479,9 +507,16 @@ mod tests {
     fn fill_wide_source_crops_horizontal() {
         // Source 2:1, target 1:1 → crop left/right
         let (scale, offset) = ScalingMode::Fill.compute_uv_transform(200, 100, 100, 100);
-        assert!((scale[0] - 0.5).abs() < 1e-5, "scale_x should be 0.5, got {}", scale[0]);
+        assert!(
+            (scale[0] - 0.5).abs() < 1e-5,
+            "scale_x should be 0.5, got {}",
+            scale[0]
+        );
         assert!((scale[1] - 1.0).abs() < 1e-5);
-        assert!((offset[0] - 0.25).abs() < 1e-5, "offset_x should center crop");
+        assert!(
+            (offset[0] - 0.25).abs() < 1e-5,
+            "offset_x should center crop"
+        );
         assert!((offset[1]).abs() < 1e-5);
     }
 
@@ -490,9 +525,16 @@ mod tests {
         // Source 1:2, target 1:1 → crop top/bottom
         let (scale, offset) = ScalingMode::Fill.compute_uv_transform(100, 200, 100, 100);
         assert!((scale[0] - 1.0).abs() < 1e-5);
-        assert!((scale[1] - 0.5).abs() < 1e-5, "scale_y should be 0.5, got {}", scale[1]);
+        assert!(
+            (scale[1] - 0.5).abs() < 1e-5,
+            "scale_y should be 0.5, got {}",
+            scale[1]
+        );
         assert!((offset[0]).abs() < 1e-5);
-        assert!((offset[1] - 0.25).abs() < 1e-5, "offset_y should center crop");
+        assert!(
+            (offset[1] - 0.25).abs() < 1e-5,
+            "offset_y should center crop"
+        );
     }
 
     #[test]

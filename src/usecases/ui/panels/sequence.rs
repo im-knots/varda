@@ -1,9 +1,9 @@
 //! Transition sequence builder: compact read-only timeline strip for mixer area,
 //! full interactive editor for the bottom bar.
 
-use crate::channel::DurationUnit;
-use super::super::{UIData, UIActions, SequenceStepKindUI, SequenceUIData};
+use super::super::{SequenceStepKindUI, SequenceUIData, UIActions, UIData};
 use super::utils::channel_color;
+use crate::channel::DurationUnit;
 
 /// Max drag-value range per duration unit.
 pub(super) fn duration_drag_max(unit: DurationUnit) -> f64 {
@@ -19,8 +19,15 @@ pub(super) fn duration_drag_max(unit: DurationUnit) -> f64 {
 /// Uses the provided BPM for beat-based durations (falls back to 120 BPM if None).
 fn step_duration_secs(kind: &SequenceStepKindUI, bpm: Option<f32>) -> f64 {
     match kind {
-        SequenceStepKindUI::Fade { duration_val, duration_unit, .. } |
-        SequenceStepKindUI::Wait { duration_val, duration_unit } => {
+        SequenceStepKindUI::Fade {
+            duration_val,
+            duration_unit,
+            ..
+        }
+        | SequenceStepKindUI::Wait {
+            duration_val,
+            duration_unit,
+        } => {
             let val = *duration_val;
             match duration_unit {
                 DurationUnit::Seconds => val,
@@ -77,36 +84,65 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
                         } else {
                             ("Off", egui::Color32::from_rgb(120, 120, 120))
                         };
-                        if ui.small_button(egui::RichText::new(en_label).color(en_color)).on_hover_text("Toggle enabled").clicked() {
-                            actions.sequence_actions.push(SequenceAction::ToggleEnabled(seq_idx));
+                        if ui
+                            .small_button(egui::RichText::new(en_label).color(en_color))
+                            .on_hover_text("Toggle enabled")
+                            .clicked()
+                        {
+                            actions
+                                .sequence_actions
+                                .push(SequenceAction::ToggleEnabled(seq_idx));
                         }
 
                         if seq.playing {
-                            if ui.small_button("Stop").on_hover_text("Stop playback").clicked() {
+                            if ui
+                                .small_button("Stop")
+                                .on_hover_text("Stop playback")
+                                .clicked()
+                            {
                                 actions.sequence_actions.push(SequenceAction::Stop(seq_idx));
                             }
                         } else if seq.enabled && !seq.steps.is_empty() {
-                            if ui.small_button("Play").on_hover_text("Start playback").clicked() {
+                            if ui
+                                .small_button("Play")
+                                .on_hover_text("Start playback")
+                                .clicked()
+                            {
                                 actions.sequence_actions.push(SequenceAction::Play(seq_idx));
                             }
                         }
 
-                        if ui.small_button("x").on_hover_text("Delete sequence").clicked() {
-                            actions.sequence_actions.push(SequenceAction::Delete(seq_idx));
+                        if ui
+                            .small_button("x")
+                            .on_hover_text("Delete sequence")
+                            .clicked()
+                        {
+                            actions
+                                .sequence_actions
+                                .push(SequenceAction::Delete(seq_idx));
                         }
                     });
 
                     // Read-only timeline strip (click to select)
                     if seq.steps.is_empty() {
                         let empty_resp = ui.add(
-                            egui::Label::new(egui::RichText::new("Empty — click to edit").small().weak())
-                                .sense(egui::Sense::click()),
+                            egui::Label::new(
+                                egui::RichText::new("Empty — click to edit").small().weak(),
+                            )
+                            .sense(egui::Sense::click()),
                         );
                         if empty_resp.clicked() {
                             actions.select_sequence = Some(seq_idx);
                         }
                     } else {
-                        let (_step, strip_clicked) = render_timeline_strip(ui, seq, &data.channel_names, false, None, data.clock_bpm);
+                        let (_step, strip_clicked) = render_timeline_strip(
+                            ui,
+                            seq,
+                            &data.channel_names,
+                            false,
+                            None,
+                            data.clock_bpm,
+                        );
                         if strip_clicked {
                             actions.select_sequence = Some(seq_idx);
                         }
@@ -148,14 +184,26 @@ pub(super) fn render_timeline_strip(
     let available_width = ui.available_width().max(60.0);
 
     // Compute total duration for proportional widths (proper unit conversion)
-    let total_duration: f64 = seq.steps.iter().map(|s| step_duration_secs(&s.kind, bpm).max(0.5)).sum();
-    let goto_count = seq.steps.iter().filter(|s| matches!(s.kind, SequenceStepKindUI::GoTo { .. })).count();
+    let total_duration: f64 = seq
+        .steps
+        .iter()
+        .map(|s| step_duration_secs(&s.kind, bpm).max(0.5))
+        .sum();
+    let goto_count = seq
+        .steps
+        .iter()
+        .filter(|s| matches!(s.kind, SequenceStepKindUI::GoTo { .. }))
+        .count();
     let goto_total_width = goto_count as f32 * GOTO_BLOCK_WIDTH;
     let timed_width = (available_width - goto_total_width).max(60.0);
 
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(available_width, strip_height),
-        if interactive { egui::Sense::click() } else { egui::Sense::click() },
+        if interactive {
+            egui::Sense::click()
+        } else {
+            egui::Sense::click()
+        },
     );
 
     let painter = ui.painter_at(rect);
@@ -173,10 +221,9 @@ pub(super) fn render_timeline_strip(
                 (frac as f32 * timed_width).max(MIN_BLOCK_WIDTH)
             }
         };
-        let block_rect = egui::Rect::from_min_size(
-            egui::pos2(x, rect.top()),
-            egui::vec2(block_w, strip_height),
-        ).intersect(rect);
+        let block_rect =
+            egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(block_w, strip_height))
+                .intersect(rect);
 
         // Block color
         let (fill, label) = match &step.kind {
@@ -188,18 +235,35 @@ pub(super) fn render_timeline_strip(
                 let tr = block_rect.right_top();
                 let bl = block_rect.left_bottom();
                 let br = block_rect.right_bottom();
-                painter.add(egui::Shape::convex_polygon(vec![tl, tr, bl], from_color, egui::Stroke::NONE));
-                painter.add(egui::Shape::convex_polygon(vec![tr, br, bl], to_color, egui::Stroke::NONE));
-                let from_name = channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?");
+                painter.add(egui::Shape::convex_polygon(
+                    vec![tl, tr, bl],
+                    from_color,
+                    egui::Stroke::NONE,
+                ));
+                painter.add(egui::Shape::convex_polygon(
+                    vec![tr, br, bl],
+                    to_color,
+                    egui::Stroke::NONE,
+                ));
+                let from_name = channel_names
+                    .get(*from_ch)
+                    .map(|s| s.as_str())
+                    .unwrap_or("?");
                 let to_name = channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?");
                 let short_from = from_name.chars().take(3).collect::<String>();
                 let short_to = to_name.chars().take(3).collect::<String>();
                 (None, format!("{}→{}", short_from, short_to))
             }
-            SequenceStepKindUI::Wait { duration_val, duration_unit } => {
+            SequenceStepKindUI::Wait {
+                duration_val,
+                duration_unit,
+            } => {
                 let fill = egui::Color32::from_rgb(40, 40, 50);
                 painter.rect_filled(block_rect, 0.0, fill);
-                (Some(fill), format!("{:.0}{}", duration_val, duration_unit.label()))
+                (
+                    Some(fill),
+                    format!("{:.0}{}", duration_val, duration_unit.label()),
+                )
             }
             SequenceStepKindUI::GoTo { .. } => {
                 let fill = egui::Color32::from_rgb(60, 50, 70);
@@ -210,19 +274,40 @@ pub(super) fn render_timeline_strip(
 
         // Selection highlight
         if interactive && selected_step == Some(i) {
-            painter.rect_stroke(block_rect, 0.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 80)), egui::StrokeKind::Outside);
+            painter.rect_stroke(
+                block_rect,
+                0.0,
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 80)),
+                egui::StrokeKind::Outside,
+            );
         }
 
         // Current step indicator (playback)
         let is_current = seq.playing && i == seq.current_step;
         if is_current && !interactive {
-            painter.rect_stroke(block_rect, 0.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 255, 100)), egui::StrokeKind::Outside);
+            painter.rect_stroke(
+                block_rect,
+                0.0,
+                egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 255, 100)),
+                egui::StrokeKind::Outside,
+            );
         }
 
         let _ = fill;
         let font = egui::FontId::proportional(if interactive { 10.0 } else { 9.0 });
-        painter.text(block_rect.center(), egui::Align2::CENTER_CENTER, &label, font, egui::Color32::from_rgb(220, 220, 230));
-        painter.rect_stroke(block_rect, 0.0, egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 80)), egui::StrokeKind::Outside);
+        painter.text(
+            block_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &label,
+            font,
+            egui::Color32::from_rgb(220, 220, 230),
+        );
+        painter.rect_stroke(
+            block_rect,
+            0.0,
+            egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 80)),
+            egui::StrokeKind::Outside,
+        );
 
         // Click to select step
         if interactive && response.clicked() {
@@ -251,9 +336,20 @@ pub(super) fn render_timeline_strip(
 }
 
 /// Compute the x position of the playhead based on sequence progress.
-fn compute_playhead_x(seq: &SequenceUIData, strip_left: f32, strip_width: f32, bpm: Option<f32>) -> f32 {
-    let total_duration: f64 = seq.steps.iter().map(|s| step_duration_secs(&s.kind, bpm).max(0.5)).sum();
-    if total_duration <= 0.0 { return strip_left; }
+fn compute_playhead_x(
+    seq: &SequenceUIData,
+    strip_left: f32,
+    strip_width: f32,
+    bpm: Option<f32>,
+) -> f32 {
+    let total_duration: f64 = seq
+        .steps
+        .iter()
+        .map(|s| step_duration_secs(&s.kind, bpm).max(0.5))
+        .sum();
+    if total_duration <= 0.0 {
+        return strip_left;
+    }
 
     // Sum durations of completed steps + elapsed in current step
     let mut elapsed = 0.0_f64;
@@ -261,7 +357,9 @@ fn compute_playhead_x(seq: &SequenceUIData, strip_left: f32, strip_width: f32, b
         if i < seq.current_step {
             elapsed += step_duration_secs(&step.kind, bpm).max(0.5);
         } else if i == seq.current_step {
-            elapsed += seq.step_elapsed.min(step_duration_secs(&step.kind, bpm).max(0.5));
+            elapsed += seq
+                .step_elapsed
+                .min(step_duration_secs(&step.kind, bpm).max(0.5));
             break;
         }
     }
@@ -296,14 +394,26 @@ fn render_duration_editor(
         .speed(0.1)
         .max_decimals(1);
     if ui.add(drag).changed() {
-        actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
+        actions
+            .sequence_actions
+            .push(SequenceAction::SetStepDuration {
+                seq_idx,
+                step_idx,
+                value: dur,
+            });
     }
     // Slider for duration (visual scrub)
     let slider = egui::Slider::new(&mut dur, 0.1..=max_val)
         .max_decimals(1)
         .show_value(false);
     if ui.add_sized([80.0, 16.0], slider).changed() {
-        actions.sequence_actions.push(SequenceAction::SetStepDuration { seq_idx, step_idx, value: dur });
+        actions
+            .sequence_actions
+            .push(SequenceAction::SetStepDuration {
+                seq_idx,
+                step_idx,
+                value: dur,
+            });
     }
     // Unit selector: side-by-side buttons
     let units = [
@@ -315,12 +425,21 @@ fn render_duration_editor(
     for (unit, label) in &units {
         let is_active = duration_unit == unit;
         let text = if is_active {
-            egui::RichText::new(*label).small().strong().color(egui::Color32::WHITE)
+            egui::RichText::new(*label)
+                .small()
+                .strong()
+                .color(egui::Color32::WHITE)
         } else {
             egui::RichText::new(*label).small().weak()
         };
         if ui.selectable_label(is_active, text).clicked() && !is_active {
-            actions.sequence_actions.push(SequenceAction::SetStepDurationUnit { seq_idx, step_idx, unit: *unit });
+            actions
+                .sequence_actions
+                .push(SequenceAction::SetStepDurationUnit {
+                    seq_idx,
+                    step_idx,
+                    unit: *unit,
+                });
         }
     }
 }
@@ -340,10 +459,21 @@ pub(super) fn render_sequence_step_editor(
     let seq = &data.sequences[seq_idx];
 
     match &step.kind {
-        SequenceStepKindUI::Fade { from_ch, to_ch, duration_val, duration_unit, easing, transition_shader, target_amount } => {
+        SequenceStepKindUI::Fade {
+            from_ch,
+            to_ch,
+            duration_val,
+            duration_unit,
+            easing,
+            transition_shader,
+            target_amount,
+        } => {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let from_label = channel_names.get(*from_ch).map(|s| s.as_str()).unwrap_or("?");
+                let from_label = channel_names
+                    .get(*from_ch)
+                    .map(|s| s.as_str())
+                    .unwrap_or("?");
                 egui::ComboBox::from_id_salt(format!("seq{}_from_{}", seq_idx, step_idx))
                     .selected_text(egui::RichText::new(from_label).small())
                     .width(55.0)
@@ -351,7 +481,13 @@ pub(super) fn render_sequence_step_editor(
                         for i in 0..channel_count {
                             let name = channel_names.get(i).map(|s| s.as_str()).unwrap_or("?");
                             if ui.selectable_label(i == *from_ch, name).clicked() {
-                                actions.sequence_actions.push(SequenceAction::SetStepFromCh { seq_idx, step_idx, ch: i });
+                                actions
+                                    .sequence_actions
+                                    .push(SequenceAction::SetStepFromCh {
+                                        seq_idx,
+                                        step_idx,
+                                        ch: i,
+                                    });
                             }
                         }
                     });
@@ -364,11 +500,22 @@ pub(super) fn render_sequence_step_editor(
                         for i in 0..channel_count {
                             let name = channel_names.get(i).map(|s| s.as_str()).unwrap_or("?");
                             if ui.selectable_label(i == *to_ch, name).clicked() {
-                                actions.sequence_actions.push(SequenceAction::SetStepToCh { seq_idx, step_idx, ch: i });
+                                actions.sequence_actions.push(SequenceAction::SetStepToCh {
+                                    seq_idx,
+                                    step_idx,
+                                    ch: i,
+                                });
                             }
                         }
                     });
-                render_duration_editor(ui, seq_idx, step_idx, *duration_val, duration_unit, actions);
+                render_duration_editor(
+                    ui,
+                    seq_idx,
+                    step_idx,
+                    *duration_val,
+                    duration_unit,
+                    actions,
+                );
                 ui.separator();
                 egui::ComboBox::from_id_salt(format!("seq{}_ease_{}", seq_idx, step_idx))
                     .selected_text(egui::RichText::new(easing.as_str()).small())
@@ -376,9 +523,13 @@ pub(super) fn render_sequence_step_editor(
                     .show_ui(ui, |ui| {
                         for e in &["Linear", "EaseInOut", "EaseIn", "EaseOut"] {
                             if ui.selectable_label(*e == easing.as_str(), *e).clicked() {
-                                actions.sequence_actions.push(SequenceAction::SetStepEasing {
-                                    seq_idx, step_idx, easing: e.to_string(),
-                                });
+                                actions
+                                    .sequence_actions
+                                    .push(SequenceAction::SetStepEasing {
+                                        seq_idx,
+                                        step_idx,
+                                        easing: e.to_string(),
+                                    });
                             }
                         }
                     });
@@ -389,16 +540,24 @@ pub(super) fn render_sequence_step_editor(
                     .show_ui(ui, |ui| {
                         let is_opacity = transition_shader.is_none();
                         if ui.selectable_label(is_opacity, "Opacity").clicked() {
-                            actions.sequence_actions.push(SequenceAction::SetStepTransitionShader {
-                                seq_idx, step_idx, shader: None,
-                            });
+                            actions.sequence_actions.push(
+                                SequenceAction::SetStepTransitionShader {
+                                    seq_idx,
+                                    step_idx,
+                                    shader: None,
+                                },
+                            );
                         }
                         for name in &data.transition_names {
                             let selected = transition_shader.as_ref() == Some(name);
                             if ui.selectable_label(selected, name).clicked() {
-                                actions.sequence_actions.push(SequenceAction::SetStepTransitionShader {
-                                    seq_idx, step_idx, shader: Some(name.clone()),
-                                });
+                                actions.sequence_actions.push(
+                                    SequenceAction::SetStepTransitionShader {
+                                        seq_idx,
+                                        step_idx,
+                                        shader: Some(name.clone()),
+                                    },
+                                );
                             }
                         }
                     });
@@ -410,18 +569,32 @@ pub(super) fn render_sequence_step_editor(
                     .max_decimals(2)
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0));
                 if ui.add_sized([70.0, 16.0], slider).changed() {
-                    actions.sequence_actions.push(SequenceAction::SetStepTargetAmount {
-                        seq_idx, step_idx, amount: amt,
-                    });
+                    actions
+                        .sequence_actions
+                        .push(SequenceAction::SetStepTargetAmount {
+                            seq_idx,
+                            step_idx,
+                            amount: amt,
+                        });
                 }
             });
         }
-        SequenceStepKindUI::Wait { duration_val, duration_unit } => {
+        SequenceStepKindUI::Wait {
+            duration_val,
+            duration_unit,
+        } => {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.label(egui::RichText::new("Wait").small().strong());
                 ui.label(egui::RichText::new("Duration:").small());
-                render_duration_editor(ui, seq_idx, step_idx, *duration_val, duration_unit, actions);
+                render_duration_editor(
+                    ui,
+                    seq_idx,
+                    step_idx,
+                    *duration_val,
+                    duration_unit,
+                    actions,
+                );
             });
         }
         SequenceStepKindUI::GoTo { step_index } => {
@@ -431,10 +604,17 @@ pub(super) fn render_sequence_step_editor(
                 ui.label(egui::RichText::new("Step:").small());
                 let mut target = *step_index as i32;
                 let max = seq.steps.len().saturating_sub(1) as i32;
-                if ui.add(egui::DragValue::new(&mut target).range(0..=max).speed(0.1)).changed() {
-                    actions.sequence_actions.push(SequenceAction::SetGoToTarget {
-                        seq_idx, step_idx, target: target.max(0) as usize,
-                    });
+                if ui
+                    .add(egui::DragValue::new(&mut target).range(0..=max).speed(0.1))
+                    .changed()
+                {
+                    actions
+                        .sequence_actions
+                        .push(SequenceAction::SetGoToTarget {
+                            seq_idx,
+                            step_idx,
+                            target: target.max(0) as usize,
+                        });
                 }
             });
         }
@@ -465,7 +645,7 @@ mod tests {
     }
 
     fn fixture_with_sequence() -> UIData {
-        use super::super::super::{SequenceUIData, SequenceStepUI, SequenceStepKindUI};
+        use super::super::super::{SequenceStepKindUI, SequenceStepUI, SequenceUIData};
         use crate::channel::DurationUnit;
         let mut data = UIData::test_fixture();
         data.sequences.push(SequenceUIData {
@@ -475,9 +655,29 @@ mod tests {
             current_step: 0,
             step_elapsed: 0.0,
             steps: vec![
-                SequenceStepUI { label: "Fade".into(), kind: SequenceStepKindUI::Fade { from_ch: 0, to_ch: 1, duration_val: 5.0, duration_unit: DurationUnit::Seconds, easing: "Linear".into(), transition_shader: None, target_amount: 1.0 } },
-                SequenceStepUI { label: "Wait".into(), kind: SequenceStepKindUI::Wait { duration_val: 2.0, duration_unit: DurationUnit::Seconds } },
-                SequenceStepUI { label: "GoTo".into(), kind: SequenceStepKindUI::GoTo { step_index: 0 } },
+                SequenceStepUI {
+                    label: "Fade".into(),
+                    kind: SequenceStepKindUI::Fade {
+                        from_ch: 0,
+                        to_ch: 1,
+                        duration_val: 5.0,
+                        duration_unit: DurationUnit::Seconds,
+                        easing: "Linear".into(),
+                        transition_shader: None,
+                        target_amount: 1.0,
+                    },
+                },
+                SequenceStepUI {
+                    label: "Wait".into(),
+                    kind: SequenceStepKindUI::Wait {
+                        duration_val: 2.0,
+                        duration_unit: DurationUnit::Seconds,
+                    },
+                },
+                SequenceStepUI {
+                    label: "GoTo".into(),
+                    kind: SequenceStepKindUI::GoTo { step_index: 0 },
+                },
             ],
         });
         data
