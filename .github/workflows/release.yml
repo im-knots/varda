@@ -81,12 +81,12 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      # --- arm64 (native) ---
+      # --- arm64 (native via Homebrew) ---
       - name: Install arm64 dependencies
         run: |
           brew tap homebrew-ffmpeg/ffmpeg
           brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
-          brew install cmake pkg-config create-dmg
+          brew install cmake pkg-config create-dmg nasm
 
       - name: Build arm64 .app
         run: |
@@ -94,28 +94,20 @@ jobs:
           ./scripts/ci/build-macos.sh --native-only --skip-deps --tag "$TAG"
           mv Varda.app arm64-app
 
-      # --- x86_64 (cross-compile via Rosetta Homebrew) ---
-      - name: Install x86_64 Homebrew
-        run: |
-          arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-      - name: Install x86_64 FFmpeg
-        run: |
-          arch -x86_64 /usr/local/bin/brew tap homebrew-ffmpeg/ffmpeg
-          arch -x86_64 /usr/local/bin/brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
-          arch -x86_64 /usr/local/bin/brew install cmake pkg-config
+      # --- x86_64 (cross-compile FFmpeg + Rust) ---
+      - name: Build x86_64 FFmpeg from source
+        run: ./scripts/ci/build-ffmpeg-x86_64.sh
 
       - name: Build x86_64 .app
         run: |
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
-          ./scripts/ci/build-macos.sh --native-only --skip-deps --skip-build --tag "$TAG" \
-            --lib-dir /usr/local/lib
-          # Build the x86_64 binary separately with cross-compile env
-          PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
+          # Build x86_64 Rust binary
+          PKG_CONFIG_PATH=/tmp/ffmpeg-x86_64/lib/pkgconfig \
           PKG_CONFIG_ALLOW_CROSS=1 \
           cargo build --release --target x86_64-apple-darwin
-          # Replace the binary in the .app with the x86_64 one
-          cp target/x86_64-apple-darwin/release/varda Varda.app/Contents/MacOS/varda
+          # Create .app with x86_64 FFmpeg dylibs
+          ./scripts/ci/build-macos.sh --native-only --skip-deps --skip-build --tag "$TAG" \
+            --target x86_64-apple-darwin --lib-dir /tmp/ffmpeg-x86_64/lib
           mv Varda.app x86-app
 
       # --- Combine into universal DMG ---
