@@ -1,7 +1,7 @@
 pub mod audio;
-pub mod cli_install;
 pub mod camera;
 pub mod channel;
+pub mod cli_install;
 pub mod clock;
 pub mod deck;
 pub mod isf;
