@@ -26,7 +26,36 @@ Experimental:
 - **Dome projection**: fisheye to equirectangular (360°) and cubemap (3D) rendering with configurable lens correction and chromatic aberration.
 - **Surface overlap zones**: manual and auto-detect modes for precise edge blending.
 
-## Build & run
+## Install
+
+Download the latest release from the [Releases page](https://github.com/im-knots/varda/releases).
+
+### macOS (Universal DMG)
+
+1. Download `Varda-macOS-universal.dmg`
+2. Open the DMG and drag **Varda.app** to `/Applications`
+3. Before first launch, open Terminal and run:
+   ```bash
+   xattr -cr /Applications/Varda.app
+   ```
+   This removes the macOS quarantine flag. Varda is not yet signed with an Apple Developer certificate, so Gatekeeper will block it without this step.
+4. Launch Varda — on first run it will prompt for your password to install the `varda` CLI command to `/usr/local/bin/`
+
+### Linux (AppImage)
+
+1. Download `Varda-x86_64.AppImage`
+2. Make it executable and run:
+   ```bash
+   chmod +x Varda-x86_64.AppImage
+   ./Varda-x86_64.AppImage
+   ```
+   On first launch, a `varda` symlink is created in `~/.local/bin/` so you can run `varda` from any terminal.
+
+Both releases bundle FFmpeg and NDI, no extra dependencies needed.
+
+---
+
+## Build from source
 
 Requires [Rust](https://rustup.rs/) (stable) and a GPU with Metal (macOS) or Vulkan (Linux) support.
 
