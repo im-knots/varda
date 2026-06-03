@@ -58,16 +58,7 @@ fi
 # --- Build architectures ---
 if [ "$SKIP_BUILD" = false ]; then
   echo "==> Building $NATIVE_TARGET..."
-  # When cross-compiling (--target differs from native), set pkg-config to find libs in --lib-dir
-  if [ -n "$TARGET" ] && [ "$TARGET" != "$( [ "$NATIVE_ARCH" = "arm64" ] && echo "aarch64-apple-darwin" || echo "x86_64-apple-darwin" )" ]; then
-    echo "    (cross-compiling with lib-dir: ${LIB_DIR:-system})"
-    PKG_CONFIG_PATH="${LIB_DIR:+${LIB_DIR}/pkgconfig}" \
-    PKG_CONFIG_ALLOW_CROSS=1 \
-    CMAKE_OSX_ARCHITECTURES="$( echo "$TARGET" | sed 's/aarch64.*/arm64/; s/x86_64.*/x86_64/' )" \
-    cargo build --release --target "$NATIVE_TARGET"
-  else
-    cargo build --release --target "$NATIVE_TARGET"
-  fi
+  cargo build --release --target "$NATIVE_TARGET"
 
   if [ "$NATIVE_ONLY" = false ]; then
     echo "==> Building $CROSS_TARGET (cross)..."
