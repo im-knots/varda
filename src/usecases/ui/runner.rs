@@ -729,8 +729,8 @@ impl UIRunner {
             input.take()
         };
         let mut ui_actions = ui::UIActions::new();
-        let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            ui_actions = ui::panels::render_ui(ctx, &ui_data);
+        let full_output = self.egui_ctx.run_ui(raw_input, |ui| {
+            ui_actions = ui::panels::render_ui(ui, &ui_data);
         });
         {
             let Some(egui_state) = &mut self.egui_state else { return };
@@ -1098,26 +1098,32 @@ impl UIRunner {
 
         let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
 
-        let _ = context.device.poll(wgpu::PollType::Poll);
-        let output = match win_surface.surface.get_current_texture() {
-            Ok(o) => o,
-            Err(wgpu::SurfaceError::Outdated) => {
-                log::warn!("UI surface outdated, reconfiguring");
-                win_surface.surface.configure(&context.device, &win_surface.surface_config);
-                match win_surface.surface.get_current_texture() {
-                    Ok(o) => o,
-                    Err(e) => { log::error!("Failed to get surface texture after reconfigure: {}", e); return; }
-                }
-            }
-            Err(e) => { log::error!("Failed to get surface texture: {}", e); return; }
-        };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
+        // Always apply texture updates so the egui renderer stays in sync,
+        // even when the surface is unavailable (e.g. Occluded at startup).
         let Some(egui_renderer) = &mut self.egui_renderer else { return };
-
         for (id, delta) in &textures_delta.set {
             egui_renderer.update_texture(&context.device, &context.queue, *id, delta);
         }
+
+        let _ = context.device.poll(wgpu::PollType::Poll);
+        let output = match win_surface.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(o) => o,
+            wgpu::CurrentSurfaceTexture::Suboptimal(o) => {
+                log::warn!("UI surface suboptimal, will reconfigure");
+                o
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                log::warn!("UI surface outdated, reconfiguring");
+                win_surface.surface.configure(&context.device, &win_surface.surface_config);
+                match win_surface.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(o)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(o) => o,
+                    other => { log::error!("Failed to get surface texture after reconfigure: {:?}", other); return; }
+                }
+            }
+            other => { log::debug!("UI surface unavailable: {:?}", other); return; }
+        };
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Screen Encoder"),
@@ -1146,7 +1152,7 @@ impl UIRunner {
                     },
                     depth_slice: None,
                 })],
-                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
             });
             if let (Some(bg), Some(blit)) = (&bind_group, &self.blit_pipeline) { blit.render(&mut rp, bg); }
             let mut rp_static = rp.forget_lifetime();

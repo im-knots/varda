@@ -12,22 +12,22 @@ path = "src/lib.rs"
 
 [dependencies]
 # Graphics
-wgpu = "27.0"
+wgpu = "29.0"
 winit = "0.30"
 bytemuck = { version = "1.25", features = ["derive"] }
 
 # Shader compilation
 shaderc = "0.10"
-naga = { version = "27.0", features = ["spv-in", "wgsl-out"] }
+naga = { version = "29.0", features = ["spv-in", "wgsl-out"] }
 
 # ISF metadata parsing
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # UI
-egui = "0.33"
-egui-wgpu = "0.33"
-egui-winit = { version = "0.33", features = ["accesskit"] }
+egui = "0.34"
+egui-wgpu = "0.34"
+egui-winit = { version = "0.34", features = ["accesskit"] }
 
 # File system
 notify = "8.2"
@@ -78,7 +78,7 @@ test-fixtures = []
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-egui_kittest = { version = "0.33.3", features = ["wgpu", "snapshot"] }
+egui_kittest = { version = "0.34.2", features = ["wgpu", "snapshot"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 varda = { path = ".", features = ["test-fixtures"] }

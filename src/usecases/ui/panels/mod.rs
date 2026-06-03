@@ -25,28 +25,28 @@ use mixer::render_central_panel;
 use notifications_overlay::render_notifications;
 
 /// Top-level UI rendering entry point. Orchestrates all panels.
-pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
+pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
     let mut actions = UIActions::new();
 
     // Disable all egui animations — instant panel/widget transitions
-    ctx.style_mut(|style| {
+    ui.global_style_mut(|style| {
         style.animation_time = 0.0;
     });
 
     // === LEFT PANEL: Library (collapsible) ===
     if data.library_panel_open {
-        egui::SidePanel::left("library_panel")
-            .min_width(180.0)
-            .default_width(220.0)
+        egui::Panel::left("library_panel")
+            .min_size(180.0)
+            .default_size(220.0)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 render_library_panel(ui, data, &mut actions);
             });
     } else {
-        egui::SidePanel::left("library_collapsed")
-            .exact_width(36.0)
+        egui::Panel::left("library_collapsed")
+            .exact_size(36.0)
             .resizable(false)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
                     if ui.small_button("▶").on_hover_text("Open library (L)").clicked() {
@@ -58,18 +58,18 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
 
     // === RIGHT PANEL: Main Output + Master Effects (collapsible) ===
     if data.right_panel_open {
-        egui::SidePanel::right("master_panel")
-            .min_width(280.0)
-            .default_width(320.0)
+        egui::Panel::right("master_panel")
+            .min_size(280.0)
+            .default_size(320.0)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 render_right_panel(ui, data, &mut actions);
             });
     } else {
-        egui::SidePanel::right("master_collapsed")
-            .exact_width(36.0)
+        egui::Panel::right("master_collapsed")
+            .exact_size(36.0)
             .resizable(false)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
                     if ui.small_button("«").on_hover_text("Open master panel").clicked() {
@@ -80,21 +80,21 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
     }
 
     // === BOTTOM PANEL: Audio, Modulation, Shader Browser ===
-    egui::TopBottomPanel::bottom("bottom_panel")
-        .min_height(80.0)
-        .max_height(400.0)
-        .default_height(180.0)
+    egui::Panel::bottom("bottom_panel")
+        .min_size(80.0)
+        .max_size(400.0)
+        .default_size(180.0)
         .resizable(true)
         .show_separator_line(true)
-        .show(ctx, |ui| {
+        .show_inside(ui, |ui| {
             ui.set_min_height(ui.max_rect().height());
             render_bottom_panel(ui, data, &mut actions);
         });
 
     // === TOP BAR: Save button + FPS/BPM status ===
-    egui::TopBottomPanel::top("top_bar")
-        .exact_height(28.0)
-        .show(ctx, |ui| {
+    egui::Panel::top("top_bar")
+        .exact_size(28.0)
+        .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 let any_learn = data.midi_learn_active || data.keyboard_learn_active;
                 // Undo / Redo / Save — in learn mode: show glow + select target on click.
@@ -282,29 +282,29 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
         });
 
     // === CENTRAL AREA: Decks as columns ===
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
         render_central_panel(ui, data, &mut actions);
     });
 
     // === LIBRARY DnD: deferred drop handler ===
-    handle_library_dnd(ctx, data, &mut actions);
+    handle_library_dnd(ui, data, &mut actions);
 
     // === EFFECT REORDER DnD: deferred drop handler ===
-    handle_effect_dnd(ctx, data, &mut actions);
+    handle_effect_dnd(ui, data, &mut actions);
 
     // === SEQUENCE STEP REORDER DnD: deferred drop handler ===
-    handle_sequence_step_dnd(ctx, data, &mut actions);
+    handle_sequence_step_dnd(ui, data, &mut actions);
 
     // === NOTIFICATION OVERLAY ===
-    render_notifications(ctx, &data.notifications, &mut actions);
+    render_notifications(ui, &data.notifications, &mut actions);
 
     // === GLOBAL RIGHT-CLICK: Toggle MIDI Learn Mode ===
-    handle_midi_learn_popup(ctx, data, &mut actions);
+    handle_midi_learn_popup(ui, data, &mut actions);
 
     // === KEYBOARD SHORTCUTS (data-driven via keymap) ===
     {
         use crate::keymap::{KeyCombo, KeyTarget, ActionId, collect_pressed_keys};
-        let pressed = collect_pressed_keys(ctx);
+        let pressed = collect_pressed_keys(ui);
 
         if data.keyboard_learn_active {
             // In learn mode: intercept key presses for binding, don't dispatch normally
@@ -322,7 +322,7 @@ pub fn render_ui(ctx: &egui::Context, data: &UIData) -> UIActions {
                         KeyTarget::Action(ActionId::Redo) => actions.redo_requested = true,
                         KeyTarget::Action(ActionId::Save) => actions.save_requested = true,
                         KeyTarget::Action(ActionId::ToggleLibrary) => {
-                            if !ctx.wants_keyboard_input() {
+                            if !ui.egui_wants_keyboard_input() {
                                 actions.toggle_library_panel = true;
                             }
                         }
@@ -1059,7 +1059,7 @@ mod tests {
     fn render_ui_smoke_default_fixture() {
         let data = UIData::test_fixture();
         let harness = egui_kittest::Harness::new_ui(|ui| {
-            let _ = render_ui(ui.ctx(), &data);
+            let _ = render_ui(ui, &data);
         });
         // Running the harness processes a frame — if render_ui panics, this test fails.
         let _ = harness;
@@ -1075,7 +1075,7 @@ mod tests {
         data.selected_deck = None;
         data.selected_channel = None;
         let harness = egui_kittest::Harness::new_ui(|ui| {
-            let _ = render_ui(ui.ctx(), &data);
+            let _ = render_ui(ui, &data);
         });
         let _ = harness;
     }
@@ -1086,7 +1086,7 @@ mod tests {
         let mut data = UIData::test_fixture();
         data.library_panel_open = false;
         let harness = egui_kittest::Harness::new_ui(|ui| {
-            let _ = render_ui(ui.ctx(), &data);
+            let _ = render_ui(ui, &data);
         });
         let _ = harness;
     }
@@ -1097,7 +1097,7 @@ mod tests {
         let mut data = UIData::test_fixture();
         data.stage_editor_open = true;
         let harness = egui_kittest::Harness::new_ui(|ui| {
-            let _ = render_ui(ui.ctx(), &data);
+            let _ = render_ui(ui, &data);
         });
         let _ = harness;
     }
@@ -1109,7 +1109,7 @@ mod tests {
         data.selected_deck = None;
         data.selected_master = true;
         let harness = egui_kittest::Harness::new_ui(|ui| {
-            let _ = render_ui(ui.ctx(), &data);
+            let _ = render_ui(ui, &data);
         });
         let _ = harness;
     }
@@ -1121,7 +1121,7 @@ mod tests {
         data.selected_deck = None;
         data.selected_channel = Some(0);
         let harness = egui_kittest::Harness::new_ui(|ui| {
-            let _ = render_ui(ui.ctx(), &data);
+            let _ = render_ui(ui, &data);
         });
         let _ = harness;
     }
@@ -1133,7 +1133,7 @@ mod tests {
         data.midi_learn_active = true;
         data.midi_learn_target = Some("crossfader".to_string());
         let harness = egui_kittest::Harness::new_ui(|ui| {
-            let _ = render_ui(ui.ctx(), &data);
+            let _ = render_ui(ui, &data);
         });
         let _ = harness;
     }

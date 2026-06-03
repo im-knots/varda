@@ -376,8 +376,8 @@ impl EdgeBlendPipeline {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Edge Blend Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let vertex_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -420,7 +420,7 @@ impl EdgeBlendPipeline {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -431,7 +431,7 @@ impl EdgeBlendPipeline {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -476,6 +476,7 @@ impl EdgeBlendPipeline {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rp.set_pipeline(&self.pipeline);
             rp.set_bind_group(0, &bind_group, &[]);

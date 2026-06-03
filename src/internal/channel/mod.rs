@@ -638,6 +638,7 @@ impl Channel {
                             depth_stencil_attachment: None,
                             timestamp_writes: None,
                             occlusion_query_set: None,
+                            multiview_mask: None,
                         });
                         self.blit_pipeline.render(&mut render_pass, &bind_group);
                     }
@@ -673,6 +674,7 @@ impl Channel {
                             depth_stencil_attachment: None,
                             timestamp_writes: None,
                             occlusion_query_set: None,
+                            multiview_mask: None,
                         });
                         self.composite_pipeline.render(&mut render_pass, &bind_group);
                     }
@@ -704,6 +706,7 @@ impl Channel {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                     self.blit_pipeline.render(&mut render_pass, &bind_group);
                 }
@@ -739,6 +742,7 @@ impl Channel {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                     self.composite_pipeline.render(&mut render_pass, &bind_group);
                 }
@@ -766,6 +770,7 @@ impl Channel {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
             }
             context.queue.submit(std::iter::once(encoder.finish()));

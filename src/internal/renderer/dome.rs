@@ -194,8 +194,8 @@ impl DomemasterRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Domemaster Projection Pipeline Layout"),
-            bind_group_layouts: &[&projection_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&projection_bind_group_layout)],
+            immediate_size: 0,
         });
 
         let projection_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -218,7 +218,8 @@ impl DomemasterRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None, cache: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -317,6 +318,7 @@ impl DomemasterRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             if *opacity > 0.0 {
                 self.face_blit.render(&mut rp, &bind_group);
@@ -353,6 +355,7 @@ impl DomemasterRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rp.set_pipeline(&self.projection_pipeline);
             rp.set_bind_group(0, &projection_bind_group, &[]);

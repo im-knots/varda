@@ -192,6 +192,7 @@ impl Deck {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                     blit_pipeline.render(&mut render_pass, &bind_group);
                 }
@@ -225,6 +226,7 @@ impl Deck {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                     convert_pipeline.draw(&mut render_pass, &bind_group);
                 }
@@ -256,6 +258,7 @@ impl Deck {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                     blit_pipeline.render(&mut render_pass, &bind_group);
                 }
@@ -282,6 +285,7 @@ impl Deck {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                 }
                 cmd_buffers.push(encoder.finish());
@@ -402,6 +406,7 @@ impl Deck {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             render_pass.set_pipeline(&pipeline.pipeline);
@@ -521,6 +526,7 @@ impl Deck {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
 
                     render_pass.set_pipeline(multi_pass.pipeline_for_format(format));
@@ -586,6 +592,7 @@ impl Deck {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 render_pass.set_pipeline(multi_pass.pipeline_for_format(wgpu::TextureFormat::Rgba8Unorm));
@@ -637,6 +644,7 @@ impl Deck {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             blit_pipeline.render(&mut render_pass, &bind_group);
         }

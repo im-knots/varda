@@ -145,9 +145,9 @@ fn make_harness(data: UIData) -> Harness<'static, AccActions> {
     let data = Rc::new(data);
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1280.0, 720.0))
-        .build_state(
-            move |ctx, acc: &mut AccActions| {
-                let actions = render_ui(ctx, &data);
+        .build_ui_state(
+            move |ui, acc: &mut AccActions| {
+                let actions = render_ui(ui, &data);
                 acc.merge(&actions);
             },
             AccActions::default(),
@@ -284,9 +284,9 @@ fn click_new_output_creates_output_action() {
     let data = Rc::new(UIData::test_fixture());
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1280.0, 1200.0))
-        .build_state(
-            move |ctx, acc: &mut AccActions| {
-                let actions = render_ui(ctx, &data);
+        .build_ui_state(
+            move |ui, acc: &mut AccActions| {
+                let actions = render_ui(ui, &data);
                 acc.merge(&actions);
             },
             AccActions::default(),
@@ -518,9 +518,9 @@ fn click_open_library_from_right_panel() {
     let data = Rc::new(data);
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1280.0, 1200.0))
-        .build_state(
-            move |ctx, acc: &mut AccActions| {
-                let actions = render_ui(ctx, &data);
+        .build_ui_state(
+            move |ui, acc: &mut AccActions| {
+                let actions = render_ui(ui, &data);
                 acc.merge(&actions);
             },
             AccActions::default(),
@@ -733,9 +733,9 @@ fn collapsing_midi_clear_all_mappings() {
     let data = Rc::new(data);
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1280.0, 1200.0))
-        .build_state(
-            move |ctx, acc: &mut AccActions| {
-                let actions = render_ui(ctx, &data);
+        .build_ui_state(
+            move |ui, acc: &mut AccActions| {
+                let actions = render_ui(ui, &data);
                 acc.merge(&actions);
             },
             AccActions::default(),
