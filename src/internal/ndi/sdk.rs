@@ -89,27 +89,38 @@ impl NdiSdk {
         None
     }
 
-    /// Try to load NDI from the app bundle's Frameworks directory.
-    /// Path: <exe>/../Frameworks/libndi.dylib (macOS .app bundle)
+    /// Try to load NDI from the app bundle or portable directory.
+    /// macOS: <exe>/../../Frameworks/libndi.dylib (.app bundle)
+    /// Windows: <exe_dir>/Processing.NDI.Lib.x64.dll (portable ZIP)
     fn try_load_from_bundle() -> Option<Library> {
         let exe = std::env::current_exe().ok()?;
-        let frameworks = exe.parent()?.parent()?.join("Frameworks");
-        let ndi_path = if cfg!(target_os = "macos") {
-            frameworks.join("libndi.dylib")
-        } else {
-            return None;
-        };
-        if !ndi_path.exists() {
-            return None;
-        }
-        match unsafe { Library::new(&ndi_path) } {
-            Ok(lib) => {
-                log::info!("Loaded NDI SDK from bundle: {}", ndi_path.display());
-                Some(lib)
+        let exe_dir = exe.parent()?;
+
+        #[cfg(target_os = "macos")]
+        let ndi_path = exe_dir.parent()?.join("Frameworks").join("libndi.dylib");
+
+        #[cfg(target_os = "windows")]
+        let ndi_path = exe_dir.join("Processing.NDI.Lib.x64.dll");
+
+        #[cfg(target_os = "linux")]
+        let _ = exe_dir; // suppress unused on Linux
+        #[cfg(target_os = "linux")]
+        return None;
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            if !ndi_path.exists() {
+                return None;
             }
-            Err(e) => {
-                log::warn!("Failed to load bundled NDI SDK: {}", e);
-                None
+            match unsafe { Library::new(&ndi_path) } {
+                Ok(lib) => {
+                    log::info!("Loaded NDI SDK from bundle: {}", ndi_path.display());
+                    Some(lib)
+                }
+                Err(e) => {
+                    log::warn!("Failed to load bundled NDI SDK: {}", e);
+                    None
+                }
             }
         }
     }

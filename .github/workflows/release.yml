@@ -128,9 +128,72 @@ jobs:
           name: macos-dmg
           path: Varda-macOS-universal.dmg
 
+  build-windows:
+    name: Windows x64 (portable ZIP)
+    needs: [preflight]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install vcpkg FFmpeg
+        shell: pwsh
+        run: |
+          vcpkg install ffmpeg:x64-windows
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: vcpkg-windows-x64-
+
+      - name: Install LLVM (for shaderc)
+        run: choco install llvm -y
+        shell: cmd
+
+      - name: Set LLVM environment
+        shell: pwsh
+        run: |
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\lib" >> $env:GITHUB_ENV
+
+      - name: Install NDI Runtime
+        shell: pwsh
+        run: |
+          $ndiUrl = "https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20Runtime.exe"
+          $ndiInstaller = "$env:TEMP\ndi-runtime.exe"
+          Invoke-WebRequest -Uri $ndiUrl -OutFile $ndiInstaller
+          Start-Process -FilePath $ndiInstaller -ArgumentList "/verysilent" -Wait
+          Write-Host "NDI Runtime installed"
+
+      - name: Set FFmpeg pkg-config path
+        shell: pwsh
+        run: |
+          echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+
+      - name: Build release binary
+        shell: pwsh
+        run: cargo build --release
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: .\scripts\ci\build-windows.ps1 -SkipBuild
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-zip
+          path: Varda-Windows-x64.zip
+
   release:
     name: Create GitHub Release
-    needs: [build-linux, build-macos]
+    needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -153,3 +216,4 @@ jobs:
           files: |
             linux-appimage/Varda-x86_64.AppImage
             macos-dmg/Varda-macOS-universal.dmg
+            windows-zip/Varda-Windows-x64.zip
