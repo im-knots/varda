@@ -3,8 +3,8 @@
 //! Mirrors the MIDI mapping architecture: a data-driven keymap with learn mode,
 //! persistence to `.varda/keymap.json`, and default bindings that can be overridden.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// A key combination: a key + modifier state.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -94,23 +94,143 @@ impl KeymapStore {
         let action = |id: ActionId| KeyTarget::Action(id);
 
         // Global shortcuts
-        m.insert(KeyCombo { key: "Z".into(), command: true, shift: false, alt: false }, action(ActionId::Undo));
-        m.insert(KeyCombo { key: "Z".into(), command: true, shift: true, alt: false }, action(ActionId::Redo));
-        m.insert(KeyCombo { key: "S".into(), command: true, shift: false, alt: false }, action(ActionId::Save));
-        m.insert(KeyCombo { key: "L".into(), command: false, shift: false, alt: false }, action(ActionId::ToggleLibrary));
+        m.insert(
+            KeyCombo {
+                key: "Z".into(),
+                command: true,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::Undo),
+        );
+        m.insert(
+            KeyCombo {
+                key: "Z".into(),
+                command: true,
+                shift: true,
+                alt: false,
+            },
+            action(ActionId::Redo),
+        );
+        m.insert(
+            KeyCombo {
+                key: "S".into(),
+                command: true,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::Save),
+        );
+        m.insert(
+            KeyCombo {
+                key: "L".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::ToggleLibrary),
+        );
 
         // Stage editor tools (context-checked at dispatch)
-        m.insert(KeyCombo { key: "S".into(), command: false, shift: false, alt: false }, action(ActionId::ToolSelect));
-        m.insert(KeyCombo { key: "R".into(), command: false, shift: false, alt: false }, action(ActionId::ToolRectangle));
-        m.insert(KeyCombo { key: "P".into(), command: false, shift: false, alt: false }, action(ActionId::ToolPolygon));
-        m.insert(KeyCombo { key: "C".into(), command: false, shift: false, alt: false }, action(ActionId::ToolCircle));
-        m.insert(KeyCombo { key: "D".into(), command: false, shift: false, alt: false }, action(ActionId::DuplicateSurface));
-        m.insert(KeyCombo { key: "H".into(), command: false, shift: false, alt: false }, action(ActionId::FlipHorizontal));
-        m.insert(KeyCombo { key: "V".into(), command: false, shift: false, alt: false }, action(ActionId::FlipVertical));
-        m.insert(KeyCombo { key: "Delete".into(), command: false, shift: false, alt: false }, action(ActionId::DeleteSurface));
-        m.insert(KeyCombo { key: "Backspace".into(), command: false, shift: false, alt: false }, action(ActionId::DeleteSurface));
-        m.insert(KeyCombo { key: "Escape".into(), command: false, shift: false, alt: false }, action(ActionId::ClearDrawing));
-        m.insert(KeyCombo { key: "G".into(), command: false, shift: false, alt: false }, action(ActionId::CombineSurfaces));
+        m.insert(
+            KeyCombo {
+                key: "S".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::ToolSelect),
+        );
+        m.insert(
+            KeyCombo {
+                key: "R".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::ToolRectangle),
+        );
+        m.insert(
+            KeyCombo {
+                key: "P".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::ToolPolygon),
+        );
+        m.insert(
+            KeyCombo {
+                key: "C".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::ToolCircle),
+        );
+        m.insert(
+            KeyCombo {
+                key: "D".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::DuplicateSurface),
+        );
+        m.insert(
+            KeyCombo {
+                key: "H".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::FlipHorizontal),
+        );
+        m.insert(
+            KeyCombo {
+                key: "V".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::FlipVertical),
+        );
+        m.insert(
+            KeyCombo {
+                key: "Delete".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::DeleteSurface),
+        );
+        m.insert(
+            KeyCombo {
+                key: "Backspace".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::DeleteSurface),
+        );
+        m.insert(
+            KeyCombo {
+                key: "Escape".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::ClearDrawing),
+        );
+        m.insert(
+            KeyCombo {
+                key: "G".into(),
+                command: false,
+                shift: false,
+                alt: false,
+            },
+            action(ActionId::CombineSurfaces),
+        );
 
         m
     }
@@ -143,9 +263,11 @@ impl KeymapStore {
         if !self.learn_mode {
             self.learn_target = None;
         }
-        log::info!("Keyboard learn mode: {}", if self.learn_mode { "ON" } else { "OFF" });
+        log::info!(
+            "Keyboard learn mode: {}",
+            if self.learn_mode { "ON" } else { "OFF" }
+        );
     }
-
 
     /// Select a learn target (must be in learn mode).
     pub fn select_learn_target(&mut self, target: KeyTarget) {
@@ -174,16 +296,21 @@ impl KeymapStore {
 
     /// Serialize to a persistable config.
     pub fn to_config(&self) -> KeymapConfig {
-        let bindings = self.bindings.iter().map(|(combo, target)| {
-            KeyBinding {
+        let bindings = self
+            .bindings
+            .iter()
+            .map(|(combo, target)| KeyBinding {
                 key: combo.key.clone(),
                 command: combo.command,
                 shift: combo.shift,
                 alt: combo.alt,
                 target: target.clone(),
-            }
-        }).collect();
-        KeymapConfig { version: 1, bindings }
+            })
+            .collect();
+        KeymapConfig {
+            version: 1,
+            bindings,
+        }
     }
 
     /// Load bindings from config, merging over defaults.
@@ -198,7 +325,11 @@ impl KeymapStore {
                 alt: binding.alt,
             };
             // Only load if the key string is valid
-            if combo.to_egui_key().is_some() || binding.key == "Delete" || binding.key == "Backspace" || binding.key == "Escape" {
+            if combo.to_egui_key().is_some()
+                || binding.key == "Delete"
+                || binding.key == "Backspace"
+                || binding.key == "Escape"
+            {
                 self.bindings.insert(combo, binding.target.clone());
             } else {
                 log::warn!("Keymap: skipping unknown key '{}'", binding.key);
@@ -229,7 +360,9 @@ pub struct KeymapConfig {
     pub bindings: Vec<KeyBinding>,
 }
 
-fn default_keymap_version() -> u32 { 1 }
+fn default_keymap_version() -> u32 {
+    1
+}
 
 /// A single key binding entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,35 +435,71 @@ pub fn egui_key_to_string(key: egui::Key) -> String {
 /// Convert a string name back to egui::Key.
 pub fn string_to_egui_key(s: &str) -> Option<egui::Key> {
     match s {
-        "A" => Some(egui::Key::A), "B" => Some(egui::Key::B), "C" => Some(egui::Key::C),
-        "D" => Some(egui::Key::D), "E" => Some(egui::Key::E), "F" => Some(egui::Key::F),
-        "G" => Some(egui::Key::G), "H" => Some(egui::Key::H), "I" => Some(egui::Key::I),
-        "J" => Some(egui::Key::J), "K" => Some(egui::Key::K), "L" => Some(egui::Key::L),
-        "M" => Some(egui::Key::M), "N" => Some(egui::Key::N), "O" => Some(egui::Key::O),
-        "P" => Some(egui::Key::P), "Q" => Some(egui::Key::Q), "R" => Some(egui::Key::R),
-        "S" => Some(egui::Key::S), "T" => Some(egui::Key::T), "U" => Some(egui::Key::U),
-        "V" => Some(egui::Key::V), "W" => Some(egui::Key::W), "X" => Some(egui::Key::X),
-        "Y" => Some(egui::Key::Y), "Z" => Some(egui::Key::Z),
-        "Num0" => Some(egui::Key::Num0), "Num1" => Some(egui::Key::Num1),
-        "Num2" => Some(egui::Key::Num2), "Num3" => Some(egui::Key::Num3),
-        "Num4" => Some(egui::Key::Num4), "Num5" => Some(egui::Key::Num5),
-        "Num6" => Some(egui::Key::Num6), "Num7" => Some(egui::Key::Num7),
-        "Num8" => Some(egui::Key::Num8), "Num9" => Some(egui::Key::Num9),
-        "F1" => Some(egui::Key::F1), "F2" => Some(egui::Key::F2),
-        "F3" => Some(egui::Key::F3), "F4" => Some(egui::Key::F4),
-        "F5" => Some(egui::Key::F5), "F6" => Some(egui::Key::F6),
-        "F7" => Some(egui::Key::F7), "F8" => Some(egui::Key::F8),
-        "F9" => Some(egui::Key::F9), "F10" => Some(egui::Key::F10),
-        "F11" => Some(egui::Key::F11), "F12" => Some(egui::Key::F12),
-        "ArrowUp" => Some(egui::Key::ArrowUp), "ArrowDown" => Some(egui::Key::ArrowDown),
-        "ArrowLeft" => Some(egui::Key::ArrowLeft), "ArrowRight" => Some(egui::Key::ArrowRight),
-        "Home" => Some(egui::Key::Home), "End" => Some(egui::Key::End),
-        "PageUp" => Some(egui::Key::PageUp), "PageDown" => Some(egui::Key::PageDown),
-        "Insert" => Some(egui::Key::Insert), "Delete" => Some(egui::Key::Delete),
-        "Backspace" => Some(egui::Key::Backspace), "Enter" => Some(egui::Key::Enter),
-        "Tab" => Some(egui::Key::Tab), "Space" => Some(egui::Key::Space),
+        "A" => Some(egui::Key::A),
+        "B" => Some(egui::Key::B),
+        "C" => Some(egui::Key::C),
+        "D" => Some(egui::Key::D),
+        "E" => Some(egui::Key::E),
+        "F" => Some(egui::Key::F),
+        "G" => Some(egui::Key::G),
+        "H" => Some(egui::Key::H),
+        "I" => Some(egui::Key::I),
+        "J" => Some(egui::Key::J),
+        "K" => Some(egui::Key::K),
+        "L" => Some(egui::Key::L),
+        "M" => Some(egui::Key::M),
+        "N" => Some(egui::Key::N),
+        "O" => Some(egui::Key::O),
+        "P" => Some(egui::Key::P),
+        "Q" => Some(egui::Key::Q),
+        "R" => Some(egui::Key::R),
+        "S" => Some(egui::Key::S),
+        "T" => Some(egui::Key::T),
+        "U" => Some(egui::Key::U),
+        "V" => Some(egui::Key::V),
+        "W" => Some(egui::Key::W),
+        "X" => Some(egui::Key::X),
+        "Y" => Some(egui::Key::Y),
+        "Z" => Some(egui::Key::Z),
+        "Num0" => Some(egui::Key::Num0),
+        "Num1" => Some(egui::Key::Num1),
+        "Num2" => Some(egui::Key::Num2),
+        "Num3" => Some(egui::Key::Num3),
+        "Num4" => Some(egui::Key::Num4),
+        "Num5" => Some(egui::Key::Num5),
+        "Num6" => Some(egui::Key::Num6),
+        "Num7" => Some(egui::Key::Num7),
+        "Num8" => Some(egui::Key::Num8),
+        "Num9" => Some(egui::Key::Num9),
+        "F1" => Some(egui::Key::F1),
+        "F2" => Some(egui::Key::F2),
+        "F3" => Some(egui::Key::F3),
+        "F4" => Some(egui::Key::F4),
+        "F5" => Some(egui::Key::F5),
+        "F6" => Some(egui::Key::F6),
+        "F7" => Some(egui::Key::F7),
+        "F8" => Some(egui::Key::F8),
+        "F9" => Some(egui::Key::F9),
+        "F10" => Some(egui::Key::F10),
+        "F11" => Some(egui::Key::F11),
+        "F12" => Some(egui::Key::F12),
+        "ArrowUp" => Some(egui::Key::ArrowUp),
+        "ArrowDown" => Some(egui::Key::ArrowDown),
+        "ArrowLeft" => Some(egui::Key::ArrowLeft),
+        "ArrowRight" => Some(egui::Key::ArrowRight),
+        "Home" => Some(egui::Key::Home),
+        "End" => Some(egui::Key::End),
+        "PageUp" => Some(egui::Key::PageUp),
+        "PageDown" => Some(egui::Key::PageDown),
+        "Insert" => Some(egui::Key::Insert),
+        "Delete" => Some(egui::Key::Delete),
+        "Backspace" => Some(egui::Key::Backspace),
+        "Enter" => Some(egui::Key::Enter),
+        "Tab" => Some(egui::Key::Tab),
+        "Space" => Some(egui::Key::Space),
         "Escape" => Some(egui::Key::Escape),
-        "Minus" => Some(egui::Key::Minus), "Plus" => Some(egui::Key::Plus),
+        "Minus" => Some(egui::Key::Minus),
+        "Plus" => Some(egui::Key::Plus),
         _ => None,
     }
 }
@@ -341,7 +510,13 @@ pub fn collect_pressed_keys(ctx: &egui::Context) -> Vec<(egui::Key, egui::Modifi
         let mut pressed = Vec::new();
         let mods = i.modifiers;
         for event in &i.events {
-            if let egui::Event::Key { key, pressed: true, repeat: false, .. } = event {
+            if let egui::Event::Key {
+                key,
+                pressed: true,
+                repeat: false,
+                ..
+            } = event
+            {
                 pressed.push((*key, mods));
             }
         }
@@ -352,9 +527,15 @@ pub fn collect_pressed_keys(ctx: &egui::Context) -> Vec<(egui::Key, egui::Modifi
 /// Display a KeyCombo as a user-friendly string (e.g. "Cmd+Shift+Z").
 impl std::fmt::Display for KeyCombo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.command { write!(f, "Cmd+")?; }
-        if self.shift { write!(f, "Shift+")?; }
-        if self.alt { write!(f, "Alt+")?; }
+        if self.command {
+            write!(f, "Cmd+")?;
+        }
+        if self.shift {
+            write!(f, "Shift+")?;
+        }
+        if self.alt {
+            write!(f, "Alt+")?;
+        }
         write!(f, "{}", self.key)
     }
 }
@@ -368,7 +549,6 @@ impl std::fmt::Display for KeyTarget {
         }
     }
 }
-
 
 // ── Keyboard param toggle ───────────────────────────────────────────
 
@@ -431,7 +611,12 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
         // deck/<uuid>/param/<name>
         ["deck", uuid, "param", name] => {
             if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                if let Some(val) = mixer.channels_mut()[ch].decks[dk].deck.generator_params.values.get_mut(*name) {
+                if let Some(val) = mixer.channels_mut()[ch].decks[dk]
+                    .deck
+                    .generator_params
+                    .values
+                    .get_mut(*name)
+                {
                     toggle_param_value(val);
                     return true;
                 }
@@ -458,7 +643,11 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
             if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
                 if let Ok(ek) = ek_s.parse::<usize>() {
                     if ek < mixer.channels_mut()[ch].effects.len() {
-                        if let Some(val) = mixer.channels_mut()[ch].effects[ek].params.values.get_mut(*name) {
+                        if let Some(val) = mixer.channels_mut()[ch].effects[ek]
+                            .params
+                            .values
+                            .get_mut(*name)
+                        {
                             toggle_param_value(val);
                             return true;
                         }
@@ -505,16 +694,33 @@ mod tests {
     use super::*;
 
     fn combo(key: &str, command: bool, shift: bool, alt: bool) -> KeyCombo {
-        KeyCombo { key: key.into(), command, shift, alt }
+        KeyCombo {
+            key: key.into(),
+            command,
+            shift,
+            alt,
+        }
     }
 
     #[test]
     fn test_default_bindings_complete() {
         let store = KeymapStore::with_defaults();
-        assert!(store.bindings.values().any(|t| *t == KeyTarget::Action(ActionId::Undo)));
-        assert!(store.bindings.values().any(|t| *t == KeyTarget::Action(ActionId::Save)));
-        assert!(store.bindings.values().any(|t| *t == KeyTarget::Action(ActionId::ToggleLibrary)));
-        assert!(store.bindings.values().any(|t| *t == KeyTarget::Action(ActionId::ToolSelect)));
+        assert!(store
+            .bindings
+            .values()
+            .any(|t| *t == KeyTarget::Action(ActionId::Undo)));
+        assert!(store
+            .bindings
+            .values()
+            .any(|t| *t == KeyTarget::Action(ActionId::Save)));
+        assert!(store
+            .bindings
+            .values()
+            .any(|t| *t == KeyTarget::Action(ActionId::ToggleLibrary)));
+        assert!(store
+            .bindings
+            .values()
+            .any(|t| *t == KeyTarget::Action(ActionId::ToolSelect)));
     }
 
     #[test]
@@ -531,7 +737,10 @@ mod tests {
         let mut store = KeymapStore::with_defaults();
         let c = combo("L", false, false, false);
         store.set(c.clone(), KeyTarget::ParamPath("ch/0/opacity".into()));
-        assert_eq!(store.get(&c), Some(&KeyTarget::ParamPath("ch/0/opacity".into())));
+        assert_eq!(
+            store.get(&c),
+            Some(&KeyTarget::ParamPath("ch/0/opacity".into()))
+        );
     }
 
     #[test]
@@ -568,7 +777,10 @@ mod tests {
         let c = combo("L", false, false, false);
         store.set(c.clone(), KeyTarget::ParamPath("custom".into()));
         store.reset_to_defaults();
-        assert_eq!(store.get(&c), Some(&KeyTarget::Action(ActionId::ToggleLibrary)));
+        assert_eq!(
+            store.get(&c),
+            Some(&KeyTarget::Action(ActionId::ToggleLibrary))
+        );
     }
 
     #[test]
@@ -579,7 +791,13 @@ mod tests {
 
     #[test]
     fn test_egui_key_roundtrip() {
-        let keys = [egui::Key::Z, egui::Key::S, egui::Key::Delete, egui::Key::F1, egui::Key::Space];
+        let keys = [
+            egui::Key::Z,
+            egui::Key::S,
+            egui::Key::Delete,
+            egui::Key::F1,
+            egui::Key::Space,
+        ];
         for key in keys {
             let s = egui_key_to_string(key);
             let back = string_to_egui_key(&s);
@@ -592,17 +810,21 @@ mod tests {
         let mut store = KeymapStore::with_defaults();
         let config = KeymapConfig {
             version: 1,
-            bindings: vec![
-                KeyBinding {
-                    key: "L".into(), command: false, shift: false, alt: false,
-                    target: KeyTarget::ParamPath("ch/0/opacity".into()),
-                },
-            ],
+            bindings: vec![KeyBinding {
+                key: "L".into(),
+                command: false,
+                shift: false,
+                alt: false,
+                target: KeyTarget::ParamPath("ch/0/opacity".into()),
+            }],
         };
         store.load_config(&config);
         // Custom binding overrides default
         let c = combo("L", false, false, false);
-        assert_eq!(store.get(&c), Some(&KeyTarget::ParamPath("ch/0/opacity".into())));
+        assert_eq!(
+            store.get(&c),
+            Some(&KeyTarget::ParamPath("ch/0/opacity".into()))
+        );
         // Other defaults remain
         let undo = combo("Z", true, false, false);
         assert_eq!(store.get(&undo), Some(&KeyTarget::Action(ActionId::Undo)));
@@ -613,7 +835,10 @@ mod tests {
         let config = KeymapConfig {
             version: 1,
             bindings: vec![KeyBinding {
-                key: "Z".into(), command: true, shift: false, alt: false,
+                key: "Z".into(),
+                command: true,
+                shift: false,
+                alt: false,
                 target: KeyTarget::Action(ActionId::Undo),
             }],
         };
@@ -625,7 +850,10 @@ mod tests {
         let config = KeymapConfig {
             version: 1,
             bindings: vec![KeyBinding {
-                key: "".into(), command: false, shift: false, alt: false,
+                key: "".into(),
+                command: false,
+                shift: false,
+                alt: false,
                 target: KeyTarget::Action(ActionId::Save),
             }],
         };

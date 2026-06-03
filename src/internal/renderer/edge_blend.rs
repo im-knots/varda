@@ -4,7 +4,9 @@ use anyhow::Result;
 use wgpu::util::DeviceExt;
 
 /// Controls whether edge blend config is user-set or auto-computed from surface topology.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 pub enum EdgeBlendMode {
     /// User sets each edge manually (default — preserves existing behavior).
     Manual,
@@ -30,7 +32,11 @@ pub struct EdgeBlendEdge {
 
 impl Default for EdgeBlendEdge {
     fn default() -> Self {
-        Self { enabled: false, width: 0.1, gamma: 2.2 }
+        Self {
+            enabled: false,
+            width: 0.1,
+            gamma: 2.2,
+        }
     }
 }
 
@@ -101,7 +107,9 @@ impl SurfaceOverlapZones {
             self.zones.sort_by(|a, b| {
                 let area_a = (a.uv_rect[2] - a.uv_rect[0]) * (a.uv_rect[3] - a.uv_rect[1]);
                 let area_b = (b.uv_rect[2] - b.uv_rect[0]) * (b.uv_rect[3] - b.uv_rect[1]);
-                area_b.partial_cmp(&area_a).unwrap_or(std::cmp::Ordering::Equal)
+                area_b
+                    .partial_cmp(&area_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
             self.zones.truncate(MAX_OVERLAP_ZONES);
         }
@@ -167,7 +175,11 @@ fn polygon_intersect_aabb(a: &MappedRegion, b: &MappedRegion) -> Option<[f32; 4]
                 polys.push(p);
             }
         }
-        if polys.is_empty() { None } else { Some(geo::MultiPolygon::new(polys)) }
+        if polys.is_empty() {
+            None
+        } else {
+            Some(geo::MultiPolygon::new(polys))
+        }
     };
 
     if let (Some(ma), Some(mb)) = (build_multi(a), build_multi(b)) {
@@ -244,7 +256,9 @@ pub fn compute_auto_edge_blend(infos: &[OutputSurfaceInfo]) -> Vec<AutoBlendResu
     for info in infos {
         log::debug!(
             "[edge-blend] output {} mode={:?} regions={}",
-            info.output_idx, info.edge_blend_mode, info.regions.len()
+            info.output_idx,
+            info.edge_blend_mode,
+            info.regions.len()
         );
 
         if info.edge_blend_mode != EdgeBlendMode::Auto {
@@ -265,8 +279,14 @@ pub fn compute_auto_edge_blend(infos: &[OutputSurfaceInfo]) -> Vec<AutoBlendResu
                     }
                     if let Some(overlap) = polygon_intersect_aabb(region_a, region_b) {
                         let uv_rect = stage_to_surface_uv(&region_a.bbox, &overlap);
-                        let (ramp_x, ramp_y) = compute_ramp_direction(&region_a.bbox, &region_b.bbox);
-                        zones.add_zone(OverlapZone { uv_rect, gamma, ramp_x, ramp_y });
+                        let (ramp_x, ramp_y) =
+                            compute_ramp_direction(&region_a.bbox, &region_b.bbox);
+                        zones.add_zone(OverlapZone {
+                            uv_rect,
+                            gamma,
+                            ramp_x,
+                            ramp_y,
+                        });
                     }
                 }
             }
@@ -297,10 +317,22 @@ fn stage_to_surface_uv(region: &[f32; 4], overlap: &[f32; 4]) -> [f32; 4] {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EdgeBlendParams {
-    left_enabled: f32, left_width: f32, left_gamma: f32, _pad0: f32,
-    right_enabled: f32, right_width: f32, right_gamma: f32, _pad1: f32,
-    top_enabled: f32, top_width: f32, top_gamma: f32, _pad2: f32,
-    bottom_enabled: f32, bottom_width: f32, bottom_gamma: f32, _pad3: f32,
+    left_enabled: f32,
+    left_width: f32,
+    left_gamma: f32,
+    _pad0: f32,
+    right_enabled: f32,
+    right_width: f32,
+    right_gamma: f32,
+    _pad1: f32,
+    top_enabled: f32,
+    top_width: f32,
+    top_gamma: f32,
+    _pad2: f32,
+    bottom_enabled: f32,
+    bottom_width: f32,
+    bottom_gamma: f32,
+    _pad3: f32,
 }
 
 impl From<&EdgeBlendConfig> for EdgeBlendParams {
@@ -389,7 +421,6 @@ impl EdgeBlendPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/edge_blend.wgsl").into()),
         });
 
-
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Edge Blend Pipeline"),
             layout: Some(&pipeline_layout),
@@ -419,7 +450,11 @@ impl EdgeBlendPipeline {
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             multiview_mask: None,
             cache: None,
         });
@@ -435,7 +470,12 @@ impl EdgeBlendPipeline {
             ..Default::default()
         });
 
-        Ok(Self { pipeline, bind_group_layout, sampler, params_buffer })
+        Ok(Self {
+            pipeline,
+            bind_group_layout,
+            sampler,
+            params_buffer,
+        })
     }
 
     /// Run the edge blend pass: reads from `source_view`, writes to `target_view`.
@@ -458,9 +498,18 @@ impl EdgeBlendPipeline {
             label: Some("Edge Blend BG"),
             layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(source_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: self.params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -470,7 +519,10 @@ impl EdgeBlendPipeline {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
@@ -607,7 +659,12 @@ mod tests {
     #[test]
     fn overlap_zones_any_enabled() {
         let mut zones = SurfaceOverlapZones::default();
-        zones.add_zone(OverlapZone { uv_rect: [0.8, 0.0, 1.0, 1.0], gamma: 2.2, ramp_x: 1.0, ramp_y: 0.0 });
+        zones.add_zone(OverlapZone {
+            uv_rect: [0.8, 0.0, 1.0, 1.0],
+            gamma: 2.2,
+            ramp_x: 1.0,
+            ramp_y: 0.0,
+        });
         assert!(zones.any_enabled());
     }
 
@@ -616,13 +673,20 @@ mod tests {
         let mut zones = SurfaceOverlapZones::default();
         for i in 0..6 {
             let size = 0.1 * (i as f32 + 1.0);
-            zones.add_zone(OverlapZone { uv_rect: [0.0, 0.0, size, size], gamma: 2.2, ramp_x: 1.0, ramp_y: 1.0 });
+            zones.add_zone(OverlapZone {
+                uv_rect: [0.0, 0.0, size, size],
+                gamma: 2.2,
+                ramp_x: 1.0,
+                ramp_y: 1.0,
+            });
         }
         assert_eq!(zones.zones.len(), MAX_OVERLAP_ZONES);
         // Largest zones kept (sorted by area descending)
-        let areas: Vec<f32> = zones.zones.iter().map(|z| {
-            (z.uv_rect[2] - z.uv_rect[0]) * (z.uv_rect[3] - z.uv_rect[1])
-        }).collect();
+        let areas: Vec<f32> = zones
+            .zones
+            .iter()
+            .map(|z| (z.uv_rect[2] - z.uv_rect[0]) * (z.uv_rect[3] - z.uv_rect[1]))
+            .collect();
         for i in 0..areas.len() - 1 {
             assert!(areas[i] >= areas[i + 1]);
         }
@@ -631,7 +695,12 @@ mod tests {
     #[test]
     fn overlap_zones_serialization_roundtrip() {
         let mut zones = SurfaceOverlapZones::default();
-        zones.add_zone(OverlapZone { uv_rect: [0.7, 0.0, 1.0, 1.0], gamma: 2.2, ramp_x: 1.0, ramp_y: 0.0 });
+        zones.add_zone(OverlapZone {
+            uv_rect: [0.7, 0.0, 1.0, 1.0],
+            gamma: 2.2,
+            ramp_x: 1.0,
+            ramp_y: 0.0,
+        });
         let json = serde_json::to_string(&zones).unwrap();
         let restored: SurfaceOverlapZones = serde_json::from_str(&json).unwrap();
         assert_eq!(zones, restored);
@@ -657,9 +726,9 @@ mod tests {
         let overlap = [0.4, 0.0, 0.2, 1.0];
         let uv = stage_to_surface_uv(&region, &overlap);
         assert!((uv[0] - 0.4 / 0.6).abs() < 1e-4); // u_min ≈ 0.667
-        assert!((uv[1]).abs() < 1e-6);               // v_min = 0
-        assert!((uv[2] - 1.0).abs() < 1e-4);         // u_max = 1.0
-        assert!((uv[3] - 1.0).abs() < 1e-6);         // v_max = 1.0
+        assert!((uv[1]).abs() < 1e-6); // v_min = 0
+        assert!((uv[2] - 1.0).abs() < 1e-4); // u_max = 1.0
+        assert!((uv[3] - 1.0).abs() < 1e-6); // v_max = 1.0
     }
 
     #[test]
@@ -668,14 +737,19 @@ mod tests {
         let region = [0.4, 0.0, 0.6, 1.0];
         let overlap = [0.4, 0.0, 0.2, 1.0];
         let uv = stage_to_surface_uv(&region, &overlap);
-        assert!((uv[0]).abs() < 1e-6);               // u_min = 0
-        assert!((uv[2] - 0.2 / 0.6).abs() < 1e-4);  // u_max ≈ 0.333
+        assert!((uv[0]).abs() < 1e-6); // u_min = 0
+        assert!((uv[2] - 0.2 / 0.6).abs() < 1e-4); // u_max ≈ 0.333
     }
 
     // ── compute_auto_edge_blend tests (overlap zones) ──────────────
 
     fn make_info(idx: usize, mode: EdgeBlendMode, regions: Vec<MappedRegion>) -> OutputSurfaceInfo {
-        OutputSurfaceInfo { output_idx: idx, edge_blend_mode: mode, default_gamma: 2.2, regions }
+        OutputSurfaceInfo {
+            output_idx: idx,
+            edge_blend_mode: mode,
+            default_gamma: 2.2,
+            regions,
+        }
     }
 
     fn make_region(source: &str, bbox: [f32; 4]) -> MappedRegion {
@@ -690,15 +764,30 @@ mod tests {
         }
     }
 
-    fn find_zones<'a>(results: &'a [AutoBlendResult], output_idx: usize) -> &'a SurfaceOverlapZones {
-        &results.iter().find(|r| r.output_idx == output_idx).unwrap().overlap_zones
+    fn find_zones<'a>(
+        results: &'a [AutoBlendResult],
+        output_idx: usize,
+    ) -> &'a SurfaceOverlapZones {
+        &results
+            .iter()
+            .find(|r| r.output_idx == output_idx)
+            .unwrap()
+            .overlap_zones
     }
 
     #[test]
     fn auto_blend_manual_outputs_skipped() {
         let infos = vec![
-            make_info(0, EdgeBlendMode::Manual, vec![make_region("Master", [0.0, 0.0, 0.5, 1.0])]),
-            make_info(1, EdgeBlendMode::Manual, vec![make_region("Master", [0.3, 0.0, 0.5, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Manual,
+                vec![make_region("Master", [0.0, 0.0, 0.5, 1.0])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Manual,
+                vec![make_region("Master", [0.3, 0.0, 0.5, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         assert!(results.is_empty());
@@ -707,8 +796,16 @@ mod tests {
     #[test]
     fn auto_blend_no_overlap() {
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.4, 1.0])]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Master", [0.5, 0.0, 0.4, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.4, 1.0])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.5, 0.0, 0.4, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         assert_eq!(results.len(), 2);
@@ -720,8 +817,16 @@ mod tests {
     fn auto_blend_horizontal_overlap() {
         // Two surfaces overlapping horizontally by 0.2 in stage space
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.6, 1.0])]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Master", [0.4, 0.0, 0.6, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.6, 1.0])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.4, 0.0, 0.6, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         let z0 = find_zones(&results, 0);
@@ -735,22 +840,30 @@ mod tests {
         let rect0 = z0.zones[0].uv_rect;
         assert!((rect0[2] - 1.0).abs() < 1e-4); // u_max = 1.0
         assert!((rect0[0] - 0.4 / 0.6).abs() < 0.01); // u_min ≈ 0.667
-        assert_eq!(z0.zones[0].ramp_x, 1.0);  // fade toward right (B is to the right)
-        assert_eq!(z0.zones[0].ramp_y, 0.0);  // no vertical ramp
+        assert_eq!(z0.zones[0].ramp_x, 1.0); // fade toward right (B is to the right)
+        assert_eq!(z0.zones[0].ramp_y, 0.0); // no vertical ramp
 
         // Output 1: overlap zone on the left side (u_min ≈ 0.0), ramp toward left
         let rect1 = z1.zones[0].uv_rect;
         assert!((rect1[0]).abs() < 1e-4); // u_min = 0.0
         assert!((rect1[2] - 0.2 / 0.6).abs() < 0.01); // u_max ≈ 0.333
         assert_eq!(z1.zones[0].ramp_x, -1.0); // fade toward left (A is to the left)
-        assert_eq!(z1.zones[0].ramp_y, 0.0);  // no vertical ramp
+        assert_eq!(z1.zones[0].ramp_y, 0.0); // no vertical ramp
     }
 
     #[test]
     fn auto_blend_different_sources_no_blend() {
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.6, 1.0])]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Channel(0)", [0.4, 0.0, 0.6, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.6, 1.0])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Channel(0)", [0.4, 0.0, 0.6, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         assert!(!results[0].overlap_zones.any_enabled());
@@ -760,8 +873,16 @@ mod tests {
     #[test]
     fn auto_blend_vertical_overlap() {
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 1.0, 0.6])]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.4, 1.0, 0.6])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 1.0, 0.6])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.4, 1.0, 0.6])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         let z0 = find_zones(&results, 0);
@@ -772,9 +893,9 @@ mod tests {
 
         // Output 0: overlap at bottom (v_max ≈ 1.0), ramp toward bottom
         assert!((z0.zones[0].uv_rect[3] - 1.0).abs() < 1e-4);
-        assert_eq!(z0.zones[0].ramp_x, 0.0);  // no horizontal ramp (same x center)
-        assert_eq!(z0.zones[0].ramp_y, 1.0);  // fade toward bottom
-        // Output 1: overlap at top (v_min ≈ 0.0), ramp toward top
+        assert_eq!(z0.zones[0].ramp_x, 0.0); // no horizontal ramp (same x center)
+        assert_eq!(z0.zones[0].ramp_y, 1.0); // fade toward bottom
+                                             // Output 1: overlap at top (v_min ≈ 0.0), ramp toward top
         assert!((z1.zones[0].uv_rect[1]).abs() < 1e-4);
         assert_eq!(z1.zones[0].ramp_x, 0.0);
         assert_eq!(z1.zones[0].ramp_y, -1.0); // fade toward top
@@ -783,8 +904,16 @@ mod tests {
     #[test]
     fn auto_blend_mixed_modes() {
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.6, 1.0])]),
-            make_info(1, EdgeBlendMode::Manual, vec![make_region("Master", [0.4, 0.0, 0.6, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.6, 1.0])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Manual,
+                vec![make_region("Master", [0.4, 0.0, 0.6, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         assert_eq!(results.len(), 1);
@@ -796,8 +925,16 @@ mod tests {
     #[test]
     fn auto_blend_uses_default_gamma() {
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.6, 1.0])]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Master", [0.4, 0.0, 0.6, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.6, 1.0])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.4, 0.0, 0.6, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         let z0 = find_zones(&results, 0);
@@ -817,9 +954,21 @@ mod tests {
     #[test]
     fn auto_blend_three_outputs_chain() {
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.4, 1.0])]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Master", [0.3, 0.0, 0.4, 1.0])]),
-            make_info(2, EdgeBlendMode::Auto, vec![make_region("Master", [0.6, 0.0, 0.4, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.4, 1.0])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.3, 0.0, 0.4, 1.0])],
+            ),
+            make_info(
+                2,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.6, 0.0, 0.4, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         let z0 = find_zones(&results, 0);
@@ -838,8 +987,16 @@ mod tests {
     fn auto_blend_fully_overlapping() {
         // Two identical surfaces → each gets 1 zone covering [0,0,1,1]
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.5, 1.0])]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.5, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.5, 1.0])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.5, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         let z0 = find_zones(&results, 0);
@@ -855,11 +1012,19 @@ mod tests {
     fn auto_blend_per_surface_isolation() {
         // Two surfaces on output 0, only one overlaps with output 1
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![
-                make_region("Master", [0.0, 0.0, 0.3, 0.5]),  // no overlap
-                make_region("Master", [0.4, 0.0, 0.6, 1.0]),  // overlaps with output 1
-            ]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Master", [0.8, 0.0, 0.2, 1.0])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![
+                    make_region("Master", [0.0, 0.0, 0.3, 0.5]), // no overlap
+                    make_region("Master", [0.4, 0.0, 0.6, 1.0]), // overlaps with output 1
+                ],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.8, 0.0, 0.2, 1.0])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         assert_eq!(results.len(), 3);
@@ -876,8 +1041,16 @@ mod tests {
         // Corner overlap — previously would trigger spurious full-edge blends.
         // Now it creates a small overlap zone in the corner.
         let infos = vec![
-            make_info(0, EdgeBlendMode::Auto, vec![make_region("Master", [0.0, 0.0, 0.6, 0.6])]),
-            make_info(1, EdgeBlendMode::Auto, vec![make_region("Master", [0.5, 0.5, 0.5, 0.5])]),
+            make_info(
+                0,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.0, 0.0, 0.6, 0.6])],
+            ),
+            make_info(
+                1,
+                EdgeBlendMode::Auto,
+                vec![make_region("Master", [0.5, 0.5, 0.5, 0.5])],
+            ),
         ];
         let results = compute_auto_edge_blend(&infos);
         let z0 = find_zones(&results, 0);
@@ -888,7 +1061,7 @@ mod tests {
         assert!(r[1] > 0.5); // v_min well past midpoint
         assert!((r[2] - 1.0).abs() < 1e-4); // u_max = 1.0
         assert!((r[3] - 1.0).abs() < 1e-4); // v_max = 1.0
-        // Ramp toward bottom-right (B is below and to the right of A)
+                                            // Ramp toward bottom-right (B is below and to the right of A)
         assert_eq!(z0.zones[0].ramp_x, 1.0);
         assert_eq!(z0.zones[0].ramp_y, 1.0);
     }
@@ -931,10 +1104,12 @@ mod tests {
         // overlaps in a much smaller region.
         let n = 32;
         let make_circle = |cx: f32, cy: f32, r: f32| -> Vec<[f32; 2]> {
-            (0..n).map(|i| {
-                let angle = 2.0 * std::f32::consts::PI * (i as f32) / (n as f32);
-                [cx + r * angle.cos(), cy + r * angle.sin()]
-            }).collect()
+            (0..n)
+                .map(|i| {
+                    let angle = 2.0 * std::f32::consts::PI * (i as f32) / (n as f32);
+                    [cx + r * angle.cos(), cy + r * angle.sin()]
+                })
+                .collect()
         };
         let verts_a = make_circle(0.3, 0.5, 0.25);
         let verts_b = make_circle(0.7, 0.5, 0.25);
@@ -946,12 +1121,18 @@ mod tests {
         let aabb_area = aabb_overlap[2] * aabb_overlap[3];
 
         let region_a = MappedRegion {
-            source_key: "Master".into(), bbox: bbox_a,
-            surface_uuid: "a".into(), vertices: verts_a, extra_contours: vec![],
+            source_key: "Master".into(),
+            bbox: bbox_a,
+            surface_uuid: "a".into(),
+            vertices: verts_a,
+            extra_contours: vec![],
         };
         let region_b = MappedRegion {
-            source_key: "Master".into(), bbox: bbox_b,
-            surface_uuid: "b".into(), vertices: verts_b, extra_contours: vec![],
+            source_key: "Master".into(),
+            bbox: bbox_b,
+            surface_uuid: "b".into(),
+            vertices: verts_b,
+            extra_contours: vec![],
         };
 
         let poly_overlap = polygon_intersect_aabb(&region_a, &region_b);

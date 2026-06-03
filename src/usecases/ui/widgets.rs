@@ -1,5 +1,8 @@
+use super::{
+    modulator_color, AudioUIData, ModAssignmentUI, ModSourceUI, ModSourceUIEntry, ModulationAction,
+    ParamUIInfo, ParamUpdate,
+};
 use crate::params::ParamValue;
-use super::{ParamUIInfo, ParamUpdate, ModulationAction, ModSourceUI, ModSourceUIEntry, ModAssignmentUI, AudioUIData, modulator_color};
 
 /// Build a set of prefixes whose params should be hidden.
 /// Convention: a bool param named `<prefix>_mode` controls visibility of params
@@ -19,7 +22,9 @@ fn hidden_prefixes(params: &[ParamUIInfo]) -> Vec<String> {
 /// Check if a param name should be hidden based on `_mode` toggle conventions.
 fn is_hidden(name: &str, hidden: &[String]) -> bool {
     // Don't hide the _mode toggle itself
-    if name.ends_with("_mode") { return false; }
+    if name.ends_with("_mode") {
+        return false;
+    }
     hidden.iter().any(|prefix| name.starts_with(prefix))
 }
 
@@ -48,7 +53,9 @@ pub fn render_params(
 ) {
     let hidden = hidden_prefixes(params);
     for param in params {
-        if is_hidden(&param.name, &hidden) { continue; }
+        if is_hidden(&param.name, &hidden) {
+            continue;
+        }
         let label = param.label.as_ref().unwrap_or(&param.name);
         // Check if this param is modulated and get color info
         let mod_key = format!("{}:{}", mod_param_prefix, param.name);
@@ -56,7 +63,10 @@ pub fn render_params(
         let is_modulated = assignments.map_or(false, |a| !a.is_empty());
         // Pick the primary modulator color (first assignment)
         let mod_label_color = assignments.and_then(|a| a.first()).map(|a| {
-            let color_idx = modulation_sources.iter().position(|e| e.uuid == a.source_id).unwrap_or(0);
+            let color_idx = modulation_sources
+                .iter()
+                .position(|e| e.uuid == a.source_id)
+                .unwrap_or(0);
             modulator_color(color_idx)
         });
         match param.value {
@@ -80,7 +90,8 @@ pub fn render_params(
                         });
                         slider_rect = inner.inner.rect;
                     } else {
-                        let slider_response = ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
+                        let slider_response =
+                            ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
                         if slider_response.changed() {
                             param_updates.push(make_update(&param.name, ParamValue::Float(v)));
                         }
@@ -97,7 +108,8 @@ pub fn render_params(
                                 draw_midi_learn_glow(ui, slider_rect);
                             }
                             let click_id = ui.id().with(("midi_learn_param", &param.name));
-                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            let click_resp =
+                                ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
                                 *midi_learn_select = Some(path);
                             }
@@ -114,9 +126,11 @@ pub fn render_params(
                                 draw_keyboard_learn_glow(ui, slider_rect);
                             }
                             let click_id = ui.id().with(("kb_learn_param", &param.name));
-                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            let click_resp =
+                                ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
-                                *keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
+                                *keyboard_learn_select =
+                                    Some(crate::keymap::KeyTarget::ParamPath(path));
                             }
                         }
                     }
@@ -125,7 +139,9 @@ pub fn render_params(
                         if let Some(assigns) = assignments {
                             let mut total_offset = 0.0f32;
                             for a in assigns {
-                                total_offset += mod_current_values.get(&a.source_id).copied().unwrap_or(0.0) * a.amount;
+                                total_offset +=
+                                    mod_current_values.get(&a.source_id).copied().unwrap_or(0.0)
+                                        * a.amount;
                             }
                             // Scale by param range to match GPU-side modulation
                             let range = max - min;
@@ -136,42 +152,63 @@ pub fn render_params(
                             let painter = ui.painter();
                             // Vertical line at modulated value position
                             painter.line_segment(
-                                [egui::pos2(x, slider_rect.top()), egui::pos2(x, slider_rect.bottom())],
+                                [
+                                    egui::pos2(x, slider_rect.top()),
+                                    egui::pos2(x, slider_rect.bottom()),
+                                ],
                                 egui::Stroke::new(2.0, color),
                             );
                         }
                     }
                     // Modulation assignment dropdown (only if sources exist and callbacks provided)
                     if !modulation_sources.is_empty() {
-                        if let (Some(assign_fn), Some(remove_fn)) = (make_mod_assign, make_mod_remove) {
-                            egui::ComboBox::from_id_salt(format!("mod_{}_{}", id_prefix, param.name))
-                                .selected_text("〰")
-                                .width(30.0)
-                                .show_ui(ui, |ui| {
-                                    ui.label(egui::RichText::new("Assign Modulation").small().strong());
-                                    for (src_idx, entry) in modulation_sources.iter().enumerate() {
-                                        let color = modulator_color(src_idx);
-                                        let src_name = match &entry.source {
-                                            ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                                            ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
-                                            ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
-                                            ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
-                                        };
-                                        if ui.button(egui::RichText::new(&src_name).color(color)).clicked() {
-                                            modulation_actions.push(assign_fn(&param.name, &entry.uuid));
+                        if let (Some(assign_fn), Some(remove_fn)) =
+                            (make_mod_assign, make_mod_remove)
+                        {
+                            egui::ComboBox::from_id_salt(format!(
+                                "mod_{}_{}",
+                                id_prefix, param.name
+                            ))
+                            .selected_text("〰")
+                            .width(30.0)
+                            .show_ui(ui, |ui| {
+                                ui.label(egui::RichText::new("Assign Modulation").small().strong());
+                                for (src_idx, entry) in modulation_sources.iter().enumerate() {
+                                    let color = modulator_color(src_idx);
+                                    let src_name = match &entry.source {
+                                        ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
+                                        ModSourceUI::Audio {
+                                            freq_low,
+                                            freq_high,
+                                            ..
+                                        } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
+                                        ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
+                                        ModSourceUI::StepSequencer { .. } => {
+                                            format!("StepSeq {}", src_idx + 1)
                                         }
+                                    };
+                                    if ui
+                                        .button(egui::RichText::new(&src_name).color(color))
+                                        .clicked()
+                                    {
+                                        modulation_actions
+                                            .push(assign_fn(&param.name, &entry.uuid));
                                     }
-                                    ui.separator();
-                                    if ui.button("Clear").clicked() {
-                                        modulation_actions.push(remove_fn(&param.name));
-                                    }
-                                });
+                                }
+                                ui.separator();
+                                if ui.button("Clear").clicked() {
+                                    modulation_actions.push(remove_fn(&param.name));
+                                }
+                            });
                         }
                     }
                 });
             }
             ParamValue::Bool(mut v) => {
-                if ui.checkbox(&mut v, egui::RichText::new(label).small()).changed() {
+                if ui
+                    .checkbox(&mut v, egui::RichText::new(label).small())
+                    .changed()
+                {
                     param_updates.push(make_update(&param.name, ParamValue::Bool(v)));
                 }
             }
@@ -213,13 +250,18 @@ pub fn render_effect_params(
 ) {
     let hidden = hidden_prefixes(params);
     for param in params {
-        if is_hidden(&param.name, &hidden) { continue; }
+        if is_hidden(&param.name, &hidden) {
+            continue;
+        }
         let label = param.label.as_ref().unwrap_or(&param.name);
         let mod_key = format!("{}:{}", mod_param_prefix, param.name);
         let assignments = mod_assignments.get(&mod_key);
         let is_modulated = assignments.map_or(false, |a| !a.is_empty());
         let mod_label_color = assignments.and_then(|a| a.first()).map(|a| {
-            let color_idx = modulation_sources.iter().position(|e| e.uuid == a.source_id).unwrap_or(0);
+            let color_idx = modulation_sources
+                .iter()
+                .position(|e| e.uuid == a.source_id)
+                .unwrap_or(0);
             modulator_color(color_idx)
         });
         match param.value {
@@ -242,7 +284,8 @@ pub fn render_effect_params(
                         });
                         slider_rect = inner.inner.rect;
                     } else {
-                        let slider_resp = ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
+                        let slider_resp =
+                            ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
                         if slider_resp.changed() {
                             param_updates.push(make_update(&param.name, ParamValue::Float(v)));
                         }
@@ -259,7 +302,8 @@ pub fn render_effect_params(
                                 draw_midi_learn_glow(ui, slider_rect);
                             }
                             let click_id = ui.id().with(("midi_learn_fx_param", &param.name));
-                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            let click_resp =
+                                ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
                                 *midi_learn_select = Some(path);
                             }
@@ -276,9 +320,11 @@ pub fn render_effect_params(
                                 draw_keyboard_learn_glow(ui, slider_rect);
                             }
                             let click_id = ui.id().with(("kb_learn_fx_param", &param.name));
-                            let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
+                            let click_resp =
+                                ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
-                                *keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
+                                *keyboard_learn_select =
+                                    Some(crate::keymap::KeyTarget::ParamPath(path));
                             }
                         }
                     }
@@ -287,7 +333,9 @@ pub fn render_effect_params(
                         if let Some(assigns) = assignments {
                             let mut total_offset = 0.0f32;
                             for a in assigns {
-                                total_offset += mod_current_values.get(&a.source_id).copied().unwrap_or(0.0) * a.amount;
+                                total_offset +=
+                                    mod_current_values.get(&a.source_id).copied().unwrap_or(0.0)
+                                        * a.amount;
                             }
                             // Scale by param range to match GPU-side modulation
                             let range = max - min;
@@ -297,42 +345,63 @@ pub fn render_effect_params(
                             let color = mod_label_color.unwrap_or(egui::Color32::YELLOW);
                             let painter = ui.painter();
                             painter.line_segment(
-                                [egui::pos2(x, slider_rect.top()), egui::pos2(x, slider_rect.bottom())],
+                                [
+                                    egui::pos2(x, slider_rect.top()),
+                                    egui::pos2(x, slider_rect.bottom()),
+                                ],
                                 egui::Stroke::new(2.0, color),
                             );
                         }
                     }
                     // Modulation assignment dropdown
                     if !modulation_sources.is_empty() {
-                        if let (Some(assign_fn), Some(remove_fn)) = (make_mod_assign, make_mod_remove) {
-                            egui::ComboBox::from_id_salt(format!("mod_{}_{}", id_prefix, param.name))
-                                .selected_text("〰")
-                                .width(30.0)
-                                .show_ui(ui, |ui| {
-                                    ui.label(egui::RichText::new("Assign Modulation").small().strong());
-                                    for (src_idx, entry) in modulation_sources.iter().enumerate() {
-                                        let color = modulator_color(src_idx);
-                                        let src_name = match &entry.source {
-                                            ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
-                                            ModSourceUI::Audio { freq_low, freq_high, .. } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
-                                            ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
-                                            ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
-                                        };
-                                        if ui.button(egui::RichText::new(&src_name).color(color)).clicked() {
-                                            modulation_actions.push(assign_fn(&param.name, &entry.uuid));
+                        if let (Some(assign_fn), Some(remove_fn)) =
+                            (make_mod_assign, make_mod_remove)
+                        {
+                            egui::ComboBox::from_id_salt(format!(
+                                "mod_{}_{}",
+                                id_prefix, param.name
+                            ))
+                            .selected_text("〰")
+                            .width(30.0)
+                            .show_ui(ui, |ui| {
+                                ui.label(egui::RichText::new("Assign Modulation").small().strong());
+                                for (src_idx, entry) in modulation_sources.iter().enumerate() {
+                                    let color = modulator_color(src_idx);
+                                    let src_name = match &entry.source {
+                                        ModSourceUI::LFO { .. } => format!("LFO {}", src_idx + 1),
+                                        ModSourceUI::Audio {
+                                            freq_low,
+                                            freq_high,
+                                            ..
+                                        } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
+                                        ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
+                                        ModSourceUI::StepSequencer { .. } => {
+                                            format!("StepSeq {}", src_idx + 1)
                                         }
+                                    };
+                                    if ui
+                                        .button(egui::RichText::new(&src_name).color(color))
+                                        .clicked()
+                                    {
+                                        modulation_actions
+                                            .push(assign_fn(&param.name, &entry.uuid));
                                     }
-                                    ui.separator();
-                                    if ui.button("Clear").clicked() {
-                                        modulation_actions.push(remove_fn(&param.name));
-                                    }
-                                });
+                                }
+                                ui.separator();
+                                if ui.button("Clear").clicked() {
+                                    modulation_actions.push(remove_fn(&param.name));
+                                }
+                            });
                         }
                     }
                 });
             }
             ParamValue::Bool(mut v) => {
-                if ui.checkbox(&mut v, egui::RichText::new(label).small().weak()).changed() {
+                if ui
+                    .checkbox(&mut v, egui::RichText::new(label).small().weak())
+                    .changed()
+                {
                     param_updates.push(make_update(&param.name, ParamValue::Bool(v)));
                 }
             }
@@ -359,20 +428,36 @@ pub fn render_audio_levels(ui: &mut egui::Ui, audio: &AudioUIData) {
         });
         ui.horizontal(|ui| {
             ui.label("Bass:");
-            ui.add(egui::ProgressBar::new(audio.bass).desired_width(100.0).fill(egui::Color32::from_rgb(220, 60, 60)));
+            ui.add(
+                egui::ProgressBar::new(audio.bass)
+                    .desired_width(100.0)
+                    .fill(egui::Color32::from_rgb(220, 60, 60)),
+            );
         });
         ui.horizontal(|ui| {
             ui.label("Mid:");
-            ui.add(egui::ProgressBar::new(audio.mid).desired_width(100.0).fill(egui::Color32::from_rgb(60, 220, 60)));
+            ui.add(
+                egui::ProgressBar::new(audio.mid)
+                    .desired_width(100.0)
+                    .fill(egui::Color32::from_rgb(60, 220, 60)),
+            );
         });
         ui.horizontal(|ui| {
             ui.label("High:");
-            ui.add(egui::ProgressBar::new(audio.treble).desired_width(100.0).fill(egui::Color32::from_rgb(60, 60, 220)));
+            ui.add(
+                egui::ProgressBar::new(audio.treble)
+                    .desired_width(100.0)
+                    .fill(egui::Color32::from_rgb(60, 60, 220)),
+            );
         });
         if let Some(bpm) = audio.bpm {
             ui.horizontal(|ui| {
                 ui.label(format!("BPM: {:.0}", bpm));
-                ui.add(egui::ProgressBar::new(audio.beat_phase).desired_width(50.0).fill(egui::Color32::from_rgb(255, 165, 0)));
+                ui.add(
+                    egui::ProgressBar::new(audio.beat_phase)
+                        .desired_width(50.0)
+                        .fill(egui::Color32::from_rgb(255, 165, 0)),
+                );
             });
         }
     } else {
@@ -380,14 +465,17 @@ pub fn render_audio_levels(ui: &mut egui::Ui, audio: &AudioUIData) {
     }
 }
 
-
-
 /// Draw a pulsing purple glow around a rect to indicate it's a MIDI-learnable target.
 pub fn draw_midi_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(180, 80, 220, 80);
     let expanded = rect.expand(2.0);
-    painter.rect_stroke(expanded, 3.0, egui::Stroke::new(2.0, glow_color), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        expanded,
+        3.0,
+        egui::Stroke::new(2.0, glow_color),
+        egui::StrokeKind::Outside,
+    );
 }
 
 /// Draw a brighter glow for the currently selected MIDI learn target.
@@ -395,7 +483,12 @@ pub fn draw_midi_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(255, 100, 50, 120);
     let expanded = rect.expand(3.0);
-    painter.rect_stroke(expanded, 3.0, egui::Stroke::new(3.0, glow_color), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        expanded,
+        3.0,
+        egui::Stroke::new(3.0, glow_color),
+        egui::StrokeKind::Outside,
+    );
 }
 
 /// Draw an orange glow around a rect for keyboard-learnable target.
@@ -403,7 +496,12 @@ pub fn draw_keyboard_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(255, 165, 0, 80);
     let expanded = rect.expand(2.0);
-    painter.rect_stroke(expanded, 3.0, egui::Stroke::new(2.0, glow_color), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        expanded,
+        3.0,
+        egui::Stroke::new(2.0, glow_color),
+        egui::StrokeKind::Outside,
+    );
 }
 
 /// Draw a brighter orange glow for the currently selected keyboard learn target.
@@ -411,5 +509,10 @@ pub fn draw_keyboard_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let glow_color = egui::Color32::from_rgba_unmultiplied(255, 120, 0, 120);
     let expanded = rect.expand(3.0);
-    painter.rect_stroke(expanded, 3.0, egui::Stroke::new(3.0, glow_color), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        expanded,
+        3.0,
+        egui::Stroke::new(3.0, glow_color),
+        egui::StrokeKind::Outside,
+    );
 }

@@ -48,7 +48,8 @@ impl GpuContext {
             memory_budget_thresholds: Default::default(),
         });
 
-        let surface = instance.create_surface(window)
+        let surface = instance
+            .create_surface(window)
             .context("Failed to create surface")?;
 
         let adapter = instance
@@ -64,7 +65,10 @@ impl GpuContext {
         log::info!("Backend: {:?}", adapter.get_info().backend);
 
         let mut required_features = wgpu::Features::empty();
-        if adapter.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
+        if adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+        {
             required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
             log::info!("GPU supports BC texture compression (HAP video enabled)");
         } else {
@@ -72,19 +76,17 @@ impl GpuContext {
         }
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("Varda Device"),
-                    required_features,
-                    required_limits: wgpu::Limits {
-                        max_texture_dimension_2d: 16384,
-                        ..wgpu::Limits::default()
-                    },
-                    memory_hints: Default::default(),
-                    experimental_features: Default::default(),
-                    trace: Default::default(),
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("Varda Device"),
+                required_features,
+                required_limits: wgpu::Limits {
+                    max_texture_dimension_2d: 16384,
+                    ..wgpu::Limits::default()
                 },
-            )
+                memory_hints: Default::default(),
+                experimental_features: Default::default(),
+                trace: Default::default(),
+            })
             .await
             .context("Failed to create device")?;
 
@@ -99,14 +101,24 @@ impl GpuContext {
         // Prefer Immediate to avoid macOS ProMotion throttling the render loop.
         // The UI event loop drives frame pacing via request_redraw().
         // Fallback: Mailbox (non-blocking vsync) > Fifo (blocking vsync, last resort).
-        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+        let present_mode = if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Immediate)
+        {
             wgpu::PresentMode::Immediate
-        } else if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+        } else if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
             wgpu::PresentMode::Mailbox
         } else {
             wgpu::PresentMode::Fifo
         };
-        log::info!("Present mode: {:?} (available: {:?})", present_mode, surface_caps.present_modes);
+        log::info!(
+            "Present mode: {:?} (available: {:?})",
+            present_mode,
+            surface_caps.present_modes
+        );
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -121,8 +133,18 @@ impl GpuContext {
 
         surface.configure(&device, &surface_config);
 
-        let gpu = GpuContext { instance, adapter, device, queue, texture_format: surface_format };
-        let win_surface = WindowSurface { surface, surface_config, size };
+        let gpu = GpuContext {
+            instance,
+            adapter,
+            device,
+            queue,
+            texture_format: surface_format,
+        };
+        let win_surface = WindowSurface {
+            surface,
+            surface_config,
+            size,
+        };
 
         Ok((gpu, win_surface))
     }
@@ -148,16 +170,14 @@ impl GpuContext {
         }))
         .context("Failed to find GPU adapter for headless context")?;
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("Varda Headless Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: Default::default(),
-                experimental_features: Default::default(),
-                trace: Default::default(),
-            },
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Varda Headless Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: Default::default(),
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
         .context("Failed to create headless device")?;
 
         Ok(GpuContext {
@@ -173,31 +193,37 @@ impl GpuContext {
     pub fn create_render_texture(&self, width: u32, height: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Render Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.texture_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                 | wgpu::TextureUsages::TEXTURE_BINDING
-                 | wgpu::TextureUsages::COPY_SRC
-                 | wgpu::TextureUsages::COPY_DST,
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
     }
 
     /// Create a uniform buffer
     pub fn create_uniform_buffer<T: bytemuck::Pod>(&self, data: &T) -> wgpu::Buffer {
-        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[*data]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        })
+        self.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[*data]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            })
     }
 
     /// Update a uniform buffer
     pub fn update_uniform_buffer<T: bytemuck::Pod>(&self, buffer: &wgpu::Buffer, data: &T) {
-        self.queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[*data]));
+        self.queue
+            .write_buffer(buffer, 0, bytemuck::cast_slice(&[*data]));
     }
 }
 
@@ -212,7 +238,6 @@ impl WindowSurface {
         }
     }
 }
-
 
 /// Per-output rotation applied at the final blit stage.
 /// For 90°/270°, intermediate textures are created at swapped dimensions
@@ -253,7 +278,11 @@ impl OutputRotation {
     /// Effective texture dimensions after rotation.
     /// For 0°/180° returns (w, h); for 90°/270° returns (h, w).
     pub fn effective_dimensions(&self, w: u32, h: u32) -> (u32, u32) {
-        if self.swaps_dimensions() { (h, w) } else { (w, h) }
+        if self.swaps_dimensions() {
+            (h, w)
+        } else {
+            (w, h)
+        }
     }
 
     /// Human-readable label for UI display.
@@ -359,7 +388,11 @@ pub enum OutputTarget {
     /// Stream frames via SRT (Secure Reliable Transport) through ffmpeg
     SrtStream { url: String, codec: SrtCodec },
     /// Stream frames as HLS segments via ffmpeg
-    HlsStream { name: String, codec: StreamingCodec, low_latency: bool },
+    HlsStream {
+        name: String,
+        codec: StreamingCodec,
+        low_latency: bool,
+    },
     /// Stream frames as DASH segments via ffmpeg
     DashStream { name: String, codec: StreamingCodec },
     /// Push frames to an RTMP/RTMPS ingest endpoint via ffmpeg
@@ -389,9 +422,16 @@ impl std::fmt::Display for OutputTarget {
             OutputTarget::Display { name, .. } => write!(f, "{}", name),
             OutputTarget::Recording { path, codec } => write!(f, "Rec [{}]: {}", codec, path),
             OutputTarget::SrtStream { url, codec } => write!(f, "SRT [{}]: {}", codec, url),
-            OutputTarget::HlsStream { name, codec, low_latency } => {
-                if *low_latency { write!(f, "LL-HLS [{}]: {}", codec, name) }
-                else { write!(f, "HLS [{}]: {}", codec, name) }
+            OutputTarget::HlsStream {
+                name,
+                codec,
+                low_latency,
+            } => {
+                if *low_latency {
+                    write!(f, "LL-HLS [{}]: {}", codec, name)
+                } else {
+                    write!(f, "HLS [{}]: {}", codec, name)
+                }
             }
             OutputTarget::DashStream { name, codec } => write!(f, "DASH [{}]: {}", codec, name),
             OutputTarget::RtmpStream { url, codec } => write!(f, "RTMP [{}]: {}", codec, url),
@@ -441,14 +481,12 @@ pub struct OutputWindow {
 
 impl OutputWindow {
     /// Create a new output window with its own surface, sharing the given device/queue.
-    pub fn new(
-        context: &GpuContext,
-        window: &'static Window,
-        name: String,
-    ) -> Result<Self> {
+    pub fn new(context: &GpuContext, window: &'static Window, name: String) -> Result<Self> {
         let size = window.inner_size();
 
-        let surface = context.instance.create_surface(window)
+        let surface = context
+            .instance
+            .create_surface(window)
             .context("Failed to create output surface")?;
 
         let surface_caps = surface.get_capabilities(&context.adapter);
@@ -461,7 +499,10 @@ impl OutputWindow {
 
         // Output windows use Immediate mode for lowest latency to projectors/displays.
         // This avoids output windows throttling the main render loop via vsync contention.
-        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+        let present_mode = if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Immediate)
+        {
             wgpu::PresentMode::Immediate
         } else {
             wgpu::PresentMode::Fifo
@@ -482,9 +523,22 @@ impl OutputWindow {
 
         let blit_pipeline = BlitPipeline::new(&context.device, surface_config.format)?;
         let polygon_pipeline = PolygonBlitPipeline::new(&context.device, surface_config.format)?;
-        let edge_blend_pipeline = super::edge_blend::EdgeBlendPipeline::new(&context.device, surface_config.format)?;
-        let (surface_texture, surface_texture_view) = Self::create_intermediate_texture(&context.device, size.width, size.height, surface_config.format, "Surface Intermediate");
-        let (preview_texture, preview_texture_view) = Self::create_intermediate_texture(&context.device, size.width, size.height, surface_config.format, "Preview");
+        let edge_blend_pipeline =
+            super::edge_blend::EdgeBlendPipeline::new(&context.device, surface_config.format)?;
+        let (surface_texture, surface_texture_view) = Self::create_intermediate_texture(
+            &context.device,
+            size.width,
+            size.height,
+            surface_config.format,
+            "Surface Intermediate",
+        );
+        let (preview_texture, preview_texture_view) = Self::create_intermediate_texture(
+            &context.device,
+            size.width,
+            size.height,
+            surface_config.format,
+            "Preview",
+        );
 
         Ok(Self {
             uuid: crate::deck::generate_short_uuid(),
@@ -510,10 +564,20 @@ impl OutputWindow {
     }
 
     /// Create an intermediate GPU texture for the render pipeline.
-    fn create_intermediate_texture(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
+    fn create_intermediate_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        label: &str,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
-            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -533,8 +597,11 @@ impl OutputWindow {
             self.surface_config.height = new_size.height;
             self.surface.configure(device, &self.surface_config);
             let fmt = self.surface_config.format;
-            let (ew, eh) = self.rotation.effective_dimensions(new_size.width, new_size.height);
-            let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Surface Intermediate");
+            let (ew, eh) = self
+                .rotation
+                .effective_dimensions(new_size.width, new_size.height);
+            let (tex, view) =
+                Self::create_intermediate_texture(device, ew, eh, fmt, "Surface Intermediate");
             self.surface_texture = tex;
             self.surface_texture_view = view;
             let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Preview");
@@ -548,7 +615,8 @@ impl OutputWindow {
         self.rotation = rotation;
         let fmt = self.surface_config.format;
         let (ew, eh) = rotation.effective_dimensions(self.size.width, self.size.height);
-        let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Surface Intermediate");
+        let (tex, view) =
+            Self::create_intermediate_texture(device, ew, eh, fmt, "Surface Intermediate");
         self.surface_texture = tex;
         self.surface_texture_view = view;
         let (tex, view) = Self::create_intermediate_texture(device, ew, eh, fmt, "Preview");
@@ -559,15 +627,18 @@ impl OutputWindow {
     /// Render the routed content to this output window's surface (simple single-source blit)
     pub fn render(&self, context: &GpuContext, content_view: &wgpu::TextureView) {
         let fullscreen_quad: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        self.render_surfaces(context, &[SurfaceRenderInfo {
-            content_view,
-            vertices: &fullscreen_quad,
-            bounding_box: [0.0, 0.0, 1.0, 1.0],
-            uv_scale: [1.0, 1.0],
-            uv_offset: [0.0, 0.0],
-            warp_mode: None,
-            overlap_zones: Default::default(),
-        }]);
+        self.render_surfaces(
+            context,
+            &[SurfaceRenderInfo {
+                content_view,
+                vertices: &fullscreen_quad,
+                bounding_box: [0.0, 0.0, 1.0, 1.0],
+                uv_scale: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
+                warp_mode: None,
+                overlap_zones: Default::default(),
+            }],
+        );
     }
 
     /// Render multiple surfaces composited at their canvas positions.
@@ -578,17 +649,25 @@ impl OutputWindow {
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(output) => output,
             wgpu::CurrentSurfaceTexture::Suboptimal(output) => {
-                log::warn!("Output '{}': surface suboptimal, will reconfigure", self.name);
+                log::warn!(
+                    "Output '{}': surface suboptimal, will reconfigure",
+                    self.name
+                );
                 output
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 log::warn!("Output '{}': surface outdated, reconfiguring", self.name);
-                self.surface.configure(&context.device, &self.surface_config);
+                self.surface
+                    .configure(&context.device, &self.surface_config);
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(output)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
                     other => {
-                        log::error!("Output '{}': failed to get surface texture after reconfigure: {:?}", self.name, other);
+                        log::error!(
+                            "Output '{}': failed to get surface texture after reconfigure: {:?}",
+                            self.name,
+                            other
+                        );
                         return;
                     }
                 }
@@ -598,7 +677,9 @@ impl OutputWindow {
                 return;
             }
         };
-        let final_view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let final_view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         // Post-process edge blend only applies in Manual mode.
         // Auto mode uses per-surface blend in the polygon shader.
         let use_edge_blend = self.edge_blend_mode == super::edge_blend::EdgeBlendMode::Manual
@@ -608,56 +689,78 @@ impl OutputWindow {
         //   No edge blend:  surfaces → preview_texture → swap chain  (2 passes)
         //   Edge blend:     surfaces → surface_texture → edge blend → preview_texture → swap chain  (3 passes)
         // The UI preview always reads preview_texture_view.
-        let surface_render_target = if use_edge_blend { &self.surface_texture_view } else { &self.preview_texture_view };
+        let surface_render_target = if use_edge_blend {
+            &self.surface_texture_view
+        } else {
+            &self.preview_texture_view
+        };
 
-        let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some(&format!("Output '{}' Encoder", self.name)),
-        });
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(&format!("Output '{}' Encoder", self.name)),
+            });
 
         // Pass 1: Render surfaces into the surface render target
-        let prepared: Vec<_> = surfaces.iter().map(|surf| {
-            let bb = surf.bounding_box;
+        let prepared: Vec<_> = surfaces
+            .iter()
+            .map(|surf| {
+                let bb = surf.bounding_box;
 
-            // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
-            let (homography, vb, num_tris) = match &surf.warp_mode {
-                Some(super::warp::WarpMode::CornerPin { corners }) => {
-                    let src_corners = [
-                        [bb[0], bb[1]],
-                        [bb[0] + bb[2], bb[1]],
-                        [bb[0] + bb[2], bb[1] + bb[3]],
-                        [bb[0], bb[1] + bb[3]],
-                    ];
-                    let h = super::warp::compute_forward_homography(&src_corners, corners);
-                    let (vb, nt) = PolygonBlitPipeline::triangulate(
-                        &context.device, surf.vertices, bb[0], bb[1], bb[2], bb[3],
-                    );
-                    (Some(h), vb, nt)
-                }
-                Some(super::warp::WarpMode::Mesh(mesh)) => {
-                    // Mesh mode: warp baked into vertices, identity homography
-                    let (vb, nt) = PolygonBlitPipeline::triangulate_with_mesh(
-                        &context.device, surf.vertices, bb, mesh,
-                    );
-                    (None, vb, nt)
-                }
-                None => {
-                    let (vb, nt) = PolygonBlitPipeline::triangulate(
-                        &context.device, surf.vertices, bb[0], bb[1], bb[2], bb[3],
-                    );
-                    (None, vb, nt)
-                }
-            };
+                // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
+                let (homography, vb, num_tris) = match &surf.warp_mode {
+                    Some(super::warp::WarpMode::CornerPin { corners }) => {
+                        let src_corners = [
+                            [bb[0], bb[1]],
+                            [bb[0] + bb[2], bb[1]],
+                            [bb[0] + bb[2], bb[1] + bb[3]],
+                            [bb[0], bb[1] + bb[3]],
+                        ];
+                        let h = super::warp::compute_forward_homography(&src_corners, corners);
+                        let (vb, nt) = PolygonBlitPipeline::triangulate(
+                            &context.device,
+                            surf.vertices,
+                            bb[0],
+                            bb[1],
+                            bb[2],
+                            bb[3],
+                        );
+                        (Some(h), vb, nt)
+                    }
+                    Some(super::warp::WarpMode::Mesh(mesh)) => {
+                        // Mesh mode: warp baked into vertices, identity homography
+                        let (vb, nt) = PolygonBlitPipeline::triangulate_with_mesh(
+                            &context.device,
+                            surf.vertices,
+                            bb,
+                            mesh,
+                        );
+                        (None, vb, nt)
+                    }
+                    None => {
+                        let (vb, nt) = PolygonBlitPipeline::triangulate(
+                            &context.device,
+                            surf.vertices,
+                            bb[0],
+                            bb[1],
+                            bb[2],
+                            bb[3],
+                        );
+                        (None, vb, nt)
+                    }
+                };
 
-            let bind_group = self.polygon_pipeline.create_bind_group(
-                &context.device,
-                surf.content_view,
-                surf.uv_scale,
-                surf.uv_offset,
-                homography.as_ref(),
-                &surf.overlap_zones,
-            );
-            (bind_group, vb, num_tris)
-        }).collect();
+                let bind_group = self.polygon_pipeline.create_bind_group(
+                    &context.device,
+                    surf.content_view,
+                    surf.uv_scale,
+                    surf.uv_offset,
+                    homography.as_ref(),
+                    &surf.overlap_zones,
+                );
+                (bind_group, vb, num_tris)
+            })
+            .collect();
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -693,15 +796,22 @@ impl OutputWindow {
         // Pass 2 (edge blend only): surface_texture → edge blend → preview_texture
         if use_edge_blend {
             self.edge_blend_pipeline.render(
-                &context.device, &context.queue, &mut encoder,
-                &self.surface_texture_view, &self.preview_texture_view, &self.edge_blend,
+                &context.device,
+                &context.queue,
+                &mut encoder,
+                &self.surface_texture_view,
+                &self.preview_texture_view,
+                &self.edge_blend,
             );
         }
 
         // Final pass: blit preview_texture → swap chain (with rotation)
         {
-            self.blit_pipeline.set_rotation(&context.queue, self.rotation.index());
-            let blit_bg = self.blit_pipeline.create_bind_group(&context.device, &self.preview_texture_view);
+            self.blit_pipeline
+                .set_rotation(&context.queue, self.rotation.index());
+            let blit_bg = self
+                .blit_pipeline
+                .create_bind_group(&context.device, &self.preview_texture_view);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(&format!("Output '{}' Swap Blit", self.name)),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -727,14 +837,19 @@ impl OutputWindow {
 
     /// Set the display target for this output window.
     /// `monitor` should be the MonitorHandle for Display targets.
-    pub fn set_target(&mut self, target: OutputTarget, monitor: Option<winit::monitor::MonitorHandle>) {
+    pub fn set_target(
+        &mut self,
+        target: OutputTarget,
+        monitor: Option<winit::monitor::MonitorHandle>,
+    ) {
         use winit::window::Fullscreen;
         match &target {
             OutputTarget::Windowed => {
                 self.window.set_fullscreen(None);
             }
             OutputTarget::Display { .. } => {
-                self.window.set_fullscreen(Some(Fullscreen::Borderless(monitor)));
+                self.window
+                    .set_fullscreen(Some(Fullscreen::Borderless(monitor)));
             }
             _ => {
                 log::warn!("Cannot set headless target on a windowed output");
@@ -832,11 +947,12 @@ pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) ->
                     let v = (t * 255.0) as u8;
 
                     color = match bar_idx {
-                        0 => [v, v, v, 255],       // Grayscale
-                        1 => [v, 0, 0, 255],       // Red
-                        2 => [0, v, 0, 255],       // Green
-                        3 => [0, 0, v, 255],       // Blue
-                        _ => {                     // 16-step gray
+                        0 => [v, v, v, 255], // Grayscale
+                        1 => [v, 0, 0, 255], // Red
+                        2 => [0, v, 0, 255], // Green
+                        3 => [0, 0, v, 255], // Blue
+                        _ => {
+                            // 16-step gray
                             let step = (t * 16.0).floor().min(15.0) as u8;
                             let sv = step * 17;
                             [sv, sv, sv, 255]
@@ -879,10 +995,10 @@ pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) ->
 
             // Edge midpoint markers (on the border itself)
             let edge_pts = [
-                (cx, 0u32),              // top center
-                (cx, height - 1),        // bottom center
-                (0u32, cy),              // left center
-                (width - 1, cy),         // right center
+                (cx, 0u32),       // top center
+                (cx, height - 1), // bottom center
+                (0u32, cy),       // left center
+                (width - 1, cy),  // right center
             ];
             for (ex, ey) in edge_pts {
                 if (x.abs_diff(ex) <= cross_thick * 3 && y.abs_diff(ey) <= border_w + 4)
@@ -967,7 +1083,6 @@ pub fn create_calibration_textures(
         .collect()
 }
 
-
 // ── Headless Output ─────────────────────────────────────────────────
 
 /// Recording codec for ffmpeg subprocess.
@@ -1013,7 +1128,9 @@ pub enum SrtCodec {
 }
 
 impl Default for SrtCodec {
-    fn default() -> Self { Self::H264 }
+    fn default() -> Self {
+        Self::H264
+    }
 }
 
 impl std::fmt::Display for SrtCodec {
@@ -1037,7 +1154,9 @@ pub enum StreamingCodec {
 }
 
 impl Default for StreamingCodec {
-    fn default() -> Self { Self::H264 }
+    fn default() -> Self {
+        Self::H264
+    }
 }
 
 impl std::fmt::Display for StreamingCodec {
@@ -1123,8 +1242,7 @@ impl HeadlessOutput {
         &mut self,
         frame_data: &[u8],
         ndi_manager: &mut crate::ndi::NdiManager,
-        #[cfg(target_os = "macos")]
-        syphon_manager: &mut crate::syphon::SyphonManager,
+        #[cfg(target_os = "macos")] syphon_manager: &mut crate::syphon::SyphonManager,
     ) -> DeliveryResult {
         match &mut self.target {
             OutputTarget::Recording { .. }
@@ -1136,9 +1254,10 @@ impl HeadlessOutput {
                         if let Some(mut sub) = self.subprocess.take() {
                             sub.stop();
                         }
-                        return DeliveryResult::Failed(
-                            format!("Subprocess write failed for '{}'", self.name),
-                        );
+                        return DeliveryResult::Failed(format!(
+                            "Subprocess write failed for '{}'",
+                            self.name
+                        ));
                     }
                 }
                 DeliveryResult::Ok
@@ -1152,16 +1271,21 @@ impl HeadlessOutput {
                             sub.stop();
                         }
                         match super::FfmpegSubprocess::spawn_srt(
-                            &url, &codec, self.width, self.height, 30,
+                            &url,
+                            &codec,
+                            self.width,
+                            self.height,
+                            30,
                         ) {
                             Ok(new_sub) => {
                                 self.subprocess = Some(new_sub);
                                 return DeliveryResult::Restarted;
                             }
                             Err(e) => {
-                                return DeliveryResult::Failed(
-                                    format!("Failed to restart SRT listener: {}", e),
-                                );
+                                return DeliveryResult::Failed(format!(
+                                    "Failed to restart SRT listener: {}",
+                                    e
+                                ));
                             }
                         }
                     }
@@ -1198,7 +1322,11 @@ impl HeadlessOutput {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Headless Output Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1210,15 +1338,19 @@ impl HeadlessOutput {
         });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let readback = super::ReadbackBuffer::new(device, width, height);
-        let blit_pipeline = BlitPipeline::new(device, format)
-            .expect("Failed to create headless blit pipeline");
+        let blit_pipeline =
+            BlitPipeline::new(device, format).expect("Failed to create headless blit pipeline");
         let polygon_pipeline = PolygonBlitPipeline::new(device, format)
             .expect("Failed to create headless polygon pipeline");
         let edge_blend_pipeline = super::edge_blend::EdgeBlendPipeline::new(device, format)
             .expect("Failed to create headless edge blend pipeline");
         let eb_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Headless Edge Blend Intermediate"),
-            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1360,14 +1492,11 @@ impl UnifiedOutput {
                     return sub.duration();
                 }
                 // Non-subprocess outputs (NDI/Syphon) use started_at timestamp
-                h.started_at
-                    .map(|t| t.elapsed())
-                    .unwrap_or_default()
+                h.started_at.map(|t| t.elapsed()).unwrap_or_default()
             }
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1396,10 +1525,22 @@ mod tests {
 
     #[test]
     fn output_rotation_effective_dimensions() {
-        assert_eq!(OutputRotation::Deg0.effective_dimensions(1920, 1080), (1920, 1080));
-        assert_eq!(OutputRotation::Deg90.effective_dimensions(1920, 1080), (1080, 1920));
-        assert_eq!(OutputRotation::Deg180.effective_dimensions(1920, 1080), (1920, 1080));
-        assert_eq!(OutputRotation::Deg270.effective_dimensions(1920, 1080), (1080, 1920));
+        assert_eq!(
+            OutputRotation::Deg0.effective_dimensions(1920, 1080),
+            (1920, 1080)
+        );
+        assert_eq!(
+            OutputRotation::Deg90.effective_dimensions(1920, 1080),
+            (1080, 1920)
+        );
+        assert_eq!(
+            OutputRotation::Deg180.effective_dimensions(1920, 1080),
+            (1920, 1080)
+        );
+        assert_eq!(
+            OutputRotation::Deg270.effective_dimensions(1920, 1080),
+            (1080, 1920)
+        );
     }
 
     #[test]

@@ -1,9 +1,9 @@
 //! Engine trait implementations for VardaApp.
 
 use super::VardaApp;
+use crate::deck::{Deck, Effect};
 use crate::engine::traits::*;
 use crate::engine::types::*;
-use crate::deck::{Deck, Effect};
 use crate::modulation::ModulationSource;
 
 use anyhow::{Context as _, Result};
@@ -12,7 +12,11 @@ use anyhow::{Context as _, Result};
 /// Used at every command boundary that accepts a unit-range float.
 #[inline]
 fn sanitize_unit(value: f32, fallback: f32) -> f32 {
-    if value.is_finite() { value.clamp(0.0, 1.0) } else { fallback }
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        fallback
+    }
 }
 
 impl MixerCommands for VardaApp {
@@ -36,59 +40,124 @@ impl MixerCommands for VardaApp {
 
     fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<()> {
         let generators = self.registry.generators();
-        let shader = generators.iter()
+        let shader = generators
+            .iter()
             .find(|s| s.name() == shader_name)
             .context("Shader not found")?;
-        let deck = Deck::new(&self.context, (*shader).clone(), self.render_width, self.render_height)?;
-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
+        let deck = Deck::new(
+            &self.context,
+            (*shader).clone(),
+            self.render_width,
+            self.render_height,
+        )?;
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
         let idx = ch.add_deck(deck);
-        log::info!("Added deck {} to channel {} with shader: {}", idx, channel_idx, shader_name);
+        log::info!(
+            "Added deck {} to channel {} with shader: {}",
+            idx,
+            channel_idx,
+            shader_name
+        );
         Ok(())
     }
 
     fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()> {
-        let deck = Deck::new_from_image(&self.context, path, self.render_width, self.render_height)?;
-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
+        let deck =
+            Deck::new_from_image(&self.context, path, self.render_width, self.render_height)?;
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
-        log::info!("Added image deck {} to channel {}: {}", idx, channel_idx, name);
+        log::info!(
+            "Added image deck {} to channel {}: {}",
+            idx,
+            channel_idx,
+            name
+        );
         Ok(())
     }
 
     fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()> {
-        let deck = Deck::new_from_video(&self.context, path, self.render_width, self.render_height)?;
-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
+        let deck =
+            Deck::new_from_video(&self.context, path, self.render_width, self.render_height)?;
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
-        log::info!("Added video deck {} to channel {}: {}", idx, channel_idx, name);
+        log::info!(
+            "Added video deck {} to channel {}: {}",
+            idx,
+            channel_idx,
+            name
+        );
         Ok(())
     }
 
     fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<()> {
-        let deck = Deck::new_solid_color(&self.context, color, self.render_width, self.render_height)?;
-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
+        let deck =
+            Deck::new_solid_color(&self.context, color, self.render_width, self.render_height)?;
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
-        log::info!("Added solid color deck {} to channel {}: {}", idx, channel_idx, name);
+        log::info!(
+            "Added solid color deck {} to channel {}: {}",
+            idx,
+            channel_idx,
+            name
+        );
         Ok(())
     }
 
     fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<()> {
-        let cam_name = self.camera_manager.devices().iter()
+        let cam_name = self
+            .camera_manager
+            .devices()
+            .iter()
             .find(|d| d.id == camera_id)
             .map(|d| d.name.clone())
             .unwrap_or_else(|| format!("Camera {}", camera_id));
-        let (src_w, src_h) = self.camera_manager.open_camera(camera_id, &self.context.device)?;
-        let deck = Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h, self.render_width, self.render_height)?;
-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
+        let (src_w, src_h) = self
+            .camera_manager
+            .open_camera(camera_id, &self.context.device)?;
+        let deck = Deck::new_from_camera(
+            &self.context,
+            camera_id,
+            &cam_name,
+            src_w,
+            src_h,
+            self.render_width,
+            self.render_height,
+        )?;
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
         let idx = ch.add_deck(deck);
-        log::info!("Added camera deck {} to channel {}: {}", idx, channel_idx, cam_name);
+        log::info!(
+            "Added camera deck {} to channel {}: {}",
+            idx,
+            channel_idx,
+            cam_name
+        );
         Ok(())
     }
 
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()> {
         // Capture deck UUID before removal for modulation cleanup
-        let deck_uuid = self.mixer.channels().get(channel_idx)
+        let deck_uuid = self
+            .mixer
+            .channels()
+            .get(channel_idx)
             .and_then(|ch| ch.decks.get(deck_idx))
             .map(|slot| slot.deck.uuid().to_string());
         // Release external resources before removal
@@ -109,19 +178,30 @@ impl MixerCommands for VardaApp {
                 }
             }
         }
-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
         if deck_idx < ch.decks.len() {
             // Also capture effect UUIDs for modulation cleanup
-            let effect_uuids: Vec<String> = ch.decks[deck_idx].deck.effects
-                .iter().map(|e| e.uuid.clone()).collect();
+            let effect_uuids: Vec<String> = ch.decks[deck_idx]
+                .deck
+                .effects
+                .iter()
+                .map(|e| e.uuid.clone())
+                .collect();
             ch.remove_deck(deck_idx);
             log::info!("Removed deck {} from channel {}", deck_idx, channel_idx);
             // Clean up orphaned modulation assignments
             if let Some(uuid) = deck_uuid {
-                self.mixer.modulation_mut().remove_assignments_with_prefix(&format!("deck_{}:", uuid));
+                self.mixer
+                    .modulation_mut()
+                    .remove_assignments_with_prefix(&format!("deck_{}:", uuid));
             }
             for fx_uuid in &effect_uuids {
-                self.mixer.modulation_mut().remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
+                self.mixer
+                    .modulation_mut()
+                    .remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
             }
         }
         Ok(())
@@ -142,16 +222,28 @@ impl MixerCommands for VardaApp {
         // (split_at_mut or index — Rust's borrow checker doesn't allow two
         //  channel_mut() calls in the same scope)
         let Some(slot) = channels[src_ch].remove_deck_slot(src_deck) else {
-            log::warn!("move_deck: deck {} not found in channel {}", src_deck, src_ch);
+            log::warn!(
+                "move_deck: deck {} not found in channel {}",
+                src_deck,
+                src_ch
+            );
             return Ok(());
         };
         let new_idx = channels[dst_ch].add_deck_slot(slot);
-        log::info!("Moved deck {} from ch{} to ch{} (new idx {})", src_deck, src_ch, dst_ch, new_idx);
+        log::info!(
+            "Moved deck {} from ch{} to ch{} (new idx {})",
+            src_deck,
+            src_ch,
+            dst_ch,
+            new_idx
+        );
         Ok(())
     }
 
     fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize) {
-        if from_idx == to_idx { return; }
+        if from_idx == to_idx {
+            return;
+        }
         if let Some(channel) = self.mixer.channel_mut(ch) {
             if from_idx < channel.decks.len() && to_idx < channel.decks.len() {
                 let slot = channel.decks.remove(from_idx);
@@ -212,7 +304,8 @@ impl MixerCommands for VardaApp {
     }
 
     fn add_channel(&mut self) -> Result<usize> {
-        self.mixer.add_channel(&self.context, self.render_width, self.render_height)
+        self.mixer
+            .add_channel(&self.context, self.render_width, self.render_height)
     }
 
     fn remove_channel(&mut self, channel_idx: usize) -> Result<()> {
@@ -226,7 +319,8 @@ impl MixerCommands for VardaApp {
 
     fn add_effect(&mut self, target: EffectTarget, shader_name: &str) -> Result<()> {
         let filters = self.registry.filters();
-        let shader = filters.iter()
+        let shader = filters
+            .iter()
             .find(|s| s.name() == shader_name)
             .context("Filter shader not found")?;
         match target {
@@ -235,17 +329,30 @@ impl MixerCommands for VardaApp {
                 let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
                 if deck_idx < ch.decks.len() {
                     ch.decks[deck_idx].deck.add_effect(effect);
-                    log::info!("Added effect {} to ch{} deck {}", shader_name, ch_idx, deck_idx);
+                    log::info!(
+                        "Added effect {} to ch{} deck {}",
+                        shader_name,
+                        ch_idx,
+                        deck_idx
+                    );
                 }
             }
             EffectTarget::Channel(ch_idx) => {
-                let effect = Effect::new_with_format(&self.context, (*shader).clone(), self.context.texture_format)?;
+                let effect = Effect::new_with_format(
+                    &self.context,
+                    (*shader).clone(),
+                    self.context.texture_format,
+                )?;
                 let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
                 ch.add_effect(effect);
                 log::info!("Added channel effect {} to ch{}", shader_name, ch_idx);
             }
             EffectTarget::Master => {
-                let effect = Effect::new_with_format(&self.context, (*shader).clone(), self.context.texture_format)?;
+                let effect = Effect::new_with_format(
+                    &self.context,
+                    (*shader).clone(),
+                    self.context.texture_format,
+                )?;
                 self.mixer.add_master_effect(effect);
                 log::info!("Added master effect: {}", shader_name);
             }
@@ -294,14 +401,17 @@ impl MixerCommands for VardaApp {
             }
             EffectTarget::Master => {
                 if effect_idx < self.mixer.master_effects().len() {
-                    self.mixer.master_effects_mut()[effect_idx].enabled = !self.mixer.master_effects_mut()[effect_idx].enabled;
+                    self.mixer.master_effects_mut()[effect_idx].enabled =
+                        !self.mixer.master_effects_mut()[effect_idx].enabled;
                 }
             }
         }
     }
 
     fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize) {
-        if from_idx == to_idx { return; }
+        if from_idx == to_idx {
+            return;
+        }
         match target {
             EffectTarget::Deck(ch_idx, deck_idx) => {
                 if let Some(ch) = self.mixer.channel_mut(ch_idx) {
@@ -323,7 +433,9 @@ impl MixerCommands for VardaApp {
                 }
             }
             EffectTarget::Master => {
-                if from_idx < self.mixer.master_effects().len() && to_idx < self.mixer.master_effects().len() {
+                if from_idx < self.mixer.master_effects().len()
+                    && to_idx < self.mixer.master_effects().len()
+                {
                     let effect = self.mixer.master_effects_mut().remove(from_idx);
                     self.mixer.master_effects_mut().insert(to_idx, effect);
                 }
@@ -333,9 +445,15 @@ impl MixerCommands for VardaApp {
 
     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()> {
         match shader_name {
-            None => { self.mixer.clear_transition(); Ok(()) }
+            None => {
+                self.mixer.clear_transition();
+                Ok(())
+            }
             Some(name) => {
-                let shader = self.registry.get(name).context("Transition shader not found")?;
+                let shader = self
+                    .registry
+                    .get(name)
+                    .context("Transition shader not found")?;
                 self.mixer.set_transition(&self.context, shader.clone())
             }
         }
@@ -345,7 +463,13 @@ impl MixerCommands for VardaApp {
         // Convert ParamValue to f32 for the param router
         let f_value = match value {
             ParamValue::Float(v) => v,
-            ParamValue::Bool(b) => if b { 1.0 } else { 0.0 },
+            ParamValue::Bool(b) => {
+                if b {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             ParamValue::Long(i) => i as f32,
             ParamValue::Color(c) => c[0],
             ParamValue::Point2D(p) => p[0],
@@ -365,7 +489,8 @@ impl MixerCommands for VardaApp {
 
 impl AudioCommands for VardaApp {
     fn open_audio_source(&mut self, source_id: AudioSourceId) -> Result<()> {
-        self.audio_manager.open_source(source_id)
+        self.audio_manager
+            .open_source(source_id)
             .map_err(|e| anyhow::anyhow!("Failed to open audio source: {}", e))
     }
 
@@ -390,33 +515,50 @@ impl AudioQueries for VardaApp {
             bpm: primary_audio.bpm,
             beat_phase: primary_audio.beat_phase(),
             enabled: self.audio_manager.has_active_source(),
-            devices: self.audio_manager.devices().iter().map(|d| AudioDeviceSnapshot {
-                id: d.id,
-                name: d.name.clone(),
-                active: active_ids.contains(&d.id),
-            }).collect(),
+            devices: self
+                .audio_manager
+                .devices()
+                .iter()
+                .map(|d| AudioDeviceSnapshot {
+                    id: d.id,
+                    name: d.name.clone(),
+                    active: active_ids.contains(&d.id),
+                })
+                .collect(),
             fft: primary_audio.fft.clone(),
             sample_rate: primary_audio.sample_rate,
         }
     }
 }
 
-
 // ── Modulation trait implementations ────────────────────────────────
 
 impl ModulationCommands for VardaApp {
     fn add_lfo(&mut self, waveform: LFOWaveform, frequency: f32) -> String {
         let source = ModulationSource::LFO {
-            waveform, frequency, phase: 0.0, amplitude: 1.0, bipolar: false,
+            waveform,
+            frequency,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: false,
         };
         self.mixer.modulation_mut().add_source(source)
     }
 
-    fn add_audio_band(&mut self, preset: AudioBandPreset, source_id: Option<AudioSourceId>) -> String {
+    fn add_audio_band(
+        &mut self,
+        preset: AudioBandPreset,
+        source_id: Option<AudioSourceId>,
+    ) -> String {
         let (freq_low, freq_high) = preset.freq_range();
         let source = ModulationSource::AudioBand {
-            source_id, freq_low, freq_high, gain: 1.0, smoothing: 0.6,
-            mode: crate::modulation::AudioReactMode::Direct, noise_gate: 0.1,
+            source_id,
+            freq_low,
+            freq_high,
+            gain: 1.0,
+            smoothing: 0.6,
+            mode: crate::modulation::AudioReactMode::Direct,
+            noise_gate: 0.1,
         };
         self.mixer.modulation_mut().add_source(source)
     }
@@ -436,7 +578,9 @@ impl ModulationCommands for VardaApp {
     }
 
     fn assign_modulation(&mut self, target: &str, source_id: &str, amount: f32) {
-        self.mixer.modulation_mut().assign(target, source_id, amount, None);
+        self.mixer
+            .modulation_mut()
+            .assign(target, source_id, amount, None);
     }
 
     fn clear_modulation(&mut self, target: &str) {
@@ -447,45 +591,111 @@ impl ModulationCommands for VardaApp {
 impl ModulationQueries for VardaApp {
     fn modulation_snapshot(&self) -> ModulationSnapshot {
         let m = &self.mixer;
-        let sources = m.modulation().sources.iter().map(|entry| {
-            let snapshot = match &entry.source {
-                ModulationSource::LFO { waveform, frequency, phase, amplitude, bipolar } => {
-                    ModulationSourceSnapshot::LFO {
-                        waveform: *waveform, frequency: *frequency, phase: *phase,
-                        amplitude: *amplitude, bipolar: *bipolar,
-                    }
+        let sources = m
+            .modulation()
+            .sources
+            .iter()
+            .map(|entry| {
+                let snapshot = match &entry.source {
+                    ModulationSource::LFO {
+                        waveform,
+                        frequency,
+                        phase,
+                        amplitude,
+                        bipolar,
+                    } => ModulationSourceSnapshot::LFO {
+                        waveform: *waveform,
+                        frequency: *frequency,
+                        phase: *phase,
+                        amplitude: *amplitude,
+                        bipolar: *bipolar,
+                    },
+                    ModulationSource::AudioBand {
+                        source_id,
+                        freq_low,
+                        freq_high,
+                        gain,
+                        smoothing,
+                        mode,
+                        noise_gate,
+                    } => ModulationSourceSnapshot::Audio {
+                        source_id: *source_id,
+                        freq_low: *freq_low,
+                        freq_high: *freq_high,
+                        gain: *gain,
+                        smoothing: *smoothing,
+                        mode: *mode,
+                        noise_gate: *noise_gate,
+                    },
+                    ModulationSource::ADSR {
+                        attack,
+                        decay,
+                        sustain,
+                        release,
+                        stage,
+                        ..
+                    } => ModulationSourceSnapshot::ADSR {
+                        attack: *attack,
+                        decay: *decay,
+                        sustain: *sustain,
+                        release: *release,
+                        stage: *stage,
+                    },
+                    ModulationSource::StepSequencer {
+                        steps,
+                        rate,
+                        interpolation,
+                        bipolar,
+                    } => ModulationSourceSnapshot::StepSequencer {
+                        steps: steps.clone(),
+                        rate: *rate,
+                        interpolation: *interpolation,
+                        bipolar: *bipolar,
+                    },
+                };
+                ModulationSourceSnapshotEntry {
+                    uuid: entry.uuid.clone(),
+                    source: snapshot,
                 }
-                ModulationSource::AudioBand { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } => {
-                    ModulationSourceSnapshot::Audio {
-                        source_id: *source_id, freq_low: *freq_low, freq_high: *freq_high,
-                        gain: *gain, smoothing: *smoothing, mode: *mode, noise_gate: *noise_gate,
-                    }
-                }
-                ModulationSource::ADSR { attack, decay, sustain, release, stage, .. } => {
-                    ModulationSourceSnapshot::ADSR {
-                        attack: *attack, decay: *decay, sustain: *sustain,
-                        release: *release, stage: *stage,
-                    }
-                }
-                ModulationSource::StepSequencer { steps, rate, interpolation, bipolar } => {
-                    ModulationSourceSnapshot::StepSequencer {
-                        steps: steps.clone(), rate: *rate,
-                        interpolation: *interpolation, bipolar: *bipolar,
-                    }
-                }
-            };
-            ModulationSourceSnapshotEntry { uuid: entry.uuid.clone(), source: snapshot }
-        }).collect();
-        let current_values: std::collections::HashMap<String, f32> = m.modulation().sources.iter().enumerate().map(|(i, entry)| {
-            (entry.uuid.clone(), m.modulation().current_values().get(i).copied().unwrap_or(0.0))
-        }).collect();
-        let assignments = m.modulation().assignments.iter().map(|(k, v)| {
-            (k.clone(), v.iter().map(|pm| ModulationAssignmentSnapshot {
-                source_id: pm.source_id.clone(),
-                amount: pm.amount,
-            }).collect())
-        }).collect();
-        ModulationSnapshot { sources, current_values, assignments }
+            })
+            .collect();
+        let current_values: std::collections::HashMap<String, f32> = m
+            .modulation()
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                (
+                    entry.uuid.clone(),
+                    m.modulation()
+                        .current_values()
+                        .get(i)
+                        .copied()
+                        .unwrap_or(0.0),
+                )
+            })
+            .collect();
+        let assignments = m
+            .modulation()
+            .assignments
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    v.iter()
+                        .map(|pm| ModulationAssignmentSnapshot {
+                            source_id: pm.source_id.clone(),
+                            amount: pm.amount,
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        ModulationSnapshot {
+            sources,
+            current_values,
+            assignments,
+        }
     }
 }
 
@@ -493,14 +703,18 @@ impl ModulationQueries for VardaApp {
 
 impl OutputCommands for VardaApp {
     fn request_create_output(&mut self) {
-        self.output.pending_output_creates.push(crate::scene::OutputConfig::default_windowed());
+        self.output
+            .pending_output_creates
+            .push(crate::scene::OutputConfig::default_windowed());
     }
 
     fn close_output(&mut self, idx: usize) {
         if idx < self.output.outputs.len() {
             let name = self.output.outputs[idx].name().to_string();
             // Stop active subprocess before removing to release ports/resources
-            if let crate::renderer::context::UnifiedOutput::Headless(h) = &mut self.output.outputs[idx] {
+            if let crate::renderer::context::UnifiedOutput::Headless(h) =
+                &mut self.output.outputs[idx]
+            {
                 if let Some(mut sub) = h.subprocess.take() {
                     sub.stop();
                 }
@@ -514,8 +728,14 @@ impl OutputCommands for VardaApp {
     }
 
     fn set_output_display(&mut self, idx: usize, monitor_name: &str) {
-        if let Some(crate::renderer::context::UnifiedOutput::Window(output)) = self.output.outputs.get_mut(idx) {
-            if let Some((mi, (_, handle))) = self.output.cached_monitors.iter().enumerate()
+        if let Some(crate::renderer::context::UnifiedOutput::Window(output)) =
+            self.output.outputs.get_mut(idx)
+        {
+            if let Some((mi, (_, handle))) = self
+                .output
+                .cached_monitors
+                .iter()
+                .enumerate()
                 .find(|(_, (name, _))| name == monitor_name)
             {
                 let target = crate::renderer::context::OutputTarget::Display {
@@ -531,50 +751,77 @@ impl OutputCommands for VardaApp {
 impl OutputQueries for VardaApp {
     fn output_snapshot(&self) -> OutputSnapshot {
         OutputSnapshot {
-            windows: self.output.outputs.iter().filter_map(|o| {
-                if let crate::renderer::context::UnifiedOutput::Window(w) = o {
-                    Some(OutputWindowSnapshot {
-                        uuid: w.uuid.clone(),
-                        name: w.name.clone(),
-                        target_label: format!("{}", w.target),
-                        is_on_display: matches!(w.target, crate::renderer::context::OutputTarget::Display { .. }),
-                        surface_assignments: w.surface_assignments.iter().map(|a| {
-                            let surface_name = self.output.surface_manager.find_by_uuid(&a.surface_uuid)
-                                .map(|(_, s)| s.name.clone())
-                                .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
-                            SurfaceAssignmentSnapshot {
-                                surface_uuid: a.surface_uuid.clone(),
-                                surface_name,
-                                warp_mode: a.warp_mode.clone(),
-                                enabled: a.enabled,
-                            }
-                        }).collect(),
-                        calibration_mode: w.calibration_mode,
-                    })
-                } else {
-                    None
-                }
-            }).collect(),
-            surfaces: self.output.surface_manager.surfaces.iter().map(|s| SurfaceSnapshot {
-                uuid: s.uuid.clone(),
-                name: s.name.clone(),
-                vertices: s.vertices.clone(),
-                extra_contours: s.extra_contours.clone(),
-                source: s.source.clone(),
-                content_mapping: s.content_mapping,
-                output_type: s.output_type,
-                circle_hint: s.circle_hint,
-                default_warp: s.default_warp.clone(),
-            }).collect(),
-            monitors: self.output.cached_monitors.iter().enumerate().map(|(i, (name, handle))| {
-                let size = handle.size();
-                MonitorSnapshot {
-                    name: name.clone(),
-                    index: i,
-                    width: size.width,
-                    height: size.height,
-                }
-            }).collect(),
+            windows: self
+                .output
+                .outputs
+                .iter()
+                .filter_map(|o| {
+                    if let crate::renderer::context::UnifiedOutput::Window(w) = o {
+                        Some(OutputWindowSnapshot {
+                            uuid: w.uuid.clone(),
+                            name: w.name.clone(),
+                            target_label: format!("{}", w.target),
+                            is_on_display: matches!(
+                                w.target,
+                                crate::renderer::context::OutputTarget::Display { .. }
+                            ),
+                            surface_assignments: w
+                                .surface_assignments
+                                .iter()
+                                .map(|a| {
+                                    let surface_name = self
+                                        .output
+                                        .surface_manager
+                                        .find_by_uuid(&a.surface_uuid)
+                                        .map(|(_, s)| s.name.clone())
+                                        .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
+                                    SurfaceAssignmentSnapshot {
+                                        surface_uuid: a.surface_uuid.clone(),
+                                        surface_name,
+                                        warp_mode: a.warp_mode.clone(),
+                                        enabled: a.enabled,
+                                    }
+                                })
+                                .collect(),
+                            calibration_mode: w.calibration_mode,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            surfaces: self
+                .output
+                .surface_manager
+                .surfaces
+                .iter()
+                .map(|s| SurfaceSnapshot {
+                    uuid: s.uuid.clone(),
+                    name: s.name.clone(),
+                    vertices: s.vertices.clone(),
+                    extra_contours: s.extra_contours.clone(),
+                    source: s.source.clone(),
+                    content_mapping: s.content_mapping,
+                    output_type: s.output_type,
+                    circle_hint: s.circle_hint,
+                    default_warp: s.default_warp.clone(),
+                })
+                .collect(),
+            monitors: self
+                .output
+                .cached_monitors
+                .iter()
+                .enumerate()
+                .map(|(i, (name, handle))| {
+                    let size = handle.size();
+                    MonitorSnapshot {
+                        name: name.clone(),
+                        index: i,
+                        width: size.width,
+                        height: size.height,
+                    }
+                })
+                .collect(),
         }
     }
 }
@@ -591,20 +838,53 @@ impl MixerQueries for VardaApp {
 
 impl SurfaceCommands for VardaApp {
     fn add_surface(&mut self, name: &str, source: OutputSource) -> String {
-        let uuid = self.output.surface_manager.add_surface(name.to_string(), source);
+        let uuid = self
+            .output
+            .surface_manager
+            .add_surface(name.to_string(), source);
         log::info!("Added surface '{}' (uuid {})", name, uuid);
         uuid
     }
 
-    fn add_polygon_surface(&mut self, name: &str, vertices: &[[f32; 2]], source: OutputSource) -> String {
-        let uuid = self.output.surface_manager.add_polygon_surface(name.to_string(), vertices.to_vec(), source);
-        log::info!("Added polygon surface '{}' with {} vertices (uuid {})", name, vertices.len(), uuid);
+    fn add_polygon_surface(
+        &mut self,
+        name: &str,
+        vertices: &[[f32; 2]],
+        source: OutputSource,
+    ) -> String {
+        let uuid = self.output.surface_manager.add_polygon_surface(
+            name.to_string(),
+            vertices.to_vec(),
+            source,
+        );
+        log::info!(
+            "Added polygon surface '{}' with {} vertices (uuid {})",
+            name,
+            vertices.len(),
+            uuid
+        );
         uuid
     }
 
-    fn add_circle_surface(&mut self, name: &str, center: [f32; 2], radius: f32, sides: u32, aspect_ratio: f32, source: OutputSource) -> String {
-        let hint = crate::surface::CircleHint { center, radius, sides, aspect_ratio };
-        let uuid = self.output.surface_manager.add_circle_surface(name.to_string(), hint, source);
+    fn add_circle_surface(
+        &mut self,
+        name: &str,
+        center: [f32; 2],
+        radius: f32,
+        sides: u32,
+        aspect_ratio: f32,
+        source: OutputSource,
+    ) -> String {
+        let hint = crate::surface::CircleHint {
+            center,
+            radius,
+            sides,
+            aspect_ratio,
+        };
+        let uuid = self
+            .output
+            .surface_manager
+            .add_circle_surface(name.to_string(), hint, source);
         log::info!("Added circle surface '{}' (uuid {})", name, uuid);
         uuid
     }
@@ -638,16 +918,21 @@ impl SurfaceCommands for VardaApp {
     }
 
     fn assign_surface_to_output(&mut self, output_uuid: &str, surface_uuid: &str) {
-        if let Some(output) = self.output.outputs.iter_mut().find(|o| o.uuid() == output_uuid) {
+        if let Some(output) = self
+            .output
+            .outputs
+            .iter_mut()
+            .find(|o| o.uuid() == output_uuid)
+        {
             let assignments = output.surface_assignments_mut();
             if !assignments.iter().any(|a| a.surface_uuid == surface_uuid) {
                 if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(surface_uuid) {
                     // Use pre-computed warp mesh if available (dome surfaces), otherwise identity corners
                     let warp_mode = surface.default_warp.clone().unwrap_or_else(|| {
                         let bb = surface.bounding_box();
-                        crate::renderer::warp::WarpMode::identity_corners(
-                            [bb.x, bb.y, bb.width, bb.height]
-                        )
+                        crate::renderer::warp::WarpMode::identity_corners([
+                            bb.x, bb.y, bb.width, bb.height,
+                        ])
                     });
                     assignments.push(crate::renderer::context::SurfaceAssignment {
                         surface_uuid: surface_uuid.to_string(),
@@ -661,7 +946,12 @@ impl SurfaceCommands for VardaApp {
     }
 
     fn unassign_surface_from_output(&mut self, output_uuid: &str, assignment_idx: usize) {
-        if let Some(output) = self.output.outputs.iter_mut().find(|o| o.uuid() == output_uuid) {
+        if let Some(output) = self
+            .output
+            .outputs
+            .iter_mut()
+            .find(|o| o.uuid() == output_uuid)
+        {
             let assignments = output.surface_assignments_mut();
             if assignment_idx < assignments.len() {
                 assignments.remove(assignment_idx);
@@ -782,17 +1072,22 @@ impl DetectCommands for VardaApp {
 
 impl SurfaceQueries for VardaApp {
     fn surface_snapshot(&self) -> Vec<SurfaceSnapshot> {
-        self.output.surface_manager.surfaces.iter().map(|s| SurfaceSnapshot {
-            uuid: s.uuid.clone(),
-            name: s.name.clone(),
-            vertices: s.vertices.clone(),
-            extra_contours: s.extra_contours.clone(),
-            source: s.source.clone(),
-            content_mapping: s.content_mapping,
-            output_type: s.output_type,
-            circle_hint: s.circle_hint,
-            default_warp: s.default_warp.clone(),
-        }).collect()
+        self.output
+            .surface_manager
+            .surfaces
+            .iter()
+            .map(|s| SurfaceSnapshot {
+                uuid: s.uuid.clone(),
+                name: s.name.clone(),
+                vertices: s.vertices.clone(),
+                extra_contours: s.extra_contours.clone(),
+                source: s.source.clone(),
+                content_mapping: s.content_mapping,
+                output_type: s.output_type,
+                circle_hint: s.circle_hint,
+                default_warp: s.default_warp.clone(),
+            })
+            .collect()
     }
 }
 
@@ -813,7 +1108,9 @@ mod tests {
 
     #[test]
     fn move_deck_same_channel_noop() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
         let result = app.move_deck(0, 0, 0);
         assert!(result.is_ok());
@@ -824,21 +1121,27 @@ mod tests {
 
     #[test]
     fn move_deck_invalid_src_channel() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let result = app.move_deck(99, 0, 0);
         assert!(result.is_ok()); // silent no-op
     }
 
     #[test]
     fn move_deck_invalid_src_deck() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let result = app.move_deck(0, 99, 1);
         assert!(result.is_ok()); // silent no-op
     }
 
     #[test]
     fn move_deck_valid() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
         let snap = app.mixer_snapshot();
         assert_eq!(snap.channels[0].decks.len(), 1);
@@ -853,7 +1156,9 @@ mod tests {
 
     #[test]
     fn reorder_deck_within_channel() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
         app.add_solid_color_deck(0, [0.0, 1.0, 0.0, 1.0]).unwrap();
         app.add_solid_color_deck(0, [0.0, 0.0, 1.0, 1.0]).unwrap();
@@ -864,7 +1169,9 @@ mod tests {
 
     #[test]
     fn reorder_deck_same_position_noop() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
         app.reorder_deck(0, 0, 0);
         assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 1);
@@ -872,55 +1179,77 @@ mod tests {
 
     #[test]
     fn reorder_deck_invalid_channel() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.reorder_deck(99, 0, 1); // no crash
     }
 
     #[test]
     fn set_deck_opacity_invalid_channel() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.set_deck_opacity(99, 0, 0.5); // no crash
     }
 
     #[test]
     fn set_deck_opacity_invalid_deck() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.set_deck_opacity(0, 99, 0.5); // no crash
     }
 
     #[test]
     fn set_deck_blend_mode_invalid() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.set_deck_blend_mode(99, 99, BlendMode::Add); // no crash
     }
 
     #[test]
     fn set_deck_solo_invalid() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.set_deck_solo(99, 99, true); // no crash
     }
 
     #[test]
     fn set_deck_mute_invalid() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.set_deck_mute(99, 99, true); // no crash
     }
 
     #[test]
     fn set_channel_opacity_clamps() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         app.set_channel_opacity(0, 2.0);
         let snap = app.mixer_snapshot();
-        assert!((snap.channels[0].opacity - 1.0).abs() < 1e-5, "should clamp to 1.0");
+        assert!(
+            (snap.channels[0].opacity - 1.0).abs() < 1e-5,
+            "should clamp to 1.0"
+        );
 
         app.set_channel_opacity(0, -1.0);
         let snap = app.mixer_snapshot();
-        assert!((snap.channels[0].opacity).abs() < 1e-5, "should clamp to 0.0");
+        assert!(
+            (snap.channels[0].opacity).abs() < 1e-5,
+            "should clamp to 0.0"
+        );
     }
 
     #[test]
     fn add_channel_increases_count() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         let before = app.mixer_snapshot().channels.len();
         assert_eq!(before, 2);
         app.add_channel().unwrap();
@@ -930,7 +1259,9 @@ mod tests {
 
     #[test]
     fn remove_channel_enforces_minimum() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         assert_eq!(app.mixer_snapshot().channels.len(), 2);
         // Trying to remove should fail (minimum 2)
         let result = app.remove_channel(0);
@@ -940,7 +1271,9 @@ mod tests {
 
     #[test]
     fn toggle_effect_invalid_index() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         // Toggle on non-existent effect → no crash
         app.toggle_effect(EffectTarget::Deck(0, 0), 99);
         app.toggle_effect(EffectTarget::Channel(0), 99);
@@ -949,7 +1282,9 @@ mod tests {
 
     #[test]
     fn set_param_invalid_path() {
-        let Some(mut app) = headless_app() else { return; };
+        let Some(mut app) = headless_app() else {
+            return;
+        };
         // Non-existent param path → silent failure
         app.set_param("ch99/deck99/nonexistent_param", ParamValue::Float(0.5));
     }

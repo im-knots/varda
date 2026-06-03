@@ -1,8 +1,8 @@
 //! Mixer render pipeline — compositing, master effects, sub-mixes.
 
+use super::{AutoCrossfade, CrossfadeEasing, Mixer};
 use crate::renderer::{GpuContext, ISFUniforms};
 use anyhow::Result;
-use super::{Mixer, CrossfadeEasing, AutoCrossfade};
 
 impl Mixer {
     /// Pre-update modulation engine with latest audio data.
@@ -12,7 +12,12 @@ impl Mixer {
     }
 
     /// Render all channels and composite them via crossfader, then apply master effects.
-    pub fn render(&mut self, context: &GpuContext, audio_data: &crate::audio::AudioData, audio_values: &crate::modulation::AudioValues) -> Result<()> {
+    pub fn render(
+        &mut self,
+        context: &GpuContext,
+        audio_data: &crate::audio::AudioData,
+        audio_values: &crate::modulation::AudioValues,
+    ) -> Result<()> {
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
         self.last_render_time = now;
@@ -38,11 +43,18 @@ impl Mixer {
                     let bpm = audio_data.bpm.unwrap_or(120.0);
                     let duration_secs = bsc.beats * 60.0 / bpm;
                     bsc.auto = Some(AutoCrossfade::new(
-                        self.crossfader, bsc.to, duration_secs, CrossfadeEasing::EaseInOut,
+                        self.crossfader,
+                        bsc.to,
+                        duration_secs,
+                        CrossfadeEasing::EaseInOut,
                     ));
                     bsc.started = true;
-                    log::info!("Beat-synced crossfade started: {:.1} beats at {:.0} BPM = {:.2}s",
-                        bsc.beats, bpm, duration_secs);
+                    log::info!(
+                        "Beat-synced crossfade started: {:.1} beats at {:.0} BPM = {:.2}s",
+                        bsc.beats,
+                        bpm,
+                        duration_secs
+                    );
                 }
             }
 
@@ -91,7 +103,8 @@ impl Mixer {
                 channel.active_deck_count = 0;
                 continue;
             }
-            if let Err(e) = channel.render(context, audio_data, &self.modulation, ch_idx, time, dt) {
+            if let Err(e) = channel.render(context, audio_data, &self.modulation, ch_idx, time, dt)
+            {
                 log::error!("Channel {} render failed, skipping: {}", ch_idx, e);
                 continue;
             }
@@ -105,13 +118,15 @@ impl Mixer {
         Ok(())
     }
 
-
     fn composite_channels(&mut self, context: &GpuContext) -> Result<()> {
         let channel_count = self.channels.len();
         if channel_count == 0 {
-            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Mixer Clear Encoder"),
-            });
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Mixer Clear Encoder"),
+                    });
             {
                 let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Mixer Clear Pass"),
@@ -189,15 +204,22 @@ impl Mixer {
         // are consumed before the next channel overwrites them.
         let mut is_first = true;
         for (_i, (channel, &opacity)) in self.channels.iter().zip(opacities.iter()).enumerate() {
-            if opacity <= 0.0 { continue; }
+            if opacity <= 0.0 {
+                continue;
+            }
 
             if is_first {
                 // First visible channel: simple blit copy
                 self.blit_pipeline.set_opacity(&context.queue, opacity);
-                let bind_group = self.blit_pipeline.create_bind_group(&context.device, &channel.composite_view);
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Mixer Composite Encoder (first)"),
-                });
+                let bind_group = self
+                    .blit_pipeline
+                    .create_bind_group(&context.device, &channel.composite_view);
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Mixer Composite Encoder (first)"),
+                        });
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Mixer Composite Pass (first)"),
@@ -221,9 +243,12 @@ impl Mixer {
                 is_first = false;
             } else {
                 // Subsequent channels: snapshot + composite shader
-                let mut copy_encoder = context.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("Mixer Snapshot Copy") },
-                );
+                let mut copy_encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Mixer Snapshot Copy"),
+                        });
                 copy_encoder.copy_texture_to_texture(
                     self.composite_texture.as_image_copy(),
                     self.effect_ping_texture.as_image_copy(),
@@ -231,11 +256,24 @@ impl Mixer {
                 );
 
                 let blend_mode = channel.blend_mode;
-                self.composite_pipeline.set_params(&context.queue, opacity, blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
-                let bind_group = self.composite_pipeline.create_bind_group(&context.device, &channel.composite_view, &self.effect_ping_view);
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Mixer Composite Encoder"),
-                });
+                self.composite_pipeline.set_params(
+                    &context.queue,
+                    opacity,
+                    blend_mode.to_index(),
+                    [1.0, 1.0],
+                    [0.0, 0.0],
+                );
+                let bind_group = self.composite_pipeline.create_bind_group(
+                    &context.device,
+                    &channel.composite_view,
+                    &self.effect_ping_view,
+                );
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Mixer Composite Encoder"),
+                        });
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Mixer Composite Pass"),
@@ -253,9 +291,12 @@ impl Mixer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    self.composite_pipeline.render(&mut render_pass, &bind_group);
+                    self.composite_pipeline
+                        .render(&mut render_pass, &bind_group);
                 }
-                context.queue.submit([copy_encoder.finish(), encoder.finish()]);
+                context
+                    .queue
+                    .submit([copy_encoder.finish(), encoder.finish()]);
             }
         }
 
@@ -300,18 +341,27 @@ impl Mixer {
         // are consumed before the next channel overwrites them.
         let mut is_first = true;
         for &ch_idx in indices {
-            if ch_idx >= self.channels.len() { continue; }
+            if ch_idx >= self.channels.len() {
+                continue;
+            }
             let channel = &self.channels[ch_idx];
             let opacity = opacities.get(ch_idx).copied().unwrap_or(0.0);
-            if opacity <= 0.0 { continue; }
+            if opacity <= 0.0 {
+                continue;
+            }
 
             if is_first {
                 // First visible channel: simple blit copy
                 self.blit_pipeline.set_opacity(&context.queue, opacity);
-                let bind_group = self.blit_pipeline.create_bind_group(&context.device, &channel.composite_view);
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Sub-mix Composite Encoder (first)"),
-                });
+                let bind_group = self
+                    .blit_pipeline
+                    .create_bind_group(&context.device, &channel.composite_view);
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Sub-mix Composite Encoder (first)"),
+                        });
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Sub-mix Composite Pass (first)"),
@@ -335,9 +385,12 @@ impl Mixer {
                 is_first = false;
             } else {
                 // Subsequent channels: snapshot sub-mix → effect_ping, composite shader
-                let mut copy_encoder = context.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("Sub-mix Snapshot Copy") },
-                );
+                let mut copy_encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Sub-mix Snapshot Copy"),
+                        });
                 copy_encoder.copy_texture_to_texture(
                     sub_tex.as_image_copy(),
                     self.effect_ping_texture.as_image_copy(),
@@ -345,11 +398,24 @@ impl Mixer {
                 );
 
                 let blend_mode = channel.blend_mode;
-                self.composite_pipeline.set_params(&context.queue, opacity, blend_mode.to_index(), [1.0, 1.0], [0.0, 0.0]);
-                let bind_group = self.composite_pipeline.create_bind_group(&context.device, &channel.composite_view, &self.effect_ping_view);
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Sub-mix Composite Encoder"),
-                });
+                self.composite_pipeline.set_params(
+                    &context.queue,
+                    opacity,
+                    blend_mode.to_index(),
+                    [1.0, 1.0],
+                    [0.0, 0.0],
+                );
+                let bind_group = self.composite_pipeline.create_bind_group(
+                    &context.device,
+                    &channel.composite_view,
+                    &self.effect_ping_view,
+                );
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Sub-mix Composite Encoder"),
+                        });
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Sub-mix Composite Pass"),
@@ -367,16 +433,22 @@ impl Mixer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    self.composite_pipeline.render(&mut render_pass, &bind_group);
+                    self.composite_pipeline
+                        .render(&mut render_pass, &bind_group);
                 }
-                context.queue.submit([copy_encoder.finish(), encoder.finish()]);
+                context
+                    .queue
+                    .submit([copy_encoder.finish(), encoder.finish()]);
             }
         }
 
         if is_first {
-            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Sub-mix Clear Encoder"),
-            });
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Sub-mix Clear Encoder"),
+                    });
             {
                 let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Sub-mix Clear Pass"),
@@ -404,8 +476,12 @@ impl Mixer {
         self.sub_mix_cache.get(indices).map(|(_, v)| v)
     }
 
-
-    fn apply_master_effects(&mut self, context: &GpuContext, audio_data: &crate::audio::AudioData, time: f32) -> Result<()> {
+    fn apply_master_effects(
+        &mut self,
+        context: &GpuContext,
+        audio_data: &crate::audio::AudioData,
+        time: f32,
+    ) -> Result<()> {
         if self.master_effects.is_empty() {
             return Ok(());
         }
@@ -433,7 +509,9 @@ impl Mixer {
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
 
         for effect in self.master_effects.iter_mut() {
-            if !effect.enabled { continue; }
+            if !effect.enabled {
+                continue;
+            }
 
             let (input_view, output_view) = if read_from_composite {
                 (&self.composite_view, &self.effect_ping_view)
@@ -441,14 +519,23 @@ impl Mixer {
                 (&self.effect_ping_view, &self.composite_view)
             };
 
-            effect.apply(context, input_view, output_view, &uniforms, &mut cmd_buffers)?;
+            effect.apply(
+                context,
+                input_view,
+                output_view,
+                &uniforms,
+                &mut cmd_buffers,
+            )?;
             read_from_composite = !read_from_composite;
         }
 
         if !read_from_composite {
-            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Master Effect Final Copy Encoder"),
-            });
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Master Effect Final Copy Encoder"),
+                    });
             encoder.copy_texture_to_texture(
                 self.effect_ping_texture.as_image_copy(),
                 self.composite_texture.as_image_copy(),

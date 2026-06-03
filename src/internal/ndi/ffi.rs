@@ -3,7 +3,7 @@
 //! These `#[repr(C)]` structs mirror the NDI SDK headers exactly.
 //! Only the subset used by Varda is declared here.
 
-use std::os::raw::{c_char, c_int, c_float};
+use std::os::raw::{c_char, c_float, c_int};
 
 /// Opaque handle returned by NDIlib_find_create_v2.
 pub type NDIlib_find_instance_t = *mut std::ffi::c_void;

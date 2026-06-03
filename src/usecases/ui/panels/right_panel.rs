@@ -1,16 +1,20 @@
 //! Right side panel.
 
-use super::super::{UIData, UIActions};
-use super::modulation::render_modulation_section;
+use super::super::{UIActions, UIData};
 use super::midi::render_midi_section;
-use super::stage::render_surface_editor;
+use super::modulation::render_modulation_section;
 use super::outputs::render_output_section;
+use super::stage::render_surface_editor;
 
 pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         // Header row: collapse button on left, heading on right (mirror of library panel)
         ui.horizontal(|ui| {
-            if ui.small_button("»").on_hover_text("Collapse panel").clicked() {
+            if ui
+                .small_button("»")
+                .on_hover_text("Collapse panel")
+                .clicked()
+            {
                 actions.toggle_right_panel = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -30,16 +34,19 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
         let preview_size = egui::vec2(preview_width, preview_height);
 
         if let Some(texture_id) = data.main_output_texture {
-            let img_response = ui.add(egui::Image::new(egui::load::SizedTexture::new(texture_id, preview_size))
-                .corner_radius(4.0)
-                .sense(egui::Sense::click()));
+            let img_response = ui.add(
+                egui::Image::new(egui::load::SizedTexture::new(texture_id, preview_size))
+                    .corner_radius(4.0)
+                    .sense(egui::Sense::click()),
+            );
             if img_response.clicked() {
                 actions.select_master = true;
             }
         } else {
             ui.allocate_ui(preview_size, |ui| {
                 let (rect, response) = ui.allocate_exact_size(preview_size, egui::Sense::click());
-                ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 30));
+                ui.painter()
+                    .rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 30));
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -58,8 +65,9 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
             egui::Label::new(
                 egui::RichText::new("Click preview to edit master effects")
                     .small()
-                    .weak()
-            ).sense(egui::Sense::click()),
+                    .weak(),
+            )
+            .sense(egui::Sense::click()),
         );
         if hint_resp.clicked() {
             actions.select_master = true;
@@ -119,13 +127,16 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
             };
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(egui::RichText::new(label).small().color(egui::Color32::from_rgb(180, 180, 255)));
+                ui.label(
+                    egui::RichText::new(label)
+                        .small()
+                        .color(egui::Color32::from_rgb(180, 180, 255)),
+                );
             });
             ui.ctx().request_repaint();
         }
     });
 }
-
 
 #[cfg(test)]
 mod tests {

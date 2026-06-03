@@ -17,9 +17,7 @@ use anyhow::Context as _;
 use midir::{MidiInput, MidiOutput};
 
 pub use auto_map::AutoMapEngine;
-pub use controller_profile::{
-    ControllerProfileData, ProfileRegistry, ControllerLedManager,
-};
+pub use controller_profile::{ControllerLedManager, ControllerProfileData, ProfileRegistry};
 
 /// Stable identifier for a MIDI device within a session.
 pub type DeviceId = u32;
@@ -28,11 +26,26 @@ pub type DeviceId = u32;
 #[derive(Debug, Clone)]
 pub enum MidiMessage {
     /// Control Change: channel, cc number, value (0–127)
-    ControlChange { device_id: DeviceId, channel: u8, cc: u8, value: u8 },
+    ControlChange {
+        device_id: DeviceId,
+        channel: u8,
+        cc: u8,
+        value: u8,
+    },
     /// Note On: channel, note, velocity
-    NoteOn { device_id: DeviceId, channel: u8, note: u8, velocity: u8 },
+    NoteOn {
+        device_id: DeviceId,
+        channel: u8,
+        note: u8,
+        velocity: u8,
+    },
     /// Note Off: channel, note, velocity
-    NoteOff { device_id: DeviceId, channel: u8, note: u8, velocity: u8 },
+    NoteOff {
+        device_id: DeviceId,
+        channel: u8,
+        note: u8,
+        velocity: u8,
+    },
     /// MIDI Clock Tick (0xF8) — 24 per quarter note
     ClockTick { device_id: DeviceId },
     /// MIDI Start (0xFA) — reset to beginning
@@ -64,16 +77,28 @@ impl MidiMessage {
         let channel = status & 0x0F;
         match msg_type {
             0x90 if data.len() >= 3 && data[2] > 0 => Some(MidiMessage::NoteOn {
-                device_id, channel, note: data[1], velocity: data[2],
+                device_id,
+                channel,
+                note: data[1],
+                velocity: data[2],
             }),
             0x90 if data.len() >= 3 => Some(MidiMessage::NoteOff {
-                device_id, channel, note: data[1], velocity: 0,
+                device_id,
+                channel,
+                note: data[1],
+                velocity: 0,
             }),
             0x80 if data.len() >= 3 => Some(MidiMessage::NoteOff {
-                device_id, channel, note: data[1], velocity: data[2],
+                device_id,
+                channel,
+                note: data[1],
+                velocity: data[2],
             }),
             0xB0 if data.len() >= 3 => Some(MidiMessage::ControlChange {
-                device_id, channel, cc: data[1], value: data[2],
+                device_id,
+                channel,
+                cc: data[1],
+                value: data[2],
             }),
             _ => None,
         }
@@ -96,9 +121,24 @@ impl MidiMessage {
     /// Clock messages are not mappable — returns None.
     pub fn mapping_key(&self) -> Option<MidiKey> {
         match self {
-            MidiMessage::ControlChange { device_id, channel, cc, .. } => Some(MidiKey::CC(*device_id, *channel, *cc)),
-            MidiMessage::NoteOn { device_id, channel, note, .. } => Some(MidiKey::Note(*device_id, *channel, *note)),
-            MidiMessage::NoteOff { device_id, channel, note, .. } => Some(MidiKey::Note(*device_id, *channel, *note)),
+            MidiMessage::ControlChange {
+                device_id,
+                channel,
+                cc,
+                ..
+            } => Some(MidiKey::CC(*device_id, *channel, *cc)),
+            MidiMessage::NoteOn {
+                device_id,
+                channel,
+                note,
+                ..
+            } => Some(MidiKey::Note(*device_id, *channel, *note)),
+            MidiMessage::NoteOff {
+                device_id,
+                channel,
+                note,
+                ..
+            } => Some(MidiKey::Note(*device_id, *channel, *note)),
             // Clock messages are not mappable
             MidiMessage::ClockTick { .. }
             | MidiMessage::ClockStart { .. }
@@ -123,7 +163,9 @@ impl MidiMessage {
 
 /// Unique identifier for a MIDI control (for mapping).
 /// Includes device_id so the same CC# on different devices maps independently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 pub enum MidiKey {
     /// CC message: (device_id, channel, cc_number)
     CC(DeviceId, u8, u8),
@@ -169,7 +211,8 @@ pub struct MidiDeviceInfo {
 impl MidiDeviceInfo {
     /// Profile display name for UI.
     pub fn profile_name(&self) -> &str {
-        self.profile.as_ref()
+        self.profile
+            .as_ref()
             .map(|p| p.profile.name.as_str())
             .unwrap_or("Generic")
     }
@@ -249,7 +292,8 @@ impl MidiDeviceManager {
             let midi_out = MidiOutput::new("Varda scan")
                 .map_err(|e| anyhow::anyhow!("Failed to create MidiOutput for scan: {}", e))?;
             let ports = midi_out.ports();
-            ports.iter()
+            ports
+                .iter()
                 .map(|p| midi_out.port_name(p).unwrap_or_default())
                 .collect()
         };
@@ -259,12 +303,17 @@ impl MidiDeviceManager {
             let midi_in = MidiInput::new("Varda scan")
                 .map_err(|e| anyhow::anyhow!("Failed to create MidiInput for scan: {}", e))?;
             let ports = midi_in.ports();
-            ports.iter()
+            ports
+                .iter()
                 .map(|p| midi_in.port_name(p).unwrap_or_default())
                 .collect()
         };
 
-        log::info!("MIDI scan: {} input(s), {} output(s)", input_port_names.len(), output_port_names.len());
+        log::info!(
+            "MIDI scan: {} input(s), {} output(s)",
+            input_port_names.len(),
+            output_port_names.len()
+        );
 
         // Track which output names have been matched to an input
         let mut matched_outputs: Vec<bool> = vec![false; output_port_names.len()];
@@ -278,7 +327,8 @@ impl MidiDeviceManager {
             // Pass 1: exact name match (case-insensitive) — handles simple devices (APC Mini)
             // Pass 2: stem match after stripping directional suffixes — handles multi-port
             //         devices (Tascam Model 12 MIDI In ↔ Tascam Model 12 MIDI Out)
-            let matching_out_idx = output_port_names.iter()
+            let matching_out_idx = output_port_names
+                .iter()
                 .enumerate()
                 .position(|(j, out_name)| {
                     !matched_outputs[j] && out_name.to_lowercase() == in_name.to_lowercase()
@@ -286,7 +336,8 @@ impl MidiDeviceManager {
                 .map(|j| j)
                 .or_else(|| {
                     let in_stem = strip_port_suffix(in_name);
-                    output_port_names.iter()
+                    output_port_names
+                        .iter()
                         .enumerate()
                         .position(|(j, out_name)| {
                             !matched_outputs[j]
@@ -301,19 +352,28 @@ impl MidiDeviceManager {
             }
 
             let profile = self.profile_registry.detect(in_name);
-            let profile_name = profile.as_ref()
+            let profile_name = profile
+                .as_ref()
                 .map(|p| p.profile.name.as_str())
                 .unwrap_or("Generic");
-            log::info!("MIDI device [{}]: {} (profile={}, output={})",
-                device_id, in_name, profile_name, has_output);
+            log::info!(
+                "MIDI device [{}]: {} (profile={}, output={})",
+                device_id,
+                in_name,
+                profile_name,
+                has_output
+            );
 
-            self.devices.insert(device_id, MidiDeviceInfo {
-                id: device_id,
-                name: in_name.clone(),
-                enabled: true,
-                has_output,
-                profile,
-            });
+            self.devices.insert(
+                device_id,
+                MidiDeviceInfo {
+                    id: device_id,
+                    name: in_name.clone(),
+                    enabled: true,
+                    has_output,
+                    profile,
+                },
+            );
 
             // Connect input (fresh MidiInput per port — midir consumes it on connect).
             // Match by port name instead of index since each MidiInput::new() creates a
@@ -324,9 +384,9 @@ impl MidiDeviceManager {
             match MidiInput::new(&port_label) {
                 Ok(midi_in) => {
                     let ports = midi_in.ports();
-                    let target_port = ports.iter().find(|p| {
-                        midi_in.port_name(p).map(|n| n == *in_name).unwrap_or(false)
-                    });
+                    let target_port = ports
+                        .iter()
+                        .find(|p| midi_in.port_name(p).map(|n| n == *in_name).unwrap_or(false));
                     if let Some(port) = target_port {
                         match midi_in.connect(
                             port,
@@ -334,7 +394,12 @@ impl MidiDeviceManager {
                             move |_ts, data, _| {
                                 // Raw byte logging for diagnostics.
                                 // Enable with RUST_LOG=varda::midi=debug
-                                log::debug!("[MIDI-RAW] dev={} len={} bytes: {:02X?}", dev_id, data.len(), data);
+                                log::debug!(
+                                    "[MIDI-RAW] dev={} len={} bytes: {:02X?}",
+                                    dev_id,
+                                    data.len(),
+                                    data
+                                );
                                 if let Some(msg) = MidiMessage::from_bytes(data, dev_id) {
                                     let _ = tx.send(msg);
                                 }
@@ -342,13 +407,20 @@ impl MidiDeviceManager {
                             (),
                         ) {
                             Ok(conn) => {
-                                log::debug!("[MIDI] Connected input: '{}' (dev={})", in_name, device_id);
+                                log::debug!(
+                                    "[MIDI] Connected input: '{}' (dev={})",
+                                    in_name,
+                                    device_id
+                                );
                                 self.input_connections.push(conn);
                             }
                             Err(e) => log::warn!("Failed to connect MIDI input {}: {}", in_name, e),
                         }
                     } else {
-                        log::warn!("MIDI input port '{}' not found during connect (port list changed?)", in_name);
+                        log::warn!(
+                            "MIDI input port '{}' not found during connect (port list changed?)",
+                            in_name
+                        );
                     }
                 }
                 Err(e) => log::warn!("Failed to create MidiInput for {}: {}", in_name, e),
@@ -363,18 +435,27 @@ impl MidiDeviceManager {
             let device_id = self.next_device_id;
             self.next_device_id += 1;
             let profile = self.profile_registry.detect(out_name);
-            let profile_name = profile.as_ref()
+            let profile_name = profile
+                .as_ref()
                 .map(|p| p.profile.name.as_str())
                 .unwrap_or("Generic");
-            log::info!("MIDI output-only device [{}]: {} (profile={})", device_id, out_name, profile_name);
+            log::info!(
+                "MIDI output-only device [{}]: {} (profile={})",
+                device_id,
+                out_name,
+                profile_name
+            );
             self.connect_output(device_id, out_name);
-            self.devices.insert(device_id, MidiDeviceInfo {
-                id: device_id,
-                name: out_name.clone(),
-                enabled: true,
-                has_output: true,
-                profile,
-            });
+            self.devices.insert(
+                device_id,
+                MidiDeviceInfo {
+                    id: device_id,
+                    name: out_name.clone(),
+                    enabled: true,
+                    has_output: true,
+                    profile,
+                },
+            );
         }
 
         Ok(())
@@ -386,7 +467,10 @@ impl MidiDeviceManager {
             Ok(midi_out) => {
                 let ports = midi_out.ports();
                 let port = ports.iter().find(|p| {
-                    midi_out.port_name(p).map(|n| n == port_name).unwrap_or(false)
+                    midi_out
+                        .port_name(p)
+                        .map(|n| n == port_name)
+                        .unwrap_or(false)
                 });
                 if let Some(port) = port {
                     match midi_out.connect(port, &format!("Varda Out {}", device_id)) {
@@ -447,8 +531,12 @@ impl MidiDeviceManager {
     pub fn set_device_enabled(&mut self, id: DeviceId, enabled: bool) {
         if let Some(info) = self.devices.get_mut(&id) {
             info.enabled = enabled;
-            log::info!("MIDI device [{}] {} → {}", id, info.name,
-                if enabled { "enabled" } else { "disabled" });
+            log::info!(
+                "MIDI device [{}] {} → {}",
+                id,
+                info.name,
+                if enabled { "enabled" } else { "disabled" }
+            );
         }
     }
 
@@ -514,7 +602,10 @@ impl MidiMappingStore {
         if !self.learn_mode {
             self.learn_target = None;
         }
-        log::info!("MIDI learn mode: {}", if self.learn_mode { "ON" } else { "OFF" });
+        log::info!(
+            "MIDI learn mode: {}",
+            if self.learn_mode { "ON" } else { "OFF" }
+        );
     }
 
     /// Select a parameter path as the learn target (must be in learn mode).
@@ -558,9 +649,7 @@ impl MidiMappingStore {
 
     /// Get all mappings sorted by device ID for display.
     pub fn sorted_mappings(&self) -> Vec<(MidiKey, String)> {
-        let mut list: Vec<_> = self.mappings.iter()
-            .map(|(k, v)| (*k, v.clone()))
-            .collect();
+        let mut list: Vec<_> = self.mappings.iter().map(|(k, v)| (*k, v.clone())).collect();
         list.sort_by_key(|(k, _)| k.device_id());
         list
     }
@@ -568,32 +657,48 @@ impl MidiMappingStore {
     /// Export mappings to a serializable config using device names instead of IDs.
     /// Filters out any mappings whose key is handled by the auto-map engine so
     /// that `midi.json` only contains user-created manual mappings.
-    pub fn to_config(&self, devices: &HashMap<DeviceId, MidiDeviceInfo>, auto_map: &AutoMapEngine) -> MidiConfig {
-        let mappings = self.mappings.iter()
+    pub fn to_config(
+        &self,
+        devices: &HashMap<DeviceId, MidiDeviceInfo>,
+        auto_map: &AutoMapEngine,
+    ) -> MidiConfig {
+        let mappings = self
+            .mappings
+            .iter()
             .filter(|(key, _)| !auto_map.handles_key(key.device_id(), key))
             .map(|(key, path)| {
-            let device_name = devices.get(&key.device_id())
-                .map(|d| d.name.clone())
-                .unwrap_or_else(|| format!("unknown_{}", key.device_id()));
-            let (msg_type, channel, number) = match key {
-                MidiKey::CC(_, ch, cc) => ("cc".to_string(), *ch, *cc),
-                MidiKey::Note(_, ch, note) => ("note".to_string(), *ch, *note),
-            };
-            MidiMappingEntry {
-                device_name,
-                msg_type,
-                channel,
-                number,
-                param_path: path.clone(),
-            }
-        }).collect();
-        MidiConfig { version: 1, mappings }
+                let device_name = devices
+                    .get(&key.device_id())
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| format!("unknown_{}", key.device_id()));
+                let (msg_type, channel, number) = match key {
+                    MidiKey::CC(_, ch, cc) => ("cc".to_string(), *ch, *cc),
+                    MidiKey::Note(_, ch, note) => ("note".to_string(), *ch, *note),
+                };
+                MidiMappingEntry {
+                    device_name,
+                    msg_type,
+                    channel,
+                    number,
+                    param_path: path.clone(),
+                }
+            })
+            .collect();
+        MidiConfig {
+            version: 1,
+            mappings,
+        }
     }
 
     /// Import mappings from config, resolving device names to current device IDs.
-    pub fn load_from_config(&mut self, config: &MidiConfig, devices: &HashMap<DeviceId, MidiDeviceInfo>) {
+    pub fn load_from_config(
+        &mut self,
+        config: &MidiConfig,
+        devices: &HashMap<DeviceId, MidiDeviceInfo>,
+    ) {
         // Build name -> device_id lookup
-        let name_to_id: HashMap<&str, DeviceId> = devices.iter()
+        let name_to_id: HashMap<&str, DeviceId> = devices
+            .iter()
             .map(|(id, info)| (info.name.as_str(), *id))
             .collect();
 
@@ -601,8 +706,12 @@ impl MidiMappingStore {
             let device_id = match name_to_id.get(entry.device_name.as_str()) {
                 Some(id) => *id,
                 None => {
-                    log::warn!("MIDI mapping references unknown device '{}', skipping: {} -> {}",
-                        entry.device_name, entry.device_name, entry.param_path);
+                    log::warn!(
+                        "MIDI mapping references unknown device '{}', skipping: {} -> {}",
+                        entry.device_name,
+                        entry.device_name,
+                        entry.param_path
+                    );
                     continue;
                 }
             };
@@ -631,7 +740,9 @@ pub struct MidiConfig {
     pub mappings: Vec<MidiMappingEntry>,
 }
 
-fn default_midi_version() -> u32 { 1 }
+fn default_midi_version() -> u32 {
+    1
+}
 
 /// A single MIDI mapping entry (device name + CC/Note -> parameter path).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -657,10 +768,16 @@ impl MidiMappingEntry {
             ));
         }
         if self.channel > 15 {
-            errors.push(format!("{}: channel {} exceeds MIDI range 0-15", prefix, self.channel));
+            errors.push(format!(
+                "{}: channel {} exceeds MIDI range 0-15",
+                prefix, self.channel
+            ));
         }
         if self.number > 127 {
-            errors.push(format!("{}: number {} exceeds MIDI range 0-127", prefix, self.number));
+            errors.push(format!(
+                "{}: number {} exceeds MIDI range 0-127",
+                prefix, self.number
+            ));
         }
         if self.param_path.trim().is_empty() {
             errors.push(format!("{}: param_path is empty", prefix));
@@ -699,13 +816,12 @@ impl MidiConfig {
         for e in &errors {
             log::error!("MIDI config save: {}", e);
         }
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize MIDI config")?;
+        let content =
+            serde_json::to_string_pretty(self).context("Failed to serialize MIDI config")?;
         crate::persistence::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -716,7 +832,12 @@ mod tests {
         let msg = MidiMessage::from_bytes(&[0x90, 60, 100], 42).unwrap();
         assert_eq!(msg.device_id(), 42);
         match msg {
-            MidiMessage::NoteOn { device_id, channel, note, velocity } => {
+            MidiMessage::NoteOn {
+                device_id,
+                channel,
+                note,
+                velocity,
+            } => {
                 assert_eq!(device_id, 42);
                 assert_eq!(channel, 0);
                 assert_eq!(note, 60);
@@ -811,14 +932,26 @@ mod tests {
 
     #[test]
     fn test_strip_port_suffix_midi_in_out() {
-        assert_eq!(strip_port_suffix("Tascam Model 12 MIDI In"), "Tascam Model 12 MIDI");
-        assert_eq!(strip_port_suffix("Tascam Model 12 MIDI Out"), "Tascam Model 12 MIDI");
+        assert_eq!(
+            strip_port_suffix("Tascam Model 12 MIDI In"),
+            "Tascam Model 12 MIDI"
+        );
+        assert_eq!(
+            strip_port_suffix("Tascam Model 12 MIDI Out"),
+            "Tascam Model 12 MIDI"
+        );
     }
 
     #[test]
     fn test_strip_port_suffix_daw_control() {
-        assert_eq!(strip_port_suffix("Tascam Model 12 DAW CONTROL MIDI In"), "Tascam Model 12 DAW CONTROL MIDI");
-        assert_eq!(strip_port_suffix("Tascam Model 12 DAW CONTROL MIDI Out"), "Tascam Model 12 DAW CONTROL MIDI");
+        assert_eq!(
+            strip_port_suffix("Tascam Model 12 DAW CONTROL MIDI In"),
+            "Tascam Model 12 DAW CONTROL MIDI"
+        );
+        assert_eq!(
+            strip_port_suffix("Tascam Model 12 DAW CONTROL MIDI Out"),
+            "Tascam Model 12 DAW CONTROL MIDI"
+        );
     }
 
     #[test]
@@ -875,10 +1008,14 @@ mod tests {
         let entry = MidiMappingEntry {
             device_name: "".into(),
             msg_type: "cc".into(),
-            channel: 0, number: 0,
+            channel: 0,
+            number: 0,
             param_path: "ch/0/opacity".into(),
         };
-        assert!(entry.validate("m[0]").iter().any(|e| e.contains("device_name")));
+        assert!(entry
+            .validate("m[0]")
+            .iter()
+            .any(|e| e.contains("device_name")));
     }
 
     #[test]
@@ -886,10 +1023,14 @@ mod tests {
         let entry = MidiMappingEntry {
             device_name: "dev".into(),
             msg_type: "sysex".into(),
-            channel: 0, number: 0,
+            channel: 0,
+            number: 0,
             param_path: "ch/0/opacity".into(),
         };
-        assert!(entry.validate("m[0]").iter().any(|e| e.contains("msg_type")));
+        assert!(entry
+            .validate("m[0]")
+            .iter()
+            .any(|e| e.contains("msg_type")));
     }
 
     #[test]
@@ -897,7 +1038,8 @@ mod tests {
         let entry = MidiMappingEntry {
             device_name: "dev".into(),
             msg_type: "note".into(),
-            channel: 16, number: 60,
+            channel: 16,
+            number: 60,
             param_path: "ch/0/opacity".into(),
         };
         assert!(entry.validate("m[0]").iter().any(|e| e.contains("channel")));
@@ -908,24 +1050,49 @@ mod tests {
         let entry = MidiMappingEntry {
             device_name: "dev".into(),
             msg_type: "cc".into(),
-            channel: 0, number: 0,
+            channel: 0,
+            number: 0,
             param_path: "".into(),
         };
-        assert!(entry.validate("m[0]").iter().any(|e| e.contains("param_path")));
+        assert!(entry
+            .validate("m[0]")
+            .iter()
+            .any(|e| e.contains("param_path")));
     }
 
     // ── Helper for building an AutoMapEngine with a registered device ──
 
-    fn make_auto_map_engine(device_id: DeviceId, grid_range: [u8; 2], fader_range: [u8; 2]) -> AutoMapEngine {
+    fn make_auto_map_engine(
+        device_id: DeviceId,
+        grid_range: [u8; 2],
+        fader_range: [u8; 2],
+    ) -> AutoMapEngine {
         use crate::midi::controller_profile::*;
         use std::sync::Arc;
 
         let profile = ControllerProfileData {
-            profile: ProfileMeta { name: "test".into(), name_match: "test".into() },
+            profile: ProfileMeta {
+                name: "test".into(),
+                name_match: "test".into(),
+            },
             leds: None,
             controls: vec![
-                ControlDef { name: "pads".into(), control_type: "button".into(), midi_type: "note".into(), channel: 0, range: grid_range, has_led: false },
-                ControlDef { name: "faders".into(), control_type: "fader".into(), midi_type: "cc".into(), channel: 0, range: fader_range, has_led: false },
+                ControlDef {
+                    name: "pads".into(),
+                    control_type: "button".into(),
+                    midi_type: "note".into(),
+                    channel: 0,
+                    range: grid_range,
+                    has_led: false,
+                },
+                ControlDef {
+                    name: "faders".into(),
+                    control_type: "fader".into(),
+                    midi_type: "cc".into(),
+                    channel: 0,
+                    range: fader_range,
+                    has_led: false,
+                },
             ],
             auto_map: Some(AutoMapConfig {
                 strategy: "grid".into(),
@@ -962,17 +1129,29 @@ mod tests {
 
         let mut store = MidiMappingStore::new();
         // Auto-mapped key (grid note within 0–63) — should be filtered
-        store.mappings.insert(MidiKey::Note(dev_id, 0, 10), "ch/0/deck/0/play".into());
+        store
+            .mappings
+            .insert(MidiKey::Note(dev_id, 0, 10), "ch/0/deck/0/play".into());
         // Auto-mapped key (fader CC within 48–55) — should be filtered
-        store.mappings.insert(MidiKey::CC(dev_id, 0, 50), "ch/0/opacity".into());
+        store
+            .mappings
+            .insert(MidiKey::CC(dev_id, 0, 50), "ch/0/opacity".into());
         // Manual mapping (CC outside auto-map range) — should be kept
-        store.mappings.insert(MidiKey::CC(dev_id, 0, 99), "ch/1/opacity".into());
+        store
+            .mappings
+            .insert(MidiKey::CC(dev_id, 0, 99), "ch/1/opacity".into());
 
         let mut devices = HashMap::new();
-        devices.insert(dev_id, MidiDeviceInfo {
-            id: dev_id, name: "TestDev".into(), enabled: true,
-            has_output: false, profile: None,
-        });
+        devices.insert(
+            dev_id,
+            MidiDeviceInfo {
+                id: dev_id,
+                name: "TestDev".into(),
+                enabled: true,
+                has_output: false,
+                profile: None,
+            },
+        );
 
         let config = store.to_config(&devices, &auto_map);
         assert_eq!(config.mappings.len(), 1);
@@ -986,14 +1165,24 @@ mod tests {
         let auto_map = AutoMapEngine::new(); // empty — no devices registered
 
         let mut store = MidiMappingStore::new();
-        store.mappings.insert(MidiKey::Note(dev_id, 0, 10), "ch/0/deck/0/play".into());
-        store.mappings.insert(MidiKey::CC(dev_id, 0, 50), "ch/0/opacity".into());
+        store
+            .mappings
+            .insert(MidiKey::Note(dev_id, 0, 10), "ch/0/deck/0/play".into());
+        store
+            .mappings
+            .insert(MidiKey::CC(dev_id, 0, 50), "ch/0/opacity".into());
 
         let mut devices = HashMap::new();
-        devices.insert(dev_id, MidiDeviceInfo {
-            id: dev_id, name: "TestDev".into(), enabled: true,
-            has_output: false, profile: None,
-        });
+        devices.insert(
+            dev_id,
+            MidiDeviceInfo {
+                id: dev_id,
+                name: "TestDev".into(),
+                enabled: true,
+                has_output: false,
+                profile: None,
+            },
+        );
 
         let config = store.to_config(&devices, &auto_map);
         assert_eq!(config.mappings.len(), 2);

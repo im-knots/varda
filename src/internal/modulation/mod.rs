@@ -2,13 +2,13 @@
 //!
 //! Supports LFOs, envelopes, and audio-reactive modulation sources.
 
-mod sources;
 mod audio;
 mod engine;
+mod sources;
 
-pub use sources::ModulationSource;
 pub use audio::{AudioSourceValues, AudioValues};
 pub use engine::ModulationEngine;
+pub use sources::ModulationSource;
 
 use crate::deck::generate_short_uuid;
 
@@ -42,16 +42,18 @@ pub enum AudioReactMode {
 }
 
 impl Default for AudioReactMode {
-    fn default() -> Self { AudioReactMode::Direct }
+    fn default() -> Self {
+        AudioReactMode::Direct
+    }
 }
 
 /// Audio frequency band presets (convenience for UI quick-select).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum AudioBandPreset {
-    Low,    // 20–250 Hz
-    Mid,    // 250–2000 Hz
-    High,   // 2000–20000 Hz
-    Full,   // 20–20000 Hz (overall level)
+    Low,  // 20–250 Hz
+    Mid,  // 250–2000 Hz
+    High, // 2000–20000 Hz
+    Full, // 20–20000 Hz (overall level)
 }
 
 impl AudioBandPreset {
@@ -125,14 +127,16 @@ pub struct ModulationSourceEntry {
 
 impl ModulationSourceEntry {
     pub fn new(source: ModulationSource) -> Self {
-        Self { uuid: generate_short_uuid(), source }
+        Self {
+            uuid: generate_short_uuid(),
+            source,
+        }
     }
 
     pub fn with_uuid(uuid: String, source: ModulationSource) -> Self {
         Self { uuid, source }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -151,29 +155,41 @@ mod tests {
         for i in 0..100 {
             let t = i as f32 / 100.0;
             let val = lfo.calculate(t, 0.01, &audio, 0.0);
-            assert!(val >= 0.0 && val <= 1.0, "Sine unipolar out of range: {val} at t={t}");
+            assert!(
+                val >= 0.0 && val <= 1.0,
+                "Sine unipolar out of range: {val} at t={t}"
+            );
         }
     }
 
     #[test]
     fn lfo_sine_bipolar_range() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Sine, frequency: 1.0, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Sine,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         for i in 0..100 {
             let t = i as f32 / 100.0;
             let val = lfo.calculate(t, 0.01, &audio, 0.0);
-            assert!(val >= -1.0 && val <= 1.0, "Sine bipolar out of range: {val}");
+            assert!(
+                val >= -1.0 && val <= 1.0,
+                "Sine bipolar out of range: {val}"
+            );
         }
     }
 
     #[test]
     fn lfo_square_values() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Square, frequency: 1.0, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Square,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         let val_first = lfo.calculate(0.1, 0.01, &audio, 0.0);
@@ -185,21 +201,30 @@ mod tests {
     #[test]
     fn lfo_triangle_symmetry() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Triangle, frequency: 1.0, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Triangle,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         let val_start = lfo.calculate(0.0, 0.01, &audio, 0.0);
         let val_mid = lfo.calculate(0.5, 0.01, &audio, 0.0);
-        assert!((val_start - (-1.0)).abs() < 1e-5, "Triangle at 0: {val_start}");
+        assert!(
+            (val_start - (-1.0)).abs() < 1e-5,
+            "Triangle at 0: {val_start}"
+        );
         assert!((val_mid - 1.0).abs() < 1e-5, "Triangle at 0.5: {val_mid}");
     }
 
     #[test]
     fn lfo_sawtooth_ramp() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Sawtooth, frequency: 1.0, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Sawtooth,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         let val_0 = lfo.calculate(0.0, 0.01, &audio, 0.0);
@@ -211,8 +236,11 @@ mod tests {
     #[test]
     fn lfo_amplitude_scales() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Sine, frequency: 1.0, phase: 0.0,
-            amplitude: 0.5, bipolar: true,
+            waveform: LFOWaveform::Sine,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 0.5,
+            bipolar: true,
         };
         let audio = empty_audio();
         for i in 0..100 {
@@ -235,13 +263,19 @@ mod tests {
     #[test]
     fn lfo_random_deterministic() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Random, frequency: 1.0, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Random,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         let val1 = lfo.calculate(0.3, 0.01, &audio, 0.0);
         let val2 = lfo.calculate(0.3, 0.01, &audio, 0.0);
-        assert_eq!(val1, val2, "Random LFO should be deterministic for same time");
+        assert_eq!(
+            val1, val2,
+            "Random LFO should be deterministic for same time"
+        );
     }
 
     // ── ADSR tests ───────────────────────────────────────────────────
@@ -263,7 +297,10 @@ mod tests {
         for _ in 0..20 {
             val = adsr.calculate(0.0, 0.01, &audio, val);
         }
-        assert!(val > 0.4, "ADSR should reach significant level during attack: {val}");
+        assert!(
+            val > 0.4,
+            "ADSR should reach significant level during attack: {val}"
+        );
     }
 
     #[test]
@@ -275,7 +312,10 @@ mod tests {
         for _ in 0..100 {
             val = adsr.calculate(0.0, 0.01, &audio, val);
         }
-        assert!((val - 0.7).abs() < 0.05, "ADSR should hold at sustain level: {val}");
+        assert!(
+            (val - 0.7).abs() < 0.05,
+            "ADSR should hold at sustain level: {val}"
+        );
     }
 
     #[test]
@@ -372,32 +412,51 @@ mod tests {
         let audio = empty_audio();
         let val = seq.calculate(0.5, 0.01, &audio, 0.0);
         assert!(val > 0.0 && val < 1.0, "Smooth interp: {val}");
-        assert!((val - 0.5).abs() < 0.01, "Smoothstep at 0.5 should be 0.5: {val}");
+        assert!(
+            (val - 0.5).abs() < 0.01,
+            "Smoothstep at 0.5 should be 0.5: {val}"
+        );
     }
 
     // ── AudioSourceValues tests ──────────────────────────────────────
 
     #[test]
     fn audio_energy_empty_fft() {
-        let source = AudioSourceValues { fft: vec![], level: 0.0, sample_rate: 48000.0 };
+        let source = AudioSourceValues {
+            fft: vec![],
+            level: 0.0,
+            sample_rate: 48000.0,
+        };
         assert_eq!(source.energy_in_range(20.0, 250.0), 0.0);
     }
 
     #[test]
     fn audio_energy_zero_sample_rate() {
-        let source = AudioSourceValues { fft: vec![0.5; 256], level: 0.5, sample_rate: 0.0 };
+        let source = AudioSourceValues {
+            fft: vec![0.5; 256],
+            level: 0.5,
+            sample_rate: 0.0,
+        };
         assert_eq!(source.energy_in_range(20.0, 250.0), 0.0);
     }
 
     #[test]
     fn audio_energy_silent() {
-        let source = AudioSourceValues { fft: vec![0.0; 256], level: 0.0, sample_rate: 48000.0 };
+        let source = AudioSourceValues {
+            fft: vec![0.0; 256],
+            level: 0.0,
+            sample_rate: 48000.0,
+        };
         assert_eq!(source.energy_in_range(20.0, 250.0), 0.0);
     }
 
     #[test]
     fn audio_energy_loud_signal() {
-        let source = AudioSourceValues { fft: vec![1.0; 256], level: 1.0, sample_rate: 48000.0 };
+        let source = AudioSourceValues {
+            fft: vec![1.0; 256],
+            level: 1.0,
+            sample_rate: 48000.0,
+        };
         let energy = source.energy_in_range(20.0, 20000.0);
         assert!((energy - 1.0).abs() < 0.01, "Full signal energy: {energy}");
     }
@@ -405,8 +464,22 @@ mod tests {
     #[test]
     fn audio_values_primary_returns_lowest_id() {
         let mut av = AudioValues::default();
-        av.sources.insert(5, AudioSourceValues { fft: vec![], level: 0.5, sample_rate: 48000.0 });
-        av.sources.insert(2, AudioSourceValues { fft: vec![], level: 0.8, sample_rate: 48000.0 });
+        av.sources.insert(
+            5,
+            AudioSourceValues {
+                fft: vec![],
+                level: 0.5,
+                sample_rate: 48000.0,
+            },
+        );
+        av.sources.insert(
+            2,
+            AudioSourceValues {
+                fft: vec![],
+                level: 0.8,
+                sample_rate: 48000.0,
+            },
+        );
         let primary = av.primary().unwrap();
         assert!((primary.level - 0.8).abs() < 1e-5);
     }
@@ -562,7 +635,12 @@ mod tests {
     fn audio_band_from_preset_creates_valid_source() {
         let source = ModulationSource::audio_from_preset(AudioBandPreset::Low);
         match source {
-            ModulationSource::AudioBand { freq_low, freq_high, gain, .. } => {
+            ModulationSource::AudioBand {
+                freq_low,
+                freq_high,
+                gain,
+                ..
+            } => {
                 assert_eq!(freq_low, 20.0);
                 assert_eq!(freq_high, 250.0);
                 assert_eq!(gain, 1.0);
@@ -586,8 +664,14 @@ mod tests {
 
     #[test]
     fn parse_mod_target_valid() {
-        assert_eq!(ModulationEngine::parse_mod_target("mod:abc123:frequency"), Some("abc123"));
-        assert_eq!(ModulationEngine::parse_mod_target("mod:def456:phase"), Some("def456"));
+        assert_eq!(
+            ModulationEngine::parse_mod_target("mod:abc123:frequency"),
+            Some("abc123")
+        );
+        assert_eq!(
+            ModulationEngine::parse_mod_target("mod:def456:phase"),
+            Some("def456")
+        );
     }
 
     #[test]
@@ -610,11 +694,14 @@ mod tests {
             noise_gate: 0.5,
         };
         let mut audio = AudioValues::default();
-        audio.sources.insert(0, AudioSourceValues {
-            fft: vec![0.001; 256],
-            level: 0.001,
-            sample_rate: 48000.0,
-        });
+        audio.sources.insert(
+            0,
+            AudioSourceValues {
+                fft: vec![0.001; 256],
+                level: 0.001,
+                sample_rate: 48000.0,
+            },
+        );
         let val = source.calculate(0.0, 0.01, &audio, 0.0);
         assert_eq!(val, 0.0, "Below noise gate should be silent");
     }
@@ -638,12 +725,24 @@ mod tests {
     #[test]
     fn config_eq_adsr_ignores_runtime() {
         let a = ModulationSource::ADSR {
-            attack: 0.1, decay: 0.2, sustain: 0.7, release: 0.3,
-            stage: ADSRStage::Idle, stage_time: 0.0, gate: false, current_level: 0.0,
+            attack: 0.1,
+            decay: 0.2,
+            sustain: 0.7,
+            release: 0.3,
+            stage: ADSRStage::Idle,
+            stage_time: 0.0,
+            gate: false,
+            current_level: 0.0,
         };
         let b = ModulationSource::ADSR {
-            attack: 0.1, decay: 0.2, sustain: 0.7, release: 0.3,
-            stage: ADSRStage::Attack, stage_time: 1.5, gate: true, current_level: 0.8,
+            attack: 0.1,
+            decay: 0.2,
+            sustain: 0.7,
+            release: 0.3,
+            stage: ADSRStage::Attack,
+            stage_time: 1.5,
+            gate: true,
+            current_level: 0.8,
         };
         assert!(a.config_eq(&b));
     }
@@ -673,7 +772,8 @@ mod tests {
     #[test]
     fn add_source_with_uuid_preserves_uuid() {
         let mut engine = ModulationEngine::new();
-        let uuid = engine.add_source_with_uuid("custom01".to_string(), ModulationSource::sine_lfo(2.0));
+        let uuid =
+            engine.add_source_with_uuid("custom01".to_string(), ModulationSource::sine_lfo(2.0));
         assert_eq!(uuid, "custom01");
         assert!(engine.has_source("custom01"));
     }
@@ -726,9 +826,18 @@ mod tests {
         // A modulates B → A must be evaluated before B
         engine.assign_mod_on_mod(&b, "frequency", &a, 0.5);
         let order = engine.evaluation_order();
-        let a_pos = order.iter().position(|&i| i == engine.sources.iter().position(|e| e.uuid == a).unwrap()).unwrap();
-        let b_pos = order.iter().position(|&i| i == engine.sources.iter().position(|e| e.uuid == b).unwrap()).unwrap();
-        assert!(a_pos < b_pos, "dependency A should be evaluated before target B");
+        let a_pos = order
+            .iter()
+            .position(|&i| i == engine.sources.iter().position(|e| e.uuid == a).unwrap())
+            .unwrap();
+        let b_pos = order
+            .iter()
+            .position(|&i| i == engine.sources.iter().position(|e| e.uuid == b).unwrap())
+            .unwrap();
+        assert!(
+            a_pos < b_pos,
+            "dependency A should be evaluated before target B"
+        );
     }
 
     #[test]
@@ -783,7 +892,10 @@ mod tests {
         assert!(!engine.has_source(&a));
         // The mod-on-mod key "mod:{a}:frequency" should have been purged
         for key in engine.assignments_iter().map(|(k, _)| k) {
-            assert!(!key.contains(&a), "stale mod-on-mod key found after target removal");
+            assert!(
+                !key.contains(&a),
+                "stale mod-on-mod key found after target removal"
+            );
         }
     }
 
@@ -800,8 +912,11 @@ mod tests {
     #[test]
     fn chaos_lfo_zero_frequency_does_not_nan() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Sine, frequency: 0.0, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Sine,
+            frequency: 0.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         for i in 0..100 {
@@ -813,8 +928,11 @@ mod tests {
     #[test]
     fn chaos_lfo_infinity_frequency_does_not_panic() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Sine, frequency: f32::INFINITY, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Sine,
+            frequency: f32::INFINITY,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
@@ -825,8 +943,11 @@ mod tests {
     #[test]
     fn chaos_lfo_nan_frequency_does_not_panic() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Sine, frequency: f32::NAN, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Sine,
+            frequency: f32::NAN,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
@@ -836,8 +957,11 @@ mod tests {
     #[test]
     fn chaos_lfo_nan_amplitude_does_not_panic() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Triangle, frequency: 1.0, phase: 0.0,
-            amplitude: f32::NAN, bipolar: false,
+            waveform: LFOWaveform::Triangle,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: f32::NAN,
+            bipolar: false,
         };
         let audio = empty_audio();
         let val = lfo.calculate(0.5, 0.01, &audio, 0.0);
@@ -847,22 +971,36 @@ mod tests {
     #[test]
     fn chaos_lfo_negative_frequency_does_not_panic() {
         let mut lfo = ModulationSource::LFO {
-            waveform: LFOWaveform::Sawtooth, frequency: -10.0, phase: 0.0,
-            amplitude: 1.0, bipolar: true,
+            waveform: LFOWaveform::Sawtooth,
+            frequency: -10.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
         };
         let audio = empty_audio();
         let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
-        assert!(val.is_finite(), "negative freq should produce finite: {val}");
+        assert!(
+            val.is_finite(),
+            "negative freq should produce finite: {val}"
+        );
     }
 
     #[test]
     fn chaos_lfo_all_waveforms_at_extreme_time() {
         let audio = empty_audio();
-        for waveform in [LFOWaveform::Sine, LFOWaveform::Square, LFOWaveform::Triangle,
-                         LFOWaveform::Sawtooth, LFOWaveform::Random] {
+        for waveform in [
+            LFOWaveform::Sine,
+            LFOWaveform::Square,
+            LFOWaveform::Triangle,
+            LFOWaveform::Sawtooth,
+            LFOWaveform::Random,
+        ] {
             let mut lfo = ModulationSource::LFO {
-                waveform, frequency: 1e6, phase: 0.0,
-                amplitude: 1.0, bipolar: true,
+                waveform,
+                frequency: 1e6,
+                phase: 0.0,
+                amplitude: 1.0,
+                bipolar: true,
             };
             let val = lfo.calculate(1e10, 0.01, &audio, 0.0);
             let _ = val; // must not panic
@@ -960,8 +1098,14 @@ mod tests {
     #[test]
     fn chaos_adsr_nan_attack_does_not_panic() {
         let mut adsr = ModulationSource::ADSR {
-            attack: f32::NAN, decay: 0.1, sustain: 0.5, release: 0.1,
-            stage: ADSRStage::Idle, stage_time: 0.0, gate: false, current_level: 0.0,
+            attack: f32::NAN,
+            decay: 0.1,
+            sustain: 0.5,
+            release: 0.1,
+            stage: ADSRStage::Idle,
+            stage_time: 0.0,
+            gate: false,
+            current_level: 0.0,
         };
         adsr.gate_on();
         let audio = empty_audio();
@@ -990,7 +1134,9 @@ mod tests {
         adsr.gate_on();
         let audio = empty_audio();
         let mut val = 0.0;
-        for _ in 0..50 { val = adsr.calculate(0.0, 0.016, &audio, val); }
+        for _ in 0..50 {
+            val = adsr.calculate(0.0, 0.016, &audio, val);
+        }
         adsr.gate_off();
         for _ in 0..50 {
             val = adsr.calculate(0.0, 0.016, &audio, val);
@@ -1005,10 +1151,17 @@ mod tests {
         let audio = empty_audio();
         let mut val = 0.0;
         for i in 0..100 {
-            if i % 3 == 0 { adsr.gate_on(); }
-            if i % 5 == 0 { adsr.gate_off(); }
+            if i % 3 == 0 {
+                adsr.gate_on();
+            }
+            if i % 5 == 0 {
+                adsr.gate_off();
+            }
             val = adsr.calculate(0.0, 0.001, &audio, val);
-            assert!(val.is_finite(), "rapid gate toggle produced non-finite at step {i}: {val}");
+            assert!(
+                val.is_finite(),
+                "rapid gate toggle produced non-finite at step {i}: {val}"
+            );
         }
     }
 }

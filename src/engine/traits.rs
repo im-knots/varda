@@ -6,8 +6,8 @@
 //! Traits MUST NOT expose wgpu, egui, or internal implementation types.
 //! Parameters use primitives, strings, and engine-defined value types.
 
-use anyhow::Result;
 use super::types::*;
+use anyhow::Result;
 
 // ── Mixer ───────────────────────────────────────────────────────────
 
@@ -65,7 +65,11 @@ pub trait AudioQueries {
 /// Commands for controlling the modulation engine.
 pub trait ModulationCommands {
     fn add_lfo(&mut self, waveform: LFOWaveform, frequency: f32) -> String;
-    fn add_audio_band(&mut self, preset: AudioBandPreset, source_id: Option<AudioSourceId>) -> String;
+    fn add_audio_band(
+        &mut self,
+        preset: AudioBandPreset,
+        source_id: Option<AudioSourceId>,
+    ) -> String;
     fn add_adsr(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) -> String;
     fn add_step_sequencer(&mut self, num_steps: usize, rate: f32) -> String;
     fn remove_modulation_source(&mut self, uuid: &str);
@@ -97,8 +101,21 @@ pub trait OutputQueries {
 /// Commands for controlling surfaces.
 pub trait SurfaceCommands {
     fn add_surface(&mut self, name: &str, source: OutputSource) -> String;
-    fn add_polygon_surface(&mut self, name: &str, vertices: &[[f32; 2]], source: OutputSource) -> String;
-    fn add_circle_surface(&mut self, name: &str, center: [f32; 2], radius: f32, sides: u32, aspect_ratio: f32, source: OutputSource) -> String;
+    fn add_polygon_surface(
+        &mut self,
+        name: &str,
+        vertices: &[[f32; 2]],
+        source: OutputSource,
+    ) -> String;
+    fn add_circle_surface(
+        &mut self,
+        name: &str,
+        center: [f32; 2],
+        radius: f32,
+        sides: u32,
+        aspect_ratio: f32,
+        source: OutputSource,
+    ) -> String;
     fn remove_surface(&mut self, uuid: &str);
     fn set_surface_source(&mut self, uuid: &str, source: OutputSource);
     fn set_surface_output_type(&mut self, uuid: &str, output_type: SurfaceOutputType);
@@ -111,15 +128,32 @@ pub trait SurfaceCommands {
 /// Commands for surface auto-detection and import.
 pub trait DetectCommands {
     /// Detect contours from raster image bytes.
-    fn detect_from_image(&self, image_data: &[u8], params: &crate::surface::detect::DetectionParams) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    fn detect_from_image(
+        &self,
+        image_data: &[u8],
+        params: &crate::surface::detect::DetectionParams,
+    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
     /// Detect contours from SVG data.
-    fn detect_from_svg(&self, svg_data: &[u8]) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    fn detect_from_svg(
+        &self,
+        svg_data: &[u8],
+    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
     /// Detect contours from DXF data.
-    fn detect_from_dxf(&self, dxf_data: &[u8]) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    fn detect_from_dxf(
+        &self,
+        dxf_data: &[u8],
+    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
     /// Detect contours from a camera snapshot (RGBA frame data).
-    fn detect_from_camera(&mut self, camera_id: CameraId, params: &crate::surface::detect::DetectionParams) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    fn detect_from_camera(
+        &mut self,
+        camera_id: CameraId,
+        params: &crate::surface::detect::DetectionParams,
+    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
     /// Create surfaces from confirmed detected contours.
-    fn confirm_detected_contours(&mut self, contours: &[crate::surface::detect::DetectedContour]) -> Vec<String>;
+    fn confirm_detected_contours(
+        &mut self,
+        contours: &[crate::surface::detect::DetectedContour],
+    ) -> Vec<String>;
 }
 
 /// Read-only queries for surface state.

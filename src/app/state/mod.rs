@@ -12,11 +12,11 @@
 //! - `surfaces` — surface command state mutations
 //! - `io` — external I/O deck creation and stream library mutations
 
-mod video;
-mod params;
-mod modulation;
 mod decks;
+mod io;
+mod modulation;
 mod outputs;
+mod params;
 mod sequences;
 mod surfaces;
-mod io;
+mod video;

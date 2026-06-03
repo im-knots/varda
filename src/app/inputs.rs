@@ -16,16 +16,31 @@ impl VardaApp {
         for event in &shader_events {
             match event {
                 crate::registry::ShaderEvent::Changed(path) => {
-                    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
-                    self.session.notifications.info(format!("Shader reloaded: {}", name));
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown");
+                    self.session
+                        .notifications
+                        .info(format!("Shader reloaded: {}", name));
                 }
                 crate::registry::ShaderEvent::Removed(path) => {
-                    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
-                    self.session.notifications.warn(format!("Shader removed: {}", name));
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown");
+                    self.session
+                        .notifications
+                        .warn(format!("Shader removed: {}", name));
                 }
                 crate::registry::ShaderEvent::Error(path, err) => {
-                    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
-                    self.session.notifications.error(format!("Shader error in {}: {}", name, err));
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown");
+                    self.session
+                        .notifications
+                        .error(format!("Shader error in {}: {}", name, err));
                 }
             }
         }
@@ -34,18 +49,22 @@ impl VardaApp {
         self.audio_manager.poll();
 
         // Update audio textures (using primary source)
-        self.audio_textures.update(&self.context.queue, self.audio_manager.get_primary_data());
+        self.audio_textures
+            .update(&self.context.queue, self.audio_manager.get_primary_data());
 
         // Pre-update modulation with fresh audio so snapshots read current values
         {
             let mut av = crate::modulation::AudioValues::default();
             for id in self.audio_manager.active_source_ids() {
                 if let Some(data) = self.audio_manager.get_data(id) {
-                    av.sources.insert(id, crate::modulation::AudioSourceValues {
-                        fft: data.fft.clone(),
-                        level: data.level,
-                        sample_rate: data.sample_rate,
-                    });
+                    av.sources.insert(
+                        id,
+                        crate::modulation::AudioSourceValues {
+                            fft: data.fft.clone(),
+                            level: data.level,
+                            sample_rate: data.sample_rate,
+                        },
+                    );
                 }
             }
             self.mixer.update_modulation(&av);
@@ -61,9 +80,15 @@ impl VardaApp {
                                 "action/undo" => self.midi_pending_undo = true,
                                 "action/redo" => self.midi_pending_redo = true,
                                 "action/save" => self.midi_pending_save = true,
-                                _ => { log::debug!("Unknown OSC action: {}", path); }
+                                _ => {
+                                    log::debug!("Unknown OSC action: {}", path);
+                                }
                             }
-                        } else if crate::param_router::apply_param_by_path(&mut self.mixer, path, value) {
+                        } else if crate::param_router::apply_param_by_path(
+                            &mut self.mixer,
+                            path,
+                            value,
+                        ) {
                             changed_params.push((path.clone(), value));
                         }
                     }
@@ -86,9 +111,13 @@ impl VardaApp {
                 // Forward clock messages to ClockManager
                 match &msg {
                     crate::midi::MidiMessage::ClockTick { device_id } => {
-                        let dev_name = midi.device(*device_id)
-                            .map(|d| d.name.as_str()).unwrap_or("Unknown");
-                        self.input.clock_manager.process_midi_tick(*device_id, dev_name);
+                        let dev_name = midi
+                            .device(*device_id)
+                            .map(|d| d.name.as_str())
+                            .unwrap_or("Unknown");
+                        self.input
+                            .clock_manager
+                            .process_midi_tick(*device_id, dev_name);
                         continue;
                     }
                     crate::midi::MidiMessage::ClockStart { .. } => {
@@ -112,20 +141,57 @@ impl VardaApp {
                 };
 
                 // Auto-map: intercept keys owned by auto-mapping before normal lookup
-                if self.input.auto_map_engine.handles_key(msg.device_id(), &key) {
+                if self
+                    .input
+                    .auto_map_engine
+                    .handles_key(msg.device_id(), &key)
+                {
                     match &msg {
-                        crate::midi::MidiMessage::NoteOn { device_id, note, velocity, channel, .. } => {
+                        crate::midi::MidiMessage::NoteOn {
+                            device_id,
+                            note,
+                            velocity,
+                            channel,
+                            ..
+                        } => {
                             if *velocity > 0 {
-                                self.input.auto_map_engine.process_note_on(*device_id, *note, *channel);
+                                self.input
+                                    .auto_map_engine
+                                    .process_note_on(*device_id, *note, *channel);
                             } else {
-                                self.input.auto_map_engine.process_note_off(*device_id, *note, *channel, &mut self.mixer);
+                                self.input.auto_map_engine.process_note_off(
+                                    *device_id,
+                                    *note,
+                                    *channel,
+                                    &mut self.mixer,
+                                );
                             }
                         }
-                        crate::midi::MidiMessage::NoteOff { device_id, note, channel, .. } => {
-                            self.input.auto_map_engine.process_note_off(*device_id, *note, *channel, &mut self.mixer);
+                        crate::midi::MidiMessage::NoteOff {
+                            device_id,
+                            note,
+                            channel,
+                            ..
+                        } => {
+                            self.input.auto_map_engine.process_note_off(
+                                *device_id,
+                                *note,
+                                *channel,
+                                &mut self.mixer,
+                            );
                         }
-                        crate::midi::MidiMessage::ControlChange { device_id, cc, value, .. } => {
-                            self.input.auto_map_engine.process_cc(*device_id, *cc, *value, &mut self.mixer);
+                        crate::midi::MidiMessage::ControlChange {
+                            device_id,
+                            cc,
+                            value,
+                            ..
+                        } => {
+                            self.input.auto_map_engine.process_cc(
+                                *device_id,
+                                *cc,
+                                *value,
+                                &mut self.mixer,
+                            );
                         }
                         _ => {}
                     }
@@ -144,8 +210,13 @@ impl VardaApp {
                     if path == "clock/bpm" {
                         // Map normalized 0.0–1.0 → 20–300 BPM range
                         let bpm = 20.0 + value * 280.0;
-                        if !matches!(self.input.clock_manager.preference(), crate::clock::ClockPreference::ForceManual { .. }) {
-                            self.input.clock_manager.set_preference(crate::clock::ClockPreference::ForceManual { bpm });
+                        if !matches!(
+                            self.input.clock_manager.preference(),
+                            crate::clock::ClockPreference::ForceManual { .. }
+                        ) {
+                            self.input
+                                .clock_manager
+                                .set_preference(crate::clock::ClockPreference::ForceManual { bpm });
                         } else {
                             self.input.clock_manager.set_manual_bpm(bpm);
                         }
@@ -155,7 +226,9 @@ impl VardaApp {
                             "action/undo" => self.midi_pending_undo = true,
                             "action/redo" => self.midi_pending_redo = true,
                             "action/save" => self.midi_pending_save = true,
-                            _ => { log::debug!("Unknown action path: {}", path); }
+                            _ => {
+                                log::debug!("Unknown action path: {}", path);
+                            }
                         }
                     } else {
                         if crate::param_router::apply_param_by_path(&mut self.mixer, &path, value) {
@@ -171,7 +244,9 @@ impl VardaApp {
         // Feed audio BPM to ClockManager
         {
             let primary = self.audio_manager.get_primary_data();
-            self.input.clock_manager.update_audio(primary.bpm, primary.beat_phase());
+            self.input
+                .clock_manager
+                .update_audio(primary.bpm, primary.beat_phase());
         }
 
         // Resolve clock priority

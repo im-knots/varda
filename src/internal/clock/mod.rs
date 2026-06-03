@@ -26,7 +26,10 @@ pub enum ClockSource {
     /// BPM derived from audio beat detection (lowest priority).
     Audio,
     /// BPM derived from MIDI clock ticks (highest priority).
-    MidiClock { device_id: DeviceId, device_name: String },
+    MidiClock {
+        device_id: DeviceId,
+        device_name: String,
+    },
     /// BPM received via OSC messages.
     OscClock,
     /// BPM set manually by the user.
@@ -78,7 +81,12 @@ pub struct ClockState {
 
 impl Default for ClockState {
     fn default() -> Self {
-        Self { bpm: 120.0, beat_phase: 0.0, source: ClockSource::Audio, active: false }
+        Self {
+            bpm: 120.0,
+            beat_phase: 0.0,
+            source: ClockSource::Audio,
+            active: false,
+        }
     }
 }
 
@@ -155,7 +163,10 @@ impl ClockManager {
     /// Update the manual BPM value (clamped 20–300). Only effective in ForceManual mode.
     pub fn set_manual_bpm(&mut self, bpm: f32) {
         let bpm = bpm.clamp(20.0, 300.0);
-        if let ClockPreference::ForceManual { bpm: ref mut stored } = self.preference {
+        if let ClockPreference::ForceManual {
+            bpm: ref mut stored,
+        } = self.preference
+        {
             *stored = bpm;
         }
     }
@@ -173,15 +184,18 @@ impl ClockManager {
     /// Process a MIDI clock tick (0xF8). Called 24 times per quarter note.
     pub fn process_midi_tick(&mut self, device_id: DeviceId, device_name: &str) {
         let now = Instant::now();
-        let dev = self.midi_devices.entry(device_id).or_insert_with(|| MidiDeviceClock {
-            ticks: VecDeque::with_capacity(MIDI_PPQ + 1),
-            bpm: None,
-            running: false,
-            device_name: device_name.to_string(),
-            beat_phase: 0.0,
-            last_tick: now,
-            smoothed_bpm: None,
-        });
+        let dev = self
+            .midi_devices
+            .entry(device_id)
+            .or_insert_with(|| MidiDeviceClock {
+                ticks: VecDeque::with_capacity(MIDI_PPQ + 1),
+                bpm: None,
+                running: false,
+                device_name: device_name.to_string(),
+                beat_phase: 0.0,
+                last_tick: now,
+                smoothed_bpm: None,
+            });
 
         dev.device_name = device_name.to_string();
         dev.last_tick = now;
@@ -261,7 +275,8 @@ impl ClockManager {
     /// Get all MIDI devices currently detected as sending clock ticks (not stale).
     pub fn detected_midi_sources(&self) -> Vec<DetectedClockSource> {
         let now = Instant::now();
-        self.midi_devices.iter()
+        self.midi_devices
+            .iter()
             .filter(|(_, dev)| now.duration_since(dev.last_tick).as_secs_f32() < STALE_TIMEOUT_SECS)
             .map(|(&id, dev)| DetectedClockSource {
                 device_id: id,
@@ -281,7 +296,11 @@ impl ClockManager {
 
     /// Get the current OSC BPM (if active).
     pub fn osc_bpm(&self) -> Option<f32> {
-        if self.osc_active() { self.osc_bpm } else { None }
+        if self.osc_active() {
+            self.osc_bpm
+        } else {
+            None
+        }
     }
 
     // ── Resolution ──────────────────────────────────────────────
@@ -309,14 +328,18 @@ impl ClockManager {
                 return;
             }
             ClockPreference::ForceOsc => {
-                if self.resolve_osc(now) { return; }
+                if self.resolve_osc(now) {
+                    return;
+                }
                 // OSC not available, fall back to audio
                 self.resolve_audio();
                 return;
             }
             ClockPreference::ForceMidi { device_id } => {
                 let dev_id = *device_id;
-                if self.resolve_midi_device(now, dev_id) { return; }
+                if self.resolve_midi_device(now, dev_id) {
+                    return;
+                }
                 // Forced device not available, fall back to audio
                 self.resolve_audio();
                 return;
@@ -327,7 +350,9 @@ impl ClockManager {
                 // Select any device with fresh ticks and a valid BPM.
                 // Don't require `running` — many devices (e.g. Tascam Model 12)
                 // free-run clock ticks without sending MIDI Start (0xFA).
-                let best_midi = self.midi_devices.iter()
+                let best_midi = self
+                    .midi_devices
+                    .iter()
                     .filter(|(_, dev)| {
                         now.duration_since(dev.last_tick).as_secs_f32() < STALE_TIMEOUT_SECS
                             && dev.bpm.is_some()
@@ -336,10 +361,14 @@ impl ClockManager {
                     .next();
 
                 if let Some(dev_id) = best_midi {
-                    if self.resolve_midi_device(now, dev_id) { return; }
+                    if self.resolve_midi_device(now, dev_id) {
+                        return;
+                    }
                 }
 
-                if self.resolve_osc(now) { return; }
+                if self.resolve_osc(now) {
+                    return;
+                }
                 self.resolve_audio();
             }
         }
@@ -444,15 +473,18 @@ mod tests {
         // Simulate 25 ticks at 120 BPM (0.5s per quarter note, ~20.83ms per tick)
         let tick_interval = Duration::from_secs_f64(0.5 / 24.0);
         let base = Instant::now();
-        let dev = mgr.midi_devices.entry(0).or_insert_with(|| MidiDeviceClock {
-            ticks: VecDeque::with_capacity(MIDI_PPQ + 1),
-            bpm: None,
-            running: true,
-            device_name: "Test".to_string(),
-            beat_phase: 0.0,
-            last_tick: base,
-            smoothed_bpm: None,
-        });
+        let dev = mgr
+            .midi_devices
+            .entry(0)
+            .or_insert_with(|| MidiDeviceClock {
+                ticks: VecDeque::with_capacity(MIDI_PPQ + 1),
+                bpm: None,
+                running: true,
+                device_name: "Test".to_string(),
+                beat_phase: 0.0,
+                last_tick: base,
+                smoothed_bpm: None,
+            });
         for i in 0..=MIDI_PPQ {
             let tick_time = base + tick_interval * i as u32;
             dev.ticks.push_back(tick_time);
@@ -577,7 +609,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         mgr.update();
         assert!(mgr.state().active);
-        assert!(mgr.state().beat_phase > 0.0, "beat phase should advance over time");
+        assert!(
+            mgr.state().beat_phase > 0.0,
+            "beat phase should advance over time"
+        );
         assert!(mgr.state().beat_phase < 1.0, "beat phase should be in 0..1");
     }
 
@@ -635,6 +670,9 @@ mod tests {
         mgr.update();
         let phase2 = mgr.state().beat_phase;
         // phase2 should be very close to 0 since we just re-entered
-        assert!(phase2 < phase1, "phase should reset when re-entering manual mode");
+        assert!(
+            phase2 < phase1,
+            "phase should reset when re-entering manual mode"
+        );
     }
 }

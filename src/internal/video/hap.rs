@@ -4,9 +4,9 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 extern crate ffmpeg_next as ffmpeg;
+use super::{HapTextureFormat, LoopMode, PlaybackState};
 use ffmpeg::format::input;
 use ffmpeg::media::Type;
-use super::{HapTextureFormat, PlaybackState, LoopMode};
 
 const COMPRESSOR_NONE: u8 = 0xA0;
 const COMPRESSOR_SNAPPY: u8 = 0xB0;
@@ -23,17 +23,35 @@ const CHUNK_OFFSET_TABLE: u8 = 0x04;
 const CHUNK_UNCOMPRESSED: u8 = 0x0A;
 const CHUNK_SNAPPY_ID: u8 = 0x0B;
 
-struct SectionHeader { section_type: u8, data_length: usize, header_size: usize }
+struct SectionHeader {
+    section_type: u8,
+    data_length: usize,
+    header_size: usize,
+}
 
 fn parse_header(data: &[u8]) -> Result<SectionHeader> {
-    if data.len() < 4 { bail!("HAP header too short"); }
+    if data.len() < 4 {
+        bail!("HAP header too short");
+    }
     let (data_length, header_size) = if data[0] == 0 && data[1] == 0 && data[2] == 0 {
-        if data.len() < 8 { bail!("HAP 8-byte header incomplete"); }
-        (u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize, 8)
+        if data.len() < 8 {
+            bail!("HAP 8-byte header incomplete");
+        }
+        (
+            u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize,
+            8,
+        )
     } else {
-        (data[0] as usize | ((data[1] as usize) << 8) | ((data[2] as usize) << 16), 4)
+        (
+            data[0] as usize | ((data[1] as usize) << 8) | ((data[2] as usize) << 16),
+            4,
+        )
     };
-    Ok(SectionHeader { section_type: data[3], data_length, header_size })
+    Ok(SectionHeader {
+        section_type: data[3],
+        data_length,
+        header_size,
+    })
 }
 
 /// BC4/RGTC1 nibble (alpha-only, used in Hap Q Alpha's alpha plane)
@@ -53,16 +71,25 @@ fn tex_fmt(t: u8) -> Result<HapTextureFormat> {
 fn snappy_decompress(src: &[u8], out: &mut Vec<u8>) -> Result<()> {
     let len = snap::raw::decompress_len(src).context("Snappy len")?;
     out.resize(len, 0);
-    snap::raw::Decoder::new().decompress(src, out).context("Snappy decompress")?;
+    snap::raw::Decoder::new()
+        .decompress(src, out)
+        .context("Snappy decompress")?;
     Ok(())
 }
 
 fn decode_section(typ: u8, data: &[u8], out: &mut Vec<u8>) -> Result<HapTextureFormat> {
     let fmt = tex_fmt(typ)?;
     match typ & 0xF0 {
-        COMPRESSOR_NONE => { out.clear(); out.extend_from_slice(data); }
-        COMPRESSOR_SNAPPY => { snappy_decompress(data, out)?; }
-        COMPRESSOR_COMPLEX => { decode_chunked(data, out)?; }
+        COMPRESSOR_NONE => {
+            out.clear();
+            out.extend_from_slice(data);
+        }
+        COMPRESSOR_SNAPPY => {
+            snappy_decompress(data, out)?;
+        }
+        COMPRESSOR_COMPLEX => {
+            decode_chunked(data, out)?;
+        }
         c => bail!("Unknown HAP compressor: 0x{:02X}", c),
     }
     Ok(fmt)
@@ -89,14 +116,17 @@ fn decode_chunked(data: &[u8], output: &mut Vec<u8>) -> Result<()> {
         p += s.header_size + s.data_length;
     }
     let n = ct.len();
-    if st.len() < n * 4 { bail!("Chunk size table too short"); }
+    if st.len() < n * 4 {
+        bail!("Chunk size table too short");
+    }
     output.clear();
     let mut ao: usize = 0;
     let mut tmp = Vec::new();
     for i in 0..n {
-        let sz = u32::from_le_bytes([st[i*4], st[i*4+1], st[i*4+2], st[i*4+3]]) as usize;
+        let sz =
+            u32::from_le_bytes([st[i * 4], st[i * 4 + 1], st[i * 4 + 2], st[i * 4 + 3]]) as usize;
         let off = ot.map_or(ao, |o| {
-            u32::from_le_bytes([o[i*4], o[i*4+1], o[i*4+2], o[i*4+3]]) as usize
+            u32::from_le_bytes([o[i * 4], o[i * 4 + 1], o[i * 4 + 2], o[i * 4 + 3]]) as usize
         });
         let chunk = &fdata[off..off + sz];
         match ct[i] {
@@ -142,7 +172,8 @@ pub fn decode_hap_frame(
 
         while pos < section_data.len() {
             let sub = parse_header(&section_data[pos..])?;
-            let sub_data = &section_data[pos + sub.header_size..pos + sub.header_size + sub.data_length];
+            let sub_data =
+                &section_data[pos + sub.header_size..pos + sub.header_size + sub.data_length];
             let fmt = tex_fmt(sub.section_type)?;
 
             match fmt {
@@ -160,7 +191,10 @@ pub fn decode_hap_frame(
 
         let cf = color_fmt.context("HAP multi-image missing color plane")?;
         let af = alpha_fmt.unwrap_or(HapTextureFormat::Bc4);
-        Ok(HapFrame::DualPlane { color_format: cf, alpha_format: af })
+        Ok(HapFrame::DualPlane {
+            color_format: cf,
+            alpha_format: af,
+        })
     } else {
         let fmt = decode_section(h.section_type, section_data, out)?;
         Ok(HapFrame::Single { format: fmt })
@@ -208,7 +242,10 @@ impl HapPlayer {
     pub fn new<P: AsRef<Path>>(path: P, initial_format: HapTextureFormat) -> Result<Self> {
         ffmpeg::init().context("Failed to initialize FFmpeg")?;
         let ictx = input(&path).context("Failed to open HAP video")?;
-        let video_stream = ictx.streams().best(Type::Video).context("No video stream")?;
+        let video_stream = ictx
+            .streams()
+            .best(Type::Video)
+            .context("No video stream")?;
         let video_stream_index = video_stream.index();
         let params = video_stream.parameters();
         let codec_ctx = ffmpeg::codec::context::Context::from_parameters(params)?;
@@ -219,12 +256,24 @@ impl HapPlayer {
         let fps = rate.0 as f64 / rate.1 as f64;
         let duration = if ictx.duration() > 0 {
             ictx.duration() as f64 / ffmpeg::ffi::AV_TIME_BASE as f64
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         let color_buf = initial_format.frame_byte_size(width, height);
         let alpha_buf = HapTextureFormat::Bc4.frame_byte_size(width, height);
-        log::info!("HAP video: {}x{} @ {:.2}fps, {:.2}s, {:?}", width, height, fps, duration, initial_format);
+        log::info!(
+            "HAP video: {}x{} @ {:.2}fps, {:.2}s, {:?}",
+            width,
+            height,
+            fps,
+            duration,
+            initial_format
+        );
         Ok(Self {
-            ictx, video_stream_index, width, height,
+            ictx,
+            video_stream_index,
+            width,
+            height,
             texture_format: initial_format,
             is_dual_plane: false,
             playback: PlaybackState::new(duration, fps),
@@ -260,7 +309,11 @@ impl HapPlayer {
                         if let Some(data) = packet.data() {
                             decoded_count += 1;
                             if decoded_count >= target_frames {
-                                let frame = decode_hap_frame(data, &mut self.frame_data, &mut self.alpha_data)?;
+                                let frame = decode_hap_frame(
+                                    data,
+                                    &mut self.frame_data,
+                                    &mut self.alpha_data,
+                                )?;
                                 match frame {
                                     HapFrame::Single { format } => {
                                         self.texture_format = format;
@@ -272,7 +325,10 @@ impl HapPlayer {
                                             alpha_format: None,
                                         }));
                                     }
-                                    HapFrame::DualPlane { color_format, alpha_format } => {
+                                    HapFrame::DualPlane {
+                                        color_format,
+                                        alpha_format,
+                                    } => {
                                         self.texture_format = color_format;
                                         self.is_dual_plane = true;
                                         return Ok(Some(HapFrameResult {
@@ -338,16 +394,36 @@ impl HapPlayer {
         Ok(())
     }
 
-    pub fn width(&self) -> u32 { self.width }
-    pub fn height(&self) -> u32 { self.height }
-    pub fn frame_rate(&self) -> f64 { self.playback.frame_rate }
-    pub fn duration(&self) -> f64 { self.playback.duration }
-    pub fn texture_format(&self) -> HapTextureFormat { self.texture_format }
-    pub fn is_playing(&self) -> bool { self.playback.playing }
-    pub fn set_playing(&mut self, playing: bool) { self.playback.playing = playing; }
-    pub fn is_looping(&self) -> bool { self.playback.loop_mode == LoopMode::Loop }
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+    pub fn frame_rate(&self) -> f64 {
+        self.playback.frame_rate
+    }
+    pub fn duration(&self) -> f64 {
+        self.playback.duration
+    }
+    pub fn texture_format(&self) -> HapTextureFormat {
+        self.texture_format
+    }
+    pub fn is_playing(&self) -> bool {
+        self.playback.playing
+    }
+    pub fn set_playing(&mut self, playing: bool) {
+        self.playback.playing = playing;
+    }
+    pub fn is_looping(&self) -> bool {
+        self.playback.loop_mode == LoopMode::Loop
+    }
     pub fn set_looping(&mut self, looping: bool) {
-        self.playback.loop_mode = if looping { LoopMode::Loop } else { LoopMode::OneShot };
+        self.playback.loop_mode = if looping {
+            LoopMode::Loop
+        } else {
+            LoopMode::OneShot
+        };
     }
 }
 

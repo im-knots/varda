@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 
 use crate::engine::types::EffectTarget;
 use crate::engine::{CommandResult, EngineCommand};
-use crate::usecases::api::{SharedState, command_response};
+use crate::usecases::api::{command_response, SharedState};
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddEffectBody {
@@ -49,10 +49,13 @@ pub async fn add_effect(
     State(state): State<SharedState>,
     Json(body): Json<AddEffectBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::AddEffect {
-        target: body.target,
-        shader_name: body.shader_name,
-    }).await {
+    match state
+        .send_command(EngineCommand::AddEffect {
+            target: body.target,
+            shader_name: body.shader_name,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -63,10 +66,13 @@ pub async fn remove_effect(
     State(state): State<SharedState>,
     Json(body): Json<RemoveEffectBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::RemoveEffect {
-        target: body.target,
-        effect_idx: body.effect_idx,
-    }).await {
+    match state
+        .send_command(EngineCommand::RemoveEffect {
+            target: body.target,
+            effect_idx: body.effect_idx,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -77,10 +83,13 @@ pub async fn toggle_effect(
     State(state): State<SharedState>,
     Json(body): Json<ToggleEffectBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::ToggleEffect {
-        target: body.target,
-        effect_idx: body.effect_idx,
-    }).await {
+    match state
+        .send_command(EngineCommand::ToggleEffect {
+            target: body.target,
+            effect_idx: body.effect_idx,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -91,11 +100,14 @@ pub async fn move_effect(
     State(state): State<SharedState>,
     Json(body): Json<MoveEffectBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::MoveEffect {
-        target: body.target,
-        from_idx: body.from_idx,
-        to_idx: body.to_idx,
-    }).await {
+    match state
+        .send_command(EngineCommand::MoveEffect {
+            target: body.target,
+            from_idx: body.from_idx,
+            to_idx: body.to_idx,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }

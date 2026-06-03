@@ -10,7 +10,6 @@
 /// The (empty_mod − no_mod) gap is the per-param allocation cost paid even
 /// when nothing is modulated. Multiply by params × decks × effects to
 /// estimate the per-frame floor for a full scene.
-
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use varda::{
     isf::ISFInput,
@@ -36,8 +35,13 @@ fn color_input(name: &str) -> ISFInput {
     ISFInput {
         name: name.to_string(),
         input_type: "color".to_string(),
-        default: None, min: None, max: None, label: None,
-        values: None, labels: None, identity: None,
+        default: None,
+        min: None,
+        max: None,
+        label: None,
+        values: None,
+        labels: None,
+        identity: None,
     }
 }
 
@@ -45,8 +49,13 @@ fn point2d_input(name: &str) -> ISFInput {
     ISFInput {
         name: name.to_string(),
         input_type: "point2D".to_string(),
-        default: None, min: None, max: None, label: None,
-        values: None, labels: None, identity: None,
+        default: None,
+        min: None,
+        max: None,
+        label: None,
+        values: None,
+        labels: None,
+        identity: None,
     }
 }
 
@@ -69,7 +78,12 @@ fn engine_with_lfo(param_key: &str) -> ModulationEngine {
         bipolar: false,
     });
     engine.assign(param_key, &src, 1.0, None);
-    engine.update(0.5, &AudioValues { sources: Default::default() });
+    engine.update(
+        0.5,
+        &AudioValues {
+            sources: Default::default(),
+        },
+    );
     engine
 }
 
@@ -84,12 +98,15 @@ fn bench_shader_params_buffer(c: &mut Criterion) {
         let eng_empty = ModulationEngine::new();
         let eng_lfo = engine_with_lfo(&lfo_key);
 
-        g.bench_with_input(BenchmarkId::new("no_mod", total), &total,
-            |b, _| b.iter(|| params.build_buffer_data()));
-        g.bench_with_input(BenchmarkId::new("empty_mod", total), &total,
-            |b, _| b.iter(|| params.build_modulated_buffer_data(&eng_empty, Some("deck0"))));
-        g.bench_with_input(BenchmarkId::new("active_lfo", total), &total,
-            |b, _| b.iter(|| params.build_modulated_buffer_data(&eng_lfo, Some("deck0"))));
+        g.bench_with_input(BenchmarkId::new("no_mod", total), &total, |b, _| {
+            b.iter(|| params.build_buffer_data())
+        });
+        g.bench_with_input(BenchmarkId::new("empty_mod", total), &total, |b, _| {
+            b.iter(|| params.build_modulated_buffer_data(&eng_empty, Some("deck0")))
+        });
+        g.bench_with_input(BenchmarkId::new("active_lfo", total), &total, |b, _| {
+            b.iter(|| params.build_modulated_buffer_data(&eng_lfo, Some("deck0")))
+        });
     }
 
     g.finish();

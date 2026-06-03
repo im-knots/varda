@@ -25,7 +25,11 @@ pub async fn get_state(State(state): State<SharedState>) -> impl IntoResponse {
     match state.engine_state.read() {
         Ok(guard) => match guard.as_ref() {
             Some(engine_state) => Json(serde_json::to_value(engine_state).unwrap()).into_response(),
-            None => (StatusCode::SERVICE_UNAVAILABLE, "Engine not yet initialized").into_response(),
+            None => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Engine not yet initialized",
+            )
+                .into_response(),
         },
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "State lock poisoned").into_response(),
     }
@@ -40,19 +44,22 @@ use serde::Deserialize;
 #[utoipa::path(post, path = "/api/shutdown", responses((status = 200, body = CommandResult)), tag = "System")]
 pub async fn shutdown(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::Shutdown).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/undo", responses((status = 200, body = CommandResult)), tag = "System")]
 pub async fn undo(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::Undo).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/redo", responses((status = 200, body = CommandResult)), tag = "System")]
 pub async fn redo(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::Redo).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -64,9 +71,19 @@ pub struct ResolutionBody {
     pub height: u32,
 }
 #[utoipa::path(put, path = "/api/resolution", request_body = ResolutionBody, responses((status = 200, body = CommandResult)), tag = "System")]
-pub async fn set_resolution(State(state): State<SharedState>, Json(b): Json<ResolutionBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::SetRenderResolution { width: b.width, height: b.height }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn set_resolution(
+    State(state): State<SharedState>,
+    Json(b): Json<ResolutionBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetRenderResolution {
+            width: b.width,
+            height: b.height,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -76,9 +93,18 @@ pub struct ClockPreferenceBody {
     pub preference: crate::clock::ClockPreference,
 }
 #[utoipa::path(put, path = "/api/clock/preference", request_body = ClockPreferenceBody, responses((status = 200, body = CommandResult)), tag = "System")]
-pub async fn set_clock_preference(State(state): State<SharedState>, Json(b): Json<ClockPreferenceBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::SetClockPreference { preference: b.preference }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn set_clock_preference(
+    State(state): State<SharedState>,
+    Json(b): Json<ClockPreferenceBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetClockPreference {
+            preference: b.preference,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -88,21 +114,30 @@ pub struct ManualBpmBody {
     pub bpm: f32,
 }
 #[utoipa::path(put, path = "/api/clock/manual-bpm", request_body = ManualBpmBody, responses((status = 200, body = CommandResult)), tag = "System")]
-pub async fn set_manual_bpm(State(state): State<SharedState>, Json(b): Json<ManualBpmBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::SetManualBpm { bpm: b.bpm }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn set_manual_bpm(
+    State(state): State<SharedState>,
+    Json(b): Json<ManualBpmBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetManualBpm { bpm: b.bpm })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/workspace/save", responses((status = 200, body = CommandResult)), tag = "System")]
 pub async fn save_workspace(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::SaveWorkspace).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/workspace/load", responses((status = 200, body = CommandResult)), tag = "System")]
 pub async fn load_workspace(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::LoadWorkspace).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -111,32 +146,37 @@ pub async fn load_workspace(State(state): State<SharedState>) -> impl IntoRespon
 #[utoipa::path(post, path = "/api/devices/ndi/scan", responses((status = 200, body = CommandResult)), tag = "Devices")]
 pub async fn scan_ndi(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::RescanNdi).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/devices/syphon/scan", responses((status = 200, body = CommandResult)), tag = "Devices")]
 pub async fn scan_syphon(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::RescanSyphon).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/devices/cameras/scan", responses((status = 200, body = CommandResult)), tag = "Devices")]
 pub async fn scan_cameras(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::RescanCameras).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(post, path = "/api/devices/midi/scan", responses((status = 200, body = CommandResult)), tag = "Devices")]
 pub async fn scan_midi(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::RescanMidi).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
 #[utoipa::path(post, path = "/api/devices/audio/scan", responses((status = 200, body = CommandResult)), tag = "Devices")]
 pub async fn scan_audio(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::RescanAudio).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -148,9 +188,19 @@ pub struct AudioSourceEnabledBody {
     pub enabled: bool,
 }
 #[utoipa::path(put, path = "/api/devices/audio/enabled", request_body = AudioSourceEnabledBody, responses((status = 200, body = CommandResult)), tag = "Devices")]
-pub async fn set_audio_source_enabled(State(state): State<SharedState>, Json(b): Json<AudioSourceEnabledBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::ToggleAudioSource { source_id: b.source_id, enabled: b.enabled }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn set_audio_source_enabled(
+    State(state): State<SharedState>,
+    Json(b): Json<AudioSourceEnabledBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::ToggleAudioSource {
+            source_id: b.source_id,
+            enabled: b.enabled,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -162,15 +212,26 @@ pub struct MidiDeviceEnabledBody {
     pub enabled: bool,
 }
 #[utoipa::path(put, path = "/api/devices/midi/enabled", request_body = MidiDeviceEnabledBody, responses((status = 200, body = CommandResult)), tag = "Devices")]
-pub async fn set_midi_device_enabled(State(state): State<SharedState>, Json(b): Json<MidiDeviceEnabledBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::SetMidiDeviceEnabled { device_id: b.device_id, enabled: b.enabled }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn set_midi_device_enabled(
+    State(state): State<SharedState>,
+    Json(b): Json<MidiDeviceEnabledBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetMidiDeviceEnabled {
+            device_id: b.device_id,
+            enabled: b.enabled,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 #[utoipa::path(delete, path = "/api/midi/mappings", responses((status = 200, body = CommandResult)), tag = "Devices")]
 pub async fn clear_midi_mappings(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::ClearMidiMappings).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -180,9 +241,16 @@ pub struct RemoveMidiMappingBody {
     pub key: crate::midi::MidiKey,
 }
 #[utoipa::path(post, path = "/api/midi/mappings/remove", request_body = RemoveMidiMappingBody, responses((status = 200, body = CommandResult)), tag = "Devices")]
-pub async fn remove_midi_mapping(State(state): State<SharedState>, Json(b): Json<RemoveMidiMappingBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::RemoveMidiMapping { key: b.key }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn remove_midi_mapping(
+    State(state): State<SharedState>,
+    Json(b): Json<RemoveMidiMappingBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RemoveMidiMapping { key: b.key })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -196,9 +264,19 @@ pub struct StreamLibraryBody {
     pub mode: crate::stream::SrtMode,
 }
 #[utoipa::path(post, path = "/api/streams/library", request_body = StreamLibraryBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
-pub async fn add_stream_library_entry(State(state): State<SharedState>, Json(b): Json<StreamLibraryBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::AddStreamLibraryEntry { url: b.url, mode: b.mode }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn add_stream_library_entry(
+    State(state): State<SharedState>,
+    Json(b): Json<StreamLibraryBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::AddStreamLibraryEntry {
+            url: b.url,
+            mode: b.mode,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -208,9 +286,16 @@ pub struct RemoveStreamBody {
     pub url: String,
 }
 #[utoipa::path(delete, path = "/api/streams/library", request_body = RemoveStreamBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
-pub async fn remove_stream_library_entry(State(state): State<SharedState>, Json(b): Json<RemoveStreamBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::RemoveStreamLibraryEntry { url: b.url }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn remove_stream_library_entry(
+    State(state): State<SharedState>,
+    Json(b): Json<RemoveStreamBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RemoveStreamLibraryEntry { url: b.url })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -222,9 +307,16 @@ pub struct HlsLibraryBody {
     pub url: String,
 }
 #[utoipa::path(post, path = "/api/streams/hls/library", request_body = HlsLibraryBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
-pub async fn add_hls_library_entry(State(state): State<SharedState>, Json(b): Json<HlsLibraryBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::AddHlsLibraryEntry { url: b.url }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn add_hls_library_entry(
+    State(state): State<SharedState>,
+    Json(b): Json<HlsLibraryBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::AddHlsLibraryEntry { url: b.url })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -234,9 +326,16 @@ pub struct RemoveHlsBody {
     pub url: String,
 }
 #[utoipa::path(delete, path = "/api/streams/hls/library", request_body = RemoveHlsBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
-pub async fn remove_hls_library_entry(State(state): State<SharedState>, Json(b): Json<RemoveHlsBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::RemoveHlsLibraryEntry { url: b.url }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn remove_hls_library_entry(
+    State(state): State<SharedState>,
+    Json(b): Json<RemoveHlsBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RemoveHlsLibraryEntry { url: b.url })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -248,9 +347,16 @@ pub struct DashLibraryBody {
     pub url: String,
 }
 #[utoipa::path(post, path = "/api/streams/dash/library", request_body = DashLibraryBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
-pub async fn add_dash_library_entry(State(state): State<SharedState>, Json(b): Json<DashLibraryBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::AddDashLibraryEntry { url: b.url }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn add_dash_library_entry(
+    State(state): State<SharedState>,
+    Json(b): Json<DashLibraryBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::AddDashLibraryEntry { url: b.url })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -260,9 +366,16 @@ pub struct RemoveDashBody {
     pub url: String,
 }
 #[utoipa::path(delete, path = "/api/streams/dash/library", request_body = RemoveDashBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
-pub async fn remove_dash_library_entry(State(state): State<SharedState>, Json(b): Json<RemoveDashBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::RemoveDashLibraryEntry { url: b.url }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn remove_dash_library_entry(
+    State(state): State<SharedState>,
+    Json(b): Json<RemoveDashBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RemoveDashLibraryEntry { url: b.url })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -274,9 +387,19 @@ pub struct RtmpLibraryBody {
     pub mode: crate::stream::RtmpMode,
 }
 #[utoipa::path(post, path = "/api/streams/rtmp/library", request_body = RtmpLibraryBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
-pub async fn add_rtmp_library_entry(State(state): State<SharedState>, Json(b): Json<RtmpLibraryBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::AddRtmpLibraryEntry { url: b.url, mode: b.mode }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn add_rtmp_library_entry(
+    State(state): State<SharedState>,
+    Json(b): Json<RtmpLibraryBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::AddRtmpLibraryEntry {
+            url: b.url,
+            mode: b.mode,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 
@@ -286,9 +409,16 @@ pub struct RemoveRtmpBody {
     pub url: String,
 }
 #[utoipa::path(delete, path = "/api/streams/rtmp/library", request_body = RemoveRtmpBody, responses((status = 200, body = CommandResult)), tag = "Streams")]
-pub async fn remove_rtmp_library_entry(State(state): State<SharedState>, Json(b): Json<RemoveRtmpBody>) -> impl IntoResponse {
-    match state.send_command(EngineCommand::RemoveRtmpLibraryEntry { url: b.url }).await {
-        Ok(r) => command_response(r), Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+pub async fn remove_rtmp_library_entry(
+    State(state): State<SharedState>,
+    Json(b): Json<RemoveRtmpBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RemoveRtmpLibraryEntry { url: b.url })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
 

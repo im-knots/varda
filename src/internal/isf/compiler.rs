@@ -3,16 +3,17 @@ use shaderc::{Compiler, ShaderKind};
 
 /// Compile GLSL fragment shader to SPIR-V
 pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec<u32>> {
-    let compiler = Compiler::new()
-        .context("Failed to create shaderc compiler")?;
-    
-    let mut options = shaderc::CompileOptions::new()
-        .context("Failed to create compile options")?;
-    
+    let compiler = Compiler::new().context("Failed to create shaderc compiler")?;
+
+    let mut options = shaderc::CompileOptions::new().context("Failed to create compile options")?;
+
     // Set GLSL version to 330 (common for ISF shaders)
     options.set_source_language(shaderc::SourceLanguage::GLSL);
-    options.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_2 as u32);
-    
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
+
     // Compile to SPIR-V
     let binary_result = compiler
         .compile_into_spirv(
@@ -23,7 +24,7 @@ pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec
             Some(&options),
         )
         .with_context(|| format!("Failed to compile shader '{}'", shader_name))?;
-    
+
     // Check for warnings
     if binary_result.get_num_warnings() > 0 {
         log::warn!(
@@ -32,7 +33,7 @@ pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec
             binary_result.get_warning_messages()
         );
     }
-    
+
     Ok(binary_result.as_binary().to_vec())
 }
 
@@ -50,7 +51,8 @@ pub fn inject_isf_uniforms(glsl_source: &str) -> String {
 
 /// Inject ISF uniforms including user parameters (legacy GLSL 330 style)
 pub fn inject_isf_uniforms_with_params(glsl_source: &str, inputs: &[super::ISFInput]) -> String {
-    let mut isf_uniforms = String::from(r#"
+    let mut isf_uniforms = String::from(
+        r#"
 // ISF automatic uniforms
 uniform float TIME;
 uniform float TIMEDELTA;
@@ -64,7 +66,8 @@ uniform float PHASE_TIME_3;
 
 // ISF automatic varying (normalized fragment coordinates)
 in vec2 isf_FragNormCoord;
-"#);
+"#,
+    );
 
     // Add user parameter uniforms
     for input in inputs {
@@ -163,7 +166,7 @@ void main() {
     gl_FragColor = vec4(TIME, 0.0, 0.0, 1.0);
 }
 "#;
-        
+
         let injected = inject_isf_uniforms(glsl);
         assert!(injected.contains("uniform float TIME"));
         assert!(injected.contains("uniform vec2 RENDERSIZE"));
@@ -180,15 +183,18 @@ void main() {
     fragColor = vec4(TIME, isf_FragNormCoord.x, isf_FragNormCoord.y, 1.0);
 }
 "#;
-        
+
         let injected = inject_isf_uniforms(glsl);
         let spirv = compile_glsl_to_spirv(&injected, "isf_test");
-        
+
         // Legacy injection uses bare uniforms (not blocks) and lacks explicit
         // locations, so Vulkan SPIR-V compilation is expected to fail here.
         // The modern path uses the ISFUniforms block in pipeline.rs instead.
         if let Err(e) = spirv {
-            println!("Expected compilation error (legacy uniforms vs Vulkan blocks): {}", e);
+            println!(
+                "Expected compilation error (legacy uniforms vs Vulkan blocks): {}",
+                e
+            );
         }
     }
 
@@ -198,7 +204,10 @@ void main() {
         let shader_path = manifest_dir.join("shaders/tree_of_life.fs");
         let source = match std::fs::read_to_string(&shader_path) {
             Ok(s) => s,
-            Err(_) => { println!("Skipping: shader file not found"); return; }
+            Err(_) => {
+                println!("Skipping: shader file not found");
+                return;
+            }
         };
         let json_end = source.find("}*/").expect("JSON header");
         let glsl = source[json_end + 3..].trim();
@@ -211,21 +220,24 @@ void main() {
 
         // Now test naga parse + validation (same as pipeline.rs)
         let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let module = naga::front::spv::parse_u8_slice(
-            &spirv_bytes, &naga::front::spv::Options::default()
-        ).expect("naga SPIR-V parse should succeed");
+        let module =
+            naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
+                .expect("naga SPIR-V parse should succeed");
 
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
-        ).validate(&module);
+        )
+        .validate(&module);
         if let Err(ref e) = info {
             panic!("Naga validation failed: {:?}", e);
         }
 
         // Try WGSL output too
         let wgsl = naga::back::wgsl::write_string(
-            &module, &info.unwrap(), naga::back::wgsl::WriterFlags::empty()
+            &module,
+            &info.unwrap(),
+            naga::back::wgsl::WriterFlags::empty(),
         );
         if let Err(ref e) = wgsl {
             panic!("WGSL output failed: {:?}", e);
@@ -233,4 +245,3 @@ void main() {
         println!("WGSL output length: {}", wgsl.unwrap().len());
     }
 }
-

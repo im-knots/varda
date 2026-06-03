@@ -34,8 +34,8 @@ pub fn detect_from_image(
     image_data: &[u8],
     params: &DetectionParams,
 ) -> Result<DetectionResult, ImportError> {
-    let img = image::load_from_memory(image_data)
-        .map_err(|e| ImportError::ImageLoad(e.to_string()))?;
+    let img =
+        image::load_from_memory(image_data).map_err(|e| ImportError::ImageLoad(e.to_string()))?;
     let gray = img.to_luma8();
     let result = detect_contours(&gray, params);
     if result.contours.is_empty() {
@@ -75,8 +75,9 @@ pub fn detect_from_rgba(
             (0.299 * r + 0.587 * g + 0.114 * b) as u8
         })
         .collect();
-    let gray = image::GrayImage::from_raw(w, h, gray_pixels)
-        .ok_or_else(|| ImportError::ImageLoad("Failed to create grayscale image from RGBA".into()))?;
+    let gray = image::GrayImage::from_raw(w, h, gray_pixels).ok_or_else(|| {
+        ImportError::ImageLoad("Failed to create grayscale image from RGBA".into())
+    })?;
 
     // Wrap detection in catch_unwind to absorb any imageproc panics
     let params_clone = params.clone();
@@ -185,7 +186,11 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
     }
 
     // Sort by area descending
-    contours.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+    contours.sort_by(|a, b| {
+        b.area
+            .partial_cmp(&a.area)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     if contours.is_empty() {
         return Err(ImportError::NoContours);
@@ -234,12 +239,8 @@ fn flatten_svg_path(path: &tiny_skia_path::Path) -> Vec<[f32; 2]> {
                 for i in 1..=STEPS {
                     let t = i as f32 / STEPS as f32;
                     let inv = 1.0 - t;
-                    let x = inv * inv * last[0]
-                        + 2.0 * inv * t * ctrl.x
-                        + t * t * pt.x;
-                    let y = inv * inv * last[1]
-                        + 2.0 * inv * t * ctrl.y
-                        + t * t * pt.y;
+                    let x = inv * inv * last[0] + 2.0 * inv * t * ctrl.x + t * t * pt.x;
+                    let y = inv * inv * last[1] + 2.0 * inv * t * ctrl.y + t * t * pt.y;
                     points.push([x, y]);
                 }
                 last = [pt.x, pt.y];
@@ -265,9 +266,7 @@ fn flatten_svg_path(path: &tiny_skia_path::Path) -> Vec<[f32; 2]> {
             tiny_skia_path::PathSegment::Close => {
                 // Close the path by connecting back to the first point
                 if let Some(&first) = points.first() {
-                    if (last[0] - first[0]).abs() > 1e-4
-                        || (last[1] - first[1]).abs() > 1e-4
-                    {
+                    if (last[0] - first[0]).abs() > 1e-4 || (last[1] - first[1]).abs() > 1e-4 {
                         points.push(first);
                     }
                 }
@@ -286,22 +285,18 @@ const CLOSE_TOLERANCE: f64 = 1e-4;
 /// Detect surfaces from DXF data.
 pub fn detect_from_dxf(dxf_data: &[u8]) -> Result<DetectionResult, ImportError> {
     let mut cursor = Cursor::new(dxf_data);
-    let drawing = dxf::Drawing::load(&mut cursor)
-        .map_err(|e| ImportError::DxfParse(e.to_string()))?;
+    let drawing =
+        dxf::Drawing::load(&mut cursor).map_err(|e| ImportError::DxfParse(e.to_string()))?;
 
     let mut polylines: Vec<(Vec<[f64; 2]>, bool)> = Vec::new(); // (points, is_circular)
 
     for entity in drawing.entities() {
         match &entity.specific {
             dxf::entities::EntityType::Line(line) => {
-                polylines.push((
-                    vec![[line.p1.x, line.p1.y], [line.p2.x, line.p2.y]],
-                    false,
-                ));
+                polylines.push((vec![[line.p1.x, line.p1.y], [line.p2.x, line.p2.y]], false));
             }
             dxf::entities::EntityType::LwPolyline(poly) => {
-                let pts: Vec<[f64; 2]> =
-                    poly.vertices.iter().map(|v| [v.x, v.y]).collect();
+                let pts: Vec<[f64; 2]> = poly.vertices.iter().map(|v| [v.x, v.y]).collect();
                 if pts.len() >= 2 {
                     let mut pts = pts;
                     // Close if flagged or if start ≈ end
@@ -312,11 +307,7 @@ pub fn detect_from_dxf(dxf_data: &[u8]) -> Result<DetectionResult, ImportError> 
                 }
             }
             dxf::entities::EntityType::Circle(circle) => {
-                let pts = approximate_circle(
-                    circle.center.x,
-                    circle.center.y,
-                    circle.radius,
-                );
+                let pts = approximate_circle(circle.center.x, circle.center.y, circle.radius);
                 polylines.push((pts, true));
             }
             dxf::entities::EntityType::Arc(arc) => {
@@ -365,10 +356,12 @@ pub fn detect_from_dxf(dxf_data: &[u8]) -> Result<DetectionResult, ImportError> 
     for (i, (pts, is_circular_hint)) in polylines.iter().enumerate() {
         let normalized: Vec<[f32; 2]> = pts
             .iter()
-            .map(|pt| [
-                ((pt[0] - min_x) / width) as f32,
-                ((pt[1] - min_y) / height) as f32,
-            ])
+            .map(|pt| {
+                [
+                    ((pt[0] - min_x) / width) as f32,
+                    ((pt[1] - min_y) / height) as f32,
+                ]
+            })
             .collect();
         if normalized.len() < 3 {
             continue;
@@ -396,7 +389,11 @@ pub fn detect_from_dxf(dxf_data: &[u8]) -> Result<DetectionResult, ImportError> 
     }
 
     // Sort by area descending
-    contours.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+    contours.sort_by(|a, b| {
+        b.area
+            .partial_cmp(&a.area)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     if contours.is_empty() {
         return Err(ImportError::NoContours);
@@ -416,8 +413,7 @@ fn close_enough(pts: &[[f64; 2]]) -> bool {
     }
     let first = pts[0];
     let last = pts[pts.len() - 1];
-    (first[0] - last[0]).abs() < CLOSE_TOLERANCE
-        && (first[1] - last[1]).abs() < CLOSE_TOLERANCE
+    (first[0] - last[0]).abs() < CLOSE_TOLERANCE && (first[1] - last[1]).abs() < CLOSE_TOLERANCE
 }
 
 fn close_polyline(pts: &mut Vec<[f64; 2]>) {
@@ -436,13 +432,7 @@ fn approximate_circle(cx: f64, cy: f64, r: f64) -> Vec<[f64; 2]> {
         .collect()
 }
 
-fn approximate_arc(
-    cx: f64,
-    cy: f64,
-    r: f64,
-    start_deg: f64,
-    end_deg: f64,
-) -> Vec<[f64; 2]> {
+fn approximate_arc(cx: f64, cy: f64, r: f64, start_deg: f64, end_deg: f64) -> Vec<[f64; 2]> {
     let start = start_deg.to_radians();
     let mut end = end_deg.to_radians();
     if end <= start {
@@ -481,11 +471,10 @@ fn approximate_ellipse(
         .collect()
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::detect::{DetectionMethod, HullMode};
+    use super::*;
 
     #[test]
     fn detect_from_image_rejects_empty() {
@@ -504,14 +493,8 @@ mod tests {
         }
         let mut buf = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut buf);
-        image::ImageEncoder::write_image(
-            encoder,
-            &img,
-            200,
-            200,
-            image::ExtendedColorType::Rgba8,
-        )
-        .unwrap();
+        image::ImageEncoder::write_image(encoder, &img, 200, 200, image::ExtendedColorType::Rgba8)
+            .unwrap();
 
         let params = DetectionParams {
             min_area: 0.01,
@@ -519,7 +502,11 @@ mod tests {
             ..DetectionParams::default()
         };
         let result = detect_from_image(&buf, &params);
-        assert!(result.is_ok(), "Expected detection to succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected detection to succeed: {:?}",
+            result.err()
+        );
         let det = result.unwrap();
         assert!(!det.contours.is_empty(), "Expected at least one contour");
     }
@@ -530,9 +517,16 @@ mod tests {
             <rect x="10" y="10" width="80" height="80" fill="black" stroke="black"/>
         </svg>"#;
         let result = detect_from_svg(svg);
-        assert!(result.is_ok(), "Expected SVG detection to succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected SVG detection to succeed: {:?}",
+            result.err()
+        );
         let det = result.unwrap();
-        assert!(!det.contours.is_empty(), "Expected at least one contour from SVG rect");
+        assert!(
+            !det.contours.is_empty(),
+            "Expected at least one contour from SVG rect"
+        );
     }
 
     #[test]
@@ -604,7 +598,11 @@ mod tests {
             ..DetectionParams::default()
         };
         let result = detect_from_rgba(&rgba, w, h, &params);
-        assert!(result.is_ok(), "Expected detection to succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected detection to succeed: {:?}",
+            result.err()
+        );
         let det = result.unwrap();
         assert!(!det.contours.is_empty(), "Expected at least one contour");
     }
@@ -628,9 +626,8 @@ mod tests {
         let (w, h) = img.dimensions();
         let mut buf = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut buf);
-        image::ImageEncoder::write_image(
-            encoder, img, w, h, image::ExtendedColorType::Rgba8,
-        ).unwrap();
+        image::ImageEncoder::write_image(encoder, img, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap();
         buf
     }
 
@@ -638,22 +635,60 @@ mod tests {
     fn multi_screen_stage() {
         let mut img = image::RgbaImage::new(600, 200);
         let white = image::Rgba([255, 255, 255, 255]);
-        for y in 25..175 { for x in 25..175 { img.put_pixel(x, y, white); } }
-        for y in 25..175 { for x in 225..375 { img.put_pixel(x, y, white); } }
-        for y in 25..175 { for x in 425..575 { img.put_pixel(x, y, white); } }
+        for y in 25..175 {
+            for x in 25..175 {
+                img.put_pixel(x, y, white);
+            }
+        }
+        for y in 25..175 {
+            for x in 225..375 {
+                img.put_pixel(x, y, white);
+            }
+        }
+        for y in 25..175 {
+            for x in 425..575 {
+                img.put_pixel(x, y, white);
+            }
+        }
         let buf = encode_rgba_to_png(&img);
         let params = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             ..DetectionParams::default()
         };
         let det = detect_from_image(&buf, &params).expect("multi-screen detection failed");
-        assert_eq!(det.contours.len(), 3, "Expected 3 screens, got {}", det.contours.len());
-        let names: Vec<&str> = det.contours.iter().map(|c| c.suggested_name.as_str()).collect();
-        assert!(names.iter().any(|n| n.contains("left")), "No left screen: {:?}", names);
-        assert!(names.iter().any(|n| n.contains("center")), "No center screen: {:?}", names);
-        assert!(names.iter().any(|n| n.contains("right")), "No right screen: {:?}", names);
-        for c in &det.contours { assert!(c.area > 0.05, "Screen area too small: {}", c.area); }
+        assert_eq!(
+            det.contours.len(),
+            3,
+            "Expected 3 screens, got {}",
+            det.contours.len()
+        );
+        let names: Vec<&str> = det
+            .contours
+            .iter()
+            .map(|c| c.suggested_name.as_str())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.contains("left")),
+            "No left screen: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n.contains("center")),
+            "No center screen: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n.contains("right")),
+            "No right screen: {:?}",
+            names
+        );
+        for c in &det.contours {
+            assert!(c.area > 0.05, "Screen area too small: {}", c.area);
+        }
     }
 
     #[test]
@@ -662,25 +697,53 @@ mod tests {
         let white = image::Rgba([255, 255, 255, 255]);
         let rects = [(25u32, 25u32), (225, 25), (25, 225), (225, 225)];
         for &(rx, ry) in &rects {
-            for y in ry..ry+150 { for x in rx..rx+150 { img.put_pixel(x, y, white); } }
+            for y in ry..ry + 150 {
+                for x in rx..rx + 150 {
+                    img.put_pixel(x, y, white);
+                }
+            }
         }
         let buf = encode_rgba_to_png(&img);
         let params = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             ..DetectionParams::default()
         };
         let det = detect_from_image(&buf, &params).expect("quadrant detection failed");
-        assert_eq!(det.contours.len(), 4, "Expected 4 quadrants, got {}", det.contours.len());
+        assert_eq!(
+            det.contours.len(),
+            4,
+            "Expected 4 quadrants, got {}",
+            det.contours.len()
+        );
         for c in &det.contours {
-            assert!(c.area > 0.10 && c.area < 0.20,
-                "Quadrant area out of range: {} for {}", c.area, c.suggested_name);
+            assert!(
+                c.area > 0.10 && c.area < 0.20,
+                "Quadrant area out of range: {} for {}",
+                c.area,
+                c.suggested_name
+            );
         }
-        let names: Vec<&str> = det.contours.iter().map(|c| c.suggested_name.as_str()).collect();
-        assert!(names.iter().any(|n| n.contains("top") && n.contains("left")));
-        assert!(names.iter().any(|n| n.contains("top") && n.contains("right")));
-        assert!(names.iter().any(|n| n.contains("bottom") && n.contains("left")));
-        assert!(names.iter().any(|n| n.contains("bottom") && n.contains("right")));
+        let names: Vec<&str> = det
+            .contours
+            .iter()
+            .map(|c| c.suggested_name.as_str())
+            .collect();
+        assert!(names
+            .iter()
+            .any(|n| n.contains("top") && n.contains("left")));
+        assert!(names
+            .iter()
+            .any(|n| n.contains("top") && n.contains("right")));
+        assert!(names
+            .iter()
+            .any(|n| n.contains("bottom") && n.contains("left")));
+        assert!(names
+            .iter()
+            .any(|n| n.contains("bottom") && n.contains("right")));
     }
 
     #[test]
@@ -689,44 +752,86 @@ mod tests {
         let mut img = image::RgbaImage::new(400, 400);
         let white = image::Rgba([255, 255, 255, 255]);
         // Top-left rect: x=20..120, y=20..120
-        for y in 20..120 { for x in 20..120 { img.put_pixel(x, y, white); } }
+        for y in 20..120 {
+            for x in 20..120 {
+                img.put_pixel(x, y, white);
+            }
+        }
         // Bottom-right rect: x=280..380, y=280..380
-        for y in 280..380 { for x in 280..380 { img.put_pixel(x, y, white); } }
+        for y in 280..380 {
+            for x in 280..380 {
+                img.put_pixel(x, y, white);
+            }
+        }
         // Center circle: cx=200, cy=200, r=70
-        for y in 0..400 { for x in 0..400 {
-            let dx = x as f64 - 200.0;
-            let dy = y as f64 - 200.0;
-            if dx*dx + dy*dy <= 70.0*70.0 { img.put_pixel(x, y, white); }
-        }}
+        for y in 0..400 {
+            for x in 0..400 {
+                let dx = x as f64 - 200.0;
+                let dy = y as f64 - 200.0;
+                if dx * dx + dy * dy <= 70.0 * 70.0 {
+                    img.put_pixel(x, y, white);
+                }
+            }
+        }
         let buf = encode_rgba_to_png(&img);
         let params = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             ..DetectionParams::default()
         };
         let det = detect_from_image(&buf, &params).expect("mixed shapes detection failed");
-        assert!(det.contours.len() >= 3, "Expected >= 3 shapes, got {}", det.contours.len());
+        assert!(
+            det.contours.len() >= 3,
+            "Expected >= 3 shapes, got {}",
+            det.contours.len()
+        );
         let circular_count = det.contours.iter().filter(|c| c.is_circular).count();
-        assert!(circular_count >= 1, "Expected at least 1 circular contour, got {}", circular_count);
+        assert!(
+            circular_count >= 1,
+            "Expected at least 1 circular contour, got {}",
+            circular_count
+        );
         let non_circular = det.contours.iter().filter(|c| !c.is_circular).count();
-        assert!(non_circular >= 2, "Expected at least 2 non-circular contours, got {}", non_circular);
+        assert!(
+            non_circular >= 2,
+            "Expected at least 2 non-circular contours, got {}",
+            non_circular
+        );
     }
 
     #[test]
     fn nested_rectangles() {
         let mut img = image::RgbaImage::new(400, 400);
         let white = image::Rgba([255, 255, 255, 255]);
-        for y in 50..350 { for x in 50..350 { img.put_pixel(x, y, white); } }
+        for y in 50..350 {
+            for x in 50..350 {
+                img.put_pixel(x, y, white);
+            }
+        }
         let black = image::Rgba([0, 0, 0, 255]);
-        for y in 150..250 { for x in 150..250 { img.put_pixel(x, y, black); } }
+        for y in 150..250 {
+            for x in 150..250 {
+                img.put_pixel(x, y, black);
+            }
+        }
         let buf = encode_rgba_to_png(&img);
         let params = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             ..DetectionParams::default()
         };
         let det = detect_from_image(&buf, &params).expect("nested detection failed");
-        assert!(det.contours.len() >= 2, "Expected >= 2 contours for nested rects, got {}", det.contours.len());
+        assert!(
+            det.contours.len() >= 2,
+            "Expected >= 2 contours for nested rects, got {}",
+            det.contours.len()
+        );
         assert!(det.contours[0].area > det.contours.last().unwrap().area);
     }
 
@@ -734,18 +839,36 @@ mod tests {
     fn l_shaped_stage() {
         let mut img = image::RgbaImage::new(400, 400);
         let white = image::Rgba([255, 255, 255, 255]);
-        for y in 50..350 { for x in 50..200 { img.put_pixel(x, y, white); } }
-        for y in 200..350 { for x in 200..350 { img.put_pixel(x, y, white); } }
+        for y in 50..350 {
+            for x in 50..200 {
+                img.put_pixel(x, y, white);
+            }
+        }
+        for y in 200..350 {
+            for x in 200..350 {
+                img.put_pixel(x, y, white);
+            }
+        }
         let buf = encode_rgba_to_png(&img);
         let params = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             ..DetectionParams::default()
         };
         let det = detect_from_image(&buf, &params).expect("L-shape detection failed");
-        assert!(!det.contours.is_empty(), "Expected at least 1 contour for L-shape");
+        assert!(
+            !det.contours.is_empty(),
+            "Expected at least 1 contour for L-shape"
+        );
         let total_area: f32 = det.contours.iter().map(|c| c.area).sum();
-        assert!(total_area > 0.15, "L-shape total area too small: {}", total_area);
+        assert!(
+            total_area > 0.15,
+            "L-shape total area too small: {}",
+            total_area
+        );
     }
 
     #[test]
@@ -753,20 +876,36 @@ mod tests {
         let mut img = image::RgbaImage::new(600, 400);
         let white = image::Rgba([255, 255, 255, 255]);
         let positions = [
-            (50u32, 50u32), (250, 50), (450, 50),
-            (50, 250), (250, 250), (450, 250),
+            (50u32, 50u32),
+            (250, 50),
+            (450, 50),
+            (50, 250),
+            (250, 250),
+            (450, 250),
         ];
         for &(rx, ry) in &positions {
-            for y in ry..ry+80 { for x in rx..rx+80 { img.put_pixel(x, y, white); } }
+            for y in ry..ry + 80 {
+                for x in rx..rx + 80 {
+                    img.put_pixel(x, y, white);
+                }
+            }
         }
         let buf = encode_rgba_to_png(&img);
         let params = DetectionParams {
-            min_area: 0.001, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.001,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             ..DetectionParams::default()
         };
         let det = detect_from_image(&buf, &params).expect("many screens detection failed");
-        assert_eq!(det.contours.len(), 6, "Expected 6 screens, got {}", det.contours.len());
+        assert_eq!(
+            det.contours.len(),
+            6,
+            "Expected 6 screens, got {}",
+            det.contours.len()
+        );
         for c in &det.contours {
             assert!(c.area < 0.05, "Screen area too large: {}", c.area);
         }
@@ -779,16 +918,27 @@ mod tests {
     fn threshold_vs_canny_both_detect() {
         let mut img = image::RgbaImage::new(300, 300);
         let white = image::Rgba([255, 255, 255, 255]);
-        for y in 50..250 { for x in 50..250 { img.put_pixel(x, y, white); } }
+        for y in 50..250 {
+            for x in 50..250 {
+                img.put_pixel(x, y, white);
+            }
+        }
         let buf = encode_rgba_to_png(&img);
         let thresh_params = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             ..DetectionParams::default()
         };
         let canny_params = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Canny, canny_low: 50, canny_high: 150,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Canny,
+            canny_low: 50,
+            canny_high: 150,
             ..DetectionParams::default()
         };
         let t = detect_from_image(&buf, &thresh_params).expect("Threshold mode failed");
@@ -803,38 +953,79 @@ mod tests {
         let gray_bg = image::Rgba([100, 100, 100, 255]);
         let bright = image::Rgba([240, 240, 240, 255]);
         let noise = image::Rgba([140, 140, 140, 255]);
-        for y in 0..400 { for x in 0..400 { img.put_pixel(x, y, gray_bg); } }
-        for y in 50..150 { for x in 50..150 { img.put_pixel(x, y, bright); } }
-        for y in 250..350 { for x in 250..350 { img.put_pixel(x, y, bright); } }
-        for y in 50..100 { for x in 250..300 { img.put_pixel(x, y, noise); } }
-        for y in 300..350 { for x in 50..100 { img.put_pixel(x, y, noise); } }
+        for y in 0..400 {
+            for x in 0..400 {
+                img.put_pixel(x, y, gray_bg);
+            }
+        }
+        for y in 50..150 {
+            for x in 50..150 {
+                img.put_pixel(x, y, bright);
+            }
+        }
+        for y in 250..350 {
+            for x in 250..350 {
+                img.put_pixel(x, y, bright);
+            }
+        }
+        for y in 50..100 {
+            for x in 250..300 {
+                img.put_pixel(x, y, noise);
+            }
+        }
+        for y in 300..350 {
+            for x in 50..100 {
+                img.put_pixel(x, y, noise);
+            }
+        }
         let buf = encode_rgba_to_png(&img);
         let params = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 180,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 180,
             ..DetectionParams::default()
         };
         let det = detect_from_image(&buf, &params).expect("grayscale threshold detection failed");
-        assert_eq!(det.contours.len(), 2,
-            "Expected 2 bright rects only (noise below threshold), got {}", det.contours.len());
+        assert_eq!(
+            det.contours.len(),
+            2,
+            "Expected 2 bright rects only (noise below threshold), got {}",
+            det.contours.len()
+        );
     }
 
     #[test]
     fn convex_hull_mode_fills_concavity() {
         let mut img = image::RgbaImage::new(400, 400);
         let white = image::Rgba([255, 255, 255, 255]);
-        for y in 50..350 { for x in 50..200 { img.put_pixel(x, y, white); } }
-        for y in 200..350 { for x in 200..350 { img.put_pixel(x, y, white); } }
+        for y in 50..350 {
+            for x in 50..200 {
+                img.put_pixel(x, y, white);
+            }
+        }
+        for y in 200..350 {
+            for x in 200..350 {
+                img.put_pixel(x, y, white);
+            }
+        }
         let buf = encode_rgba_to_png(&img);
         let no_hull = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             hull_mode: HullMode::None,
             ..DetectionParams::default()
         };
         let with_hull = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             hull_mode: HullMode::ConvexHull,
             ..DetectionParams::default()
         };
@@ -842,34 +1033,60 @@ mod tests {
         let det_yes = detect_from_image(&buf, &with_hull).expect("hull detection failed");
         let area_no: f32 = det_no.contours.iter().map(|c| c.area).sum();
         let area_yes: f32 = det_yes.contours.iter().map(|c| c.area).sum();
-        assert!(area_yes >= area_no,
-            "Convex hull area ({}) should be >= non-hull area ({})", area_yes, area_no);
+        assert!(
+            area_yes >= area_no,
+            "Convex hull area ({}) should be >= non-hull area ({})",
+            area_yes,
+            area_no
+        );
     }
 
     #[test]
     fn morphological_close_merges_gap() {
         let mut img = image::RgbaImage::new(400, 200);
         let white = image::Rgba([255, 255, 255, 255]);
-        for y in 50..150 { for x in 100..198 { img.put_pixel(x, y, white); } }
-        for y in 50..150 { for x in 200..298 { img.put_pixel(x, y, white); } }
+        for y in 50..150 {
+            for x in 100..198 {
+                img.put_pixel(x, y, white);
+            }
+        }
+        for y in 50..150 {
+            for x in 200..298 {
+                img.put_pixel(x, y, white);
+            }
+        }
         let buf = encode_rgba_to_png(&img);
         let no_morph = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             morph_size: 0,
             ..DetectionParams::default()
         };
         let with_morph = DetectionParams {
-            min_area: 0.005, min_vertices: 3, blur_radius: 0,
-            detection_method: DetectionMethod::Threshold, threshold: 127,
+            min_area: 0.005,
+            min_vertices: 3,
+            blur_radius: 0,
+            detection_method: DetectionMethod::Threshold,
+            threshold: 127,
             morph_size: 3,
             ..DetectionParams::default()
         };
         let det_no = detect_from_image(&buf, &no_morph).expect("no-morph detection failed");
         let det_yes = detect_from_image(&buf, &with_morph).expect("morph detection failed");
-        assert_eq!(det_no.contours.len(), 2,
-            "Without morph close, expected 2 separate rects, got {}", det_no.contours.len());
-        assert_eq!(det_yes.contours.len(), 1,
-            "With morph close, expected 1 merged rect, got {}", det_yes.contours.len());
+        assert_eq!(
+            det_no.contours.len(),
+            2,
+            "Without morph close, expected 2 separate rects, got {}",
+            det_no.contours.len()
+        );
+        assert_eq!(
+            det_yes.contours.len(),
+            1,
+            "With morph close, expected 1 merged rect, got {}",
+            det_yes.contours.len()
+        );
     }
 }

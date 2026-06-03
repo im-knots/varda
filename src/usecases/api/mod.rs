@@ -10,7 +10,7 @@ pub mod routes;
 pub mod runner;
 pub mod ws;
 
-use crate::engine::{CommandEnvelope, CommandResult, ErrorCode, EngineCommand, EngineState};
+use crate::engine::{CommandEnvelope, CommandResult, EngineCommand, EngineState, ErrorCode};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
@@ -44,9 +44,19 @@ pub fn command_response(result: CommandResult) -> axum::response::Response {
     use axum::Json;
 
     match result {
-        CommandResult::Ok => (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response(),
-        CommandResult::OkWithId { uuid } => (StatusCode::OK, Json(serde_json::json!({"status": "ok", "uuid": uuid}))).into_response(),
-        CommandResult::OkWithData { data } => (StatusCode::OK, Json(serde_json::json!({"status": "ok", "data": data}))).into_response(),
+        CommandResult::Ok => {
+            (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response()
+        }
+        CommandResult::OkWithId { uuid } => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "ok", "uuid": uuid})),
+        )
+            .into_response(),
+        CommandResult::OkWithData { data } => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "ok", "data": data})),
+        )
+            .into_response(),
         CommandResult::Err { code, message } => {
             let (status, code_str) = match code {
                 ErrorCode::NotFound => (StatusCode::NOT_FOUND, "not_found"),
@@ -54,7 +64,11 @@ pub fn command_response(result: CommandResult) -> axum::response::Response {
                 ErrorCode::InternalError => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
                 ErrorCode::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
             };
-            (status, Json(serde_json::json!({"error": code_str, "message": message}))).into_response()
+            (
+                status,
+                Json(serde_json::json!({"error": code_str, "message": message})),
+            )
+                .into_response()
         }
     }
 }

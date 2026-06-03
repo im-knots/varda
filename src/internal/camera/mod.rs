@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use yuvutils_rs::{
-    YuvBiPlanarImage, YuvPackedImage, YuvRange, YuvStandardMatrix,
-    yuv_nv12_to_rgba, yuyv422_to_rgba, YuvConversionMode,
+    yuv_nv12_to_rgba, yuyv422_to_rgba, YuvBiPlanarImage, YuvConversionMode, YuvPackedImage,
+    YuvRange, YuvStandardMatrix,
 };
 
 /// Opaque camera identifier (matches the OS-assigned index).
@@ -91,13 +91,15 @@ impl CameraManager {
     pub fn scan_devices(&mut self) {
         match nokhwa::query(nokhwa::utils::ApiBackend::Auto) {
             Ok(cameras) => {
-                self.devices = cameras.iter().enumerate().map(|(i, info)| {
-                    CameraDeviceInfo {
+                self.devices = cameras
+                    .iter()
+                    .enumerate()
+                    .map(|(i, info)| CameraDeviceInfo {
                         id: i as CameraId,
                         name: info.human_name().to_string(),
                         index: info.index().clone(),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 log::info!("Camera scan: found {} device(s)", self.devices.len());
                 for dev in &self.devices {
                     log::info!("  Camera {}: {}", dev.id, dev.name);
@@ -123,19 +125,21 @@ impl CameraManager {
             return Ok((active.width, active.height));
         }
 
-        let dev_info = self.devices.iter()
+        let dev_info = self
+            .devices
+            .iter()
             .find(|d| d.id == id)
             .context("Camera device not found")?
             .clone();
 
-        let format = RequestedFormat::new::<RgbAFormat>(
-            RequestedFormatType::AbsoluteHighestFrameRate,
-        );
+        let format =
+            RequestedFormat::new::<RgbAFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
 
         let mut camera = Camera::new(dev_info.index.clone(), format)
             .map_err(|e| anyhow::anyhow!("Failed to open camera '{}': {}", dev_info.name, e))?;
 
-        camera.open_stream()
+        camera
+            .open_stream()
             .map_err(|e| anyhow::anyhow!("Failed to start camera stream: {}", e))?;
 
         let res = camera.resolution();
@@ -144,13 +148,20 @@ impl CameraManager {
         let cam_fmt = camera.frame_format();
         log::info!(
             "Opened camera '{}': {}x{}, format={:?}, frame_rate={}",
-            dev_info.name, width, height, cam_fmt,
+            dev_info.name,
+            width,
+            height,
+            cam_fmt,
             camera.frame_rate()
         );
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("Camera {} Texture", dev_info.name)),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -174,14 +185,32 @@ impl CameraManager {
         let thread = std::thread::Builder::new()
             .name(format!("camera-{}", cam_id))
             .spawn(move || {
-                Self::capture_loop(camera, cam_id, cam_w, cam_h, frame_data_tx, stop_clone, connected_clone);
+                Self::capture_loop(
+                    camera,
+                    cam_id,
+                    cam_w,
+                    cam_h,
+                    frame_data_tx,
+                    stop_clone,
+                    connected_clone,
+                );
             })
             .map_err(|e| anyhow::anyhow!("Failed to spawn camera thread: {}", e))?;
 
-        self.active.insert(id, ActiveCamera {
-            texture, texture_view, width, height, ref_count: 1,
-            frame_data, stop_flag, connected, thread: Some(thread),
-        });
+        self.active.insert(
+            id,
+            ActiveCamera {
+                texture,
+                texture_view,
+                width,
+                height,
+                ref_count: 1,
+                frame_data,
+                stop_flag,
+                connected,
+                thread: Some(thread),
+            },
+        );
 
         Ok((width, height))
     }
@@ -214,7 +243,11 @@ impl CameraManager {
                 Err(_) => {
                     consecutive_errors += 1;
                     if consecutive_errors == ERROR_THRESHOLD {
-                        log::warn!("Camera {}: {} consecutive frame errors — marking disconnected", cam_id, ERROR_THRESHOLD);
+                        log::warn!(
+                            "Camera {}: {} consecutive frame errors — marking disconnected",
+                            cam_id,
+                            ERROR_THRESHOLD
+                        );
                         connected.store(false, Ordering::SeqCst);
                     }
                     std::thread::sleep(std::time::Duration::from_micros(backoff_us));
@@ -246,8 +279,11 @@ impl CameraManager {
                             YuvRange::Limited,
                             YuvStandardMatrix::Bt709,
                             YuvConversionMode::Balanced,
-                        ).is_ok()
-                    } else { false }
+                        )
+                        .is_ok()
+                    } else {
+                        false
+                    }
                 }
                 FrameFormat::YUYV => {
                     // SIMD YUYV→RGBA via yuvutils-rs
@@ -265,12 +301,16 @@ impl CameraManager {
                             w * 4,
                             YuvRange::Limited,
                             YuvStandardMatrix::Bt709,
-                        ).is_ok()
-                    } else { false }
+                        )
+                        .is_ok()
+                    } else {
+                        false
+                    }
                 }
                 _ => {
                     // Fallback for MJPEG/GRAY/etc
-                    buf.decode_image_to_buffer::<RgbAFormat>(&mut rgba_buf).is_ok()
+                    buf.decode_image_to_buffer::<RgbAFormat>(&mut rgba_buf)
+                        .is_ok()
                 }
             };
 
@@ -294,13 +334,23 @@ impl CameraManager {
                 if frame_count % 300 == 0 {
                     let elapsed = start.elapsed().as_secs_f64();
                     let fps = frame_count as f64 / elapsed;
-                    log::debug!("Camera {}: {:.1} fps ({} frames in {:.1}s, fmt={:?})",
-                        cam_id, fps, frame_count, elapsed, fmt);
+                    log::debug!(
+                        "Camera {}: {:.1} fps ({} frames in {:.1}s, fmt={:?})",
+                        cam_id,
+                        fps,
+                        frame_count,
+                        elapsed,
+                        fmt
+                    );
                 }
             } else {
                 consecutive_errors += 1;
                 if consecutive_errors == ERROR_THRESHOLD {
-                    log::warn!("Camera {}: {} consecutive decode errors — marking disconnected", cam_id, ERROR_THRESHOLD);
+                    log::warn!(
+                        "Camera {}: {} consecutive decode errors — marking disconnected",
+                        cam_id,
+                        ERROR_THRESHOLD
+                    );
                     connected.store(false, Ordering::SeqCst);
                 }
                 std::thread::sleep(std::time::Duration::from_micros(backoff_us));
@@ -365,7 +415,11 @@ impl CameraManager {
 
     /// Upload frames only for cameras whose IDs are in the provided set.
     /// Cameras not in the set skip the GPU upload, saving bandwidth.
-    pub fn update_selective(&mut self, queue: &wgpu::Queue, needed_ids: &std::collections::HashSet<CameraId>) {
+    pub fn update_selective(
+        &mut self,
+        queue: &wgpu::Queue,
+        needed_ids: &std::collections::HashSet<CameraId>,
+    ) {
         for (id, active) in self.active.iter_mut() {
             if needed_ids.contains(id) {
                 Self::upload_frame(active, queue);

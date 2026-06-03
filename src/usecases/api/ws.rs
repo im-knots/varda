@@ -35,10 +35,21 @@ struct WsCommandResponse {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum WsResultPayload {
-    Ok { status: &'static str },
-    OkWithId { status: &'static str, uuid: String },
-    OkWithData { status: &'static str, data: serde_json::Value },
-    Err { error: &'static str, message: String },
+    Ok {
+        status: &'static str,
+    },
+    OkWithId {
+        status: &'static str,
+        uuid: String,
+    },
+    OkWithData {
+        status: &'static str,
+        data: serde_json::Value,
+    },
+    Err {
+        error: &'static str,
+        message: String,
+    },
 }
 
 impl From<CommandResult> for WsResultPayload {
@@ -46,7 +57,9 @@ impl From<CommandResult> for WsResultPayload {
         match r {
             CommandResult::Ok => WsResultPayload::Ok { status: "ok" },
             CommandResult::OkWithId { uuid } => WsResultPayload::OkWithId { status: "ok", uuid },
-            CommandResult::OkWithData { data } => WsResultPayload::OkWithData { status: "ok", data },
+            CommandResult::OkWithData { data } => {
+                WsResultPayload::OkWithData { status: "ok", data }
+            }
             CommandResult::Err { code, message } => {
                 let error = match code {
                     crate::engine::ErrorCode::NotFound => "not_found",
@@ -81,7 +94,11 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
     };
 
     let mut last_json = serde_json::to_value(&initial).unwrap_or_default();
-    if sink.send(Message::Text(last_json.to_string().into())).await.is_err() {
+    if sink
+        .send(Message::Text(last_json.to_string().into()))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -103,9 +120,8 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
 
     // ── Write task: deltas + command responses ───────────────────
     let write_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(
-            std::time::Duration::from_millis(DELTA_INTERVAL_MS),
-        );
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_millis(DELTA_INTERVAL_MS));
 
         loop {
             tokio::select! {
@@ -176,7 +192,10 @@ mod tests {
 
     #[test]
     fn test_ws_result_payload_ok_with_id() {
-        let payload: WsResultPayload = CommandResult::OkWithId { uuid: "abc-123".into() }.into();
+        let payload: WsResultPayload = CommandResult::OkWithId {
+            uuid: "abc-123".into(),
+        }
+        .into();
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["status"], "ok");
         assert_eq!(json["uuid"], "abc-123");
@@ -187,7 +206,8 @@ mod tests {
         let payload: WsResultPayload = CommandResult::Err {
             code: ErrorCode::NotFound,
             message: "Channel not found".into(),
-        }.into();
+        }
+        .into();
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["error"], "not_found");
         assert_eq!(json["message"], "Channel not found");
@@ -230,7 +250,9 @@ mod tests {
         let json = r#"{"id":"req-1","SetCrossfader":0.5}"#;
         let ws_cmd: WsCommand = serde_json::from_str(json).unwrap();
         assert_eq!(ws_cmd.id.as_deref(), Some("req-1"));
-        assert!(matches!(ws_cmd.command, EngineCommand::SetCrossfader(v) if (v - 0.5).abs() < 1e-6));
+        assert!(
+            matches!(ws_cmd.command, EngineCommand::SetCrossfader(v) if (v - 0.5).abs() < 1e-6)
+        );
     }
 
     #[test]

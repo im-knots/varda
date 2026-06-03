@@ -4,9 +4,9 @@
 //! The engine (`VardaApp`) is owned here and driven each frame.
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
-use crate::app::{AppConfig, VardaApp};
 use crate::app::history::HistoryManager;
 use crate::app::render::{DeckLoadResult, FileDialogKind, FileDialogResult};
+use crate::app::{AppConfig, VardaApp};
 use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::{GpuContext, WindowSurface};
 use crate::usecases::ui;
@@ -50,7 +50,10 @@ fn spawn_detect_thread(
             let mut consecutive_errors: u32 = 0;
             while let Ok(req) = rx.recv() {
                 let contours = match crate::surface::import::detect_from_rgba(
-                    &req.rgba, req.w, req.h, &req.params,
+                    &req.rgba,
+                    req.w,
+                    req.h,
+                    &req.params,
                 ) {
                     Ok(result) => {
                         consecutive_errors = 0;
@@ -61,20 +64,20 @@ fn spawn_detect_thread(
                         if !matches!(e, crate::surface::import::ImportError::NoContours) {
                             consecutive_errors += 1;
                             if consecutive_errors == 1 || consecutive_errors % 60 == 0 {
-                                log::warn!(
-                                    "Detection error (count={}): {}",
-                                    consecutive_errors, e
-                                );
+                                log::warn!("Detection error (count={}): {}", consecutive_errors, e);
                             }
                         }
                         Vec::new()
                     }
                 };
-                if tx.send(DetectResponse {
-                    contours,
-                    is_capture: req.is_capture,
-                    camera_id: req.camera_id,
-                }).is_err() {
+                if tx
+                    .send(DetectResponse {
+                        contours,
+                        is_capture: req.is_capture,
+                        camera_id: req.camera_id,
+                    })
+                    .is_err()
+                {
                     break; // main thread dropped the receiver — exit
                 }
             }
@@ -208,7 +211,8 @@ impl UIRunner {
         });
 
         let event_loop = EventLoop::new()?;
-        event_loop.run_app(&mut self)
+        event_loop
+            .run_app(&mut self)
             .map_err(|e| anyhow::anyhow!("Event loop error: {:?}", e))?;
         Ok(())
     }
@@ -217,14 +221,20 @@ impl UIRunner {
 impl ApplicationHandler for UIRunner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Guard re-entry (resumed can be called multiple times on some platforms)
-        if self.varda.is_some() { return; }
+        if self.varda.is_some() {
+            return;
+        }
 
         let gpu = if self.config.headless {
             // Headless: no main window, no egui — GPU without window surface
             log::info!("Headless mode: skipping main window creation");
             match GpuContext::new_headless() {
                 Ok(gpu) => gpu,
-                Err(e) => { log::error!("Failed to create headless GPU context: {}", e); event_loop.exit(); return; }
+                Err(e) => {
+                    log::error!("Failed to create headless GPU context: {}", e);
+                    event_loop.exit();
+                    return;
+                }
             }
         } else {
             // Windowed: create main UI window + egui
@@ -235,8 +245,7 @@ impl ApplicationHandler for UIRunner {
                     .map(|img| {
                         let rgba = img.into_rgba8();
                         let (w, h) = (rgba.width(), rgba.height());
-                        winit::window::Icon::from_rgba(rgba.into_raw(), w, h)
-                            .ok()
+                        winit::window::Icon::from_rgba(rgba.into_raw(), w, h).ok()
                     })
                     .flatten()
             };
@@ -248,27 +257,46 @@ impl ApplicationHandler for UIRunner {
             }
 
             let window_static: &'static Window = match event_loop.create_window(window_attrs) {
-                Ok(w) => { log::info!("Window created"); Box::leak(Box::new(w)) }
-                Err(e) => { log::error!("Failed to create window: {}", e); event_loop.exit(); return; }
+                Ok(w) => {
+                    log::info!("Window created");
+                    Box::leak(Box::new(w))
+                }
+                Err(e) => {
+                    log::error!("Failed to create window: {}", e);
+                    event_loop.exit();
+                    return;
+                }
             };
             self.main_window_id = Some(window_static.id());
             self.window = Some(window_static);
 
-            let (gpu, win_surface) = match pollster::block_on(GpuContext::new_for_window(window_static)) {
-                Ok(pair) => pair,
-                Err(e) => { log::error!("Failed to create render context: {}", e); event_loop.exit(); return; }
-            };
+            let (gpu, win_surface) =
+                match pollster::block_on(GpuContext::new_for_window(window_static)) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        log::error!("Failed to create render context: {}", e);
+                        event_loop.exit();
+                        return;
+                    }
+                };
 
             self.cached_screen_size = window_static.inner_size();
             self.cached_scale_factor = window_static.scale_factor() as f32;
             self.egui_start_time = std::time::Instant::now(); // reset to window-creation epoch
-            self.blit_pipeline = BlitPipeline::new(&gpu.device, win_surface.surface_config.format).ok();
+            self.blit_pipeline =
+                BlitPipeline::new(&gpu.device, win_surface.surface_config.format).ok();
             self.egui_state = Some(egui_winit::State::new(
-                self.egui_ctx.clone(), egui::ViewportId::ROOT, window_static,
-                Some(window_static.scale_factor() as f32), None, Some(2 * 1024),
+                self.egui_ctx.clone(),
+                egui::ViewportId::ROOT,
+                window_static,
+                Some(window_static.scale_factor() as f32),
+                None,
+                Some(2 * 1024),
             ));
             self.egui_renderer = Some(egui_wgpu::Renderer::new(
-                &gpu.device, win_surface.surface_config.format, egui_wgpu::RendererOptions::default(),
+                &gpu.device,
+                win_surface.surface_config.format,
+                egui_wgpu::RendererOptions::default(),
             ));
 
             // Set the application icon on egui's viewport (controls dock/taskbar icon)
@@ -281,7 +309,10 @@ impl ApplicationHandler for UIRunner {
                         width: rgba.width(),
                         height: rgba.height(),
                     };
-                    self.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon_data))));
+                    self.egui_ctx
+                        .send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(
+                            icon_data,
+                        ))));
                 }
             }
             self.window_surface = Some(win_surface);
@@ -322,11 +353,20 @@ impl ApplicationHandler for UIRunner {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
-        let Some(varda) = self.varda.as_mut() else { return; };
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        let Some(varda) = self.varda.as_mut() else {
+            return;
+        };
         if self.main_window_id == Some(window_id) {
             if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state) {
-                if egui_state.on_window_event(window, &event).consumed { return; }
+                if egui_state.on_window_event(window, &event).consumed {
+                    return;
+                }
             }
             match event {
                 WindowEvent::CloseRequested => {
@@ -349,7 +389,9 @@ impl ApplicationHandler for UIRunner {
                 }
                 WindowEvent::RedrawRequested => {
                     self.render(event_loop);
-                    if let Some(w) = self.window { w.request_redraw(); }
+                    if let Some(w) = self.window {
+                        w.request_redraw();
+                    }
                 }
                 _ => {}
             }
@@ -369,7 +411,9 @@ impl ApplicationHandler for UIRunner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.config.headless { return; }
+        if !self.config.headless {
+            return;
+        }
 
         // Headless FPS throttle: sleep to maintain target FPS
         let frame_budget = std::time::Duration::from_secs_f64(1.0 / self.config.target_fps as f64);
@@ -386,36 +430,45 @@ impl ApplicationHandler for UIRunner {
     }
 }
 
-
 impl UIRunner {
     /// Register GPU textures with egui for deck/channel/output previews and main output.
     fn register_preview_textures(&mut self) {
         let Some(varda) = &self.varda else { return };
-        let Some(egui_renderer) = &mut self.egui_renderer else { return };
+        let Some(egui_renderer) = &mut self.egui_renderer else {
+            return;
+        };
         let context = varda.gpu_context();
         let mixer = varda.mixer_ref();
 
         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
             for (deck_idx, slot) in ch.decks.iter().enumerate() {
                 let tid = egui_renderer.register_native_texture(
-                    &context.device, &slot.deck.texture_view, wgpu::FilterMode::Linear,
+                    &context.device,
+                    &slot.deck.texture_view,
+                    wgpu::FilterMode::Linear,
                 );
                 self.deck_preview_textures.insert((ch_idx, deck_idx), tid);
             }
             // Channel composite preview
             let ch_tid = egui_renderer.register_native_texture(
-                &context.device, &ch.composite_view, wgpu::FilterMode::Linear,
+                &context.device,
+                &ch.composite_view,
+                wgpu::FilterMode::Linear,
             );
             self.channel_preview_textures.insert(ch_idx, ch_tid);
         }
         self.main_output_texture = Some(egui_renderer.register_native_texture(
-            &context.device, &mixer.composite_view(), wgpu::FilterMode::Linear,
+            &context.device,
+            &mixer.composite_view(),
+            wgpu::FilterMode::Linear,
         ));
         // Output preview textures — resolve source view for live preview
         for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
             let view = Self::output_preview_view(output, mixer);
             let tid = egui_renderer.register_native_texture(
-                &context.device, view, wgpu::FilterMode::Linear,
+                &context.device,
+                view,
+                wgpu::FilterMode::Linear,
             );
             self.output_preview_textures.insert(out_idx, tid);
         }
@@ -427,7 +480,9 @@ impl UIRunner {
             ) {
                 Ok(renderer) => {
                     let tid = egui_renderer.register_native_texture(
-                        &context.device, &renderer.output_view, wgpu::FilterMode::Linear,
+                        &context.device,
+                        &renderer.output_view,
+                        wgpu::FilterMode::Linear,
                     );
                     self.dome_preview_texture = Some(tid);
                     self.dome_preview_renderer = Some(renderer);
@@ -444,15 +499,19 @@ impl UIRunner {
         output: &'a crate::renderer::context::UnifiedOutput,
         mixer: &'a crate::mixer::Mixer,
     ) -> &'a wgpu::TextureView {
-        use crate::renderer::context::{UnifiedOutput, OutputSource};
+        use crate::renderer::context::{OutputSource, UnifiedOutput};
         match output {
             UnifiedOutput::Window(w) => &w.preview_texture_view,
             UnifiedOutput::Headless(h) => match &h.source {
                 OutputSource::Master => mixer.composite_view(),
-                OutputSource::Channel(idx) => mixer.channels().get(*idx)
+                OutputSource::Channel(idx) => mixer
+                    .channels()
+                    .get(*idx)
                     .map(|c| &c.composite_view)
                     .unwrap_or_else(|| mixer.composite_view()),
-                OutputSource::Deck(ch, dk) => mixer.channels().get(*ch)
+                OutputSource::Deck(ch, dk) => mixer
+                    .channels()
+                    .get(*ch)
                     .and_then(|c| c.decks.get(*dk))
                     .map(|s| &s.deck.texture_view)
                     .unwrap_or_else(|| mixer.composite_view()),
@@ -460,7 +519,8 @@ impl UIRunner {
                     let mut sorted = indices.clone();
                     sorted.sort();
                     sorted.dedup();
-                    mixer.get_sub_mix_view(&sorted)
+                    mixer
+                        .get_sub_mix_view(&sorted)
                         .unwrap_or_else(|| mixer.composite_view())
                 }
                 OutputSource::Domemaster => {
@@ -475,13 +535,17 @@ impl UIRunner {
     /// Re-register GPU textures when deck/channel/output layout changes.
     fn refresh_textures(&mut self) {
         let Some(varda) = &self.varda else { return };
-        let Some(egui_renderer) = &mut self.egui_renderer else { return };
+        let Some(egui_renderer) = &mut self.egui_renderer else {
+            return;
+        };
         let context = varda.gpu_context();
         let mixer = varda.mixer_ref();
 
         if self.main_output_texture.is_none() {
             self.main_output_texture = Some(egui_renderer.register_native_texture(
-                &context.device, &mixer.composite_view(), wgpu::FilterMode::Linear,
+                &context.device,
+                &mixer.composite_view(),
+                wgpu::FilterMode::Linear,
             ));
         }
         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
@@ -489,14 +553,18 @@ impl UIRunner {
                 let key = (ch_idx, deck_idx);
                 if !self.deck_preview_textures.contains_key(&key) {
                     let tid = egui_renderer.register_native_texture(
-                        &context.device, &slot.deck.texture_view, wgpu::FilterMode::Linear,
+                        &context.device,
+                        &slot.deck.texture_view,
+                        wgpu::FilterMode::Linear,
                     );
                     self.deck_preview_textures.insert(key, tid);
                 }
             }
             if !self.channel_preview_textures.contains_key(&ch_idx) {
                 let tid = egui_renderer.register_native_texture(
-                    &context.device, &ch.composite_view, wgpu::FilterMode::Linear,
+                    &context.device,
+                    &ch.composite_view,
+                    wgpu::FilterMode::Linear,
                 );
                 self.channel_preview_textures.insert(ch_idx, tid);
             }
@@ -506,7 +574,9 @@ impl UIRunner {
             if !self.output_preview_textures.contains_key(&out_idx) {
                 let view = Self::output_preview_view(output, mixer);
                 let tid = egui_renderer.register_native_texture(
-                    &context.device, view, wgpu::FilterMode::Linear,
+                    &context.device,
+                    view,
+                    wgpu::FilterMode::Linear,
                 );
                 self.output_preview_textures.insert(out_idx, tid);
             }
@@ -515,10 +585,16 @@ impl UIRunner {
 
     /// Headless render loop — engine processing without UI/egui.
     fn render_headless(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(varda) = self.varda.as_mut() else { return; };
+        let Some(varda) = self.varda.as_mut() else {
+            return;
+        };
 
         // Check for shutdown request (from API or SIGINT/SIGTERM)
-        if varda.shutdown_requested || self.shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        if varda.shutdown_requested
+            || self
+                .shutdown_flag
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
             log::info!("Shutdown requested, saving workspace and exiting...");
             varda.save_workspace(&self.layout);
             if let Some(api) = self.api_handle.take() {
@@ -541,8 +617,16 @@ impl UIRunner {
         varda.render_mixer_frame();
 
         // Push content rotation to domemaster renderer (headless path)
-        let c_az = self.layout.dome_geometry.content_azimuth_degrees.to_radians();
-        let c_el = self.layout.dome_geometry.content_elevation_degrees.to_radians();
+        let c_az = self
+            .layout
+            .dome_geometry
+            .content_azimuth_degrees
+            .to_radians();
+        let c_el = self
+            .layout
+            .dome_geometry
+            .content_elevation_degrees
+            .to_radians();
         let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
         varda.set_domemaster_content_rotation(c_az, c_el, c_roll);
 
@@ -558,7 +642,9 @@ impl UIRunner {
     fn render(&mut self, event_loop: &ActiveEventLoop) {
         // 1. Frame timing + notifications + inputs
         {
-            let Some(varda) = self.varda.as_mut() else { return; };
+            let Some(varda) = self.varda.as_mut() else {
+                return;
+            };
             varda.update_frame_timing();
             varda.update_notifications();
             varda.process_commands();
@@ -572,7 +658,9 @@ impl UIRunner {
 
         // 3. Create pending output windows + refresh monitors
         {
-            let Some(varda) = self.varda.as_mut() else { return; };
+            let Some(varda) = self.varda.as_mut() else {
+                return;
+            };
             varda.create_pending_outputs(event_loop);
             varda.refresh_monitors(event_loop);
         }
@@ -584,19 +672,38 @@ impl UIRunner {
 
                 // Update slice overlays when in dome mode
                 if self.layout.dome_mode_active {
-                    let setup = self.layout.dome_preset.to_setup_with_geometry(self.layout.dome_geometry);
+                    let setup = self
+                        .layout
+                        .dome_preset
+                        .to_setup_with_geometry(self.layout.dome_geometry);
                     renderer.set_slice_overlays(&context.device, &setup);
                 } else {
                     renderer.clear_slice_overlays();
                 }
 
                 // Use domemaster output if available, otherwise fall back to mixer composite
-                let source_view = varda.domemaster_view()
+                let source_view = varda
+                    .domemaster_view()
                     .unwrap_or_else(|| varda.mixer_ref().composite_view());
-                let c_az = self.layout.dome_geometry.content_azimuth_degrees.to_radians();
-                let c_el = self.layout.dome_geometry.content_elevation_degrees.to_radians();
+                let c_az = self
+                    .layout
+                    .dome_geometry
+                    .content_azimuth_degrees
+                    .to_radians();
+                let c_el = self
+                    .layout
+                    .dome_geometry
+                    .content_elevation_degrees
+                    .to_radians();
                 let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
-                renderer.render(&context.device, &context.queue, source_view, c_az, c_el, c_roll);
+                renderer.render(
+                    &context.device,
+                    &context.queue,
+                    source_view,
+                    c_az,
+                    c_el,
+                    c_roll,
+                );
             }
         }
 
@@ -613,7 +720,10 @@ impl UIRunner {
                     // Release previous camera if switching
                     if let Some(prev_id) = self.camera_detect_camera_id.take() {
                         varda.camera_manager_mut().release_camera(prev_id);
-                        if let (Some(tex_id), Some(egui_renderer)) = (self.camera_detect_texture.take(), self.egui_renderer.as_mut()) {
+                        if let (Some(tex_id), Some(egui_renderer)) = (
+                            self.camera_detect_texture.take(),
+                            self.egui_renderer.as_mut(),
+                        ) {
                             egui_renderer.free_texture(&tex_id);
                         }
                     }
@@ -624,7 +734,9 @@ impl UIRunner {
                                 let context = varda.gpu_context();
                                 if let Some(egui_renderer) = self.egui_renderer.as_mut() {
                                     let tid = egui_renderer.register_native_texture(
-                                        &context.device, tex_view, wgpu::FilterMode::Linear,
+                                        &context.device,
+                                        tex_view,
+                                        wgpu::FilterMode::Linear,
                                     );
                                     self.camera_detect_texture = Some(tid);
                                 }
@@ -633,7 +745,11 @@ impl UIRunner {
                             log::info!("Camera detection: opened camera {}", cam_id);
                         }
                         Err(e) => {
-                            log::error!("Camera detection: failed to open camera {}: {}", cam_id, e);
+                            log::error!(
+                                "Camera detection: failed to open camera {}: {}",
+                                cam_id,
+                                e
+                            );
                             self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
                         }
                     }
@@ -644,7 +760,10 @@ impl UIRunner {
                     if let Some(varda) = self.varda.as_mut() {
                         varda.camera_manager_mut().release_camera(prev_id);
                     }
-                    if let (Some(tex_id), Some(egui_renderer)) = (self.camera_detect_texture.take(), self.egui_renderer.as_mut()) {
+                    if let (Some(tex_id), Some(egui_renderer)) = (
+                        self.camera_detect_texture.take(),
+                        self.egui_renderer.as_mut(),
+                    ) {
                         egui_renderer.free_texture(&tex_id);
                     }
                 }
@@ -653,12 +772,21 @@ impl UIRunner {
         }
 
         // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
-        let Some(varda_ref) = self.varda.as_ref() else { return; };
-        let mut ui_data = varda_ref
-            .collect_ui_data(&self.layout, &self.deck_preview_textures, &self.channel_preview_textures, &self.output_preview_textures, self.main_output_texture);
+        let Some(varda_ref) = self.varda.as_ref() else {
+            return;
+        };
+        let mut ui_data = varda_ref.collect_ui_data(
+            &self.layout,
+            &self.deck_preview_textures,
+            &self.channel_preview_textures,
+            &self.output_preview_textures,
+            self.main_output_texture,
+        );
         ui_data.can_undo = self.history.can_undo();
         ui_data.can_redo = self.history.can_redo();
-        ui_data.pending_deck_loads = self.pending_deck_loads.load(std::sync::atomic::Ordering::Relaxed);
+        ui_data.pending_deck_loads = self
+            .pending_deck_loads
+            .load(std::sync::atomic::Ordering::Relaxed);
         ui_data.dome_preview_open = self.layout.dome_preview_open;
         ui_data.dome_preview_texture = self.dome_preview_texture;
         ui_data.camera_detect_texture = self.camera_detect_texture;
@@ -685,7 +813,11 @@ impl UIRunner {
         }
 
         // Submit new detection work if in Live mode and no work in flight
-        if let ui::CameraDetectMode::Live { camera_id, ref params } = self.layout.camera_detect_mode {
+        if let ui::CameraDetectMode::Live {
+            camera_id,
+            ref params,
+        } = self.layout.camera_detect_mode
+        {
             if !self.detect_in_flight {
                 if let Some(frame) = varda_ref.camera_manager().snapshot_frame(camera_id) {
                     let _ = self.detect_req_tx.send(DetectRequest {
@@ -709,7 +841,9 @@ impl UIRunner {
         // take_egui_input() calls it unconditionally. We replicate what it does
         // using cached values updated from Resized/ScaleFactorChanged events.
         let raw_input = {
-            let Some(egui_state) = &mut self.egui_state else { return };
+            let Some(egui_state) = &mut self.egui_state else {
+                return;
+            };
             let display_scale = self.cached_scale_factor;
             let pixels_per_point = self.egui_ctx.zoom_factor() * display_scale;
             let w = self.cached_screen_size.width as f32 / pixels_per_point;
@@ -723,7 +857,9 @@ impl UIRunner {
                 ));
             }
             input.viewport_id = egui::ViewportId::ROOT;
-            input.viewports.entry(egui::ViewportId::ROOT)
+            input
+                .viewports
+                .entry(egui::ViewportId::ROOT)
                 .or_default()
                 .native_pixels_per_point = Some(display_scale);
             input.take()
@@ -733,7 +869,9 @@ impl UIRunner {
             ui_actions = ui::panels::render_ui(ui, &ui_data);
         });
         {
-            let Some(egui_state) = &mut self.egui_state else { return };
+            let Some(egui_state) = &mut self.egui_state else {
+                return;
+            };
             egui_state.handle_platform_output(window, full_output.platform_output);
         }
 
@@ -793,7 +931,10 @@ impl UIRunner {
                         // Camera release handled by lifecycle block on next frame
                     }
                     ui::CameraDetectAction::UpdateParams(params) => {
-                        if let ui::CameraDetectMode::Live { params: ref mut p, .. } = self.layout.camera_detect_mode {
+                        if let ui::CameraDetectMode::Live {
+                            params: ref mut p, ..
+                        } = self.layout.camera_detect_mode
+                        {
                             *p = params.clone();
                             // Detection runs every frame in the lifecycle block — no need to run here
                         }
@@ -801,9 +942,15 @@ impl UIRunner {
                     ui::CameraDetectAction::Capture => {
                         // Send a capture request to the background thread — the
                         // response (polled above) will transition to Preview mode.
-                        if let ui::CameraDetectMode::Live { camera_id, ref params } = self.layout.camera_detect_mode {
+                        if let ui::CameraDetectMode::Live {
+                            camera_id,
+                            ref params,
+                        } = self.layout.camera_detect_mode
+                        {
                             if let Some(varda) = &self.varda {
-                                if let Some(frame) = varda.camera_manager().snapshot_frame(camera_id) {
+                                if let Some(frame) =
+                                    varda.camera_manager().snapshot_frame(camera_id)
+                                {
                                     let _ = self.detect_req_tx.send(DetectRequest {
                                         rgba: frame.0,
                                         w: frame.1,
@@ -818,21 +965,40 @@ impl UIRunner {
                         }
                     }
                     ui::CameraDetectAction::ToggleContour(idx) => {
-                        if let ui::CameraDetectMode::Preview { ref mut selected, .. } = self.layout.camera_detect_mode {
-                            if let Some(s) = selected.get_mut(idx) { *s = !*s; }
+                        if let ui::CameraDetectMode::Preview {
+                            ref mut selected, ..
+                        } = self.layout.camera_detect_mode
+                        {
+                            if let Some(s) = selected.get_mut(idx) {
+                                *s = !*s;
+                            }
                         }
                     }
                     ui::CameraDetectAction::SelectAll(val) => {
-                        if let ui::CameraDetectMode::Preview { ref mut selected, .. } = self.layout.camera_detect_mode {
+                        if let ui::CameraDetectMode::Preview {
+                            ref mut selected, ..
+                        } = self.layout.camera_detect_mode
+                        {
                             selected.iter_mut().for_each(|s| *s = val);
                         }
                     }
                     ui::CameraDetectAction::Accept => {
-                        if let ui::CameraDetectMode::Preview { ref contours, ref selected, .. } = self.layout.camera_detect_mode {
-                            let chosen: Vec<_> = contours.iter().zip(selected.iter())
-                                .filter(|(_, &s)| s).map(|(c, _)| c.clone()).collect();
+                        if let ui::CameraDetectMode::Preview {
+                            ref contours,
+                            ref selected,
+                            ..
+                        } = self.layout.camera_detect_mode
+                        {
+                            let chosen: Vec<_> = contours
+                                .iter()
+                                .zip(selected.iter())
+                                .filter(|(_, &s)| s)
+                                .map(|(c, _)| c.clone())
+                                .collect();
                             if !chosen.is_empty() {
-                                ui_actions.surface_actions.push(ui::SurfaceAction::ConfirmDetectedContours { contours: chosen });
+                                ui_actions.surface_actions.push(
+                                    ui::SurfaceAction::ConfirmDetectedContours { contours: chosen },
+                                );
                             }
                         }
                         self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
@@ -843,13 +1009,19 @@ impl UIRunner {
 
         // 6b. Engine actions (delegated to VardaApp)
         {
-            let Some(varda) = self.varda.as_mut() else { return; };
-            let Some(egui_renderer) = self.egui_renderer.as_mut() else { return; };
+            let Some(varda) = self.varda.as_mut() else {
+                return;
+            };
+            let Some(egui_renderer) = self.egui_renderer.as_mut() else {
+                return;
+            };
 
             // ── Undo/redo: snapshot before undoable mutations ──
             if ui_actions.has_undoable_action() {
                 let snapshot = crate::persistence::snapshot_scene(
-                    varda.mixer_ref(), varda.render_width(), varda.render_height(),
+                    varda.mixer_ref(),
+                    varda.render_width(),
+                    varda.render_height(),
                 );
                 self.history.push(snapshot);
             }
@@ -871,7 +1043,11 @@ impl UIRunner {
                 }
             }
 
-            let removed_ch = varda.apply_engine_actions(&mut ui_actions, egui_renderer, &mut self.deck_preview_textures);
+            let removed_ch = varda.apply_engine_actions(
+                &mut ui_actions,
+                egui_renderer,
+                &mut self.deck_preview_textures,
+            );
 
             // ── Drain MIDI-triggered global actions ──
             if std::mem::take(&mut varda.midi_pending_undo) {
@@ -887,7 +1063,9 @@ impl UIRunner {
             // ── Undo/redo: diff-apply from history ──
             if ui_actions.undo_requested || ui_actions.redo_requested {
                 let current = crate::persistence::snapshot_scene(
-                    varda.mixer_ref(), varda.render_width(), varda.render_height(),
+                    varda.mixer_ref(),
+                    varda.render_width(),
+                    varda.render_height(),
                 );
                 let target = if ui_actions.undo_requested {
                     self.history.undo(current)
@@ -901,7 +1079,11 @@ impl UIRunner {
                     for w in &warnings {
                         log::warn!("Undo/redo restore warning: {}", w);
                     }
-                    let label = if ui_actions.undo_requested { "↩ Undo" } else { "↪ Redo" };
+                    let label = if ui_actions.undo_requested {
+                        "↩ Undo"
+                    } else {
+                        "↪ Redo"
+                    };
                     varda.notify_info(label);
 
                     if structural_changed {
@@ -913,21 +1095,26 @@ impl UIRunner {
                         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
                             for (deck_idx, slot) in ch.decks.iter().enumerate() {
                                 let tex_id = egui_renderer.register_native_texture(
-                                    &context.device, &slot.deck.texture_view,
+                                    &context.device,
+                                    &slot.deck.texture_view,
                                     wgpu::FilterMode::Linear,
                                 );
-                                self.deck_preview_textures.insert((ch_idx, deck_idx), tex_id);
+                                self.deck_preview_textures
+                                    .insert((ch_idx, deck_idx), tex_id);
                             }
                             let ch_tid = egui_renderer.register_native_texture(
-                                &context.device, &ch.composite_view,
+                                &context.device,
+                                &ch.composite_view,
                                 wgpu::FilterMode::Linear,
                             );
                             self.channel_preview_textures.insert(ch_idx, ch_tid);
                         }
                         if let Some(main_id) = self.main_output_texture {
                             egui_renderer.update_egui_texture_from_wgpu_texture(
-                                &context.device, &varda.mixer_ref().composite_view(),
-                                wgpu::FilterMode::Linear, main_id,
+                                &context.device,
+                                &varda.mixer_ref().composite_view(),
+                                wgpu::FilterMode::Linear,
+                                main_id,
                             );
                         }
                         // Re-register output preview textures
@@ -935,7 +1122,8 @@ impl UIRunner {
                         for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
                             let view = Self::output_preview_view(output, mixer);
                             let tid = egui_renderer.register_native_texture(
-                                &context.device, view,
+                                &context.device,
+                                view,
                                 wgpu::FilterMode::Linear,
                             );
                             self.output_preview_textures.insert(out_idx, tid);
@@ -963,22 +1151,28 @@ impl UIRunner {
                         let key = (ch_idx, deck_idx);
                         if let Some(&tex_id) = self.deck_preview_textures.get(&key) {
                             egui_renderer.update_egui_texture_from_wgpu_texture(
-                                &context.device, &slot.deck.texture_view,
-                                wgpu::FilterMode::Linear, tex_id,
+                                &context.device,
+                                &slot.deck.texture_view,
+                                wgpu::FilterMode::Linear,
+                                tex_id,
                             );
                         }
                     }
                     if let Some(&ch_tid) = self.channel_preview_textures.get(&ch_idx) {
                         egui_renderer.update_egui_texture_from_wgpu_texture(
-                            &context.device, &ch.composite_view,
-                            wgpu::FilterMode::Linear, ch_tid,
+                            &context.device,
+                            &ch.composite_view,
+                            wgpu::FilterMode::Linear,
+                            ch_tid,
                         );
                     }
                 }
                 if let Some(main_id) = self.main_output_texture {
                     egui_renderer.update_egui_texture_from_wgpu_texture(
-                        &context.device, &mixer.composite_view(),
-                        wgpu::FilterMode::Linear, main_id,
+                        &context.device,
+                        &mixer.composite_view(),
+                        wgpu::FilterMode::Linear,
+                        main_id,
                     );
                 }
                 // Update output preview textures after resolution change
@@ -986,8 +1180,10 @@ impl UIRunner {
                     if let Some(&tid) = self.output_preview_textures.get(&out_idx) {
                         let view = Self::output_preview_view(output, mixer);
                         egui_renderer.update_egui_texture_from_wgpu_texture(
-                            &context.device, view,
-                            wgpu::FilterMode::Linear, tid,
+                            &context.device,
+                            view,
+                            wgpu::FilterMode::Linear,
+                            tid,
                         );
                     }
                 }
@@ -1043,7 +1239,12 @@ impl UIRunner {
                         let ch_idx = result.ch_idx;
                         if let Some(ch) = varda.mixer_mut().channel_mut(ch_idx) {
                             let idx = ch.add_deck(deck);
-                            log::info!("Background load complete: deck {} to channel {}: {}", idx, ch_idx, result.name);
+                            log::info!(
+                                "Background load complete: deck {} to channel {}: {}",
+                                idx,
+                                ch_idx,
+                                result.name
+                            );
                         }
                         // Re-borrow for texture registration (separate from mixer borrow)
                         if let Some(ch) = varda.mixer_ref().channels().get(ch_idx) {
@@ -1056,24 +1257,43 @@ impl UIRunner {
                             self.deck_preview_textures.insert((ch_idx, idx), texture_id);
                         }
                     }
-                    Err(e) => log::error!("Background deck load failed for '{}': {}", result.name, e),
+                    Err(e) => {
+                        log::error!("Background deck load failed for '{}': {}", result.name, e)
+                    }
                 }
             }
         }
 
         // 7. GPU: render mixer + blit + egui overlay + present
         {
-            let Some(varda) = self.varda.as_mut() else { return; };
+            let Some(varda) = self.varda.as_mut() else {
+                return;
+            };
             varda.render_mixer_frame();
         }
-        self.submit_frame(window, full_output.shapes, full_output.pixels_per_point, full_output.textures_delta);
+        self.submit_frame(
+            window,
+            full_output.shapes,
+            full_output.pixels_per_point,
+            full_output.textures_delta,
+        );
 
         // 8. Render output windows + publish state
         {
-            let Some(varda) = self.varda.as_mut() else { return; };
+            let Some(varda) = self.varda.as_mut() else {
+                return;
+            };
             // Push content rotation to domemaster renderer each frame (real-time, MIDI-mappable)
-            let c_az = self.layout.dome_geometry.content_azimuth_degrees.to_radians();
-            let c_el = self.layout.dome_geometry.content_elevation_degrees.to_radians();
+            let c_az = self
+                .layout
+                .dome_geometry
+                .content_azimuth_degrees
+                .to_radians();
+            let c_el = self
+                .layout
+                .dome_geometry
+                .content_elevation_degrees
+                .to_radians();
             let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
             varda.set_domemaster_content_rotation(c_az, c_el, c_roll);
             varda.render_outputs();
@@ -1094,13 +1314,17 @@ impl UIRunner {
     ) {
         let Some(varda) = &self.varda else { return };
         let context = varda.gpu_context();
-        let Some(win_surface) = &self.window_surface else { return };
+        let Some(win_surface) = &self.window_surface else {
+            return;
+        };
 
         let paint_jobs = self.egui_ctx.tessellate(shapes, pixels_per_point);
 
         // Always apply texture updates so the egui renderer stays in sync,
         // even when the surface is unavailable (e.g. Occluded at startup).
-        let Some(egui_renderer) = &mut self.egui_renderer else { return };
+        let Some(egui_renderer) = &mut self.egui_renderer else {
+            return;
+        };
         for (id, delta) in &textures_delta.set {
             egui_renderer.update_texture(&context.device, &context.queue, *id, delta);
         }
@@ -1114,52 +1338,88 @@ impl UIRunner {
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 log::warn!("UI surface outdated, reconfiguring");
-                win_surface.surface.configure(&context.device, &win_surface.surface_config);
+                win_surface
+                    .surface
+                    .configure(&context.device, &win_surface.surface_config);
                 match win_surface.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(o)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(o) => o,
-                    other => { log::error!("Failed to get surface texture after reconfigure: {:?}", other); return; }
+                    other => {
+                        log::error!(
+                            "Failed to get surface texture after reconfigure: {:?}",
+                            other
+                        );
+                        return;
+                    }
                 }
             }
-            other => { log::debug!("UI surface unavailable: {:?}", other); return; }
+            other => {
+                log::debug!("UI surface unavailable: {:?}", other);
+                return;
+            }
         };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Screen Encoder"),
-        });
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Screen Encoder"),
+            });
 
         let bind_group = if let Some(blit) = &self.blit_pipeline {
             let mixer = varda.mixer_ref();
             Some(blit.create_bind_group(&context.device, &mixer.composite_view()))
-        } else { None };
+        } else {
+            None
+        };
 
         let screen_desc = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [win_surface.size.width, win_surface.size.height],
             pixels_per_point: window.scale_factor() as f32,
         };
 
-        egui_renderer.update_buffers(&context.device, &context.queue, &mut encoder, &paint_jobs, &screen_desc);
+        egui_renderer.update_buffers(
+            &context.device,
+            &context.queue,
+            &mut encoder,
+            &paint_jobs,
+            &screen_desc,
+        );
 
         {
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view, resolve_target: None,
+                    view: &view,
+                    resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],
-                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
             });
-            if let (Some(bg), Some(blit)) = (&bind_group, &self.blit_pipeline) { blit.render(&mut rp, bg); }
+            if let (Some(bg), Some(blit)) = (&bind_group, &self.blit_pipeline) {
+                blit.render(&mut rp, bg);
+            }
             let mut rp_static = rp.forget_lifetime();
             egui_renderer.render(&mut rp_static, &paint_jobs, &screen_desc);
         }
 
-        for id in &textures_delta.free { egui_renderer.free_texture(id); }
+        for id in &textures_delta.free {
+            egui_renderer.free_texture(id);
+        }
 
         context.queue.submit(std::iter::once(encoder.finish()));
         output.present();

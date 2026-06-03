@@ -1,15 +1,15 @@
 //! Deck rendering — source rendering, effect chain, video frame updates, and resize.
 
+use super::{Deck, DeckSource, PassBuffer, ScalingMode};
 use crate::audio::AudioData;
 use crate::isf::{ISFPass, PhaseInput};
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
-use crate::renderer::{GpuContext, UnifiedPipeline, ISFUniforms};
+use crate::renderer::BlitPipeline;
+use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::time::Instant;
-use crate::renderer::BlitPipeline;
-use super::{Deck, DeckSource, ScalingMode, PassBuffer};
 
 /// Accumulate phase times: for each PhaseInput, adds `dt * param_value * scale` to the accumulator.
 fn accumulate_phase_times(
@@ -33,14 +33,19 @@ impl Deck {
     /// Handles both ffmpeg RGBA uploads and HAP BCn compressed uploads.
     pub fn update_video_frame(&mut self, context: &GpuContext) -> Result<()> {
         match &mut self.source {
-            DeckSource::Video { ref mut player, ref texture, .. } => {
+            DeckSource::Video {
+                ref mut player,
+                ref texture,
+                ..
+            } => {
                 if player.is_playing() {
                     let width = player.width();
                     let height = player.height();
                     if let Some(frame_data) = player.next_frame()? {
                         context.queue.write_texture(
                             wgpu::TexelCopyTextureInfo {
-                                texture, mip_level: 0,
+                                texture,
+                                mip_level: 0,
                                 origin: wgpu::Origin3d::ZERO,
                                 aspect: wgpu::TextureAspect::All,
                             },
@@ -50,12 +55,21 @@ impl Deck {
                                 bytes_per_row: Some(width * 4),
                                 rows_per_image: Some(height),
                             },
-                            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                            wgpu::Extent3d {
+                                width,
+                                height,
+                                depth_or_array_layers: 1,
+                            },
                         );
                     }
                 }
             }
-            DeckSource::HapVideo { ref mut player, ref texture, ref alpha_texture, .. } => {
+            DeckSource::HapVideo {
+                ref mut player,
+                ref texture,
+                ref alpha_texture,
+                ..
+            } => {
                 if player.is_playing() {
                     let width = player.width();
                     let height = player.height();
@@ -65,7 +79,8 @@ impl Deck {
                         let color_bpr = blocks_x * frame.color_format.block_bytes();
                         context.queue.write_texture(
                             wgpu::TexelCopyTextureInfo {
-                                texture, mip_level: 0,
+                                texture,
+                                mip_level: 0,
                                 origin: wgpu::Origin3d::ZERO,
                                 aspect: wgpu::TextureAspect::All,
                             },
@@ -75,7 +90,11 @@ impl Deck {
                                 bytes_per_row: Some(color_bpr),
                                 rows_per_image: Some(blocks_y),
                             },
-                            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                            wgpu::Extent3d {
+                                width,
+                                height,
+                                depth_or_array_layers: 1,
+                            },
                         );
 
                         if let (Some(alpha_data), Some(alpha_fmt), Some(alpha_tex)) =
@@ -84,7 +103,8 @@ impl Deck {
                             let alpha_bpr = blocks_x * alpha_fmt.block_bytes();
                             context.queue.write_texture(
                                 wgpu::TexelCopyTextureInfo {
-                                    texture: alpha_tex, mip_level: 0,
+                                    texture: alpha_tex,
+                                    mip_level: 0,
                                     origin: wgpu::Origin3d::ZERO,
                                     aspect: wgpu::TextureAspect::All,
                                 },
@@ -94,7 +114,11 @@ impl Deck {
                                     bytes_per_row: Some(alpha_bpr),
                                     rows_per_image: Some(blocks_y),
                                 },
-                                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                                wgpu::Extent3d {
+                                    width,
+                                    height,
+                                    depth_or_array_layers: 1,
+                                },
                             );
                         }
                     }
@@ -106,13 +130,27 @@ impl Deck {
     }
 
     /// Render the deck to its texture (source + effect chain)
-    pub fn render(&mut self, context: &GpuContext, audio_data: &AudioData, modulation: &ModulationEngine, deck_idx: usize, cmd_buffers: &mut Vec<wgpu::CommandBuffer>) -> Result<()> {
+    pub fn render(
+        &mut self,
+        context: &GpuContext,
+        audio_data: &AudioData,
+        modulation: &ModulationEngine,
+        deck_idx: usize,
+        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+    ) -> Result<()> {
         let prefix = format!("deck{}", deck_idx);
         self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers)
     }
 
     /// Render the deck with a custom param prefix for modulation key lookup
-    pub fn render_with_prefix(&mut self, context: &GpuContext, audio_data: &AudioData, modulation: &ModulationEngine, param_prefix: &str, cmd_buffers: &mut Vec<wgpu::CommandBuffer>) -> Result<()> {
+    pub fn render_with_prefix(
+        &mut self,
+        context: &GpuContext,
+        audio_data: &AudioData,
+        modulation: &ModulationEngine,
+        param_prefix: &str,
+        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+    ) -> Result<()> {
         let now = Instant::now();
         let time = (now - self.start_time).as_secs_f32();
         let time_delta = (now - self.last_frame_time).as_secs_f32();
@@ -134,37 +172,64 @@ impl Deck {
         );
         let generator_phase_times = self.phase_accumulators;
 
-        let enabled_effects: Vec<usize> = self.effects.iter()
+        let enabled_effects: Vec<usize> = self
+            .effects
+            .iter()
             .enumerate()
             .filter(|(_, e)| e.enabled)
             .map(|(i, _)| i)
             .collect();
 
         let source_to_b = enabled_effects.len() % 2 == 1;
-        let generator_target = if source_to_b { &self.texture_b_view } else { &self.texture_view };
+        let generator_target = if source_to_b {
+            &self.texture_b_view
+        } else {
+            &self.texture_view
+        };
 
         match &mut self.source {
-            DeckSource::Shader { pipeline, pass_buffers, passes, imported_textures, .. } => {
-                let imported_views: Vec<&wgpu::TextureView> = imported_textures
-                    .iter()
-                    .map(|(_, _, v)| v)
-                    .collect();
+            DeckSource::Shader {
+                pipeline,
+                pass_buffers,
+                passes,
+                imported_textures,
+                ..
+            } => {
+                let imported_views: Vec<&wgpu::TextureView> =
+                    imported_textures.iter().map(|(_, _, v)| v).collect();
                 if pipeline.num_pass_buffers > 0 {
                     Self::render_multi_pass_static(
-                        context, pipeline, passes, pass_buffers,
-                        time, time_delta, self.frame_count,
-                        self.texture.width(), self.texture.height(),
-                        generator_target, audio_data,
-                        &mut self.generator_params, modulation, &param_prefix,
+                        context,
+                        pipeline,
+                        passes,
+                        pass_buffers,
+                        time,
+                        time_delta,
+                        self.frame_count,
+                        self.texture.width(),
+                        self.texture.height(),
+                        generator_target,
+                        audio_data,
+                        &mut self.generator_params,
+                        modulation,
+                        &param_prefix,
                         &imported_views,
                         generator_phase_times,
                         cmd_buffers,
                     )?;
                 } else {
                     Self::render_simple_static(
-                        context, pipeline, &self.texture,
-                        time, time_delta, self.frame_count, generator_target, audio_data,
-                        &mut self.generator_params, modulation, &param_prefix,
+                        context,
+                        pipeline,
+                        &self.texture,
+                        time,
+                        time_delta,
+                        self.frame_count,
+                        generator_target,
+                        audio_data,
+                        &mut self.generator_params,
+                        modulation,
+                        &param_prefix,
                         &imported_views,
                         generator_phase_times,
                         cmd_buffers,
@@ -172,11 +237,18 @@ impl Deck {
                 }
             }
 
-            DeckSource::Video { ref texture_view, ref blit_pipeline, .. } => {
+            DeckSource::Video {
+                ref texture_view,
+                ref blit_pipeline,
+                ..
+            } => {
                 let bind_group = blit_pipeline.create_bind_group(&context.device, texture_view);
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Video Blit Encoder"),
-                });
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Video Blit Encoder"),
+                        });
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Video Blit Pass"),
@@ -199,18 +271,31 @@ impl Deck {
                 cmd_buffers.push(encoder.finish());
             }
             DeckSource::HapVideo {
-                ref texture_view, ref alpha_texture_view, ref dummy_alpha_view,
-                ref convert_pipeline, ref hap_format, ref player, ..
+                ref texture_view,
+                ref alpha_texture_view,
+                ref dummy_alpha_view,
+                ref convert_pipeline,
+                ref hap_format,
+                ref player,
+                ..
             } => {
                 let needs_ycocg = hap_format.needs_ycocg_convert();
                 let has_alpha = player.is_dual_plane && alpha_texture_view.is_some();
                 convert_pipeline.set_params(&context.queue, 1.0, needs_ycocg, has_alpha);
 
-                let alpha_view = if let Some(ref av) = alpha_texture_view { av } else { dummy_alpha_view };
-                let bind_group = convert_pipeline.create_bind_group(&context.device, texture_view, alpha_view);
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("HAP Convert Encoder"),
-                });
+                let alpha_view = if let Some(ref av) = alpha_texture_view {
+                    av
+                } else {
+                    dummy_alpha_view
+                };
+                let bind_group =
+                    convert_pipeline.create_bind_group(&context.device, texture_view, alpha_view);
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("HAP Convert Encoder"),
+                        });
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("HAP Convert Pass"),
@@ -232,17 +317,29 @@ impl Deck {
                 }
                 cmd_buffers.push(encoder.finish());
             }
-            DeckSource::Image { texture_view, blit_pipeline, source_width, source_height, scaling_mode, .. } => {
+            DeckSource::Image {
+                texture_view,
+                blit_pipeline,
+                source_width,
+                source_height,
+                scaling_mode,
+                ..
+            } => {
                 let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
-                    *source_width, *source_height,
-                    self.texture.width(), self.texture.height(),
+                    *source_width,
+                    *source_height,
+                    self.texture.width(),
+                    self.texture.height(),
                 );
                 blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
 
                 let bind_group = blit_pipeline.create_bind_group(&context.device, texture_view);
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Image Blit Encoder"),
-                });
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Image Blit Encoder"),
+                        });
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Image Blit Pass"),
@@ -265,9 +362,12 @@ impl Deck {
                 cmd_buffers.push(encoder.finish());
             }
             DeckSource::SolidColor { color } => {
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("SolidColor Clear Encoder"),
-                });
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("SolidColor Clear Encoder"),
+                        });
                 {
                     let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("SolidColor Clear Pass"),
@@ -276,7 +376,10 @@ impl Deck {
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: color[0], g: color[1], b: color[2], a: color[3],
+                                    r: color[0],
+                                    g: color[1],
+                                    b: color[2],
+                                    a: color[3],
                                 }),
                                 store: wgpu::StoreOp::Store,
                             },
@@ -290,11 +393,27 @@ impl Deck {
                 }
                 cmd_buffers.push(encoder.finish());
             }
-            DeckSource::ExternalSource { kind, blit_pipeline, source_width, source_height, scaling_mode } => {
+            DeckSource::ExternalSource {
+                kind,
+                blit_pipeline,
+                source_width,
+                source_height,
+                scaling_mode,
+            } => {
                 if let Some(ext_view) = &self.external_source_view {
-                    Self::blit_external_source(context, blit_pipeline, ext_view,
-                        *source_width, *source_height, self.texture.width(), self.texture.height(),
-                        *scaling_mode, generator_target, kind.label(), cmd_buffers);
+                    Self::blit_external_source(
+                        context,
+                        blit_pipeline,
+                        ext_view,
+                        *source_width,
+                        *source_height,
+                        self.texture.width(),
+                        self.texture.height(),
+                        *scaling_mode,
+                        generator_target,
+                        kind.label(),
+                        cmd_buffers,
+                    );
                 }
             }
         }
@@ -334,8 +453,12 @@ impl Deck {
             };
             let fx_prefix = format!("fx_{}", self.effects[effect_idx].uuid);
             self.effects[effect_idx].apply_with_modulation(
-                context, input_view, output_view, &uniforms,
-                Some(modulation), Some(&fx_prefix),
+                context,
+                input_view,
+                output_view,
+                &uniforms,
+                Some(modulation),
+                Some(&fx_prefix),
                 cmd_buffers,
             )?;
             read_from_b = !read_from_b;
@@ -380,16 +503,28 @@ impl Deck {
         pipeline.update_uniforms(&context.queue, &uniforms);
 
         generator_params.ensure_buffer(&context.device);
-        generator_params.update_buffer_with_modulation(&context.queue, modulation, Some(param_prefix));
-
-        let user_params_buffer = generator_params.buffer().expect("Buffer should exist after ensure_buffer");
-        let bind_group = pipeline.create_bind_group(
-            &context.device, None, &[], imported_views, Some(user_params_buffer),
+        generator_params.update_buffer_with_modulation(
+            &context.queue,
+            modulation,
+            Some(param_prefix),
         );
 
-        let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Deck Source Render Encoder"),
-        });
+        let user_params_buffer = generator_params
+            .buffer()
+            .expect("Buffer should exist after ensure_buffer");
+        let bind_group = pipeline.create_bind_group(
+            &context.device,
+            None,
+            &[],
+            imported_views,
+            Some(user_params_buffer),
+        );
+
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Deck Source Render Encoder"),
+            });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -439,8 +574,14 @@ impl Deck {
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         generator_params.ensure_buffer(&context.device);
-        generator_params.update_buffer_with_modulation(&context.queue, modulation, Some(param_prefix));
-        let user_params_buffer = generator_params.buffer().expect("Buffer should exist after ensure_buffer");
+        generator_params.update_buffer_with_modulation(
+            &context.queue,
+            modulation,
+            Some(param_prefix),
+        );
+        let user_params_buffer = generator_params
+            .buffer()
+            .expect("Buffer should exist after ensure_buffer");
 
         const SIMULATION_ITERATIONS: usize = 4;
 
@@ -467,7 +608,8 @@ impl Deck {
             // Use the pass buffer's actual dimensions as RENDERSIZE so
             // shaders that store per-pixel state (e.g. particle buffers)
             // can address their own texels correctly.
-            let pass_render_size = pass_buffers.get(target_name)
+            let pass_render_size = pass_buffers
+                .get(target_name)
                 .map(|pb| {
                     let sz = pb.texture_a.size();
                     [sz.width as f32, sz.height as f32]
@@ -501,15 +643,25 @@ impl Deck {
                     .map(|pb| pb.read_view())
                     .collect();
 
-                let bind_group = multi_pass.create_bind_group(&context.device, None, &pass_buffer_views, imported_views, Some(user_params_buffer));
+                let bind_group = multi_pass.create_bind_group(
+                    &context.device,
+                    None,
+                    &pass_buffer_views,
+                    imported_views,
+                    Some(user_params_buffer),
+                );
 
-                let target_view = pass_buffers.get(target_name)
+                let target_view = pass_buffers
+                    .get(target_name)
                     .map(|pb| pb.write_view())
                     .unwrap_or(final_target);
 
-                let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Sim Pass Encoder"),
-                });
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Sim Pass Encoder"),
+                        });
 
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -571,11 +723,20 @@ impl Deck {
                 .map(|pb| pb.read_view())
                 .collect();
 
-            let bind_group = multi_pass.create_bind_group(&context.device, None, &pass_buffer_views, imported_views, Some(user_params_buffer));
+            let bind_group = multi_pass.create_bind_group(
+                &context.device,
+                None,
+                &pass_buffer_views,
+                imported_views,
+                Some(user_params_buffer),
+            );
 
-            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Final Pass Encoder"),
-            });
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Final Pass Encoder"),
+                    });
 
             {
                 let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -595,7 +756,8 @@ impl Deck {
                     multiview_mask: None,
                 });
 
-                render_pass.set_pipeline(multi_pass.pipeline_for_format(wgpu::TextureFormat::Rgba8Unorm));
+                render_pass
+                    .set_pipeline(multi_pass.pipeline_for_format(wgpu::TextureFormat::Rgba8Unorm));
                 render_pass.set_bind_group(0, &bind_group, &[]);
                 render_pass.draw(0..3, 0..1);
             }
@@ -621,14 +783,19 @@ impl Deck {
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) {
         let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
-            source_width, source_height, target_width, target_height,
+            source_width,
+            source_height,
+            target_width,
+            target_height,
         );
         blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
 
         let bind_group = blit_pipeline.create_bind_group(&context.device, source_view);
-        let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some(&format!("{} Blit Encoder", label)),
-        });
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(&format!("{} Blit Encoder", label)),
+            });
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(&format!("{} Blit Pass", label)),
@@ -657,24 +824,38 @@ impl Deck {
         let height = height.max(1);
         self.texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Deck Texture (Linear)"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        self.texture_view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.texture_view = self
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.texture_b = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Deck Texture B (Linear)"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        self.texture_b_view = self.texture_b.create_view(&wgpu::TextureViewDescriptor::default());
+        self.texture_b_view = self
+            .texture_b
+            .create_view(&wgpu::TextureViewDescriptor::default());
     }
 
     /// Get the final output texture view (after effect chain)
@@ -706,9 +887,9 @@ pub fn get_current_date() -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isf::ISFInput;
     use crate::isf::PhaseInput;
     use crate::params::ShaderParams;
-    use crate::isf::ISFInput;
 
     #[test]
     fn isf_uniforms_size_is_80_bytes() {
@@ -722,14 +903,21 @@ mod tests {
     #[test]
     fn accumulate_phase_times_basic() {
         let mut accum = [0.0f32; 4];
-        let inputs = vec![
-            PhaseInput { param: "speed".into(), index: 0, scale: 1.0 },
-        ];
+        let inputs = vec![PhaseInput {
+            param: "speed".into(),
+            index: 0,
+            scale: 1.0,
+        }];
         let isf_inputs = vec![ISFInput {
-            name: "speed".into(), input_type: "float".into(),
+            name: "speed".into(),
+            input_type: "float".into(),
             default: Some(serde_json::json!(2.0)),
-            min: Some(0.0), max: Some(5.0),
-            label: None, values: None, labels: None, identity: None,
+            min: Some(0.0),
+            max: Some(5.0),
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
         }];
         let params = ShaderParams::from_inputs(&isf_inputs);
 
@@ -746,14 +934,21 @@ mod tests {
     #[test]
     fn accumulate_phase_times_with_scale() {
         let mut accum = [0.0f32; 4];
-        let inputs = vec![
-            PhaseInput { param: "speed".into(), index: 0, scale: 0.3 },
-        ];
+        let inputs = vec![PhaseInput {
+            param: "speed".into(),
+            index: 0,
+            scale: 0.3,
+        }];
         let isf_inputs = vec![ISFInput {
-            name: "speed".into(), input_type: "float".into(),
+            name: "speed".into(),
+            input_type: "float".into(),
             default: Some(serde_json::json!(1.0)),
-            min: Some(0.0), max: Some(5.0),
-            label: None, values: None, labels: None, identity: None,
+            min: Some(0.0),
+            max: Some(5.0),
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
         }];
         let params = ShaderParams::from_inputs(&isf_inputs);
 
@@ -765,14 +960,21 @@ mod tests {
     #[test]
     fn accumulate_phase_times_speed_change_is_continuous() {
         let mut accum = [0.0f32; 4];
-        let inputs = vec![
-            PhaseInput { param: "speed".into(), index: 0, scale: 1.0 },
-        ];
+        let inputs = vec![PhaseInput {
+            param: "speed".into(),
+            index: 0,
+            scale: 1.0,
+        }];
         let isf_inputs = vec![ISFInput {
-            name: "speed".into(), input_type: "float".into(),
+            name: "speed".into(),
+            input_type: "float".into(),
             default: Some(serde_json::json!(1.0)),
-            min: Some(0.0), max: Some(5.0),
-            label: None, values: None, labels: None, identity: None,
+            min: Some(0.0),
+            max: Some(5.0),
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
         }];
         let mut params = ShaderParams::from_inputs(&isf_inputs);
 
@@ -789,41 +991,93 @@ mod tests {
 
         // Value should increase by dt*3.0, not jump to TIME*3.0
         let expected_delta = 0.016 * 3.0;
-        assert!((after_change - before_change - expected_delta).abs() < 1e-5,
+        assert!(
+            (after_change - before_change - expected_delta).abs() < 1e-5,
             "Phase time should be continuous: before={}, after={}, expected delta={}",
-            before_change, after_change, expected_delta);
+            before_change,
+            after_change,
+            expected_delta
+        );
     }
 
     #[test]
     fn accumulate_phase_times_multi_index() {
         let mut accum = [0.0f32; 4];
         let inputs = vec![
-            PhaseInput { param: "speed".into(), index: 0, scale: 1.0 },
-            PhaseInput { param: "rot_x".into(), index: 1, scale: 1.0 },
-            PhaseInput { param: "rot_y".into(), index: 2, scale: 1.0 },
-            PhaseInput { param: "rot_z".into(), index: 3, scale: 1.0 },
+            PhaseInput {
+                param: "speed".into(),
+                index: 0,
+                scale: 1.0,
+            },
+            PhaseInput {
+                param: "rot_x".into(),
+                index: 1,
+                scale: 1.0,
+            },
+            PhaseInput {
+                param: "rot_y".into(),
+                index: 2,
+                scale: 1.0,
+            },
+            PhaseInput {
+                param: "rot_z".into(),
+                index: 3,
+                scale: 1.0,
+            },
         ];
         let isf_inputs = vec![
-            ISFInput { name: "speed".into(), input_type: "float".into(),
-                default: Some(serde_json::json!(1.0)), min: Some(0.0), max: Some(5.0),
-                label: None, values: None, labels: None, identity: None },
-            ISFInput { name: "rot_x".into(), input_type: "float".into(),
-                default: Some(serde_json::json!(0.5)), min: Some(-1.0), max: Some(1.0),
-                label: None, values: None, labels: None, identity: None },
-            ISFInput { name: "rot_y".into(), input_type: "float".into(),
-                default: Some(serde_json::json!(0.3)), min: Some(-1.0), max: Some(1.0),
-                label: None, values: None, labels: None, identity: None },
-            ISFInput { name: "rot_z".into(), input_type: "float".into(),
-                default: Some(serde_json::json!(0.0)), min: Some(-1.0), max: Some(1.0),
-                label: None, values: None, labels: None, identity: None },
+            ISFInput {
+                name: "speed".into(),
+                input_type: "float".into(),
+                default: Some(serde_json::json!(1.0)),
+                min: Some(0.0),
+                max: Some(5.0),
+                label: None,
+                values: None,
+                labels: None,
+                identity: None,
+            },
+            ISFInput {
+                name: "rot_x".into(),
+                input_type: "float".into(),
+                default: Some(serde_json::json!(0.5)),
+                min: Some(-1.0),
+                max: Some(1.0),
+                label: None,
+                values: None,
+                labels: None,
+                identity: None,
+            },
+            ISFInput {
+                name: "rot_y".into(),
+                input_type: "float".into(),
+                default: Some(serde_json::json!(0.3)),
+                min: Some(-1.0),
+                max: Some(1.0),
+                label: None,
+                values: None,
+                labels: None,
+                identity: None,
+            },
+            ISFInput {
+                name: "rot_z".into(),
+                input_type: "float".into(),
+                default: Some(serde_json::json!(0.0)),
+                min: Some(-1.0),
+                max: Some(1.0),
+                label: None,
+                values: None,
+                labels: None,
+                identity: None,
+            },
         ];
         let params = ShaderParams::from_inputs(&isf_inputs);
 
         accumulate_phase_times(&mut accum, 0.1, Some(&inputs), &params);
-        assert!((accum[0] - 0.1).abs() < 1e-5);   // speed=1.0 * 0.1
-        assert!((accum[1] - 0.05).abs() < 1e-5);   // rot_x=0.5 * 0.1
-        assert!((accum[2] - 0.03).abs() < 1e-5);   // rot_y=0.3 * 0.1
-        assert!((accum[3] - 0.0).abs() < 1e-5);    // rot_z=0.0 * 0.1
+        assert!((accum[0] - 0.1).abs() < 1e-5); // speed=1.0 * 0.1
+        assert!((accum[1] - 0.05).abs() < 1e-5); // rot_x=0.5 * 0.1
+        assert!((accum[2] - 0.03).abs() < 1e-5); // rot_y=0.3 * 0.1
+        assert!((accum[3] - 0.0).abs() < 1e-5); // rot_z=0.0 * 0.1
     }
 
     #[test]

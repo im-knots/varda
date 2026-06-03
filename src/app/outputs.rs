@@ -1,8 +1,10 @@
 //! Output action processing for VardaApp (unified windowed + headless).
 
 use super::VardaApp;
+use crate::renderer::context::{
+    HeadlessOutput, OutputSource, OutputTarget, OutputWindow, SurfaceAssignment, UnifiedOutput,
+};
 use crate::usecases::ui;
-use crate::renderer::context::{OutputWindow, OutputTarget, HeadlessOutput, UnifiedOutput, SurfaceAssignment, OutputSource};
 
 impl VardaApp {
     /// Apply output-related UI actions.
@@ -11,29 +13,71 @@ impl VardaApp {
         for action in &ui_actions.output_actions {
             let cmd = match action {
                 ui::OutputAction::Create => EngineCommand::CreateOutput,
-                ui::OutputAction::CreateHeadless { target } =>
-                    EngineCommand::CreateHeadlessOutput { target: target.clone() },
+                ui::OutputAction::CreateHeadless { target } => {
+                    EngineCommand::CreateHeadlessOutput {
+                        target: target.clone(),
+                    }
+                }
                 ui::OutputAction::Close { idx } => EngineCommand::CloseOutput { idx: *idx },
-                ui::OutputAction::SetTarget { idx, target } =>
-                    EngineCommand::SetOutputTarget { idx: *idx, target: target.clone() },
+                ui::OutputAction::SetTarget { idx, target } => EngineCommand::SetOutputTarget {
+                    idx: *idx,
+                    target: target.clone(),
+                },
                 ui::OutputAction::Start { idx } => EngineCommand::StartOutput { idx: *idx },
                 ui::OutputAction::Stop { idx } => EngineCommand::StopOutput { idx: *idx },
-                ui::OutputAction::AssignSurface { output_idx, surface_uuid } =>
-                    EngineCommand::AssignSurfaceToOutputByIdx { output_idx: *output_idx, surface_uuid: surface_uuid.clone() },
-                ui::OutputAction::UnassignSurface { output_idx, assignment_idx } =>
-                    EngineCommand::UnassignSurfaceFromOutputByIdx { output_idx: *output_idx, assignment_idx: *assignment_idx },
-                ui::OutputAction::ToggleCalibration { idx } =>
-                    EngineCommand::ToggleCalibration { idx: *idx },
-                ui::OutputAction::SetWarpCorner { output_idx, assignment_idx, corner_idx, position } =>
-                    EngineCommand::SetWarpCorner { output_idx: *output_idx, assignment_idx: *assignment_idx, corner_idx: *corner_idx, position: *position },
-                ui::OutputAction::ResetWarp { output_idx, assignment_idx } =>
-                    EngineCommand::ResetWarp { output_idx: *output_idx, assignment_idx: *assignment_idx },
-                ui::OutputAction::SetEdgeBlend { output_idx, config } =>
-                    EngineCommand::SetEdgeBlend { output_idx: *output_idx, config: *config },
-                ui::OutputAction::SetEdgeBlendMode { output_idx, mode } =>
-                    EngineCommand::SetEdgeBlendMode { output_idx: *output_idx, mode: *mode },
-                ui::OutputAction::SetRotation { idx, rotation } =>
-                    EngineCommand::SetOutputRotation { idx: *idx, rotation: *rotation },
+                ui::OutputAction::AssignSurface {
+                    output_idx,
+                    surface_uuid,
+                } => EngineCommand::AssignSurfaceToOutputByIdx {
+                    output_idx: *output_idx,
+                    surface_uuid: surface_uuid.clone(),
+                },
+                ui::OutputAction::UnassignSurface {
+                    output_idx,
+                    assignment_idx,
+                } => EngineCommand::UnassignSurfaceFromOutputByIdx {
+                    output_idx: *output_idx,
+                    assignment_idx: *assignment_idx,
+                },
+                ui::OutputAction::ToggleCalibration { idx } => {
+                    EngineCommand::ToggleCalibration { idx: *idx }
+                }
+                ui::OutputAction::SetWarpCorner {
+                    output_idx,
+                    assignment_idx,
+                    corner_idx,
+                    position,
+                } => EngineCommand::SetWarpCorner {
+                    output_idx: *output_idx,
+                    assignment_idx: *assignment_idx,
+                    corner_idx: *corner_idx,
+                    position: *position,
+                },
+                ui::OutputAction::ResetWarp {
+                    output_idx,
+                    assignment_idx,
+                } => EngineCommand::ResetWarp {
+                    output_idx: *output_idx,
+                    assignment_idx: *assignment_idx,
+                },
+                ui::OutputAction::SetEdgeBlend { output_idx, config } => {
+                    EngineCommand::SetEdgeBlend {
+                        output_idx: *output_idx,
+                        config: *config,
+                    }
+                }
+                ui::OutputAction::SetEdgeBlendMode { output_idx, mode } => {
+                    EngineCommand::SetEdgeBlendMode {
+                        output_idx: *output_idx,
+                        mode: *mode,
+                    }
+                }
+                ui::OutputAction::SetRotation { idx, rotation } => {
+                    EngineCommand::SetOutputRotation {
+                        idx: *idx,
+                        rotation: *rotation,
+                    }
+                }
             };
             self.execute_command(cmd);
         }
@@ -44,27 +88,35 @@ impl VardaApp {
     pub fn create_pending_outputs(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         use winit::window::Window;
 
-        let pending: Vec<crate::scene::OutputConfig> = self.output.pending_output_creates.drain(..).collect();
+        let pending: Vec<crate::scene::OutputConfig> =
+            self.output.pending_output_creates.drain(..).collect();
         for config in pending {
             let idx = self.output.outputs.len() + 1;
-            let name = if config.name.is_empty() { format!("Output {}", idx) } else { config.name.clone() };
+            let name = if config.name.is_empty() {
+                format!("Output {}", idx)
+            } else {
+                config.name.clone()
+            };
             let target = crate::persistence::config_to_target_pub(&config.target);
 
             if target.is_windowed() {
                 // Windowed/Display: needs an OS window
-                let mut window_attrs = Window::default_attributes()
-                    .with_title(format!("Varda - {}", name));
+                let mut window_attrs =
+                    Window::default_attributes().with_title(format!("Varda - {}", name));
 
                 // Restore saved window size, or default to 1280x720
                 if let Some([w, h]) = config.window_size {
-                    window_attrs = window_attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
+                    window_attrs =
+                        window_attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
                 } else {
-                    window_attrs = window_attrs.with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+                    window_attrs =
+                        window_attrs.with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
                 }
 
                 // Set position hint in attributes (works on some platforms)
                 if let Some([x, y]) = config.window_position {
-                    window_attrs = window_attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
+                    window_attrs =
+                        window_attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
                 }
 
                 match event_loop.create_window(window_attrs) {
@@ -80,25 +132,32 @@ impl VardaApp {
                                     output.window.set_outer_position(
                                         winit::dpi::PhysicalPosition::new(x, y),
                                     );
-                                    log::info!("Restored output '{}' position to ({}, {})", output.name, x, y);
+                                    log::info!(
+                                        "Restored output '{}' position to ({}, {})",
+                                        output.name,
+                                        x,
+                                        y
+                                    );
                                 }
                                 // Restore surface assignments from config
-                                output.surface_assignments = config.surface_assignments.iter().map(|a| {
-                                    SurfaceAssignment {
+                                output.surface_assignments = config
+                                    .surface_assignments
+                                    .iter()
+                                    .map(|a| SurfaceAssignment {
                                         surface_uuid: a.surface_uuid.clone(),
                                         warp_mode: a.warp_mode.clone(),
                                         enabled: a.enabled,
                                         overlap_zones: Default::default(),
-                                    }
-                                }).collect();
+                                    })
+                                    .collect();
                                 output.edge_blend_mode = config.edge_blend_mode;
                                 output.edge_blend = config.edge_blend;
                                 output.rotation = config.rotation;
                                 // If Display target, set fullscreen — or fall back to
                                 // Windowed if the target monitor is no longer connected.
                                 if let OutputTarget::Display { ref name, .. } = target {
-                                    if let Some((_, handle)) = self.output.cached_monitors.iter()
-                                        .find(|(n, _)| n == name)
+                                    if let Some((_, handle)) =
+                                        self.output.cached_monitors.iter().find(|(n, _)| n == name)
                                     {
                                         output.set_target(target.clone(), Some(handle.clone()));
                                     } else {
@@ -118,13 +177,17 @@ impl VardaApp {
                             }
                             Err(e) => {
                                 log::error!("Failed to create output window: {}", e);
-                                self.session.notifications.error(format!("Failed to create output: {}", e));
+                                self.session
+                                    .notifications
+                                    .error(format!("Failed to create output: {}", e));
                             }
                         }
                     }
                     Err(e) => {
                         log::error!("Failed to create output window: {}", e);
-                        self.session.notifications.error(format!("Failed to create window: {}", e));
+                        self.session
+                            .notifications
+                            .error(format!("Failed to create window: {}", e));
                     }
                 }
             } else {
@@ -139,14 +202,16 @@ impl VardaApp {
                 );
                 headless.uuid = config.uuid.clone();
                 // Restore surface assignments from config
-                headless.surface_assignments = config.surface_assignments.iter().map(|a| {
-                    SurfaceAssignment {
+                headless.surface_assignments = config
+                    .surface_assignments
+                    .iter()
+                    .map(|a| SurfaceAssignment {
                         surface_uuid: a.surface_uuid.clone(),
                         warp_mode: a.warp_mode.clone(),
                         enabled: a.enabled,
                         overlap_zones: Default::default(),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 headless.edge_blend_mode = config.edge_blend_mode;
                 headless.edge_blend = config.edge_blend;
                 headless.rotation = config.rotation;
@@ -158,38 +223,59 @@ impl VardaApp {
 
     /// Recompute per-surface edge blend for all Auto-mode outputs based on surface topology.
     pub fn recompute_auto_edge_blend(&mut self) {
-        use crate::renderer::edge_blend::{EdgeBlendMode, OutputSurfaceInfo, MappedRegion, SurfaceOverlapZones, compute_auto_edge_blend};
+        use crate::renderer::edge_blend::{
+            compute_auto_edge_blend, EdgeBlendMode, MappedRegion, OutputSurfaceInfo,
+            SurfaceOverlapZones,
+        };
 
         // Check if any output is in Auto mode — early exit if none.
-        let auto_count = self.output.outputs.iter().filter(|o| o.edge_blend_mode() == EdgeBlendMode::Auto).count();
+        let auto_count = self
+            .output
+            .outputs
+            .iter()
+            .filter(|o| o.edge_blend_mode() == EdgeBlendMode::Auto)
+            .count();
         if auto_count == 0 {
             return;
         }
-        log::debug!("[edge-blend] recompute_auto: {} outputs in Auto mode", auto_count);
+        log::debug!(
+            "[edge-blend] recompute_auto: {} outputs in Auto mode",
+            auto_count
+        );
 
         // Build OutputSurfaceInfo for each output (include surface_uuid in MappedRegion).
-        let infos: Vec<OutputSurfaceInfo> = self.output.outputs.iter().enumerate().map(|(idx, output)| {
-            let mut regions = Vec::new();
-            for assignment in output.surface_assignments() {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(&assignment.surface_uuid) {
-                    let bb = surface.bounding_box();
-                    regions.push(MappedRegion {
-                        source_key: format!("{:?}", surface.source),
-                        bbox: [bb.x, bb.y, bb.width, bb.height],
-                        surface_uuid: assignment.surface_uuid.clone(),
-                        vertices: surface.vertices.clone(),
-                        extra_contours: surface.extra_contours.clone(),
-                    });
+        let infos: Vec<OutputSurfaceInfo> = self
+            .output
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(idx, output)| {
+                let mut regions = Vec::new();
+                for assignment in output.surface_assignments() {
+                    if let Some((_, surface)) = self
+                        .output
+                        .surface_manager
+                        .find_by_uuid(&assignment.surface_uuid)
+                    {
+                        let bb = surface.bounding_box();
+                        regions.push(MappedRegion {
+                            source_key: format!("{:?}", surface.source),
+                            bbox: [bb.x, bb.y, bb.width, bb.height],
+                            surface_uuid: assignment.surface_uuid.clone(),
+                            vertices: surface.vertices.clone(),
+                            extra_contours: surface.extra_contours.clone(),
+                        });
+                    }
                 }
-            }
-            let default_gamma = output.edge_blend().left.gamma;
-            OutputSurfaceInfo {
-                output_idx: idx,
-                edge_blend_mode: output.edge_blend_mode(),
-                default_gamma,
-                regions,
-            }
-        }).collect();
+                let default_gamma = output.edge_blend().left.gamma;
+                OutputSurfaceInfo {
+                    output_idx: idx,
+                    edge_blend_mode: output.edge_blend_mode(),
+                    default_gamma,
+                    regions,
+                }
+            })
+            .collect();
 
         // Clear overlap zones on all Auto-mode assignments before applying new results.
         for output in self.output.outputs.iter_mut() {
@@ -206,7 +292,8 @@ impl VardaApp {
         for result in &results {
             log::debug!(
                 "[edge-blend]   output={} surface={} zones={}",
-                result.output_idx, result.surface_uuid,
+                result.output_idx,
+                result.surface_uuid,
                 result.overlap_zones.zones.len(),
             );
         }

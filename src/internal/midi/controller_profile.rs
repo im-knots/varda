@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use super::{DeviceId, MidiKey, MidiDeviceManager, MidiMappingStore};
+use super::{DeviceId, MidiDeviceManager, MidiKey, MidiMappingStore};
 use crate::mixer::Mixer;
 
 // ── Profile Data Model ────────────────────────────────────────────
@@ -47,8 +47,12 @@ pub struct LedConfig {
     pub colors: HashMap<String, u8>,
 }
 
-fn default_led_method() -> String { "note_velocity".to_string() }
-fn default_tap_hold_threshold() -> u64 { 300 }
+fn default_led_method() -> String {
+    "note_velocity".to_string()
+}
+fn default_tap_hold_threshold() -> u64 {
+    300
+}
 
 /// Auto-mapping configuration: drives grid/fader/button behavior from profile JSON.
 #[derive(Debug, Clone, Deserialize)]
@@ -117,11 +121,15 @@ impl ControllerProfileData {
             if !VALID_LED_METHODS.contains(&leds.method.as_str()) {
                 errors.push(format!(
                     "leds.method '{}' is invalid (expected one of: {})",
-                    leds.method, VALID_LED_METHODS.join(", ")
+                    leds.method,
+                    VALID_LED_METHODS.join(", ")
                 ));
             }
             if leds.channel > 15 {
-                errors.push(format!("leds.channel {} exceeds MIDI range 0-15", leds.channel));
+                errors.push(format!(
+                    "leds.channel {} exceeds MIDI range 0-15",
+                    leds.channel
+                ));
             }
         }
 
@@ -137,17 +145,24 @@ impl ControllerProfileData {
             if !VALID_CONTROL_TYPES.contains(&ctrl.control_type.as_str()) {
                 errors.push(format!(
                     "{}: type '{}' is invalid (expected one of: {})",
-                    prefix, ctrl.control_type, VALID_CONTROL_TYPES.join(", ")
+                    prefix,
+                    ctrl.control_type,
+                    VALID_CONTROL_TYPES.join(", ")
                 ));
             }
             if !VALID_MIDI_TYPES.contains(&ctrl.midi_type.as_str()) {
                 errors.push(format!(
                     "{}: midi_type '{}' is invalid (expected one of: {})",
-                    prefix, ctrl.midi_type, VALID_MIDI_TYPES.join(", ")
+                    prefix,
+                    ctrl.midi_type,
+                    VALID_MIDI_TYPES.join(", ")
                 ));
             }
             if ctrl.channel > 15 {
-                errors.push(format!("{}: channel {} exceeds MIDI range 0-15", prefix, ctrl.channel));
+                errors.push(format!(
+                    "{}: channel {} exceeds MIDI range 0-15",
+                    prefix, ctrl.channel
+                ));
             }
             if ctrl.range[0] > ctrl.range[1] {
                 errors.push(format!(
@@ -171,7 +186,8 @@ impl ControllerProfileData {
             if !VALID_STRATEGIES.contains(&am.strategy.as_str()) {
                 errors.push(format!(
                     "auto_map.strategy '{}' is invalid (expected one of: {})",
-                    am.strategy, VALID_STRATEGIES.join(", ")
+                    am.strategy,
+                    VALID_STRATEGIES.join(", ")
                 ));
             }
 
@@ -192,27 +208,31 @@ impl ControllerProfileData {
             if let Some(ref sc) = am.shift_control {
                 if !control_names.contains(&sc.as_str()) {
                     errors.push(format!(
-                        "auto_map.shift_control '{}' does not match any control name", sc
+                        "auto_map.shift_control '{}' does not match any control name",
+                        sc
                     ));
                 }
             }
             if let Some(ref pb) = am.page_buttons_control {
                 if !control_names.contains(&pb.as_str()) {
                     errors.push(format!(
-                        "auto_map.page_buttons_control '{}' does not match any control name", pb
+                        "auto_map.page_buttons_control '{}' does not match any control name",
+                        pb
                     ));
                 }
             }
             if !VALID_ACTIONS.contains(&am.tap_action.as_str()) {
                 errors.push(format!(
                     "auto_map.tap_action '{}' is invalid (expected one of: {})",
-                    am.tap_action, VALID_ACTIONS.join(", ")
+                    am.tap_action,
+                    VALID_ACTIONS.join(", ")
                 ));
             }
             if !VALID_ACTIONS.contains(&am.hold_action.as_str()) {
                 errors.push(format!(
                     "auto_map.hold_action '{}' is invalid (expected one of: {})",
-                    am.hold_action, VALID_ACTIONS.join(", ")
+                    am.hold_action,
+                    VALID_ACTIONS.join(", ")
                 ));
             }
             if am.columns == 0 {
@@ -228,12 +248,15 @@ impl ControllerProfileData {
 
     /// Check if a MIDI device name matches this profile.
     pub fn matches(&self, device_name: &str) -> bool {
-        device_name.to_lowercase().contains(&self.profile.name_match.to_lowercase())
+        device_name
+            .to_lowercase()
+            .contains(&self.profile.name_match.to_lowercase())
     }
 
     /// Get the MIDI value for a logical color name. Returns 0 (off) if not found.
     pub fn color_value(&self, color: &str) -> u8 {
-        self.leds.as_ref()
+        self.leds
+            .as_ref()
             .and_then(|l| l.colors.get(color))
             .copied()
             .unwrap_or(0)
@@ -258,7 +281,10 @@ impl ControllerProfileData {
 
     /// Get the LED method (default "note_velocity").
     pub fn led_method(&self) -> &str {
-        self.leds.as_ref().map(|l| l.method.as_str()).unwrap_or("note_velocity")
+        self.leds
+            .as_ref()
+            .map(|l| l.method.as_str())
+            .unwrap_or("note_velocity")
     }
 }
 
@@ -271,7 +297,11 @@ pub fn builtin_apc_mini() -> ControllerProfileData {
     let profile: ControllerProfileData = serde_json::from_str(APC_MINI_PROFILE_JSON)
         .expect("Built-in APC Mini profile JSON is invalid");
     let errors = profile.validate();
-    assert!(errors.is_empty(), "Built-in APC Mini profile validation failed: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "Built-in APC Mini profile validation failed: {:?}",
+        errors
+    );
     profile
 }
 
@@ -299,7 +329,11 @@ impl ProfileRegistry {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) => {
-                log::warn!("Failed to read controller-profiles directory {}: {}", dir.display(), e);
+                log::warn!(
+                    "Failed to read controller-profiles directory {}: {}",
+                    dir.display(),
+                    e
+                );
                 return;
             }
         };
@@ -321,22 +355,36 @@ impl ProfileRegistry {
                     Ok(profile) => {
                         let errors = profile.validate();
                         if errors.is_empty() {
-                            log::info!("Loaded controller profile '{}' from {}",
-                                profile.profile.name, path.display());
+                            log::info!(
+                                "Loaded controller profile '{}' from {}",
+                                profile.profile.name,
+                                path.display()
+                            );
                             user_profiles.push(Arc::new(profile));
                         } else {
-                            log::warn!("Controller profile {} has validation errors, skipping:", path.display());
+                            log::warn!(
+                                "Controller profile {} has validation errors, skipping:",
+                                path.display()
+                            );
                             for err in &errors {
                                 log::warn!("  - {}", err);
                             }
                         }
                     }
                     Err(e) => {
-                        log::warn!("Failed to parse controller profile {}: {}", path.display(), e);
+                        log::warn!(
+                            "Failed to parse controller profile {}: {}",
+                            path.display(),
+                            e
+                        );
                     }
                 },
                 Err(e) => {
-                    log::warn!("Failed to read controller profile {}: {}", path.display(), e);
+                    log::warn!(
+                        "Failed to read controller profile {}: {}",
+                        path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -348,14 +396,18 @@ impl ProfileRegistry {
 
     /// Find a profile matching a MIDI device name. First match wins.
     pub fn detect(&self, device_name: &str) -> Option<Arc<ControllerProfileData>> {
-        self.profiles.iter()
+        self.profiles
+            .iter()
             .find(|p| p.matches(device_name))
             .cloned()
     }
 
     /// Get all loaded profile names (for debugging/UI).
     pub fn profile_names(&self) -> Vec<&str> {
-        self.profiles.iter().map(|p| p.profile.name.as_str()).collect()
+        self.profiles
+            .iter()
+            .map(|p| p.profile.name.as_str())
+            .collect()
     }
 }
 
@@ -370,11 +422,20 @@ struct DeviceLeds {
 
 impl DeviceLeds {
     fn new(profile: Arc<ControllerProfileData>) -> Self {
-        Self { profile, leds: HashMap::new() }
+        Self {
+            profile,
+            leds: HashMap::new(),
+        }
     }
 
     /// Set an LED, only sending if the value changed.
-    fn set_led(&mut self, mgr: &MidiDeviceManager, device_id: DeviceId, note: u8, color: &str) -> bool {
+    fn set_led(
+        &mut self,
+        mgr: &MidiDeviceManager,
+        device_id: DeviceId,
+        note: u8,
+        color: &str,
+    ) -> bool {
         let val = self.profile.color_value(color);
         if self.leds.get(&note) == Some(&val) {
             return false;
@@ -386,14 +447,17 @@ impl DeviceLeds {
                 mgr.send_note_on(device_id, self.profile.led_channel(), note, val);
             }
             "cc_value" => {
-                mgr.send_raw(device_id, &[
-                    0xB0 | (self.profile.led_channel() & 0x0F),
-                    note,
-                    val,
-                ]);
+                mgr.send_raw(
+                    device_id,
+                    &[0xB0 | (self.profile.led_channel() & 0x0F), note, val],
+                );
             }
             other => {
-                log::warn!("Unknown LED method '{}' in profile '{}'", other, self.profile.profile.name);
+                log::warn!(
+                    "Unknown LED method '{}' in profile '{}'",
+                    other,
+                    self.profile.profile.name
+                );
             }
         }
         true
@@ -402,7 +466,10 @@ impl DeviceLeds {
     /// Turn all LEDs off on this device.
     fn all_off(&mut self, mgr: &MidiDeviceManager, device_id: DeviceId) {
         // Collect ranges first to avoid borrow conflict with self.set_led
-        let led_ranges: Vec<(u8, u8)> = self.profile.controls.iter()
+        let led_ranges: Vec<(u8, u8)> = self
+            .profile
+            .controls
+            .iter()
             .filter(|c| c.has_led)
             .map(|c| (c.range[0], c.range[1]))
             .collect();
@@ -421,7 +488,9 @@ pub struct ControllerLedManager {
 
 impl ControllerLedManager {
     pub fn new() -> Self {
-        Self { device_leds: HashMap::new() }
+        Self {
+            device_leds: HashMap::new(),
+        }
     }
 
     /// Sync tracked devices with the device manager. Call after rescan.
@@ -430,7 +499,11 @@ impl ControllerLedManager {
         for (id, info) in &mgr.devices {
             if let Some(profile) = &info.profile {
                 self.device_leds.entry(*id).or_insert_with(|| {
-                    log::info!("LED tracking started for '{}' device [{}]", profile.profile.name, id);
+                    log::info!(
+                        "LED tracking started for '{}' device [{}]",
+                        profile.profile.name,
+                        id
+                    );
                     DeviceLeds::new(Arc::clone(profile))
                 });
             }
@@ -502,51 +575,66 @@ fn read_param_value(mixer: &Mixer, path: &str) -> f32 {
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
         ["crossfader"] => mixer.crossfader(),
-        ["ch", ch_s, "opacity"] => {
-            ch_s.parse::<usize>().ok()
-                .and_then(|ch| mixer.channel(ch))
-                .map(|c| c.opacity)
-                .unwrap_or(-1.0)
-        }
+        ["ch", ch_s, "opacity"] => ch_s
+            .parse::<usize>()
+            .ok()
+            .and_then(|ch| mixer.channel(ch))
+            .map(|c| c.opacity)
+            .unwrap_or(-1.0),
         ["ch", ch_s, "deck", dk_s, "opacity"] => {
             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                mixer.channel(ch)
+                mixer
+                    .channel(ch)
                     .and_then(|c| c.decks.get(dk))
                     .map(|d| d.opacity)
                     .unwrap_or(-1.0)
-            } else { -1.0 }
+            } else {
+                -1.0
+            }
         }
         ["ch", ch_s, "deck", dk_s, "mute"] => {
             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                mixer.channel(ch)
+                mixer
+                    .channel(ch)
                     .and_then(|c| c.decks.get(dk))
                     .map(|d| if d.mute { 1.0 } else { 0.0 })
                     .unwrap_or(-1.0)
-            } else { -1.0 }
+            } else {
+                -1.0
+            }
         }
         ["ch", ch_s, "deck", dk_s, "solo"] => {
             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                mixer.channel(ch)
+                mixer
+                    .channel(ch)
                     .and_then(|c| c.decks.get(dk))
                     .map(|d| if d.solo { 1.0 } else { 0.0 })
                     .unwrap_or(-1.0)
-            } else { -1.0 }
+            } else {
+                -1.0
+            }
         }
         ["ch", ch_s, "deck", dk_s, "trigger"] => {
             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                mixer.channel(ch)
+                mixer
+                    .channel(ch)
                     .and_then(|c| c.decks.get(dk))
                     .map(|d| d.opacity)
                     .unwrap_or(-1.0)
-            } else { -1.0 }
+            } else {
+                -1.0
+            }
         }
         ["ch", ch_s, "effect", ek_s, "param", name] => {
             if let (Ok(ch), Ok(ek)) = (ch_s.parse::<usize>(), ek_s.parse::<usize>()) {
-                mixer.channel(ch)
+                mixer
+                    .channel(ch)
                     .and_then(|c| c.effects.get(ek))
                     .and_then(|e| e.params.get_float(name))
                     .unwrap_or(-1.0)
-            } else { -1.0 }
+            } else {
+                -1.0
+            }
         }
         _ => -1.0,
     }
@@ -617,17 +705,17 @@ mod tests {
     #[test]
     fn test_control_has_led() {
         let profile = builtin_apc_mini();
-        assert!(profile.control_has_led("note", 0, 0));    // grid min
-        assert!(profile.control_has_led("note", 0, 63));   // grid max
-        assert!(profile.control_has_led("note", 0, 64));   // bottom min
-        assert!(profile.control_has_led("note", 0, 71));   // bottom max
-        assert!(profile.control_has_led("note", 0, 82));   // side min
-        assert!(profile.control_has_led("note", 0, 89));   // side max
-        assert!(profile.control_has_led("note", 0, 98));   // shift
-        assert!(!profile.control_has_led("note", 0, 72));  // gap
-        assert!(!profile.control_has_led("note", 0, 81));  // gap
-        assert!(!profile.control_has_led("note", 0, 99));  // beyond shift
-        assert!(!profile.control_has_led("cc", 0, 48));    // faders have no LED
+        assert!(profile.control_has_led("note", 0, 0)); // grid min
+        assert!(profile.control_has_led("note", 0, 63)); // grid max
+        assert!(profile.control_has_led("note", 0, 64)); // bottom min
+        assert!(profile.control_has_led("note", 0, 71)); // bottom max
+        assert!(profile.control_has_led("note", 0, 82)); // side min
+        assert!(profile.control_has_led("note", 0, 89)); // side max
+        assert!(profile.control_has_led("note", 0, 98)); // shift
+        assert!(!profile.control_has_led("note", 0, 72)); // gap
+        assert!(!profile.control_has_led("note", 0, 81)); // gap
+        assert!(!profile.control_has_led("note", 0, 99)); // beyond shift
+        assert!(!profile.control_has_led("cc", 0, 48)); // faders have no LED
     }
 
     #[test]

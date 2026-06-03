@@ -39,7 +39,10 @@ impl WarpMesh {
             let v = r as f32 / (rows - 1) as f32;
             for c in 0..cols {
                 let u = c as f32 / (cols - 1) as f32;
-                points.push(MeshPoint { position: [u, v], uv: [u, v] });
+                points.push(MeshPoint {
+                    position: [u, v],
+                    uv: [u, v],
+                });
             }
         }
         Self { cols, rows, points }
@@ -50,12 +53,25 @@ impl WarpMesh {
     pub fn from_corners(corners: &[[f32; 2]; 4]) -> Self {
         // Order: TL, TR, BR, BL → grid row-major: TL, TR, BL, BR
         Self {
-            cols: 2, rows: 2,
+            cols: 2,
+            rows: 2,
             points: vec![
-                MeshPoint { position: corners[0], uv: [0.0, 0.0] }, // TL
-                MeshPoint { position: corners[1], uv: [1.0, 0.0] }, // TR
-                MeshPoint { position: corners[3], uv: [0.0, 1.0] }, // BL
-                MeshPoint { position: corners[2], uv: [1.0, 1.0] }, // BR
+                MeshPoint {
+                    position: corners[0],
+                    uv: [0.0, 0.0],
+                }, // TL
+                MeshPoint {
+                    position: corners[1],
+                    uv: [1.0, 0.0],
+                }, // TR
+                MeshPoint {
+                    position: corners[3],
+                    uv: [0.0, 1.0],
+                }, // BL
+                MeshPoint {
+                    position: corners[2],
+                    uv: [1.0, 1.0],
+                }, // BR
             ],
         }
     }
@@ -87,9 +103,9 @@ impl WarpMode {
     /// Create an identity corner-pin (no warp, bounding-box corners).
     pub fn identity_corners(bb: [f32; 4]) -> Self {
         let [x, y, w, h] = bb;
-        Self::CornerPin { corners: [
-            [x, y], [x + w, y], [x + w, y + h], [x, y + h],
-        ]}
+        Self::CornerPin {
+            corners: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+        }
     }
 
     /// Get corner-pin corners if this is a CornerPin variant.
@@ -118,7 +134,9 @@ impl WarpMode {
                     [bb[0] + bb[2], bb[1] + bb[3]],
                     [bb[0], bb[1] + bb[3]],
                 ];
-                corners.iter().zip(id.iter())
+                corners
+                    .iter()
+                    .zip(id.iter())
                     .all(|(a, b)| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6)
             }
             Self::Mesh(mesh) => mesh.is_identity(),
@@ -137,9 +155,7 @@ pub fn compute_forward_homography(
 ) -> [f32; 12] {
     let h = solve_homography(src_corners, dst_corners);
     [
-        h[0], h[1], h[2], 0.0,
-        h[3], h[4], h[5], 0.0,
-        h[6], h[7], h[8], 0.0,
+        h[0], h[1], h[2], 0.0, h[3], h[4], h[5], 0.0, h[6], h[7], h[8], 0.0,
     ]
 }
 
@@ -177,9 +193,15 @@ fn solve_homography(src: &[[f32; 2]; 4], dst: &[[f32; 2]; 4]) -> [f32; 9] {
     let h = gauss_solve_8x8(&mut a, &mut b);
 
     [
-        h[0] as f32, h[1] as f32, h[2] as f32,
-        h[3] as f32, h[4] as f32, h[5] as f32,
-        h[6] as f32, h[7] as f32, 1.0,
+        h[0] as f32,
+        h[1] as f32,
+        h[2] as f32,
+        h[3] as f32,
+        h[4] as f32,
+        h[5] as f32,
+        h[6] as f32,
+        h[7] as f32,
+        1.0,
     ]
 }
 
@@ -202,7 +224,9 @@ fn gauss_solve_8x8(a: &mut [[f64; 8]; 8], b: &mut [f64; 8]) -> [f64; 8] {
 
         let pivot = a[col][col];
         if pivot.abs() < 1e-12 {
-            log::warn!("Degenerate homography: pivot near zero at column {col}, returning identity warp");
+            log::warn!(
+                "Degenerate homography: pivot near zero at column {col}, returning identity warp"
+            );
             return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
         }
 
@@ -262,32 +286,47 @@ impl WarpMesh {
     /// Where x,y are output positions and u,v are source UVs, all in [0..1].
     /// The intensity column is parsed but not stored (used for edge blending).
     pub fn from_xyuv_csv(input: &str) -> anyhow::Result<Self> {
-        let mut lines = input.lines()
+        let mut lines = input
+            .lines()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty() && !l.starts_with('#'));
 
-        let header = lines.next()
+        let header = lines
+            .next()
             .ok_or_else(|| anyhow::anyhow!("XYUV CSV: missing header line"))?;
-        let dims: Vec<u32> = header.split_whitespace()
+        let dims: Vec<u32> = header
+            .split_whitespace()
             .filter_map(|s| s.parse().ok())
             .collect();
         if dims.len() < 2 {
-            anyhow::bail!("XYUV CSV: header must contain mesh_w mesh_h, got: {}", header);
+            anyhow::bail!(
+                "XYUV CSV: header must contain mesh_w mesh_h, got: {}",
+                header
+            );
         }
         let cols = dims[0];
         let rows = dims[1];
         if cols < 2 || rows < 2 {
-            anyhow::bail!("XYUV CSV: mesh dimensions must be ≥ 2, got {}×{}", cols, rows);
+            anyhow::bail!(
+                "XYUV CSV: mesh dimensions must be ≥ 2, got {}×{}",
+                cols,
+                rows
+            );
         }
         if cols > 10_000 || rows > 10_000 {
-            anyhow::bail!("XYUV CSV: mesh dimensions too large (max 10000×10000), got {}×{}", cols, rows);
+            anyhow::bail!(
+                "XYUV CSV: mesh dimensions too large (max 10000×10000), got {}×{}",
+                cols,
+                rows
+            );
         }
 
         let expected = (cols * rows) as usize;
         let mut points = Vec::with_capacity(expected);
 
         for line in lines {
-            let vals: Vec<f32> = line.split(|c: char| c == ',' || c.is_whitespace())
+            let vals: Vec<f32> = line
+                .split(|c: char| c == ',' || c.is_whitespace())
                 .filter(|s| !s.is_empty())
                 .filter_map(|s| s.parse().ok())
                 .collect();
@@ -304,7 +343,10 @@ impl WarpMesh {
         if points.len() != expected {
             anyhow::bail!(
                 "XYUV CSV: expected {} points ({}×{}), got {}",
-                expected, cols, rows, points.len()
+                expected,
+                cols,
+                rows,
+                points.len()
             );
         }
 
@@ -329,12 +371,17 @@ impl WarpMesh {
         let mesh: Self = serde_json::from_str(input)
             .map_err(|e| anyhow::anyhow!("JSON mesh parse error: {}", e))?;
         if mesh.cols < 2 || mesh.rows < 2 {
-            anyhow::bail!("JSON mesh: dimensions must be ≥ 2, got {}×{}", mesh.cols, mesh.rows);
+            anyhow::bail!(
+                "JSON mesh: dimensions must be ≥ 2, got {}×{}",
+                mesh.cols,
+                mesh.rows
+            );
         }
         if mesh.points.len() != (mesh.cols * mesh.rows) as usize {
             anyhow::bail!(
                 "JSON mesh: expected {} points, got {}",
-                mesh.cols * mesh.rows, mesh.points.len()
+                mesh.cols * mesh.rows,
+                mesh.points.len()
             );
         }
         Ok(mesh)
@@ -561,20 +608,38 @@ mod tests {
 
     #[test]
     fn format_detection_csv() {
-        assert_eq!(MeshFormat::from_extension(std::path::Path::new("mesh.csv")), Some(MeshFormat::XyuvCsv));
-        assert_eq!(MeshFormat::from_extension(std::path::Path::new("dome.xyuv")), Some(MeshFormat::XyuvCsv));
-        assert_eq!(MeshFormat::from_extension(std::path::Path::new("warp.txt")), Some(MeshFormat::XyuvCsv));
+        assert_eq!(
+            MeshFormat::from_extension(std::path::Path::new("mesh.csv")),
+            Some(MeshFormat::XyuvCsv)
+        );
+        assert_eq!(
+            MeshFormat::from_extension(std::path::Path::new("dome.xyuv")),
+            Some(MeshFormat::XyuvCsv)
+        );
+        assert_eq!(
+            MeshFormat::from_extension(std::path::Path::new("warp.txt")),
+            Some(MeshFormat::XyuvCsv)
+        );
     }
 
     #[test]
     fn format_detection_json() {
-        assert_eq!(MeshFormat::from_extension(std::path::Path::new("mesh.json")), Some(MeshFormat::Json));
+        assert_eq!(
+            MeshFormat::from_extension(std::path::Path::new("mesh.json")),
+            Some(MeshFormat::Json)
+        );
     }
 
     #[test]
     fn format_detection_unknown() {
-        assert_eq!(MeshFormat::from_extension(std::path::Path::new("mesh.png")), None);
-        assert_eq!(MeshFormat::from_extension(std::path::Path::new("noext")), None);
+        assert_eq!(
+            MeshFormat::from_extension(std::path::Path::new("mesh.png")),
+            None
+        );
+        assert_eq!(
+            MeshFormat::from_extension(std::path::Path::new("noext")),
+            None
+        );
     }
 
     // ── Chaos Tests Round 2: NaN/Inf warp mesh coordinates ──────────────
@@ -612,9 +677,13 @@ mod tests {
 
     #[test]
     fn chaos_csv_all_garbage_lines() {
-        let csv = "2 2\nhello world foo bar\ngarbage in garbage out\nmore junk here\ntotally invalid\n";
+        let csv =
+            "2 2\nhello world foo bar\ngarbage in garbage out\nmore junk here\ntotally invalid\n";
         let result = WarpMesh::from_xyuv_csv(csv);
-        assert!(result.is_err(), "all-garbage CSV should fail point count check");
+        assert!(
+            result.is_err(),
+            "all-garbage CSV should fail point count check"
+        );
     }
 
     #[test]
@@ -622,14 +691,20 @@ mod tests {
         // Lines with fewer than 4 parseable floats should be skipped
         let csv = "2 2\n0.0 0.0\n1.0\n0.0 0.0 0.0\n1.0 1.0 1.0 1.0 1.0\n";
         let result = WarpMesh::from_xyuv_csv(csv);
-        assert!(result.is_err(), "partial fields should result in count mismatch");
+        assert!(
+            result.is_err(),
+            "partial fields should result in count mismatch"
+        );
     }
 
     #[test]
     fn chaos_csv_huge_dimensions() {
         let csv = "1000000 1000000\n0.0 0.0 0.0 0.0 1.0\n";
         let result = WarpMesh::from_xyuv_csv(csv);
-        assert!(result.is_err(), "huge dimensions should be rejected (overflow protection)");
+        assert!(
+            result.is_err(),
+            "huge dimensions should be rejected (overflow protection)"
+        );
     }
 
     #[test]

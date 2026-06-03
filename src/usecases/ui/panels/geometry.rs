@@ -49,14 +49,17 @@ pub(super) fn polygon_shape(
 /// Returns triangle indices into the vertex array.
 pub(super) fn triangulate_polygon(verts: &[egui::Pos2]) -> Vec<u32> {
     let n = verts.len();
-    if n < 3 { return Vec::new(); }
+    if n < 3 {
+        return Vec::new();
+    }
 
     // Work with a mutable index list
     let mut idx: Vec<usize> = (0..n).collect();
     let mut result = Vec::with_capacity((n - 2) * 3);
 
     // Determine winding: positive = CCW
-    let signed_area: f32 = idx.windows(2)
+    let signed_area: f32 = idx
+        .windows(2)
         .map(|w| {
             let a = verts[w[0]];
             let b = verts[w[1]];
@@ -102,14 +105,31 @@ pub(super) fn cross_2d(o: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
     (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
 }
 
-pub(super) fn is_ear(verts: &[egui::Pos2], idx: &[usize], prev: usize, curr: usize, next: usize, ccw: bool) -> bool {
+pub(super) fn is_ear(
+    verts: &[egui::Pos2],
+    idx: &[usize],
+    prev: usize,
+    curr: usize,
+    next: usize,
+    ccw: bool,
+) -> bool {
     let cross = cross_2d(verts[prev], verts[curr], verts[next]);
     // For CCW winding, an ear has positive cross product
-    if ccw { if cross <= 0.0 { return false; } } else { if cross >= 0.0 { return false; } }
+    if ccw {
+        if cross <= 0.0 {
+            return false;
+        }
+    } else {
+        if cross >= 0.0 {
+            return false;
+        }
+    }
 
     // Check no other vertex is inside this triangle
     for &vi in idx {
-        if vi == prev || vi == curr || vi == next { continue; }
+        if vi == prev || vi == curr || vi == next {
+            continue;
+        }
         if point_in_triangle(verts[vi], verts[prev], verts[curr], verts[next]) {
             return false;
         }
@@ -117,7 +137,12 @@ pub(super) fn is_ear(verts: &[egui::Pos2], idx: &[usize], prev: usize, curr: usi
     true
 }
 
-pub(super) fn point_in_triangle(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> bool {
+pub(super) fn point_in_triangle(
+    p: egui::Pos2,
+    a: egui::Pos2,
+    b: egui::Pos2,
+    c: egui::Pos2,
+) -> bool {
     let d0 = cross_2d(a, b, p);
     let d1 = cross_2d(b, c, p);
     let d2 = cross_2d(c, a, p);
@@ -125,4 +150,3 @@ pub(super) fn point_in_triangle(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2, c: 
     let has_pos = (d0 > 0.0) || (d1 > 0.0) || (d2 > 0.0);
     !(has_neg && has_pos)
 }
-

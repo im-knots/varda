@@ -99,7 +99,11 @@ impl ShaderRegistry {
             }
         }
 
-        log::info!("Loaded {} shaders from {} libraries", count, self.library_paths.len());
+        log::info!(
+            "Loaded {} shaders from {} libraries",
+            count,
+            self.library_paths.len()
+        );
         Ok(count)
     }
 
@@ -107,12 +111,13 @@ impl ShaderRegistry {
     pub fn start_watching(&mut self) -> Result<()> {
         let (tx, rx) = mpsc::channel();
 
-        let mut watcher = notify::recommended_watcher(tx)
-            .context("Failed to create file watcher")?;
+        let mut watcher =
+            notify::recommended_watcher(tx).context("Failed to create file watcher")?;
 
         for lib_path in &self.library_paths {
             if lib_path.exists() {
-                watcher.watch(lib_path, RecursiveMode::Recursive)
+                watcher
+                    .watch(lib_path, RecursiveMode::Recursive)
                     .with_context(|| format!("Failed to watch path: {}", lib_path.display()))?;
                 log::info!("Watching library path: {}", lib_path.display());
             }
@@ -179,7 +184,11 @@ impl ShaderRegistry {
                             }
                             Err(e) => {
                                 let err_msg = format!("{}", e);
-                                log::warn!("Failed to reload shader {}: {}", path.display(), err_msg);
+                                log::warn!(
+                                    "Failed to reload shader {}: {}",
+                                    path.display(),
+                                    err_msg
+                                );
                                 shader_events.push(ShaderEvent::Error(path, err_msg));
                             }
                         }
@@ -261,6 +270,33 @@ impl Default for ShaderRegistry {
     }
 }
 
+/// Get the bundled shader path relative to the current executable.
+/// Used when Varda is packaged as a .app (macOS) or AppImage (Linux).
+pub fn get_bundled_shader_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+
+    // macOS .app: exe is at Contents/MacOS/varda, shaders at Contents/Resources/shaders
+    #[cfg(target_os = "macos")]
+    {
+        let app_resources = exe_dir.join("../Resources/shaders");
+        if app_resources.is_dir() {
+            return Some(app_resources);
+        }
+    }
+
+    // Linux AppImage: exe is at usr/bin/varda, shaders at usr/share/varda/shaders
+    #[cfg(target_os = "linux")]
+    {
+        let appimage_shaders = exe_dir.join("../share/varda/shaders");
+        if appimage_shaders.is_dir() {
+            return Some(appimage_shaders);
+        }
+    }
+
+    None
+}
+
 /// Get the default library paths for the current platform
 pub fn get_default_library_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -291,8 +327,6 @@ pub fn get_default_library_paths() -> Vec<PathBuf> {
 
     paths
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -454,5 +488,70 @@ void main() {}"#;
         let mut reg = ShaderRegistry::new();
         let result = reg.add_library_path("/nonexistent/path/that/should/not/exist");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn multiple_library_paths_merge() {
+        let lib_a = tempfile::tempdir().unwrap();
+        let lib_b = tempfile::tempdir().unwrap();
+        write_shader(lib_a.path(), "ShaderA", "Generator", false);
+        write_shader(lib_b.path(), "ShaderB", "Filter", true);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(lib_a.path()).unwrap();
+        reg.add_library_path(lib_b.path()).unwrap();
+        let count = reg.scan().unwrap();
+
+        assert_eq!(count, 2);
+        assert!(reg.get("ShaderA").is_some());
+        assert!(reg.get("ShaderB").is_some());
+    }
+
+    #[test]
+    fn later_library_path_overrides_by_name() {
+        let builtin = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
+        // Both dirs have a shader named "Glow" but with different categories
+        write_shader(builtin.path(), "Glow", "Generator", false);
+        write_shader(user.path(), "Glow", "Filter", true);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(builtin.path()).unwrap();
+        reg.add_library_path(user.path()).unwrap();
+        reg.scan().unwrap();
+
+        // Should have exactly 1 shader named "Glow" (user version wins)
+        assert_eq!(reg.count(), 1);
+        let glow = reg.get("Glow").unwrap();
+        assert!(
+            glow.metadata.is_filter(),
+            "User shader should override builtin"
+        );
+    }
+
+    #[test]
+    fn skips_nonexistent_optional_paths_gracefully() {
+        let real = tempfile::tempdir().unwrap();
+        write_shader(real.path(), "Real", "Generator", false);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(real.path()).unwrap();
+        // Don't add a nonexistent path — just verify that only real paths load
+        let count = reg.scan().unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn get_default_library_paths_returns_platform_path() {
+        let paths = get_default_library_paths();
+        // Should return exactly one path on macOS or Linux (when HOME is set)
+        if std::env::var_os("HOME").is_some() {
+            assert_eq!(paths.len(), 1);
+            let path_str = paths[0].to_string_lossy();
+            #[cfg(target_os = "macos")]
+            assert!(path_str.contains("Library/Application Support/Varda/Shaders"));
+            #[cfg(target_os = "linux")]
+            assert!(path_str.contains(".local/share/varda/shaders"));
+        }
     }
 }

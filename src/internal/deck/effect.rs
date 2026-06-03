@@ -1,12 +1,12 @@
 //! Effect (ISF filter) implementation and PassBuffer for multi-pass effects.
 
-use crate::isf::{ISFShader, ISFPass, compile_glsl_to_spirv};
+use super::source::load_imported_textures;
+use super::{Deck, Effect, PassBuffer};
+use crate::isf::{compile_glsl_to_spirv, ISFPass, ISFShader};
 use crate::params::ShaderParams;
-use crate::renderer::{GpuContext, UnifiedPipeline, ISFUniforms};
+use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use super::{Effect, Deck, PassBuffer};
-use super::source::load_imported_textures;
 
 impl Effect {
     /// Create a new effect from an ISF filter shader
@@ -15,7 +15,11 @@ impl Effect {
     }
 
     /// Create a new effect with a specific target format
-    pub fn new_with_format(context: &GpuContext, shader: ISFShader, target_format: wgpu::TextureFormat) -> Result<Self> {
+    pub fn new_with_format(
+        context: &GpuContext,
+        shader: ISFShader,
+        target_format: wgpu::TextureFormat,
+    ) -> Result<Self> {
         let spirv = compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
             .context("Failed to compile filter shader to SPIR-V")?;
 
@@ -24,24 +28,22 @@ impl Effect {
         let uses_float = passes.iter().any(|p| p.float.unwrap_or(false));
 
         // Load ISF IMPORTED images
-        let imported_textures = load_imported_textures(
-            &shader.metadata,
-            shader.file_path.as_deref(),
-            context,
-        );
+        let imported_textures =
+            load_imported_textures(&shader.metadata, shader.file_path.as_deref(), context);
 
         let pipeline = UnifiedPipeline::new(
             &context.device,
             &spirv,
             target_format,
-            true,  // has_input_image — it's a filter
+            true, // has_input_image — it's a filter
             num_passes,
             uses_float,
             imported_textures.len(),
-        ).context("Failed to create effect pipeline")?;
+        )
+        .context("Failed to create effect pipeline")?;
 
         // Create pass buffers for multi-pass effects
-        let width = 1920u32;  // Internal resolution
+        let width = 1920u32; // Internal resolution
         let height = 1080u32;
         let mut pass_buffers = HashMap::new();
 
@@ -63,14 +65,18 @@ impl Effect {
 
             let tex_a = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("Effect Pass Buffer A: {}", target_name)),
-                size: wgpu::Extent3d { width: pass_width, height: pass_height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: pass_width,
+                    height: pass_height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                     | wgpu::TextureUsages::TEXTURE_BINDING
-                     | wgpu::TextureUsages::COPY_DST,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             let view_a = tex_a.create_view(&wgpu::TextureViewDescriptor::default());
@@ -78,14 +84,18 @@ impl Effect {
             let (tex_b, view_b) = if is_persistent {
                 let tex = context.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&format!("Effect Pass Buffer B: {}", target_name)),
-                    size: wgpu::Extent3d { width: pass_width, height: pass_height, depth_or_array_layers: 1 },
+                    size: wgpu::Extent3d {
+                        width: pass_width,
+                        height: pass_height,
+                        depth_or_array_layers: 1,
+                    },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                         | wgpu::TextureUsages::TEXTURE_BINDING
-                         | wgpu::TextureUsages::COPY_DST,
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
                 let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -94,19 +104,27 @@ impl Effect {
                 (None, None)
             };
 
-            pass_buffers.insert(target_name.clone(), PassBuffer {
-                name: target_name,
-                texture_a: tex_a,
-                view_a,
-                texture_b: tex_b,
-                view_b,
-                persistent: is_persistent,
-                read_idx: 0,
-            });
+            pass_buffers.insert(
+                target_name.clone(),
+                PassBuffer {
+                    name: target_name,
+                    texture_a: tex_a,
+                    view_a,
+                    texture_b: tex_b,
+                    view_b,
+                    persistent: is_persistent,
+                    read_idx: 0,
+                },
+            );
         }
 
         // Initialize parameters from shader inputs
-        let inputs = shader.metadata.inputs.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let inputs = shader
+            .metadata
+            .inputs
+            .as_ref()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let params = ShaderParams::from_inputs(inputs);
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
 
@@ -135,7 +153,15 @@ impl Effect {
         uniforms: &ISFUniforms,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
-        self.apply_with_modulation(context, input_view, output_view, uniforms, None, None, cmd_buffers)
+        self.apply_with_modulation(
+            context,
+            input_view,
+            output_view,
+            uniforms,
+            None,
+            None,
+            cmd_buffers,
+        )
     }
 
     /// Apply this effect with modulation support
@@ -156,16 +182,18 @@ impl Effect {
         // Ensure user params buffer exists and update it (with modulation if available)
         self.params.ensure_buffer(&context.device);
         if let Some(mod_engine) = modulation {
-            self.params.update_buffer_with_modulation(&context.queue, mod_engine, mod_prefix);
+            self.params
+                .update_buffer_with_modulation(&context.queue, mod_engine, mod_prefix);
         } else {
             self.params.update_buffer(&context.queue);
         }
-        let user_params_buffer = self.params.buffer().expect("Buffer should exist after ensure_buffer");
+        let user_params_buffer = self
+            .params
+            .buffer()
+            .expect("Buffer should exist after ensure_buffer");
 
-        let imported_views: Vec<&wgpu::TextureView> = self.imported_textures
-            .iter()
-            .map(|(_, _, v)| v)
-            .collect();
+        let imported_views: Vec<&wgpu::TextureView> =
+            self.imported_textures.iter().map(|(_, _, v)| v).collect();
 
         let has_targeted_passes = self.passes.iter().any(|p| p.target.is_some());
 
@@ -190,9 +218,11 @@ impl Effect {
                 for _iter in 0..iterations {
                     let mut pass_uniforms = *uniforms;
                     pass_uniforms.pass_index = pass_idx as i32;
-                    self.pipeline.update_uniforms(&context.queue, &pass_uniforms);
+                    self.pipeline
+                        .update_uniforms(&context.queue, &pass_uniforms);
 
-                    let pass_buffer_views: Vec<&wgpu::TextureView> = self.passes
+                    let pass_buffer_views: Vec<&wgpu::TextureView> = self
+                        .passes
                         .iter()
                         .filter_map(|p| p.target.as_ref().and_then(|t| self.pass_buffers.get(t)))
                         .map(|pb| pb.read_view())
@@ -206,31 +236,37 @@ impl Effect {
                         Some(user_params_buffer),
                     );
 
-                    let target_view = self.pass_buffers.get(&target_name)
+                    let target_view = self
+                        .pass_buffers
+                        .get(&target_name)
                         .map(|pb| pb.write_view())
                         .unwrap_or(output_view);
 
-                    let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some(&format!("Effect Pass {} Encoder", pass_idx)),
-                    });
+                    let mut encoder =
+                        context
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some(&format!("Effect Pass {} Encoder", pass_idx)),
+                            });
 
                     {
-                        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some(&format!("Effect Pass {} Render", pass_idx)),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: target_view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                                depth_slice: None,
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
+                        let mut render_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some(&format!("Effect Pass {} Render", pass_idx)),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: target_view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                multiview_mask: None,
+                            });
 
                         render_pass.set_pipeline(self.pipeline.pipeline_for_format(format));
                         render_pass.set_bind_group(0, &bind_group, &[]);
@@ -251,9 +287,11 @@ impl Effect {
             // Final pass: render to output_view using pass buffer results + input
             let mut final_uniforms = *uniforms;
             final_uniforms.pass_index = self.passes.len() as i32;
-            self.pipeline.update_uniforms(&context.queue, &final_uniforms);
+            self.pipeline
+                .update_uniforms(&context.queue, &final_uniforms);
 
-            let pass_buffer_views: Vec<&wgpu::TextureView> = self.passes
+            let pass_buffer_views: Vec<&wgpu::TextureView> = self
+                .passes
                 .iter()
                 .filter_map(|p| p.target.as_ref().and_then(|t| self.pass_buffers.get(t)))
                 .map(|pb| pb.read_view())
@@ -267,9 +305,12 @@ impl Effect {
                 Some(user_params_buffer),
             );
 
-            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Effect Final Pass Encoder"),
-            });
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Effect Final Pass Encoder"),
+                    });
 
             {
                 let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -307,9 +348,12 @@ impl Effect {
                 Some(user_params_buffer),
             );
 
-            let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Effect Render Encoder"),
-            });
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Effect Render Encoder"),
+                    });
 
             {
                 let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

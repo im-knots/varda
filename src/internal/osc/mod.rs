@@ -30,8 +30,12 @@ pub struct OscConfig {
     pub feedback_targets: Vec<String>,
 }
 
-fn default_true() -> bool { true }
-fn default_in_port() -> u16 { 9000 }
+fn default_true() -> bool {
+    true
+}
+fn default_in_port() -> u16 {
+    9000
+}
 
 impl Default for OscConfig {
     fn default() -> Self {
@@ -55,8 +59,8 @@ impl OscConfig {
 
     /// Save to a JSON file.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize OSC config")?;
+        let content =
+            serde_json::to_string_pretty(self).context("Failed to serialize OSC config")?;
         crate::persistence::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
@@ -98,7 +102,9 @@ pub fn parse_osc_message(addr: &str, args: &[OscType]) -> OscInput {
         stripped
     } else if let Some(stripped) = addr.strip_prefix("/varda") {
         // Handle `/varda` without trailing slash (e.g. `/vardacrossfader` should be Unknown)
-        if stripped.is_empty() { return OscInput::Unknown(addr.to_string()); }
+        if stripped.is_empty() {
+            return OscInput::Unknown(addr.to_string());
+        }
         // `/varda` followed by non-`/` → not our namespace
         return OscInput::Unknown(addr.to_string());
     } else {
@@ -128,7 +134,10 @@ pub fn parse_osc_message(addr: &str, args: &[OscType]) -> OscInput {
         }
         _ => {
             if let Some(v) = extract_float(args) {
-                OscInput::Param { path: path.to_string(), value: v }
+                OscInput::Param {
+                    path: path.to_string(),
+                    value: v,
+                }
             } else {
                 OscInput::Unknown(addr.to_string())
             }
@@ -147,10 +156,9 @@ pub struct OscReceiver {
 impl OscReceiver {
     /// Create a new OSC receiver listening on the given port.
     pub fn new(port: u16) -> Result<Self> {
-        let addr = SocketAddrV4::from_str(&format!("0.0.0.0:{}", port))
-            .context("Invalid address")?;
-        let socket = UdpSocket::bind(addr)
-            .context(format!("Failed to bind to port {}", port))?;
+        let addr =
+            SocketAddrV4::from_str(&format!("0.0.0.0:{}", port)).context("Invalid address")?;
+        let socket = UdpSocket::bind(addr).context(format!("Failed to bind to port {}", port))?;
         socket.set_read_timeout(Some(std::time::Duration::from_millis(100)))?;
 
         let (sender, receiver) = channel();
@@ -218,15 +226,18 @@ pub struct OscFeedbackSender {
 impl OscFeedbackSender {
     /// Create a feedback sender. Targets are added via [`add_target`].
     pub fn new() -> Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")
-            .context("Failed to create UDP socket for OSC feedback")?;
-        Ok(Self { socket, targets: Vec::new() })
+        let socket =
+            UdpSocket::bind("0.0.0.0:0").context("Failed to create UDP socket for OSC feedback")?;
+        Ok(Self {
+            socket,
+            targets: Vec::new(),
+        })
     }
 
     /// Add a feedback target (ip:port).
     pub fn add_target(&mut self, addr: &str) -> Result<()> {
-        let target = SocketAddrV4::from_str(addr)
-            .context(format!("Invalid feedback target: {}", addr))?;
+        let target =
+            SocketAddrV4::from_str(addr).context(format!("Invalid feedback target: {}", addr))?;
         if !self.targets.contains(&target) {
             self.targets.push(target);
             log::info!("OSC feedback target added: {}", addr);
@@ -265,25 +276,49 @@ mod tests {
     #[test]
     fn parse_param_crossfader() {
         let input = parse_osc_message("/varda/crossfader", &[OscType::Float(0.5)]);
-        assert_eq!(input, OscInput::Param { path: "crossfader".into(), value: 0.5 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "crossfader".into(),
+                value: 0.5
+            }
+        );
     }
 
     #[test]
     fn parse_param_deck_opacity() {
         let input = parse_osc_message("/varda/deck/abc123/opacity", &[OscType::Float(0.8)]);
-        assert_eq!(input, OscInput::Param { path: "deck/abc123/opacity".into(), value: 0.8 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "deck/abc123/opacity".into(),
+                value: 0.8
+            }
+        );
     }
 
     #[test]
     fn parse_param_mod_frequency() {
         let input = parse_osc_message("/varda/mod/2/frequency", &[OscType::Float(0.5)]);
-        assert_eq!(input, OscInput::Param { path: "mod/2/frequency".into(), value: 0.5 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "mod/2/frequency".into(),
+                value: 0.5
+            }
+        );
     }
 
     #[test]
     fn parse_param_action_undo() {
         let input = parse_osc_message("/varda/action/undo", &[OscType::Float(1.0)]);
-        assert_eq!(input, OscInput::Param { path: "action/undo".into(), value: 1.0 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "action/undo".into(),
+                value: 1.0
+            }
+        );
     }
 
     #[test]
@@ -319,19 +354,37 @@ mod tests {
     #[test]
     fn parse_int_arg_as_float() {
         let input = parse_osc_message("/varda/crossfader", &[OscType::Int(64)]);
-        assert_eq!(input, OscInput::Param { path: "crossfader".into(), value: 64.0 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "crossfader".into(),
+                value: 64.0
+            }
+        );
     }
 
     #[test]
     fn parse_bool_arg_true() {
         let input = parse_osc_message("/varda/deck/abc/mute", &[OscType::Bool(true)]);
-        assert_eq!(input, OscInput::Param { path: "deck/abc/mute".into(), value: 1.0 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "deck/abc/mute".into(),
+                value: 1.0
+            }
+        );
     }
 
     #[test]
     fn parse_bool_arg_false() {
         let input = parse_osc_message("/varda/deck/abc/mute", &[OscType::Bool(false)]);
-        assert_eq!(input, OscInput::Param { path: "deck/abc/mute".into(), value: 0.0 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "deck/abc/mute".into(),
+                value: 0.0
+            }
+        );
     }
 
     #[test]
@@ -348,7 +401,10 @@ mod tests {
         );
         assert_eq!(
             input,
-            OscInput::Param { path: "deck/abc/effect/0/param/brightness".into(), value: 0.7 },
+            OscInput::Param {
+                path: "deck/abc/effect/0/param/brightness".into(),
+                value: 0.7
+            },
         );
     }
 
@@ -360,20 +416,35 @@ mod tests {
         );
         assert_eq!(
             input,
-            OscInput::Param { path: "master/effect/1/param/amount".into(), value: 0.3 },
+            OscInput::Param {
+                path: "master/effect/1/param/amount".into(),
+                value: 0.3
+            },
         );
     }
 
     #[test]
     fn parse_channel_opacity() {
         let input = parse_osc_message("/varda/ch/def456/opacity", &[OscType::Float(0.9)]);
-        assert_eq!(input, OscInput::Param { path: "ch/def456/opacity".into(), value: 0.9 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "ch/def456/opacity".into(),
+                value: 0.9
+            }
+        );
     }
 
     #[test]
     fn parse_step_sequencer_step() {
         let input = parse_osc_message("/varda/mod/0/step/3", &[OscType::Float(0.6)]);
-        assert_eq!(input, OscInput::Param { path: "mod/0/step/3".into(), value: 0.6 });
+        assert_eq!(
+            input,
+            OscInput::Param {
+                path: "mod/0/step/3".into(),
+                value: 0.6
+            }
+        );
     }
 
     #[test]

@@ -1,0 +1,3131 @@
+Run cargo fmt --all -- --check
+  
+Diff in /home/runner/work/varda/varda/benches/compositing.rs:14:
+ ///
+ /// After the criterion groups complete, the per-deck slope (decks/8 minus
+ /// decks/1, divided by 7) is computed from fresh samples and printed.
+-
+ use std::time::Instant;
+ 
+ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+Diff in /home/runner/work/varda/varda/benches/compositing.rs:21:
+ use varda::{
+-    audio::AudioData,
+-    deck::Deck,
+-    isf::ISFShader,
+-    mixer::Mixer,
+-    modulation::AudioValues,
++    audio::AudioData, deck::Deck, isf::ISFShader, mixer::Mixer, modulation::AudioValues,
+     renderer::context::GpuContext,
+ };
+ 
+Diff in /home/runner/work/varda/varda/benches/compositing.rs:42:
+ 
+ fn poll(ctx: &GpuContext) {
+     ctx.device
+-        .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
++        .poll(wgpu::PollType::Wait {
++            submission_index: None,
++            timeout: None,
++        })
+         .ok();
+ }
+ 
+Diff in /home/runner/work/varda/varda/benches/compositing.rs:71:
+ 
+ fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
+     let audio = AudioData::default();
+-    let audio_values = AudioValues { sources: Default::default() };
++    let audio_values = AudioValues {
++        sources: Default::default(),
++    };
+     for _ in 0..3 {
+         mixer.render(ctx, &audio, &audio_values).expect("warmup");
+         poll(ctx);
+Diff in /home/runner/work/varda/varda/benches/compositing.rs:112:
+     preflight_slo(&ctx);
+ 
+     let audio = AudioData::default();
+-    let audio_values = AudioValues { sources: Default::default() };
++    let audio_values = AudioValues {
++        sources: Default::default(),
++    };
+ 
+     let mut group = c.benchmark_group("channel_composite_solid");
+     group.sample_size(50);
+Diff in /home/runner/work/varda/varda/benches/compositing.rs:137:
+     };
+ 
+     let audio = AudioData::default();
+-    let audio_values = AudioValues { sources: Default::default() };
++    let audio_values = AudioValues {
++        sources: Default::default(),
++    };
+ 
+     let mut group = c.benchmark_group("channel_composite_shader");
+     group.sample_size(50);
+Diff in /home/runner/work/varda/varda/benches/compositing.rs:162:
+     };
+ 
+     let audio = AudioData::default();
+-    let audio_values = AudioValues { sources: Default::default() };
++    let audio_values = AudioValues {
++        sources: Default::default(),
++    };
+ 
+     let mut mixer = setup_mixer_solid(&ctx, 1);
+-    let deck = Deck::new_solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT)
+-        .expect("solid color deck");
++    let deck =
++        Deck::new_solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT).expect("solid color deck");
+     mixer.channel_mut(1).unwrap().add_deck(deck);
+     mixer.set_crossfader(0.5);
+ 
+Diff in /home/runner/work/varda/varda/benches/shader_params.rs:10:
+ /// The (empty_mod − no_mod) gap is the per-param allocation cost paid even
+ /// when nothing is modulated. Multiply by params × decks × effects to
+ /// estimate the per-frame floor for a full scene.
+-
+ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+ use varda::{
+     isf::ISFInput,
+Diff in /home/runner/work/varda/varda/benches/shader_params.rs:36:
+     ISFInput {
+         name: name.to_string(),
+         input_type: "color".to_string(),
+-        default: None, min: None, max: None, label: None,
+-        values: None, labels: None, identity: None,
++        default: None,
++        min: None,
++        max: None,
++        label: None,
++        values: None,
++        labels: None,
++        identity: None,
+     }
+ }
+ 
+Diff in /home/runner/work/varda/varda/benches/shader_params.rs:45:
+     ISFInput {
+         name: name.to_string(),
+         input_type: "point2D".to_string(),
+-        default: None, min: None, max: None, label: None,
+-        values: None, labels: None, identity: None,
++        default: None,
++        min: None,
++        max: None,
++        label: None,
++        values: None,
++        labels: None,
++        identity: None,
+     }
+ }
+ 
+Diff in /home/runner/work/varda/varda/benches/shader_params.rs:69:
+         bipolar: false,
+     });
+     engine.assign(param_key, &src, 1.0, None);
+-    engine.update(0.5, &AudioValues { sources: Default::default() });
++    engine.update(
++        0.5,
++        &AudioValues {
++            sources: Default::default(),
++        },
++    );
+     engine
+ }
+ 
+Diff in /home/runner/work/varda/varda/benches/shader_params.rs:84:
+         let eng_empty = ModulationEngine::new();
+         let eng_lfo = engine_with_lfo(&lfo_key);
+ 
+-        g.bench_with_input(BenchmarkId::new("no_mod", total), &total,
+-            |b, _| b.iter(|| params.build_buffer_data()));
+-        g.bench_with_input(BenchmarkId::new("empty_mod", total), &total,
+-            |b, _| b.iter(|| params.build_modulated_buffer_data(&eng_empty, Some("deck0"))));
+-        g.bench_with_input(BenchmarkId::new("active_lfo", total), &total,
+-            |b, _| b.iter(|| params.build_modulated_buffer_data(&eng_lfo, Some("deck0"))));
++        g.bench_with_input(BenchmarkId::new("no_mod", total), &total, |b, _| {
++            b.iter(|| params.build_buffer_data())
++        });
++        g.bench_with_input(BenchmarkId::new("empty_mod", total), &total, |b, _| {
++            b.iter(|| params.build_modulated_buffer_data(&eng_empty, Some("deck0")))
++        });
++        g.bench_with_input(BenchmarkId::new("active_lfo", total), &total, |b, _| {
++            b.iter(|| params.build_modulated_buffer_data(&eng_lfo, Some("deck0")))
++        });
+     }
+ 
+     g.finish();
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:8:
+ use crate::engine::EngineCommand;
+ use crate::usecases::ui;
+ 
+-
+ impl VardaApp {
+     /// Apply UI-driven engine state changes: MIDI learn, notifications.
+     /// Selection and layout state is handled by the UI consumer (UIRunner).
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:77:
+                 CrossfaderAction::SetPosition(pos) => EngineCommand::SetCrossfader(*pos),
+                 CrossfaderAction::SnapA => EngineCommand::SetCrossfader(0.0),
+                 CrossfaderAction::SnapB => EngineCommand::SetCrossfader(1.0),
+-                CrossfaderAction::AutoTransition { target, duration_secs, easing } => {
+-                    EngineCommand::AutoCrossfade { target: *target, duration_secs: *duration_secs, easing: *easing }
+-                }
++                CrossfaderAction::AutoTransition {
++                    target,
++                    duration_secs,
++                    easing,
++                } => EngineCommand::AutoCrossfade {
++                    target: *target,
++                    duration_secs: *duration_secs,
++                    easing: *easing,
++                },
+                 CrossfaderAction::BeatTransition { target, beats } => {
+-                    EngineCommand::BeatCrossfade { target: *target, beats: *beats }
++                    EngineCommand::BeatCrossfade {
++                        target: *target,
++                        beats: *beats,
++                    }
+                 }
+             };
+             self.execute_command(cmd);
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:89:
+ 
+         // Channel updates — route through execute_command
+         for &(ch_idx, opacity, blend_mode) in &ui_actions.channel_updates {
+-            self.execute_command(EngineCommand::SetChannelOpacity { channel_idx: ch_idx, opacity });
+-            self.execute_command(EngineCommand::SetChannelBlendMode { channel_idx: ch_idx, mode: blend_mode });
++            self.execute_command(EngineCommand::SetChannelOpacity {
++                channel_idx: ch_idx,
++                opacity,
++            });
++            self.execute_command(EngineCommand::SetChannelBlendMode {
++                channel_idx: ch_idx,
++                mode: blend_mode,
++            });
+         }
+ 
+         // Deck updates — route through execute_command
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:97:
+         for &(ch_idx, deck_idx, opacity, blend_mode, solo, mute) in &ui_actions.deck_updates {
+-            self.execute_command(EngineCommand::SetDeckOpacity { channel_idx: ch_idx, deck_idx, opacity });
+-            self.execute_command(EngineCommand::SetDeckBlendMode { channel_idx: ch_idx, deck_idx, mode: blend_mode });
+-            self.execute_command(EngineCommand::SetDeckSolo { channel_idx: ch_idx, deck_idx, solo });
+-            self.execute_command(EngineCommand::SetDeckMute { channel_idx: ch_idx, deck_idx, mute });
++            self.execute_command(EngineCommand::SetDeckOpacity {
++                channel_idx: ch_idx,
++                deck_idx,
++                opacity,
++            });
++            self.execute_command(EngineCommand::SetDeckBlendMode {
++                channel_idx: ch_idx,
++                deck_idx,
++                mode: blend_mode,
++            });
++            self.execute_command(EngineCommand::SetDeckSolo {
++                channel_idx: ch_idx,
++                deck_idx,
++                solo,
++            });
++            self.execute_command(EngineCommand::SetDeckMute {
++                channel_idx: ch_idx,
++                deck_idx,
++                mute,
++            });
+         }
+ 
+         // Scaling mode — route through execute_command
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:105:
+         for &(ch_idx, deck_idx, mode) in &ui_actions.scaling_mode_updates {
+-            self.execute_command(EngineCommand::SetDeckScalingMode { channel_idx: ch_idx, deck_idx, mode });
++            self.execute_command(EngineCommand::SetDeckScalingMode {
++                channel_idx: ch_idx,
++                deck_idx,
++                mode,
++            });
+         }
+ 
+         // Complex mutations — VardaApp methods
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:121:
+ 
+         // Transition shader — route through execute_command
+         if let Some(transition_opt) = &ui_actions.set_transition {
+-            self.execute_command(EngineCommand::SetTransition { shader_name: transition_opt.clone() });
++            self.execute_command(EngineCommand::SetTransition {
++                shader_name: transition_opt.clone(),
++            });
+         }
+ 
+         // Camera add + channel remove
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:131:
+         removed_channel
+     }
+ 
+-
+     fn apply_add_channel(&mut self, ui_actions: &ui::UIActions) {
+-        if !ui_actions.add_channel { return; }
++        if !ui_actions.add_channel {
++            return;
++        }
+         self.execute_command(EngineCommand::AddChannel);
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:143:
+         egui_renderer: &mut egui_wgpu::Renderer,
+         deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
+     ) {
+-        let Some((ch_idx, camera_id)) = ui_actions.camera_to_add.take() else { return };
++        let Some((ch_idx, camera_id)) = ui_actions.camera_to_add.take() else {
++            return;
++        };
+ 
+-        let cam_name = self.camera_manager.devices().iter()
++        let cam_name = self
++            .camera_manager
++            .devices()
++            .iter()
+             .find(|d| d.id == camera_id)
+             .map(|d| d.name.clone())
+             .unwrap_or_else(|| format!("Camera {}", camera_id));
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:152:
+ 
+-        match self.camera_manager.open_camera(camera_id, &self.context.device) {
++        match self
++            .camera_manager
++            .open_camera(camera_id, &self.context.device)
++        {
+             Ok((src_w, src_h)) => {
+-                match Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h,
+-                    self.render_width, self.render_height)
+-                {
++                match Deck::new_from_camera(
++                    &self.context,
++                    camera_id,
++                    &cam_name,
++                    src_w,
++                    src_h,
++                    self.render_width,
++                    self.render_height,
++                ) {
+                     Ok(deck) => {
+                         if let Some(ch) = self.mixer.channel_mut(ch_idx) {
+                             let idx = ch.add_deck(deck);
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:161:
+-                            log::info!("Added camera deck {} to channel {}: {}", idx, ch_idx, cam_name);
++                            log::info!(
++                                "Added camera deck {} to channel {}: {}",
++                                idx,
++                                ch_idx,
++                                cam_name
++                            );
+                             let texture_id = egui_renderer.register_native_texture(
+                                 &self.context.device,
+                                 &ch.decks[idx].deck.texture_view,
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:165:
+                                 wgpu::FilterMode::Linear,
+                             );
+                             deck_preview_textures.insert((ch_idx, idx), texture_id);
+-                            self.session.notifications.info(format!("📹 Camera '{}' added to Ch {}", cam_name, ch_idx + 1));
++                            self.session.notifications.info(format!(
++                                "📹 Camera '{}' added to Ch {}",
++                                cam_name,
++                                ch_idx + 1
++                            ));
+                         }
+                     }
+                     Err(e) => {
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:172:
+                         log::error!("Failed to create camera deck: {}", e);
+-                        self.session.notifications.error(format!("Failed to create camera deck: {}", e));
++                        self.session
++                            .notifications
++                            .error(format!("Failed to create camera deck: {}", e));
+                     }
+                 }
+             }
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:177:
+             Err(e) => {
+                 log::error!("Failed to open camera '{}': {}", cam_name, e);
+-                self.session.notifications.error(format!("Failed to open camera '{}': {}", cam_name, e));
++                self.session
++                    .notifications
++                    .error(format!("Failed to open camera '{}': {}", cam_name, e));
+             }
+         }
+     }
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:185:
+     /// can fix up selection state.
+     fn apply_remove_channel(&mut self, ui_actions: &ui::UIActions) -> Option<usize> {
+         let ch_idx = ui_actions.remove_channel?;
+-        let result = self.execute_command(EngineCommand::RemoveChannel { channel_idx: ch_idx });
++        let result = self.execute_command(EngineCommand::RemoveChannel {
++            channel_idx: ch_idx,
++        });
+         match result {
+             crate::engine::CommandResult::Ok => Some(ch_idx),
+             _ => None,
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:197:
+     pub fn apply_resolution_change(&mut self, ui_actions: &ui::UIActions) -> bool {
+         if let Some((w, h)) = ui_actions.resolution_change {
+             if w > 0 && h > 0 && (w != self.render_width || h != self.render_height) {
+-                self.execute_command(EngineCommand::SetRenderResolution { width: w, height: h });
++                self.execute_command(EngineCommand::SetRenderResolution {
++                    width: w,
++                    height: h,
++                });
+                 return true;
+             }
+         }
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:207:
+     /// Apply clock preference changes from UI.
+     pub fn apply_clock_actions(&mut self, ui_actions: &ui::UIActions) {
+         if let Some(ref pref) = ui_actions.clock_preference {
+-            self.execute_command(EngineCommand::SetClockPreference { preference: pref.clone() });
++            self.execute_command(EngineCommand::SetClockPreference {
++                preference: pref.clone(),
++            });
+         }
+         if let Some(bpm) = ui_actions.manual_bpm {
+             self.execute_command(EngineCommand::SetManualBpm { bpm });
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:223:
+             self.execute_command(EngineCommand::RescanAudio);
+         }
+         for (source_id, enabled) in &ui_actions.audio_source_toggles {
+-            self.execute_command(EngineCommand::ToggleAudioSource { source_id: *source_id, enabled: *enabled });
++            self.execute_command(EngineCommand::ToggleAudioSource {
++                source_id: *source_id,
++                enabled: *enabled,
++            });
+         }
+         if ui_actions.midi_rescan {
+             self.execute_command(EngineCommand::RescanMidi);
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:230:
+         }
+         for (dev_id, enabled) in &ui_actions.midi_device_toggles {
+-            self.execute_command(EngineCommand::SetMidiDeviceEnabled { device_id: *dev_id, enabled: *enabled });
++            self.execute_command(EngineCommand::SetMidiDeviceEnabled {
++                device_id: *dev_id,
++                enabled: *enabled,
++            });
+         }
+         if ui_actions.midi_clear_mappings {
+             self.execute_command(EngineCommand::ClearMidiMappings);
+Diff in /home/runner/work/varda/varda/src/app/actions.rs:262:
+         }
+     }
+ }
++
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:1:
+ //! Engine trait implementations for VardaApp.
+ 
+ use super::VardaApp;
++use crate::deck::{Deck, Effect};
+ use crate::engine::traits::*;
+ use crate::engine::types::*;
+-use crate::deck::{Deck, Effect};
+ use crate::modulation::ModulationSource;
+ 
+ use anyhow::{Context as _, Result};
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:12:
+ /// Used at every command boundary that accepts a unit-range float.
+ #[inline]
+ fn sanitize_unit(value: f32, fallback: f32) -> f32 {
+-    if value.is_finite() { value.clamp(0.0, 1.0) } else { fallback }
++    if value.is_finite() {
++        value.clamp(0.0, 1.0)
++    } else {
++        fallback
++    }
+ }
+ 
+ impl MixerCommands for VardaApp {
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:36:
+ 
+     fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<()> {
+         let generators = self.registry.generators();
+-        let shader = generators.iter()
++        let shader = generators
++            .iter()
+             .find(|s| s.name() == shader_name)
+             .context("Shader not found")?;
+-        let deck = Deck::new(&self.context, (*shader).clone(), self.render_width, self.render_height)?;
+-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
++        let deck = Deck::new(
++            &self.context,
++            (*shader).clone(),
++            self.render_width,
++            self.render_height,
++        )?;
++        let ch = self
++            .mixer
++            .channel_mut(channel_idx)
++            .context("Invalid channel")?;
+         let idx = ch.add_deck(deck);
+-        log::info!("Added deck {} to channel {} with shader: {}", idx, channel_idx, shader_name);
++        log::info!(
++            "Added deck {} to channel {} with shader: {}",
++            idx,
++            channel_idx,
++            shader_name
++        );
+         Ok(())
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:49:
+     fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()> {
+-        let deck = Deck::new_from_image(&self.context, path, self.render_width, self.render_height)?;
+-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
++        let deck =
++            Deck::new_from_image(&self.context, path, self.render_width, self.render_height)?;
++        let ch = self
++            .mixer
++            .channel_mut(channel_idx)
++            .context("Invalid channel")?;
+         let name = deck.source_name().to_string();
+         let idx = ch.add_deck(deck);
+-        log::info!("Added image deck {} to channel {}: {}", idx, channel_idx, name);
++        log::info!(
++            "Added image deck {} to channel {}: {}",
++            idx,
++            channel_idx,
++            name
++        );
+         Ok(())
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:58:
+     fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()> {
+-        let deck = Deck::new_from_video(&self.context, path, self.render_width, self.render_height)?;
+-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
++        let deck =
++            Deck::new_from_video(&self.context, path, self.render_width, self.render_height)?;
++        let ch = self
++            .mixer
++            .channel_mut(channel_idx)
++            .context("Invalid channel")?;
+         let name = deck.source_name().to_string();
+         let idx = ch.add_deck(deck);
+-        log::info!("Added video deck {} to channel {}: {}", idx, channel_idx, name);
++        log::info!(
++            "Added video deck {} to channel {}: {}",
++            idx,
++            channel_idx,
++            name
++        );
+         Ok(())
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:67:
+     fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<()> {
+-        let deck = Deck::new_solid_color(&self.context, color, self.render_width, self.render_height)?;
+-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
++        let deck =
++            Deck::new_solid_color(&self.context, color, self.render_width, self.render_height)?;
++        let ch = self
++            .mixer
++            .channel_mut(channel_idx)
++            .context("Invalid channel")?;
+         let name = deck.source_name().to_string();
+         let idx = ch.add_deck(deck);
+-        log::info!("Added solid color deck {} to channel {}: {}", idx, channel_idx, name);
++        log::info!(
++            "Added solid color deck {} to channel {}: {}",
++            idx,
++            channel_idx,
++            name
++        );
+         Ok(())
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:76:
+     fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<()> {
+-        let cam_name = self.camera_manager.devices().iter()
++        let cam_name = self
++            .camera_manager
++            .devices()
++            .iter()
+             .find(|d| d.id == camera_id)
+             .map(|d| d.name.clone())
+             .unwrap_or_else(|| format!("Camera {}", camera_id));
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:81:
+-        let (src_w, src_h) = self.camera_manager.open_camera(camera_id, &self.context.device)?;
+-        let deck = Deck::new_from_camera(&self.context, camera_id, &cam_name, src_w, src_h, self.render_width, self.render_height)?;
+-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
++        let (src_w, src_h) = self
++            .camera_manager
++            .open_camera(camera_id, &self.context.device)?;
++        let deck = Deck::new_from_camera(
++            &self.context,
++            camera_id,
++            &cam_name,
++            src_w,
++            src_h,
++            self.render_width,
++            self.render_height,
++        )?;
++        let ch = self
++            .mixer
++            .channel_mut(channel_idx)
++            .context("Invalid channel")?;
+         let idx = ch.add_deck(deck);
+-        log::info!("Added camera deck {} to channel {}: {}", idx, channel_idx, cam_name);
++        log::info!(
++            "Added camera deck {} to channel {}: {}",
++            idx,
++            channel_idx,
++            cam_name
++        );
+         Ok(())
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:89:
+     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()> {
+         // Capture deck UUID before removal for modulation cleanup
+-        let deck_uuid = self.mixer.channels().get(channel_idx)
++        let deck_uuid = self
++            .mixer
++            .channels()
++            .get(channel_idx)
+             .and_then(|ch| ch.decks.get(deck_idx))
+             .map(|slot| slot.deck.uuid().to_string());
+         // Release external resources before removal
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:109:
+                 }
+             }
+         }
+-        let ch = self.mixer.channel_mut(channel_idx).context("Invalid channel")?;
++        let ch = self
++            .mixer
++            .channel_mut(channel_idx)
++            .context("Invalid channel")?;
+         if deck_idx < ch.decks.len() {
+             // Also capture effect UUIDs for modulation cleanup
+-            let effect_uuids: Vec<String> = ch.decks[deck_idx].deck.effects
+-                .iter().map(|e| e.uuid.clone()).collect();
++            let effect_uuids: Vec<String> = ch.decks[deck_idx]
++                .deck
++                .effects
++                .iter()
++                .map(|e| e.uuid.clone())
++                .collect();
+             ch.remove_deck(deck_idx);
+             log::info!("Removed deck {} from channel {}", deck_idx, channel_idx);
+             // Clean up orphaned modulation assignments
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:120:
+             if let Some(uuid) = deck_uuid {
+-                self.mixer.modulation_mut().remove_assignments_with_prefix(&format!("deck_{}:", uuid));
++                self.mixer
++                    .modulation_mut()
++                    .remove_assignments_with_prefix(&format!("deck_{}:", uuid));
+             }
+             for fx_uuid in &effect_uuids {
+-                self.mixer.modulation_mut().remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
++                self.mixer
++                    .modulation_mut()
++                    .remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
+             }
+         }
+         Ok(())
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:142:
+         // (split_at_mut or index — Rust's borrow checker doesn't allow two
+         //  channel_mut() calls in the same scope)
+         let Some(slot) = channels[src_ch].remove_deck_slot(src_deck) else {
+-            log::warn!("move_deck: deck {} not found in channel {}", src_deck, src_ch);
++            log::warn!(
++                "move_deck: deck {} not found in channel {}",
++                src_deck,
++                src_ch
++            );
+             return Ok(());
+         };
+         let new_idx = channels[dst_ch].add_deck_slot(slot);
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:149:
+-        log::info!("Moved deck {} from ch{} to ch{} (new idx {})", src_deck, src_ch, dst_ch, new_idx);
++        log::info!(
++            "Moved deck {} from ch{} to ch{} (new idx {})",
++            src_deck,
++            src_ch,
++            dst_ch,
++            new_idx
++        );
+         Ok(())
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:153:
+     fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize) {
+-        if from_idx == to_idx { return; }
++        if from_idx == to_idx {
++            return;
++        }
+         if let Some(channel) = self.mixer.channel_mut(ch) {
+             if from_idx < channel.decks.len() && to_idx < channel.decks.len() {
+                 let slot = channel.decks.remove(from_idx);
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:212:
+     }
+ 
+     fn add_channel(&mut self) -> Result<usize> {
+-        self.mixer.add_channel(&self.context, self.render_width, self.render_height)
++        self.mixer
++            .add_channel(&self.context, self.render_width, self.render_height)
+     }
+ 
+     fn remove_channel(&mut self, channel_idx: usize) -> Result<()> {
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:226:
+ 
+     fn add_effect(&mut self, target: EffectTarget, shader_name: &str) -> Result<()> {
+         let filters = self.registry.filters();
+-        let shader = filters.iter()
++        let shader = filters
++            .iter()
+             .find(|s| s.name() == shader_name)
+             .context("Filter shader not found")?;
+         match target {
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:235:
+                 let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
+                 if deck_idx < ch.decks.len() {
+                     ch.decks[deck_idx].deck.add_effect(effect);
+-                    log::info!("Added effect {} to ch{} deck {}", shader_name, ch_idx, deck_idx);
++                    log::info!(
++                        "Added effect {} to ch{} deck {}",
++                        shader_name,
++                        ch_idx,
++                        deck_idx
++                    );
+                 }
+             }
+             EffectTarget::Channel(ch_idx) => {
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:242:
+-                let effect = Effect::new_with_format(&self.context, (*shader).clone(), self.context.texture_format)?;
++                let effect = Effect::new_with_format(
++                    &self.context,
++                    (*shader).clone(),
++                    self.context.texture_format,
++                )?;
+                 let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
+                 ch.add_effect(effect);
+                 log::info!("Added channel effect {} to ch{}", shader_name, ch_idx);
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:246:
+             }
+             EffectTarget::Master => {
+-                let effect = Effect::new_with_format(&self.context, (*shader).clone(), self.context.texture_format)?;
++                let effect = Effect::new_with_format(
++                    &self.context,
++                    (*shader).clone(),
++                    self.context.texture_format,
++                )?;
+                 self.mixer.add_master_effect(effect);
+                 log::info!("Added master effect: {}", shader_name);
+             }
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:294:
+             }
+             EffectTarget::Master => {
+                 if effect_idx < self.mixer.master_effects().len() {
+-                    self.mixer.master_effects_mut()[effect_idx].enabled = !self.mixer.master_effects_mut()[effect_idx].enabled;
++                    self.mixer.master_effects_mut()[effect_idx].enabled =
++                        !self.mixer.master_effects_mut()[effect_idx].enabled;
+                 }
+             }
+         }
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:301:
+     }
+ 
+     fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize) {
+-        if from_idx == to_idx { return; }
++        if from_idx == to_idx {
++            return;
++        }
+         match target {
+             EffectTarget::Deck(ch_idx, deck_idx) => {
+                 if let Some(ch) = self.mixer.channel_mut(ch_idx) {
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:323:
+                 }
+             }
+             EffectTarget::Master => {
+-                if from_idx < self.mixer.master_effects().len() && to_idx < self.mixer.master_effects().len() {
++                if from_idx < self.mixer.master_effects().len()
++                    && to_idx < self.mixer.master_effects().len()
++                {
+                     let effect = self.mixer.master_effects_mut().remove(from_idx);
+                     self.mixer.master_effects_mut().insert(to_idx, effect);
+                 }
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:333:
+ 
+     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()> {
+         match shader_name {
+-            None => { self.mixer.clear_transition(); Ok(()) }
++            None => {
++                self.mixer.clear_transition();
++                Ok(())
++            }
+             Some(name) => {
+-                let shader = self.registry.get(name).context("Transition shader not found")?;
++                let shader = self
++                    .registry
++                    .get(name)
++                    .context("Transition shader not found")?;
+                 self.mixer.set_transition(&self.context, shader.clone())
+             }
+         }
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:345:
+         // Convert ParamValue to f32 for the param router
+         let f_value = match value {
+             ParamValue::Float(v) => v,
+-            ParamValue::Bool(b) => if b { 1.0 } else { 0.0 },
++            ParamValue::Bool(b) => {
++                if b {
++                    1.0
++                } else {
++                    0.0
++                }
++            }
+             ParamValue::Long(i) => i as f32,
+             ParamValue::Color(c) => c[0],
+             ParamValue::Point2D(p) => p[0],
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:365:
+ 
+ impl AudioCommands for VardaApp {
+     fn open_audio_source(&mut self, source_id: AudioSourceId) -> Result<()> {
+-        self.audio_manager.open_source(source_id)
++        self.audio_manager
++            .open_source(source_id)
+             .map_err(|e| anyhow::anyhow!("Failed to open audio source: {}", e))
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:390:
+             bpm: primary_audio.bpm,
+             beat_phase: primary_audio.beat_phase(),
+             enabled: self.audio_manager.has_active_source(),
+-            devices: self.audio_manager.devices().iter().map(|d| AudioDeviceSnapshot {
+-                id: d.id,
+-                name: d.name.clone(),
+-                active: active_ids.contains(&d.id),
+-            }).collect(),
++                        gain,
++                        smoothing,
++                        mode,
++                        noise_gate,
++                    } => ModulationSourceSnapshot::Audio {
++                        source_id: *source_id,
++                        freq_low: *freq_low,
++                        freq_high: *freq_high,
++                        gain: *gain,
++                        smoothing: *smoothing,
++                        mode: *mode,
++                        noise_gate: *noise_gate,
++                    },
++                    ModulationSource::ADSR {
++                        attack,
++                        decay,
++                        sustain,
++                        release,
++                        stage,
++                        ..
++                    } => ModulationSourceSnapshot::ADSR {
++                        attack: *attack,
++                        decay: *decay,
++                        sustain: *sustain,
++                        release: *release,
++                        stage: *stage,
++                    },
++                    ModulationSource::StepSequencer {
++                        steps,
++                        rate,
++                        interpolation,
++                        bipolar,
++                    } => ModulationSourceSnapshot::StepSequencer {
++                        steps: steps.clone(),
++                        rate: *rate,
++                        interpolation: *interpolation,
++                        bipolar: *bipolar,
++                    },
++                };
++                ModulationSourceSnapshotEntry {
++                    uuid: entry.uuid.clone(),
++                    source: snapshot,
+                 }
+-                ModulationSource::AudioBand { source_id, freq_low, freq_high, gain, smoothing, mode, noise_gate } => {
+-                    ModulationSourceSnapshot::Audio {
+-                        source_id: *source_id, freq_low: *freq_low, freq_high: *freq_high,
+-                        gain: *gain, smoothing: *smoothing, mode: *mode, noise_gate: *noise_gate,
+-                    }
+-                }
+-                ModulationSource::ADSR { attack, decay, sustain, release, stage, .. } => {
+-                    ModulationSourceSnapshot::ADSR {
+-                        attack: *attack, decay: *decay, sustain: *sustain,
+-                        release: *release, stage: *stage,
+-                    }
+-                }
+-                ModulationSource::StepSequencer { steps, rate, interpolation, bipolar } => {
+-                    ModulationSourceSnapshot::StepSequencer {
+-                        steps: steps.clone(), rate: *rate,
+-                        interpolation: *interpolation, bipolar: *bipolar,
+-                    }
+-                }
+-            };
+-            ModulationSourceSnapshotEntry { uuid: entry.uuid.clone(), source: snapshot }
+-        }).collect();
+-        let current_values: std::collections::HashMap<String, f32> = m.modulation().sources.iter().enumerate().map(|(i, entry)| {
+-            (entry.uuid.clone(), m.modulation().current_values().get(i).copied().unwrap_or(0.0))
+-        }).collect();
+-        let assignments = m.modulation().assignments.iter().map(|(k, v)| {
+-            (k.clone(), v.iter().map(|pm| ModulationAssignmentSnapshot {
+-                source_id: pm.source_id.clone(),
+-                amount: pm.amount,
+-            }).collect())
+-        }).collect();
+-        ModulationSnapshot { sources, current_values, assignments }
++            })
++            .collect();
++        let current_values: std::collections::HashMap<String, f32> = m
++            .modulation()
++            .sources
++            .iter()
++            .enumerate()
++            .map(|(i, entry)| {
++                (
++                    entry.uuid.clone(),
++                    m.modulation()
++                        .current_values()
++                        .get(i)
++                        .copied()
++                        .unwrap_or(0.0),
++                )
++            })
++            .collect();
++        let assignments = m
++            .modulation()
++            .assignments
++            .iter()
++            .map(|(k, v)| {
++                (
++                    k.clone(),
++                    v.iter()
++            devices: self
++                .audio_manager
++                .devices()
++                .iter()
++                .map(|d| AudioDeviceSnapshot {
++                    id: d.id,
++                    name: d.name.clone(),
++                    active: active_ids.contains(&d.id),
++                })
++                .collect(),
+             fft: primary_audio.fft.clone(),
+             sample_rate: primary_audio.sample_rate,
+         }
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:401:
+     }
+ }
+ 
+-
+ // ── Modulation trait implementations ────────────────────────────────
+ 
+ impl ModulationCommands for VardaApp {
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:408:
+     fn add_lfo(&mut self, waveform: LFOWaveform, frequency: f32) -> String {
+         let source = ModulationSource::LFO {
+-            waveform, frequency, phase: 0.0, amplitude: 1.0, bipolar: false,
++            waveform,
++            frequency,
++            phase: 0.0,
++            amplitude: 1.0,
++            bipolar: false,
+         };
+         self.mixer.modulation_mut().add_source(source)
+     }
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:414:
+ 
+-    fn add_audio_band(&mut self, preset: AudioBandPreset, source_id: Option<AudioSourceId>) -> String {
++    fn add_audio_band(
++        &mut self,
++        preset: AudioBandPreset,
++        source_id: Option<AudioSourceId>,
++    ) -> String {
+         let (freq_low, freq_high) = preset.freq_range();
+         let source = ModulationSource::AudioBand {
+-            source_id, freq_low, freq_high, gain: 1.0, smoothing: 0.6,
+-            mode: crate::modulation::AudioReactMode::Direct, noise_gate: 0.1,
++            source_id,
++            freq_low,
++            freq_high,
++            gain: 1.0,
++            smoothing: 0.6,
++            mode: crate::modulation::AudioReactMode::Direct,
++            noise_gate: 0.1,
+         };
+         self.mixer.modulation_mut().add_source(source)
+     }
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:436:
+     }
+ 
+     fn assign_modulation(&mut self, target: &str, source_id: &str, amount: f32) {
+-        self.mixer.modulation_mut().assign(target, source_id, amount, None);
++        self.mixer
++            .modulation_mut()
++            .assign(target, source_id, amount, None);
+     }
+ 
+     fn clear_modulation(&mut self, target: &str) {
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:447:
+ impl ModulationQueries for VardaApp {
+     fn modulation_snapshot(&self) -> ModulationSnapshot {
+         let m = &self.mixer;
+-        let sources = m.modulation().sources.iter().map(|entry| {
+-            let snapshot = match &entry.source {
+-                ModulationSource::LFO { waveform, frequency, phase, amplitude, bipolar } => {
+-                    ModulationSourceSnapshot::LFO {
+-                        waveform: *waveform, frequency: *frequency, phase: *phase,
+-                        amplitude: *amplitude, bipolar: *bipolar,
+-                    }
++        let sources = m
++            .modulation()
++            .sources
++            .iter()
++            .map(|entry| {
++                let snapshot = match &entry.source {
++                    ModulationSource::LFO {
++                        waveform,
++                        frequency,
++                        phase,
++                        amplitude,
++                        bipolar,
++                    } => ModulationSourceSnapshot::LFO {
++                        waveform: *waveform,
++                        frequency: *frequency,
++                        phase: *phase,
++                        amplitude: *amplitude,
++                        bipolar: *bipolar,
++                    },
++                    ModulationSource::AudioBand {
++                        source_id,
++                        freq_low,
++                        freq_high,
++                        .map(|pm| ModulationAssignmentSnapshot {
++                            source_id: pm.source_id.clone(),
++                            amount: pm.amount,
++                        })
++                        .collect(),
++                )
++            })
++            .collect();
++        ModulationSnapshot {
++            sources,
++            current_values,
++            assignments,
++        }
+     }
+ }
+ 
+Diff in /home/runner/work/varda/varda/src/app/engine_impl.rs:493:
+ 
+ impl OutputCommands for VardaApp {
+     fn request_create_output(&mut self) {
+-        self.output.pending_output_creates.push(crate::scene::OutputConfig::default_windowed());
++        self.output
++            .pending_output_creates
++            "Changing render resolution: {}×{} → {}×{}",
++            self.render_width,
++            self.render_height,
++            width,
++            height
++        );
+         self.render_width = width;
+         self.render_height = height;
+         self.mixer.resize(&self.context, width, height);
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1470:
+         // Clear sub-mix cache since textures were recreated
+         self.mixer.clear_sub_mix_cache();
+-        self.session.notifications.info(format!("📐 Resolution changed to {}×{}", width, height));
++        self.session
++            .notifications
++            .info(format!("📐 Resolution changed to {}×{}", width, height));
+     }
+ }
+ 
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1509:
+ 
+     #[test]
+     fn app_config_osc_flags() {
+-        let config = parse_args(&["--osc-port", "7000", "--osc-out", "192.168.1.1:8000", "--osc-out", "10.0.0.1:9000"]);
++        let config = parse_args(&[
++            "--osc-port",
++            "7000",
++            "--osc-out",
++            "192.168.1.1:8000",
++            "--osc-out",
++            "10.0.0.1:9000",
++        ]);
+         assert_eq!(config.osc_port, Some(7000));
+-        assert_eq!(config.osc_targets, vec!["192.168.1.1:8000", "10.0.0.1:9000"]);
++        assert_eq!(
++            config.osc_targets,
++            vec!["192.168.1.1:8000", "10.0.0.1:9000"]
++        );
+         assert!(!config.osc_disabled);
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1569:
+         let cwd = tempfile::tempdir().unwrap();
+         std::fs::create_dir(cwd.path().join(".varda")).unwrap();
+ 
+-        let result = AppConfig::resolve_workspace_root(
+-            Some(explicit.as_path()),
+-            Some(cwd.path()),
+-            None,
+-        );
++        let result =
++            AppConfig::resolve_workspace_root(Some(explicit.as_path()), Some(cwd.path()), None);
+         assert_eq!(result, explicit);
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1601:
+             return;
+         };
+         let state = app.build_engine_state();
+-        assert_eq!(state.mixer.channels.len(), 2, "default mixer has 2 channels");
++        assert_eq!(
++            state.mixer.channels.len(),
++            2,
++            "default mixer has 2 channels"
++        );
+         assert_eq!(state.mixer.crossfader, 0.0, "crossfader starts at A");
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1608:
+     #[test]
+     fn smoke_add_channel_via_command() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let tx = app.command_sender();
+-        tx.send((crate::engine::EngineCommand::AddChannel, None)).unwrap();
++        tx.send((crate::engine::EngineCommand::AddChannel, None))
+     fn smoke_add_lfo_modulation() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let tx = app.command_sender();
+         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+         tx.send((
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1697:
+                 frequency: 2.0,
+             },
+             Some(reply_tx),
+-        )).unwrap();
++        ))
++        .unwrap();
+         app.process_commands();
+         let result = reply_rx.blocking_recv().unwrap();
+-        assert!(matches!(result, crate::engine::CommandResult::Ok), "AddLfo failed: {:?}", result);
++        assert!(
++            matches!(result, crate::engine::CommandResult::Ok),
++            "AddLfo failed: {:?}",
++            result
++        );
+         let state = app.build_engine_state();
+         assert!(!state.modulation.sources.is_empty());
+     }
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1707:
+ 
+     #[test]
+     fn smoke_remove_channel() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let tx = app.command_sender();
+         // Add a third channel first
+-        tx.send((crate::engine::EngineCommand::AddChannel, None)).unwrap();
++        tx.send((crate::engine::EngineCommand::AddChannel, None))
++            .unwrap();
+         app.process_commands();
+         assert_eq!(app.build_engine_state().mixer.channels.len(), 3);
+         // Remove the third channel
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1717:
+-        tx.send((crate::engine::EngineCommand::RemoveChannel { channel_idx: 2 }, None)).unwrap();
++        tx.send((
++            crate::engine::EngineCommand::RemoveChannel { channel_idx: 2 },
++            None,
++        ))
++        .unwrap();
+         app.process_commands();
+         assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
+     }
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1721:
+ 
+     #[test]
+     fn smoke_set_deck_blend_mode() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let tx = app.command_sender();
+         // Add a solid color deck first
+         tx.send((
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1730:
+                 color: [0.0, 1.0, 0.0, 1.0],
+             },
+             None,
+-        )).unwrap();
++        ))
++        .unwrap();
+         app.process_commands();
+         // Set its blend mode
+         tx.send((
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1737:
+             crate::engine::EngineCommand::SetDeckBlendMode {
+-                channel_idx: 0, deck_idx: 1,
++                channel_idx: 0,
++                deck_idx: 1,
+                 mode: crate::engine::BlendMode::Add,
+             },
+             None,
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1742:
+-        )).unwrap();
++        ))
++        .unwrap();
+         app.process_commands();
+         // Verify no crash — blend mode is GPU-level and verified through state
+     }
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1746:
+ 
+     #[test]
+     fn smoke_set_render_resolution() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         app.set_render_resolution(1280, 720);
+         assert_eq!(app.render_width(), 1280);
+         assert_eq!(app.render_height(), 720);
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1754:
++            .unwrap();
+         app.process_commands();
+         let state = app.build_engine_state();
+         assert_eq!(state.mixer.channels.len(), 3);
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1617:
+ 
+     #[test]
+     fn smoke_set_crossfader_via_command() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let tx = app.command_sender();
+-        tx.send((crate::engine::EngineCommand::SetCrossfader(0.75), None)).unwrap();
++        tx.send((crate::engine::EngineCommand::SetCrossfader(0.75), None))
++            .unwrap();
+         app.process_commands();
+         let state = app.build_engine_state();
+         assert!((state.mixer.crossfader - 0.75).abs() < 1e-5);
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1627:
+ 
+     #[test]
+     fn smoke_render_frame_no_crash() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         // Render several frames — verify no panics and FPS stabilizes
+         for _ in 0..5 {
+             app.update_frame_timing();
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1639:
+ 
+     #[test]
+     fn smoke_add_solid_color_deck() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let before = app.build_engine_state().mixer.channels[0].decks.len();
+         let tx = app.command_sender();
+         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1649:
+                 color: [1.0, 0.0, 0.0, 1.0],
+             },
+             Some(reply_tx),
+-        )).unwrap();
++        ))
++        .unwrap();
+         app.process_commands();
+         let result = reply_rx.blocking_recv().unwrap();
+-        assert!(matches!(result, crate::engine::CommandResult::Ok), "command should succeed: {:?}", result);
++        assert!(
++            matches!(result, crate::engine::CommandResult::Ok),
++            "command should succeed: {:?}",
++            result
++        );
+         let after = app.build_engine_state().mixer.channels[0].decks.len();
+         assert_eq!(after, before + 1, "should have one more deck");
+     }
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1659:
+ 
+     #[test]
+     fn smoke_set_channel_opacity() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let tx = app.command_sender();
+         tx.send((
+-            crate::engine::EngineCommand::SetChannelOpacity { channel_idx: 0, opacity: 0.5 },
++            crate::engine::EngineCommand::SetChannelOpacity {
++                channel_idx: 0,
++                opacity: 0.5,
++            },
+             None,
+-        )).unwrap();
++        ))
++        .unwrap();
+         app.process_commands();
+         let state = app.build_engine_state();
+         assert!((state.mixer.channels[0].opacity - 0.5).abs() < 1e-5);
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1672:
+ 
+     #[test]
+     fn smoke_undo_redo_roundtrip() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let tx = app.command_sender();
+         // Set crossfader to 0.5 (will trigger history push)
+-        tx.send((crate::engine::EngineCommand::SetCrossfader(0.5), None)).unwrap();
++        tx.send((crate::engine::EngineCommand::SetCrossfader(0.5), None))
++            .unwrap();
+         app.process_commands();
+         // Undo
+         tx.send((crate::engine::EngineCommand::Undo, None)).unwrap();
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1688:
+ 
+     #[test]
+ 
+     #[test]
+     fn smoke_set_render_resolution_zero_ignored() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         app.set_render_resolution(0, 0);
+         // Should keep previous resolution
+         assert!(app.render_width() > 0);
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1763:
+ 
+     #[test]
+     fn smoke_publish_and_read_state() {
+-        let Some(app) = headless_app() else { return; };
++        let Some(app) = headless_app() else {
++            return;
++        };
+         let reader = app.state_reader();
+         app.publish_state();
+         let guard = reader.read().unwrap();
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1773:
+ 
+     #[test]
+     fn smoke_notifications() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         app.notify_info("Test notification");
+         app.update_notifications();
+         // Verify no crash
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1782:
+     // ── Extended smoke tests ───────────────────────────────────────
+ 
+     /// Helper: send command with reply, process, return result.
+-    fn send_cmd(app: &mut VardaApp, cmd: crate::engine::EngineCommand) -> crate::engine::CommandResult {
++    fn send_cmd(
++        app: &mut VardaApp,
++        cmd: crate::engine::EngineCommand,
++    ) -> crate::engine::CommandResult {
+         let tx = app.command_sender();
+         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+         tx.send((cmd, Some(reply_tx))).unwrap();
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1798:
+ 
+     #[test]
+     fn smoke_auto_crossfade_lifecycle() {
+-        let Some(mut app) = headless_app() else { return; };
+-        fire(&mut app, crate::engine::EngineCommand::AutoCrossfade {
+-            target: 1.0,
+-            duration_secs: 0.05,
+-            easing: crate::mixer::CrossfadeEasing::Linear,
+-        });
++        let Some(mut app) = headless_app() else {
++            return;
++        };
++        fire(
++            &mut app,
++            crate::engine::EngineCommand::AutoCrossfade {
++                target: 1.0,
++                duration_secs: 0.05,
++                easing: crate::mixer::CrossfadeEasing::Linear,
++            },
++        );
+         // Tick enough frames for it to complete
+         for _ in 0..60 {
+             app.update_frame_timing();
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1815:
+ 
+     #[test]
+     fn smoke_add_video_deck_no_crash() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         // Bad path — should not panic
+-        let _ = send_cmd(&mut app, crate::engine::EngineCommand::AddVideoDeck {
+-            channel_idx: 0,
+-            path: std::path::PathBuf::from("/nonexistent/video.mp4"),
+-        });
++        let _ = send_cmd(
++            &mut app,
++            crate::engine::EngineCommand::AddVideoDeck {
++                channel_idx: 0,
++                path: std::path::PathBuf::from("/nonexistent/video.mp4"),
++            },
++        );
+     }
+ 
+     #[test]
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1827:
+     fn smoke_video_toggle_play() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         // Toggle play on a non-video deck — should handle gracefully
+-        let _ = send_cmd(&mut app, crate::engine::EngineCommand::VideoTogglePlay {
+-            channel_idx: 0, deck_idx: 0,
+-        });
++        let _ = send_cmd(
++            &mut app,
++            crate::engine::EngineCommand::VideoTogglePlay {
++                channel_idx: 0,
++                deck_idx: 0,
++            },
++        );
+     }
+ 
+     #[test]
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1836:
+     fn smoke_video_set_speed() {
+-        let Some(mut app) = headless_app() else { return; };
+-        let _ = send_cmd(&mut app, crate::engine::EngineCommand::VideoSetSpeed {
+-            channel_idx: 0, deck_idx: 0, speed: 2.0,
+-        });
++        let Some(mut app) = headless_app() else {
++            return;
++        };
++        let _ = send_cmd(
++            &mut app,
++            crate::engine::EngineCommand::VideoSetSpeed {
++                channel_idx: 0,
++                deck_idx: 0,
++                speed: 2.0,
++            },
++        );
+     }
+ 
+     #[test]
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1844:
+     fn smoke_create_sequence() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         let r = send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
+         assert!(matches!(r, crate::engine::CommandResult::Ok));
+         let state = app.build_engine_state();
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1851:
+ 
+     #[test]
+     fn smoke_sequence_add_steps() {
+-        let Some(mut app) = headless_app() else { return; };
++        let Some(mut app) = headless_app() else {
++            return;
++        };
+         send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
+-        send_cmd(&mut app, crate::engine::EngineCommand::AddFadeStep { seq_idx: 0, from_ch: 0, to_ch: 1 });
+-        send_cmd(&mut app, crate::engine::EngineCommand::AddWaitStep { seq_idx: 0 });
++        send_cmd(
++            &mut app,
++            crate::engine::EngineCommand::AddFadeStep {
++                seq_idx: 0,
++                from_ch: 0,
++                to_ch: 1,
++            },
++        );
++        send_cmd(
++            &mut app,
++            crate::engine::EngineCommand::AddWaitStep { seq_idx: 0 },
++        );
+         let state = app.build_engine_state();
+         assert_eq!(state.mixer.sequences[0].steps.len(), 2);
+     }
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1861:
+ 
+     #[test]
+     fn smoke_effect_chain_operations() {
+-        let Some(mut app) = headless_app() else { return; };
+-        send_cmd(&mut app, crate::engine::EngineCommand::AddSolidColorDeck {
+-            channel_idx: 0, color: [1.0, 0.0, 0.0, 1.0],
+-        });
++        let Some(mut app) = headless_app() else {
++            return;
++        };
++        send_cmd(
++            &mut app,
++            crate::engine::EngineCommand::AddSolidColorDeck {
++                channel_idx: 0,
++                color: [1.0, 0.0, 0.0, 1.0],
++            },
++        );
+         let target = crate::engine::EffectTarget::Deck(0, 1);
+-        let r = send_cmd(&mut app, crate::engine::EngineCommand::AddEffect {
+-            target: target.clone(), shader_name: "Invert".into(),
+-        });
++        let r = send_cmd(
++            &mut app,
++            crate::engine::EngineCommand::AddEffect {
++                target: target.clone(),
++                shader_name: "Invert".into(),
++            },
++        );
+         if matches!(r, crate::engine::CommandResult::Ok) {
+             // Toggle
+-            let _ = send_cmd(&mut app, crate::engine::EngineCommand::ToggleEffect {
+-                target: target.clone(), effect_idx: 0,
+-            });
++            let _ = send_cmd(
++                &mut app,
++                crate::engine::EngineCommand::ToggleEffect {
++                    target: target.clone(),
++                    effect_idx: 0,
++                },
++            );
+             // Remove
+-            let _ = send_cmd(&mut app, crate::engine::EngineCommand::RemoveEffect {
+-                target, effect_idx: 0,
+-            });
++            let _ = send_cmd(
++                &mut app,
++                crate::engine::EngineCommand::RemoveEffect {
++                    target,
++                    effect_idx: 0,
++                },
++            );
+         }
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/app/mod.rs:1884:
+     #[test]
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:137:
+             if !VALID_CONTROL_TYPES.contains(&ctrl.control_type.as_str()) {
+                 errors.push(format!(
+                     "{}: type '{}' is invalid (expected one of: {})",
+-                    prefix, ctrl.control_type, VALID_CONTROL_TYPES.join(", ")
++                    prefix,
++                    ctrl.control_type,
++                    VALID_CONTROL_TYPES.join(", ")
+                 ));
+             }
+             if !VALID_MIDI_TYPES.contains(&ctrl.midi_type.as_str()) {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:144:
+                 errors.push(format!(
+                     "{}: midi_type '{}' is invalid (expected one of: {})",
+-                    prefix, ctrl.midi_type, VALID_MIDI_TYPES.join(", ")
++                    prefix,
++                    ctrl.midi_type,
++                    VALID_MIDI_TYPES.join(", ")
+                 ));
+             }
+             if ctrl.channel > 15 {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:150:
+-                errors.push(format!("{}: channel {} exceeds MIDI range 0-15", prefix, ctrl.channel));
++                errors.push(format!(
++                    "{}: channel {} exceeds MIDI range 0-15",
++                    prefix, ctrl.channel
++                ));
+             }
+             if ctrl.range[0] > ctrl.range[1] {
+                 errors.push(format!(
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:171:
+             if !VALID_STRATEGIES.contains(&am.strategy.as_str()) {
+                 errors.push(format!(
+                     "auto_map.strategy '{}' is invalid (expected one of: {})",
+-                    am.strategy, VALID_STRATEGIES.join(", ")
++                    am.strategy,
++                    VALID_STRATEGIES.join(", ")
+                 ));
+             }
+ 
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:192:
+             if let Some(ref sc) = am.shift_control {
+                 if !control_names.contains(&sc.as_str()) {
+                     errors.push(format!(
+-                        "auto_map.shift_control '{}' does not match any control name", sc
++                        "auto_map.shift_control '{}' does not match any control name",
++                        sc
+                     ));
+                 }
+             }
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:199:
+             if let Some(ref pb) = am.page_buttons_control {
+                 if !control_names.contains(&pb.as_str()) {
+                     errors.push(format!(
+-                        "auto_map.page_buttons_control '{}' does not match any control name", pb
++                        "auto_map.page_buttons_control '{}' does not match any control name",
++                        pb
+                     ));
+                 }
+             }
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:206:
+             if !VALID_ACTIONS.contains(&am.tap_action.as_str()) {
+                 errors.push(format!(
+                     "auto_map.tap_action '{}' is invalid (expected one of: {})",
+-                    am.tap_action, VALID_ACTIONS.join(", ")
++                    am.tap_action,
++                    VALID_ACTIONS.join(", ")
+                 ));
+             }
+             if !VALID_ACTIONS.contains(&am.hold_action.as_str()) {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:213:
+                 errors.push(format!(
+                     "auto_map.hold_action '{}' is invalid (expected one of: {})",
+-                    am.hold_action, VALID_ACTIONS.join(", ")
++                    am.hold_action,
++                    VALID_ACTIONS.join(", ")
+                 ));
+             }
+             if am.columns == 0 {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:228:
+ 
+     /// Check if a MIDI device name matches this profile.
+     pub fn matches(&self, device_name: &str) -> bool {
+-        device_name.to_lowercase().contains(&self.profile.name_match.to_lowercase())
++        device_name
++            .to_lowercase()
++            .contains(&self.profile.name_match.to_lowercase())
+     }
+ 
+     /// Get the MIDI value for a logical color name. Returns 0 (off) if not found.
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:235:
+     pub fn color_value(&self, color: &str) -> u8 {
+-        self.leds.as_ref()
++        self.leds
++            .as_ref()
+             .and_then(|l| l.colors.get(color))
+             .copied()
+             .unwrap_or(0)
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:258:
+ 
+     /// Get the LED method (default "note_velocity").
+     pub fn led_method(&self) -> &str {
+-        self.leds.as_ref().map(|l| l.method.as_str()).unwrap_or("note_velocity")
++        self.leds
++            .as_ref()
++            .map(|l| l.method.as_str())
++            .unwrap_or("note_velocity")
+     }
+ }
+ 
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:271:
+     let profile: ControllerProfileData = serde_json::from_str(APC_MINI_PROFILE_JSON)
+         .expect("Built-in APC Mini profile JSON is invalid");
+     let errors = profile.validate();
+-    assert!(errors.is_empty(), "Built-in APC Mini profile validation failed: {:?}", errors);
++    assert!(
++        errors.is_empty(),
++        "Built-in APC Mini profile validation failed: {:?}",
++        errors
++    );
+     profile
+ }
+ 
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:299:
+         let entries = match std::fs::read_dir(dir) {
+             Ok(e) => e,
+             Err(e) => {
+-                log::warn!("Failed to read controller-profiles directory {}: {}", dir.display(), e);
++                log::warn!(
++                    "Failed to read controller-profiles directory {}: {}",
++                    dir.display(),
++                    e
++                );
+                 return;
+             }
+         };
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:321:
+                     Ok(profile) => {
+                         let errors = profile.validate();
+                         if errors.is_empty() {
+-                            log::info!("Loaded controller profile '{}' from {}",
+-                                profile.profile.name, path.display());
++                            log::info!(
++                                "Loaded controller profile '{}' from {}",
++                                profile.profile.name,
++                                path.display()
++                            );
+                             user_profiles.push(Arc::new(profile));
+                         } else {
+-                            log::warn!("Controller profile {} has validation errors, skipping:", path.display());
++                            log::warn!(
++                                "Controller profile {} has validation errors, skipping:",
++                                path.display()
++                            );
+                             for err in &errors {
+                                 log::warn!("  - {}", err);
+                             }
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:332:
+                         }
+                     }
+                     Err(e) => {
+-                        log::warn!("Failed to parse controller profile {}: {}", path.display(), e);
++                        log::warn!(
++                            "Failed to parse controller profile {}: {}",
++                            path.display(),
++                            e
++                        );
+                     }
+                 },
+                 Err(e) => {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:339:
+-                    log::warn!("Failed to read controller profile {}: {}", path.display(), e);
++                    log::warn!(
++                        "Failed to read controller profile {}: {}",
++                        path.display(),
++                        e
++                    );
+                 }
+             }
+         }
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:348:
+ 
+     /// Find a profile matching a MIDI device name. First match wins.
+     pub fn detect(&self, device_name: &str) -> Option<Arc<ControllerProfileData>> {
+-        self.profiles.iter()
++        self.profiles
++            .iter()
+             .find(|p| p.matches(device_name))
+             .cloned()
+     }
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:355:
+ 
+     /// Get all loaded profile names (for debugging/UI).
+     pub fn profile_names(&self) -> Vec<&str> {
+-        self.profiles.iter().map(|p| p.profile.name.as_str()).collect()
++        self.profiles
++            .iter()
++            .map(|p| p.profile.name.as_str())
++            .collect()
+     }
+ }
+ 
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:370:
+ 
+ impl DeviceLeds {
+     fn new(profile: Arc<ControllerProfileData>) -> Self {
+-        Self { profile, leds: HashMap::new() }
++        Self {
++            profile,
++            leds: HashMap::new(),
++        }
+     }
+ 
+     /// Set an LED, only sending if the value changed.
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:377:
+-    fn set_led(&mut self, mgr: &MidiDeviceManager, device_id: DeviceId, note: u8, color: &str) -> bool {
++    fn set_led(
++        &mut self,
++        mgr: &MidiDeviceManager,
++        device_id: DeviceId,
++        note: u8,
++        color: &str,
++    ) -> bool {
+         let val = self.profile.color_value(color);
+         if self.leds.get(&note) == Some(&val) {
+             return false;
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:386:
+                 mgr.send_note_on(device_id, self.profile.led_channel(), note, val);
+             }
+             "cc_value" => {
+-                mgr.send_raw(device_id, &[
+-                    0xB0 | (self.profile.led_channel() & 0x0F),
+-                    note,
+-                    val,
+-                ]);
++                mgr.send_raw(
++                    device_id,
++                    &[0xB0 | (self.profile.led_channel() & 0x0F), note, val],
++                );
+             }
+             other => {
+-                log::warn!("Unknown LED method '{}' in profile '{}'", other, self.profile.profile.name);
++                log::warn!(
++                    "Unknown LED method '{}' in profile '{}'",
++                    other,
++                    self.profile.profile.name
++                );
+             }
+         }
+         true
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:402:
+     /// Turn all LEDs off on this device.
+     fn all_off(&mut self, mgr: &MidiDeviceManager, device_id: DeviceId) {
+         // Collect ranges first to avoid borrow conflict with self.set_led
+-        let led_ranges: Vec<(u8, u8)> = self.profile.controls.iter()
++        let led_ranges: Vec<(u8, u8)> = self
++            .profile
++            .controls
++            .iter()
+             .filter(|c| c.has_led)
+             .map(|c| (c.range[0], c.range[1]))
+             .collect();
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:421:
+ 
+ impl ControllerLedManager {
+     pub fn new() -> Self {
+-        Self { device_leds: HashMap::new() }
++        Self {
++            device_leds: HashMap::new(),
++        }
+     }
+ 
+     /// Sync tracked devices with the device manager. Call after rescan.
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:430:
+         for (id, info) in &mgr.devices {
+             if let Some(profile) = &info.profile {
+                 self.device_leds.entry(*id).or_insert_with(|| {
+-                    log::info!("LED tracking started for '{}' device [{}]", profile.profile.name, id);
++                    log::info!(
++                        "LED tracking started for '{}' device [{}]",
++                        profile.profile.name,
++                        id
++                    );
+                     DeviceLeds::new(Arc::clone(profile))
+                 });
+             }
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:502:
+     let parts: Vec<&str> = path.split('/').collect();
+     match parts.as_slice() {
+         ["crossfader"] => mixer.crossfader(),
+-        ["ch", ch_s, "opacity"] => {
+-            ch_s.parse::<usize>().ok()
+-                .and_then(|ch| mixer.channel(ch))
+-                .map(|c| c.opacity)
+-                .unwrap_or(-1.0)
+-        }
++        ["ch", ch_s, "opacity"] => ch_s
++            .parse::<usize>()
++            .ok()
++            .and_then(|ch| mixer.channel(ch))
++            .map(|c| c.opacity)
++            .unwrap_or(-1.0),
+         ["ch", ch_s, "deck", dk_s, "opacity"] => {
+             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
+-                mixer.channel(ch)
++                mixer
++                    .channel(ch)
+                     .and_then(|c| c.decks.get(dk))
+                     .map(|d| d.opacity)
+                     .unwrap_or(-1.0)
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:517:
+-            } else { -1.0 }
++            } else {
++                -1.0
++            }
+         }
+         ["ch", ch_s, "deck", dk_s, "mute"] => {
+             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:521:
+-                mixer.channel(ch)
++                mixer
++                    .channel(ch)
+                     .and_then(|c| c.decks.get(dk))
+                     .map(|d| if d.mute { 1.0 } else { 0.0 })
+                     .unwrap_or(-1.0)
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:525:
+-            } else { -1.0 }
++            } else {
++                -1.0
++            }
+         }
+         ["ch", ch_s, "deck", dk_s, "solo"] => {
+             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:529:
+-                mixer.channel(ch)
++                mixer
++                    .channel(ch)
+                     .and_then(|c| c.decks.get(dk))
+                     .map(|d| if d.solo { 1.0 } else { 0.0 })
+                     .unwrap_or(-1.0)
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:533:
+-            } else { -1.0 }
++            } else {
++                -1.0
++            }
+         }
+         ["ch", ch_s, "deck", dk_s, "trigger"] => {
+             if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:537:
+-                mixer.channel(ch)
++                mixer
++                    .channel(ch)
+                     .and_then(|c| c.decks.get(dk))
+                     .map(|d| d.opacity)
+                     .unwrap_or(-1.0)
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:541:
+-            } else { -1.0 }
++            } else {
++                -1.0
++            }
+         }
+         ["ch", ch_s, "effect", ek_s, "param", name] => {
+             if let (Ok(ch), Ok(ek)) = (ch_s.parse::<usize>(), ek_s.parse::<usize>()) {
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:545:
+-                mixer.channel(ch)
++                mixer
++                    .channel(ch)
+                     .and_then(|c| c.effects.get(ek))
+                     .and_then(|e| e.params.get_float(name))
+                     .unwrap_or(-1.0)
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:549:
+-            } else { -1.0 }
++            } else {
++                -1.0
++            }
+         }
+         _ => -1.0,
+     }
+Diff in /home/runner/work/varda/varda/src/internal/midi/controller_profile.rs:617:
+     #[test]
+     fn test_control_has_led() {
+         let profile = builtin_apc_mini();
+-        assert!(profile.control_has_led("note", 0, 0));    // grid min
+-        assert!(profile.control_has_led("note", 0, 63));   // grid max
+-        assert!(profile.control_has_led("note", 0, 64));   // bottom min
+-        assert!(profile.control_has_led("note", 0, 71));   // bottom max
+-        assert!(profile.control_has_led("note", 0, 82));   // side min
+-        assert!(profile.control_has_led("note", 0, 89));   // side max
+-        assert!(profile.control_has_led("note", 0, 98));   // shift
+-        assert!(!profile.control_has_led("note", 0, 72));  // gap
+-        assert!(!profile.control_has_led("note", 0, 81));  // gap
+-        assert!(!profile.control_has_led("note", 0, 99));  // beyond shift
+-        assert!(!profile.control_has_led("cc", 0, 48));    // faders have no LED
++        assert!(profile.control_has_led("note", 0, 0)); // grid min
++        assert!(profile.control_has_led("note", 0, 63)); // grid max
++        assert!(profile.control_has_led("note", 0, 64)); // bottom min
++        assert!(profile.control_has_led("note", 0, 71)); // bottom max
++        assert!(profile.control_has_led("note", 0, 82)); // side min
++        assert!(profile.control_has_led("note", 0, 89)); // side max
++        assert!(profile.control_has_led("note", 0, 98)); // shift
++        assert!(!profile.control_has_led("note", 0, 72)); // gap
++        assert!(!profile.control_has_led("note", 0, 81)); // gap
++        assert!(!profile.control_has_led("note", 0, 99)); // beyond shift
++        assert!(!profile.control_has_led("cc", 0, 48)); // faders have no LED
+     }
+ 
+     #[test]
+Diff in /home/runner/work/varda/varda/src/internal/midi/mod.rs:17:
+ use midir::{MidiInput, MidiOutput};
+ 
+ pub use auto_map::AutoMapEngine;
+-pub use controller_profile::{
+-    ControllerProfileData, ProfileRegistry, ControllerLedManager,
+-};
++pub use controller_profile::{ControllerLedManager, ControllerProfileData, ProfileRegistry};
+ 
+ /// Stable identifier for a MIDI device within a session.
+ pub type DeviceId = u32;
+Diff in /home/runner/work/varda/varda/src/internal/midi/mod.rs:28:
+ #[derive(Debug, Clone)]
+ pub enum MidiMessage {
+     /// Control Change: channel, cc number, value (0–127)
+-    ControlChange { device_id: DeviceId, channel: u8, cc: u8, value: u8 },
++    ControlChange {
++        device_id: DeviceId,
++        channel: u8,
++        cc: u8,
++        value: u8,
++    },
+     /// Note On: channel, note, velocity
+-    NoteOn { device_id: DeviceId, channel: u8, note: u8, velocity: u8 },
++    NoteOn {
++        device_id: DeviceId,
++        channel: u8,
++        note: u8,
++        velocity: u8,
++    },
+     /// Note Off: channel, note, velocity
+-    NoteOff { device_id: DeviceId, channel: u8, note: u8, velocity: u8 },
++    NoteOff {
++        device_id: DeviceId,
++        channel: u8,
++        note: u8,
++        velocity: u8,
++    },
+     /// MIDI Clock Tick (0xF8) — 24 per quarter note
+     ClockTick { device_id: DeviceId },
+     /// MIDI Start (0xFA) — reset to beginning
+Diff in /home/runner/work/varda/varda/src/internal/midi/mod.rs:64:
+         let channel = status & 0x0F;
+         match msg_type {
+             0x90 if data.len() >= 3 && data[2] > 0 => Some(MidiMessage::NoteOn {
+-                device_id, channel, note: data[1], velocity: data[2],
++                device_id,
++                channel,
++                note: data[1],
++                velocity: data[2],
+             }),
+             0x90 if data.len() >= 3 => Some(MidiMessage::NoteOff {
+-                device_id, channel, note: data[1], velocity: 0,
++                device_id,
++                channel,
++                note: data[1],
++                velocity: 0,
+             }),
+             0x80 if data.len() >= 3 => Some(MidiMessage::NoteOff {
+-                device_id, channel, note: data[1], velocity: data[2],
++                device_id,
++                channel,
++                note: data[1],
++                velocity: data[2],
+             }),
+             0xB0 if data.len() >= 3 => Some(MidiMessage::ControlChange {
+-                device_id, channel, cc: data[1], value: data[2],
++                device_id,
++                channel,
++                cc: data[1],
++                value: data[2],
+             }),
+             _ => None,
+         }
+Diff in /home/runner/work/varda/varda/src/internal/midi/mod.rs:96:
+     /// Clock messages are not mappable — returns None.
+     pub fn mapping_key(&self) -> Option<MidiKey> {
+         match self {
+-            MidiMessage::ControlChange { device_id, channel, cc, .. } => Some(MidiKey::CC(*device_id, *channel, *cc)),
+-            MidiMessage::NoteOn { device_id, channel, note, .. } => Some(MidiKey::Note(*device_id, *channel, *note)),
+-            MidiMessage::NoteOff { device_id, channel, note, .. } => Some(MidiKey::Note(*device_id, *channel, *note)),
++            MidiMessage::ControlChange {
++                device_id,
++                channel,
++                cc,
++                ..
++            } => Some(MidiKey::CC(*device_id, *channel, *cc)),
++            MidiMessage::NoteOn {
++                device_id,
++                channel,
++                note,
++                ..
++            } => Some(MidiKey::Note(*device_id, *channel, *note)),
++            MidiMessage::NoteOff {
+Diff in /home/runner/work/varda/varda/src/internal/scene/mod.rs:1080:
+ 
+     #[test]
+     fn validate_source_solid_color_non_finite() {
+-        let s = SourceConfig::SolidColor { color: [1.0, f32::NAN, 0.0, 1.0] };
++        let s = SourceConfig::SolidColor {
++            color: [1.0, f32::NAN, 0.0, 1.0],
++        };
+         let errors = s.validate("src");
+         assert!(errors.iter().any(|e| e.contains("color[1]")));
+     }
+Diff in /home/runner/work/varda/varda/src/internal/scene/mod.rs:1087:
+ 
+     #[test]
+     fn validate_effect_empty_path() {
+-        let fx = EffectConfig { uuid: "test0001".into(), path: "".into(), enabled: true, params: HashMap::new() };
++        let fx = EffectConfig {
++            uuid: "test0001".into(),
++            path: "".into(),
++            enabled: true,
++            params: HashMap::new(),
++        };
+         let errors = fx.validate("fx[0]");
+         assert!(!errors.is_empty());
+     }
+Diff in /home/runner/work/varda/varda/src/internal/scene/mod.rs:1094:
+ 
+     #[test]
+     fn scene_config_roundtrip_rtmp_source() {
+-        let source = SourceConfig::Rtmp { url: "rtmp://live.example.com/app/stream".to_string(), mode: "pull".to_string() };
++        let source = SourceConfig::Rtmp {
++            url: "rtmp://live.example.com/app/stream".to_string(),
++            mode: "pull".to_string(),
++        };
+         let json = serde_json::to_string(&source).unwrap();
+         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+         match restored {
+Diff in /home/runner/work/varda/varda/src/internal/scene/mod.rs:1108:
+ 
+     #[test]
+     fn scene_config_roundtrip_rtmp_output() {
+-        let target = OutputTargetConfig::RtmpStream { url: "rtmp://live.twitch.tv/app/key".to_string(), codec: "H.264".to_string() };
++        let target = OutputTargetConfig::RtmpStream {
++            url: "rtmp://live.twitch.tv/app/key".to_string(),
++            codec: "H.264".to_string(),
++        };
+         let json = serde_json::to_string(&target).unwrap();
+         let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
+         match restored {
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:7:
+ //! Architecture mirrors `NdiManager`: background thread decodes frames into
+ //! `Arc<Mutex<Option<Vec<u8>>>>`, main thread uploads to GPU each frame.
+ 
+-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
++use std::sync::{
++    atomic::{AtomicBool, Ordering},
++    Arc, Mutex,
++};
+ use std::thread::JoinHandle;
+ 
+ /// Serializes ffmpeg context creation (input_with_interrupt + decoder open).
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:31:
+ }
+ 
+ /// SRT connection mode — listener waits for connections, caller connects out.
+-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
++#[derive(
++    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
++)]
+ pub enum SrtMode {
+     /// Bind to a port and wait for incoming connections.
+     Listener,
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:49:
+ }
+ 
+ /// RTMP connection mode: pull from a remote server or listen for incoming pushes.
+-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
++#[derive(
++    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
++)]
+ pub enum RtmpMode {
+     /// Connect to a remote RTMP server and pull the stream.
+     Pull,
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:98:
+     /// Start receiving from a stream URL. Spawns a background ffmpeg decode thread.
+     /// Returns receiver index on success. If an active receiver for the same URL
+     /// already exists, returns its index.
+-    pub fn start_receive(&mut self, url: &str, protocol: StreamProtocol, device: &wgpu::Device) -> Option<usize> {
++    pub fn start_receive(
++        &mut self,
++        url: &str,
++        protocol: StreamProtocol,
++        device: &wgpu::Device,
++    ) -> Option<usize> {
+         // Reuse existing receiver for the same URL if it's still alive
+-        if let Some(idx) = self.receivers.iter().position(|r| r.url == url && !r.stop_flag.load(Ordering::SeqCst)) {
++        if let Some(idx) = self
++            .receivers
++            .iter()
++            .position(|r| r.url == url && !r.stop_flag.load(Ordering::SeqCst))
++        {
+             log::info!("Reusing existing stream receiver {} for '{}'", idx, url);
+             return Some(idx);
+         }
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:126:
+ 
+         let texture = device.create_texture(&wgpu::TextureDescriptor {
+             label: Some(&label),
+-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+-            mip_level_count: 1, sample_count: 1,
++            size: wgpu::Extent3d {
++                width,
++                height,
++                depth_or_array_layers: 1,
++            },
++            mip_level_count: 1,
++            sample_count: 1,
+             dimension: wgpu::TextureDimension::D2,
+             format: wgpu::TextureFormat::Rgba8UnormSrgb,
+             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:151:
+         let thread = std::thread::Builder::new()
+             .name(thread_name)
+             .spawn(move || {
+-                stream_receive_thread(url_for_thread, url_display, frame_clone, stop_clone, connected_clone);
++                stream_receive_thread(
++                    url_for_thread,
++                    url_display,
++                    frame_clone,
++                    stop_clone,
++                    connected_clone,
++                );
+             })
+             .ok();
+ 
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:177:
+     }
+ 
+     /// Start receiving from an SRT URL (convenience wrapper).
+-    pub fn start_srt_receive(&mut self, url: &str, mode: SrtMode, device: &wgpu::Device) -> Option<usize> {
++    pub fn start_srt_receive(
++        &mut self,
++        url: &str,
++        mode: SrtMode,
++        device: &wgpu::Device,
++    ) -> Option<usize> {
+         self.start_receive(url, StreamProtocol::Srt { mode }, device)
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:184:
+     /// Start receiving from an RTMP URL (convenience wrapper).
+-    pub fn start_rtmp_receive(&mut self, url: &str, mode: RtmpMode, device: &wgpu::Device) -> Option<usize> {
++    pub fn start_rtmp_receive(
++        &mut self,
++        url: &str,
++        mode: RtmpMode,
++        device: &wgpu::Device,
++    ) -> Option<usize> {
+         self.start_receive(url, StreamProtocol::Rtmp { mode }, device)
+     }
+ 
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:195:
+                     if frame.len() >= expected {
+                         queue.write_texture(
+                             wgpu::TexelCopyTextureInfo {
+-                                texture: &self.textures[i].0, mip_level: 0,
+-                                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
++                                texture: &self.textures[i].0,
++                                mip_level: 0,
++                                origin: wgpu::Origin3d::ZERO,
++                                aspect: wgpu::TextureAspect::All,
+                             },
+                             &frame[..expected],
+                             wgpu::TexelCopyBufferLayout {
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:203:
+-                                offset: 0, bytes_per_row: Some(receiver.width * 4),
++                                offset: 0,
++                                bytes_per_row: Some(receiver.width * 4),
+                                 rows_per_image: Some(receiver.height),
+                             },
+-                            wgpu::Extent3d { width: receiver.width, height: receiver.height, depth_or_array_layers: 1 },
++                            wgpu::Extent3d {
++                                width: receiver.width,
++                                height: receiver.height,
++                                depth_or_array_layers: 1,
++                            },
+                         );
+                     }
+                 }
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:221:
+ 
+     /// Whether the receiver at `idx` has successfully connected and received a frame.
+     pub fn is_connected(&self, idx: usize) -> bool {
+-        self.receivers.get(idx)
++        self.receivers
++            .get(idx)
+             .map(|r| r.connected.load(Ordering::SeqCst))
+             .unwrap_or(false)
+     }
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:322:
+     const MAX_BACKOFF_MS: u64 = 10_000;
+ 
+     loop {
+-        if stop_flag.load(Ordering::SeqCst) { return; }
++        if stop_flag.load(Ordering::SeqCst) {
++            return;
++        }
+ 
+         // Serialize ffmpeg context creation — avcodec_open2 is not thread-safe.
+         // Hold the lock through input open + decoder creation, release before
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:332:
+ 
+             let stop_for_interrupt = Arc::clone(&stop_flag);
+             (|| -> Option<_> {
+-                let ctx = match ffmpeg_next::format::input_with_interrupt(
+-                    &url,
+-                    move || stop_for_interrupt.load(Ordering::SeqCst),
+-                ) {
++                let ctx = match ffmpeg_next::format::input_with_interrupt(&url, move || {
++                    stop_for_interrupt.load(Ordering::SeqCst)
++                }) {
+                     Ok(c) => c,
+                     Err(e) => {
+-                        log::warn!("Stream '{}' connection failed: {}, retrying in {}ms...", url_display, e, backoff_ms);
++                        log::warn!(
++                            "Stream '{}' connection failed: {}, retrying in {}ms...",
++                            url_display,
++                            e,
++                            backoff_ms
++                        );
+                         return None;
+                     }
+                 };
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:345:
+ 
+-                let stream_idx = ctx.streams().best(ffmpeg_next::media::Type::Video)
++                let stream_idx = ctx
++                    .streams()
++                    .best(ffmpeg_next::media::Type::Video)
+                     .map(|s| s.index())
+                     .or_else(|| {
+-                        log::warn!("Stream '{}': no video stream found, retrying in {}ms...", url_display, backoff_ms);
++                        log::warn!(
++                            "Stream '{}': no video stream found, retrying in {}ms...",
++                            url_display,
++                            backoff_ms
++                        );
+                         None
+                     })?;
+ 
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:353:
+-                let codec_params = ctx.stream(stream_idx)
++                let codec_params = ctx
++                    .stream(stream_idx)
+                     .or_else(|| {
+-                        log::warn!("Stream '{}': stream index {} not found, retrying in {}ms...", url_display, stream_idx, backoff_ms);
++                        log::warn!(
++                            "Stream '{}': stream index {} not found, retrying in {}ms...",
++                            url_display,
++                            stream_idx,
++                            backoff_ms
++                        );
+                         None
+                     })?
+                     .parameters();
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:359:
+                 let codec_ctx = ffmpeg_next::codec::Context::from_parameters(codec_params)
+-                    .map_err(|e| log::warn!("Stream '{}': failed to create codec context: {}, retrying in {}ms...", url_display, e, backoff_ms))
++                    .map_err(|e| {
++                        log::warn!(
++                            "Stream '{}': failed to create codec context: {}, retrying in {}ms...",
++                            url_display,
++                            e,
++                            backoff_ms
++                        )
++                    })
+                     .ok()?;
+-                let decoder = codec_ctx.decoder().video()
+-                    .map_err(|e| log::warn!("Stream '{}': failed to create video decoder: {}, retrying in {}ms...", url_display, e, backoff_ms))
++                let decoder = codec_ctx
++                    .decoder()
++                    .video()
++                    .map_err(|e| {
++                        log::warn!(
++                            "Stream '{}': failed to create video decoder: {}, retrying in {}ms...",
++                            url_display,
++                            e,
++                            backoff_ms
++                        )
++                    })
+                     .ok()?;
+ 
+                 let scaler = ffmpeg_next::software::scaling::Context::get(
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:367:
+-                    decoder.format(), decoder.width(), decoder.height(),
+-                    ffmpeg_next::format::Pixel::RGBA, 1920, 1080,
++                    decoder.format(),
++                    decoder.width(),
++                    decoder.height(),
++                    ffmpeg_next::format::Pixel::RGBA,
++                    1920,
++                    1080,
+                     ffmpeg_next::software::scaling::Flags::BILINEAR,
+-                ).ok();
++                )
++                .ok();
+ 
+                 Some((ctx, stream_idx, decoder, scaler))
+             })()
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:385:
+ 
+         let mut last_frame_time = std::time::Instant::now();
+         // HLS/DASH segments can have multi-second gaps; use a longer timeout
+-        let is_segment_protocol = url.contains(".m3u8") || url.contains(".mpd")
+-            || url.starts_with("http://") || url.starts_with("https://");
++        let is_segment_protocol = url.contains(".m3u8")
++            || url.contains(".mpd")
++            || url.starts_with("http://")
++            || url.starts_with("https://");
+         let stall_timeout = if is_segment_protocol {
+             std::time::Duration::from_secs(15)
+         } else {
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:396:
+         const MAX_CONSECUTIVE_ERRORS: u32 = 50;
+ 
+         for (stream, packet) in input_ctx.packets() {
+-            if stop_flag.load(Ordering::SeqCst) { return; }
+-            if stream.index() != stream_idx { continue; }
++            if stop_flag.load(Ordering::SeqCst) {
++                return;
++            }
++            if stream.index() != stream_idx {
++                continue;
++            }
+ 
+             if decoder.send_packet(&packet).is_err() {
+                 consecutive_errors += 1;
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:404:
+                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+-                    log::warn!("Stream '{}': {} consecutive decode errors, reconnecting", url_display, consecutive_errors);
++                    log::warn!(
++                        "Stream '{}': {} consecutive decode errors, reconnecting",
++                        url_display,
++                        consecutive_errors
++                    );
+                     break;
+                 }
+                 continue;
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:411:
+ 
+             let mut decoded = ffmpeg_next::frame::Video::empty();
+             while decoder.receive_frame(&mut decoded).is_ok() {
+-                if stop_flag.load(Ordering::SeqCst) { return; }
++                if stop_flag.load(Ordering::SeqCst) {
++                    return;
++                }
+ 
+                 // Lazily init/reinit scaler if dimensions changed
+                 if scaler.is_none() || decoded.width() != 1920 || decoded.height() != 1080 {
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:418:
+                     scaler = ffmpeg_next::software::scaling::Context::get(
+-                        decoded.format(), decoded.width(), decoded.height(),
+-                        ffmpeg_next::format::Pixel::RGBA, 1920, 1080,
++                        decoded.format(),
++                        decoded.width(),
++                        decoded.height(),
++                        ffmpeg_next::format::Pixel::RGBA,
++                        1920,
++                        1080,
+                         ffmpeg_next::software::scaling::Flags::BILINEAR,
+-                    ).ok();
++                    )
++                    .ok();
+                 }
+ 
+                 if let Some(ref mut sws) = scaler {
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:443:
+                             for row in 0..height {
+                                 let start = row * stride;
+                                 let end = start + row_bytes;
+-                                if end > data.len() { break; }
++                                if end > data.len() {
++                                    break;
++                                }
+                                 buf.extend_from_slice(&data[start..end]);
+                             }
+-                            if buf.len() != expected { continue; }
++                            if buf.len() != expected {
++                                continue;
++                            }
+                             buf
+                         };
+ 
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:458:
+                         backoff_ms = MIN_BACKOFF_MS;
+                         if !connected.load(Ordering::SeqCst) {
+                             connected.store(true, Ordering::SeqCst);
+-                            log::info!("Stream '{}' first frame received ({}x{}, stride={})",
+-                                url_display, width, height, stride);
++                            log::info!(
++                                "Stream '{}' first frame received ({}x{}, stride={})",
++                                url_display,
++                                width,
++                                height,
++                                stride
++                            );
+                         }
+                     }
+                 }
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:468:
+             // If we haven't produced a frame in a while, the demuxer is
+             // likely stuck (e.g. HLS segments deleted). Force reconnect.
+             if last_frame_time.elapsed() > stall_timeout {
+-                log::warn!("Stream '{}': no frames for {:.1}s, reconnecting",
+-                    url_display, last_frame_time.elapsed().as_secs_f32());
++                log::warn!(
++                    "Stream '{}': no frames for {:.1}s, reconnecting",
++                    url_display,
++                    last_frame_time.elapsed().as_secs_f32()
++                );
+                 break;
+             }
+         }
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:476:
+ 
+-        log::warn!("Stream '{}' ended, reconnecting in {}ms...", url_display, backoff_ms);
++        log::warn!(
++            "Stream '{}' ended, reconnecting in {}ms...",
++            url_display,
++            backoff_ms
++        );
+         connected.store(false, Ordering::SeqCst);
+         std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+         backoff_ms = (backoff_ms * 2).min(MAX_BACKOFF_MS);
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:537:
+ 
+     #[test]
+     fn stream_protocol_srt_serialization() {
+-        let proto = StreamProtocol::Srt { mode: SrtMode::Listener };
++        let proto = StreamProtocol::Srt {
++            mode: SrtMode::Listener,
++        };
+         let json = serde_json::to_string(&proto).unwrap();
+         let restored: StreamProtocol = serde_json::from_str(&json).unwrap();
+-        assert_eq!(restored, StreamProtocol::Srt { mode: SrtMode::Listener });
++        assert_eq!(
++            restored,
++            StreamProtocol::Srt {
++                mode: SrtMode::Listener
++            }
++        );
+     }
+ 
+     #[test]
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:647:
+ 
+     #[test]
+     fn build_srt_url_multiple_existing_params() {
+-        let url = build_srt_url("srt://host:9000?latency=0&passphrase=test", SrtMode::Listener);
+-        assert_eq!(url, "srt://host:9000?latency=0&passphrase=test&mode=listener");
++        let url = build_srt_url(
++            "srt://host:9000?latency=0&passphrase=test",
++            SrtMode::Listener,
++        );
++        assert_eq!(
++            url,
++            "srt://host:9000?latency=0&passphrase=test&mode=listener"
++        );
+     }
+ 
+     #[test]
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:655:
+     fn stream_protocol_rtmp_serialization() {
+-        let protocol = StreamProtocol::Rtmp { mode: RtmpMode::Pull };
++        let protocol = StreamProtocol::Rtmp {
++            mode: RtmpMode::Pull,
++        };
+         let json = serde_json::to_string(&protocol).unwrap();
+         let deserialized: StreamProtocol = serde_json::from_str(&json).unwrap();
+         assert_eq!(protocol, deserialized);
+Diff in /home/runner/work/varda/varda/src/internal/stream/mod.rs:672:
+         let pull_json = serde_json::to_string(&pull).unwrap();
+         let listen_json = serde_json::to_string(&listen).unwrap();
+         assert_eq!(serde_json::from_str::<RtmpMode>(&pull_json).unwrap(), pull);
+-        assert_eq!(serde_json::from_str::<RtmpMode>(&listen_json).unwrap(), listen);
++        assert_eq!(
++            serde_json::from_str::<RtmpMode>(&listen_json).unwrap(),
++            listen
++        );
+     }
+ }
+ 
+Diff in /home/runner/work/varda/varda/src/internal/surface/detect.rs:137:
+             let canny_hi = f32::from(params.canny_high).max(canny_lo);
+             imageproc::edges::canny(&blurred, canny_lo, canny_hi)
+         }
+-        DetectionMethod::Threshold => {
+-            threshold_binary(&blurred, params.threshold, params.invert)
+-        }
++        DetectionMethod::Threshold => threshold_binary(&blurred, params.threshold, params.invert),
+     };
++                            eff_name,
++                        );
++                        ui.separator();
+                     }
+-                    render_effect_drag_ghost(
+-                        ui,
+-                        egui::Id::new(("eff_ghost_master", eff_idx)),
+-                        EffectDrag::Master(eff_idx),
+-                        eff_name,
+-                    );
+-                    ui.separator();
+-                }
+ 
+-                // Drop zone after last effect (for reordering)
+-                if !data.master_effect_info.is_empty() {
+-                    let num_effects = data.master_effect_info.len();
+-                    render_effect_drop_zone(ui, "master", num_effects);
+-                }
++                    // Drop zone after last effect (for reordering)
++                    if !data.master_effect_info.is_empty() {
++                        let num_effects = data.master_effect_info.len();
++                        render_effect_drop_zone(ui, "master", num_effects);
++                    }
+ 
+-                // Remaining space: always present drop target
+-                let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+-                    .map(|p| matches!(&*p, LibraryDrag::Effect(_))).unwrap_or(false);
+-                let remaining_w = ui.available_width().max(80.0);
+-                let remaining_h = ui.available_height().max(40.0);
+-                let stroke = if has_fx_drag { egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255)) } else { egui::Stroke::NONE };
+-                let fill = if has_fx_drag { egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20) } else { egui::Color32::TRANSPARENT };
+-                egui::Frame::default()
+-                    .inner_margin(8.0)
+-                    .corner_radius(4.0)
+-                    .fill(fill)
+-                    .stroke(stroke)
+-                    .show(ui, |ui| {
+-                        ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
+-                        ui.centered_and_justified(|ui| {
+-                            ui.label(egui::RichText::new("🔮 Drag effects here").weak());
++                    // Remaining space: always present drop target
++                    let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
++                        .map(|p| matches!(&*p, LibraryDrag::Effect(_)))
++                        .unwrap_or(false);
++                    let remaining_w = ui.available_width().max(80.0);
++                    let remaining_h = ui.available_height().max(40.0);
++                    let stroke = if has_fx_drag {
++                        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255))
++                    } else {
++                        egui::Stroke::NONE
++                    };
++                    let fill = if has_fx_drag {
++                        egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20)
++                    } else {
++                        egui::Color32::TRANSPARENT
++                    };
++                    egui::Frame::default()
++                        .inner_margin(8.0)
++                        .corner_radius(4.0)
++                        .fill(fill)
++                        .stroke(stroke)
++                        .show(ui, |ui| {
++                            ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
++                            ui.centered_and_justified(|ui| {
++                                ui.label(egui::RichText::new("🔮 Drag effects here").weak());
++                            });
+                         });
+-                    });
+-            }
++                }
+ 
+-            // Store master effect chain rect for deferred library drops
+-            let chain_rect = ui.min_rect();
+-            ui.ctx().memory_mut(|mem| {
+-                mem.data.insert_temp(egui::Id::new("master_fx_drop_rect"), chain_rect);
+-                mem.data.insert_temp(egui::Id::new("eff_dz_count").with("master".to_string()), data.master_effect_info.len() + 1);
++                // Store master effect chain rect for deferred library drops
++                let chain_rect = ui.min_rect();
++                ui.ctx().memory_mut(|mem| {
++                    mem.data
++                        .insert_temp(egui::Id::new("master_fx_drop_rect"), chain_rect);
++                    mem.data.insert_temp(
++                        egui::Id::new("eff_dz_count").with("master".to_string()),
++                        data.master_effect_info.len() + 1,
++                    );
++                });
+             });
+         });
+-    });
+ }
+ 
+-
+ /// Render channel effect chain detail in the bottom bar
+-pub(super) fn render_channel_effect_detail(ui: &mut egui::Ui, ch_idx: usize, data: &UIData, actions: &mut UIActions) {
++pub(super) fn render_channel_effect_detail(
++    ui: &mut egui::Ui,
++    ch_idx: usize,
++    data: &UIData,
++    actions: &mut UIActions,
++) {
+     let Some(ch) = data.channels.get(ch_idx) else {
+         ui.label(egui::RichText::new("Channel not found").weak());
+         return;
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/effects.rs:151:
+         if is_prompting {
+             let cleared_id = egui::Id::new("ch_preset_name_cleared");
+             let was_cleared: bool = ui.data(|d| d.get_temp(cleared_id)).unwrap_or(false);
+-            let mut name: String = ui.data(|d| d.get_temp(name_id)).unwrap_or_else(|| ch.name.clone());
++            let mut name: String = ui
++                .data(|d| d.get_temp(name_id))
++                .unwrap_or_else(|| ch.name.clone());
+             let response = ui.text_edit_singleline(&mut name);
+             if response.gained_focus() && !was_cleared {
+                 name.clear();
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/effects.rs:174:
+         }
+     });
+ 
+-    egui::ScrollArea::horizontal().id_salt("channel_fx_hscroll").show(ui, |ui| {
+-        ui.horizontal_top(|ui| {
+-            // Channel composite preview (first column before effect cards)
+-            if let Some(&tex_id) = data.channel_preview_textures.get(&ch_idx) {
+-                let available_height = ui.available_height() - 12.0;
+-                let preview_height = available_height.max(60.0);
+-                let preview_width = preview_height * 16.0 / 9.0;
+-                egui::Frame::default()
+-                    .inner_margin(6.0)
+-                    .corner_radius(4.0)
+-                    .fill(ui.visuals().faint_bg_color)
+-                    .show(ui, |ui| {
+-                        ui.set_min_width(preview_width + 12.0);
+-                        ui.set_max_width(preview_width + 12.0);
+-                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+-                            ui.image(egui::load::SizedTexture::new(tex_id, egui::vec2(preview_width, preview_height)));
+-                            ui.label(egui::RichText::new(&ch.name).small().color(accent));
+-                        });
+-                    });
+-                ui.separator();
+-            }
+-            {
+-                for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in ch.effects.iter().enumerate() {
+-                    let eff_uuid_ch_assign = eff_uuid.clone();
+-                    let eff_uuid_ch_remove = eff_uuid.clone();
+-                    render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), eff_idx);
+-
+-                    let card_resp = egui::Frame::default()
++    egui::ScrollArea::horizontal()
++        .id_salt("channel_fx_hscroll")
++        .show(ui, |ui| {
++            ui.horizontal_top(|ui| {
++                // Channel composite preview (first column before effect cards)
++                if let Some(&tex_id) = data.channel_preview_textures.get(&ch_idx) {
++                    let available_height = ui.available_height() - 12.0;
++                    let preview_height = available_height.max(60.0);
++                    let preview_width = preview_height * 16.0 / 9.0;
++                    egui::Frame::default()
+                         .inner_margin(6.0)
+                         .corner_radius(4.0)
+                         .fill(ui.visuals().faint_bg_color)
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/effects.rs:208:
+                         .show(ui, |ui| {
+-                            ui.set_min_width(180.0);
+-                            ui.set_max_width(250.0);
+-                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+-                            let max_h = (ui.available_height() - 8.0).max(100.0);
+-                            egui::ScrollArea::vertical().id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx)).max_height(max_h).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
+-                                ui.horizontal(|ui| {
+-                                    render_effect_drag_handle(ui, EffectDrag::Channel(ch_idx, eff_idx));
+-                                    let mut enabled = *eff_enabled;
+-                                    if ui.checkbox(&mut enabled, "").changed() {
+-                                        actions.ch_effect_to_toggle = Some((ch_idx, eff_idx));
+-                                    }
+-                                    ui.label(egui::RichText::new(eff_name).strong().color(accent));
+-                                });
+-
+-                                if !eff_params.params.is_empty() {
+-                                    let ch_copy = ch_idx;
+-                                    let eff_idx_copy = eff_idx;
+-                                    let ch_uuid = ch.uuid.clone();
+-                                    let _ch_uuid = ch_uuid.clone();
+-                                    let midi_prefix = format!("ch/{}/effect/{}", ch_uuid, eff_idx_copy);
+-                                    widgets::render_effect_params(
+-                                        ui,
+-                                        &eff_params.params,
+-                                        &data.modulation_sources,
+-                                        &|name: &str, val: ParamValue| match val {
+-                                            ParamValue::Float(v) => ParamUpdate::ChannelEffectFloat { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+-                                            ParamValue::Bool(v) => ParamUpdate::ChannelEffectBool { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+-                                            ParamValue::Color(v) => ParamUpdate::ChannelEffectColor { ch_idx: ch_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
+-                                            _ => unreachable!(),
+-                                        },
+-                                        Some(&|name: &str, source_uuid: &str| ModulationAction::AssignEffectModulation {
+-                                            effect_uuid: eff_uuid_ch_assign.clone(),
+-                                            param_name: name.to_string(), source_id: source_uuid.to_string(), amount: 0.5,
+-                                        }),
+-                                        Some(&|name: &str| ModulationAction::RemoveEffectAssignment {
+-                                            effect_uuid: eff_uuid_ch_remove.clone(),
+-                                            param_name: name.to_string(),
+-                                        }),
+-                                        &mut actions.param_updates,
+-                                        &mut actions.modulation_actions,
+-                                        &format!("ch_fx_{}_{}", ch_copy, eff_idx_copy),
+-                                        Some(&midi_prefix),
+-                                        data.midi_learn_active,
+-                                        &mut actions.midi_learn_select,
+-                                        data.midi_learn_target.as_deref(),
+-                                        &data.modulation_assignments,
+-                                        &data.modulation_current_values,
+-                                        &format!("fx_{}", eff_uuid),
+-                                        data.keyboard_learn_active,
+-                                        &mut actions.keyboard_learn_select,
+-                                        data.keyboard_learn_target.as_deref(),
+-                                    );
+-                                }
++                            ui.set_min_width(preview_width + 12.0);
++                            ui.set_max_width(preview_width + 12.0);
++                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
++                                ui.image(egui::load::SizedTexture::new(
++                                    tex_id,
++                                    egui::vec2(preview_width, preview_height),
++                                ));
++                                ui.label(egui::RichText::new(&ch.name).small().color(accent));
+                             });
+-                            });
+                         });
++                    ui.separator();
++                }
++                {
++                    for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in
++                        ch.effects.iter().enumerate()
+                     {
+-                        let card_rect = card_resp.response.rect;
+-                        let btn_size = egui::vec2(16.0, 16.0);
+-                        let btn_pos = egui::pos2(card_rect.right() - btn_size.x - 4.0, card_rect.top() + 4.0);
+-                        let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
+-                        let btn_resp = ui.allocate_rect(btn_rect, egui::Sense::click());
+-                        let color = if btn_resp.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().text_color() };
+-                        ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "x", egui::FontId::proportional(12.0), color);
+-                        if btn_resp.clicked() {
+-                            actions.ch_effect_to_remove = Some((ch_idx, eff_idx));
++                        let eff_uuid_ch_assign = eff_uuid.clone();
++                        let eff_uuid_ch_remove = eff_uuid.clone();
++                        render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), eff_idx);
++
++                        let card_resp = egui::Frame::default()
++                            .inner_margin(6.0)
++                            .corner_radius(4.0)
++                            .fill(ui.visuals().faint_bg_color)
++                            .show(ui, |ui| {
++                                ui.set_min_width(180.0);
++                                ui.set_max_width(250.0);
++                                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
++                                    let max_h = (ui.available_height() - 8.0).max(100.0);
++                                    egui::ScrollArea::vertical()
++                                        .id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx))
++                                        .max_height(max_h)
++                                        .scroll_source(egui::scroll_area::ScrollSource {
++                                            drag: false,
++                                            scroll_bar: true,
++                                            mouse_wheel: true,
++                                        })
++                                        .show(ui, |ui| {
++                                            ui.horizontal(|ui| {
++                                                render_effect_drag_handle(
++                                                    ui,
++                                                    EffectDrag::Channel(ch_idx, eff_idx),
++                                                );
++                                                let mut enabled = *eff_enabled;
++                                                if ui.checkbox(&mut enabled, "").changed() {
++                                                    actions.ch_effect_to_toggle =
++                                                        Some((ch_idx, eff_idx));
++                                                }
++                                                ui.label(
++                                                    egui::RichText::new(eff_name)
++                                                        .strong()
++                                                        .color(accent),
++                                                );
++                                            });
++
++                                            if !eff_params.params.is_empty() {
++                                                let ch_copy = ch_idx;
++                                                let eff_idx_copy = eff_idx;
++                                                let ch_uuid = ch.uuid.clone();
++                                                let _ch_uuid = ch_uuid.clone();
++                                                let midi_prefix = format!(
++                                                    "ch/{}/effect/{}",
++                                                    ch_uuid, eff_idx_copy
++                                                );
++                                                widgets::render_effect_params(
++                                                    ui,
++                                                    &eff_params.params,
++                                                    &data.modulation_sources,
++                                                    &|name: &str, val: ParamValue| match val {
++                                                        ParamValue::Float(v) => {
++                                                            ParamUpdate::ChannelEffectFloat {
++                                                                ch_idx: ch_copy,
++                                                                effect_idx: eff_idx_copy,
++                                                                name: name.to_string(),
++                                                                value: v,
++                                                            }
++                                                        }
++                                                        ParamValue::Bool(v) => {
++                                                            ParamUpdate::ChannelEffectBool {
++                                                                ch_idx: ch_copy,
++                                                                effect_idx: eff_idx_copy,
++                                                                name: name.to_string(),
++                                                                value: v,
++                                                            }
++                                                        }
++                                                        ParamValue::Color(v) => {
++                                                            ParamUpdate::ChannelEffectColor {
++                                                                ch_idx: ch_copy,
++                                                                effect_idx: eff_idx_copy,
++                                                                name: name.to_string(),
++                                                                value: v,
++                                                            }
++                                                        }
++                                                        _ => unreachable!(),
++                                                    },
++                                                    Some(&|name: &str, source_uuid: &str| {
++                                                        ModulationAction::AssignEffectModulation {
++                                                            effect_uuid: eff_uuid_ch_assign.clone(),
++                                                            param_name: name.to_string(),
++                                                            source_id: source_uuid.to_string(),
++                                                            amount: 0.5,
++                                                        }
++                                                    }),
++                                                    Some(&|name: &str| {
++                                                        ModulationAction::RemoveEffectAssignment {
++                                                            effect_uuid: eff_uuid_ch_remove.clone(),
++                                                            param_name: name.to_string(),
++                                                        }
++                                                    }),
++                                                    &mut actions.param_updates,
++                                                    &mut actions.modulation_actions,
++                                                    &format!("ch_fx_{}_{}", ch_copy, eff_idx_copy),
++                                                    Some(&midi_prefix),
++                                                    data.midi_learn_active,
++                                                    &mut actions.midi_learn_select,
++                                                    data.midi_learn_target.as_deref(),
++                                                    &data.modulation_assignments,
++                                                    &data.modulation_current_values,
++                                                    &format!("fx_{}", eff_uuid),
++                                                    data.keyboard_learn_active,
++                                                    &mut actions.keyboard_learn_select,
++                                                    data.keyboard_learn_target.as_deref(),
++                                                );
++                                            }
++                                        });
++                                });
++                            });
++                        {
++                            let card_rect = card_resp.response.rect;
++                            let btn_size = egui::vec2(16.0, 16.0);
++                            let btn_pos = egui::pos2(
++                                card_rect.right() - btn_size.x - 4.0,
++                                card_rect.top() + 4.0,
++                            );
++                            let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
++                            let btn_resp = ui.allocate_rect(btn_rect, egui::Sense::click());
++                            let color = if btn_resp.hovered() {
++                                ui.visuals().strong_text_color()
++                            } else {
++                                ui.visuals().text_color()
++                            };
++                            ui.painter().text(
++                                btn_rect.center(),
++                                egui::Align2::CENTER_CENTER,
++                                "x",
++                                egui::FontId::proportional(12.0),
++                                color,
++                            );
++                            if btn_resp.clicked() {
++                                actions.ch_effect_to_remove = Some((ch_idx, eff_idx));
++                            }
+                         }
++                        render_effect_drag_ghost(
++                            ui,
++                            egui::Id::new(("eff_ghost_ch", ch_idx, eff_idx)),
++                            EffectDrag::Channel(ch_idx, eff_idx),
++                            eff_name,
++                        );
++                        ui.separator();
+                     }
+-                    render_effect_drag_ghost(
+-                        ui,
+-                        egui::Id::new(("eff_ghost_ch", ch_idx, eff_idx)),
+-                        EffectDrag::Channel(ch_idx, eff_idx),
+-                        eff_name,
+-                    );
+-                    ui.separator();
+-                }
+ 
+-                // Drop zone after last effect (for reordering)
+-                if !ch.effects.is_empty() {
+-                    let num_effects = ch.effects.len();
+-                    render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), num_effects);
+-                }
++                    // Drop zone after last effect (for reordering)
++                    if !ch.effects.is_empty() {
++                        let num_effects = ch.effects.len();
++                        render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), num_effects);
++                    }
+ 
+-                // Remaining space: always present drop target
+-                let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
+-                    .map(|p| matches!(&*p, LibraryDrag::Effect(_))).unwrap_or(false);
+-                let remaining_w = ui.available_width().max(80.0);
+-                let remaining_h = ui.available_height().max(40.0);
+-                let stroke = if has_fx_drag { egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255)) } else { egui::Stroke::NONE };
+-                let fill = if has_fx_drag { egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20) } else { egui::Color32::TRANSPARENT };
+-                egui::Frame::default()
+-                    .inner_margin(8.0)
+-                    .corner_radius(4.0)
+-                    .fill(fill)
+-                    .stroke(stroke)
+-                    .show(ui, |ui| {
+-                        ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
+-                        ui.centered_and_justified(|ui| {
+-                            ui.label(egui::RichText::new("🔮 Drag effects here").weak());
++                    // Remaining space: always present drop target
++                    let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
++                        .map(|p| matches!(&*p, LibraryDrag::Effect(_)))
++                        .unwrap_or(false);
++                    let remaining_w = ui.available_width().max(80.0);
++                    let remaining_h = ui.available_height().max(40.0);
++                    let stroke = if has_fx_drag {
++                        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255))
++                    } else {
++                        egui::Stroke::NONE
++                    };
++                    let fill = if has_fx_drag {
++                        egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20)
++                    } else {
++                        egui::Color32::TRANSPARENT
++                    };
++                    egui::Frame::default()
++                        .inner_margin(8.0)
++                        .corner_radius(4.0)
++                        .fill(fill)
++                        .stroke(stroke)
++                        .show(ui, |ui| {
++                            ui.set_min_size(egui::vec2(remaining_w - 16.0, remaining_h - 16.0));
++                            ui.centered_and_justified(|ui| {
++                                ui.label(egui::RichText::new("🔮 Drag effects here").weak());
++                            });
+                         });
+-                    });
+-            }
++                }
+ 
+-            // Store channel effect chain rect for deferred library drops
+-            let chain_rect = ui.min_rect();
+-            let ch_chain_key = format!("ch_{}", ch_idx);
+-            ui.ctx().memory_mut(|mem| {
+-                mem.data.insert_temp(egui::Id::new("ch_fx_drop_rect").with(ch_idx), chain_rect);
+-                mem.data.insert_temp(egui::Id::new("eff_dz_count").with(ch_chain_key), ch.effects.len() + 1);
++                // Store channel effect chain rect for deferred library drops
++                let chain_rect = ui.min_rect();
++                let ch_chain_key = format!("ch_{}", ch_idx);
++                ui.ctx().memory_mut(|mem| {
++                    mem.data
++                        .insert_temp(egui::Id::new("ch_fx_drop_rect").with(ch_idx), chain_rect);
++                    mem.data.insert_temp(
++                        egui::Id::new("eff_dz_count").with(ch_chain_key),
++                        ch.effects.len() + 1,
++                    );
++                });
+             });
+         });
+-    });
+ }
+ 
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/geometry.rs:49:
+ /// Returns triangle indices into the vertex array.
+ pub(super) fn triangulate_polygon(verts: &[egui::Pos2]) -> Vec<u32> {
+     let n = verts.len();
+-    if n < 3 { return Vec::new(); }
++    if n < 3 {
++                                        0 => OutputSource::Master,
++                                        1 => OutputSource::Channel(new_indices[0]),
++                                        _ => OutputSource::Channels(new_indices),
++                                    };
++                                    actions.surface_actions.push(SurfaceAction::SetSource {
++                                        uuid: surface.uuid.clone(),
++                                        source: new_source,
++                                    });
++                                }
++                            }
++                        },
++                    );
+                 });
+ 
+                 ui.horizontal(|ui| {
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/stage.rs:325:
+                         .selected_text(format!("{}", surface.content_mapping))
+                         .width(80.0)
+                         .show_ui(ui, |ui| {
+-                            if ui.selectable_label(
+-                                surface.content_mapping == ContentMapping::Fill,
+-                                "Fill",
+-                            ).on_hover_text("Entire source scaled to fill this surface")
+-                            .clicked() {
+-                                actions.surface_actions.push(SurfaceAction::SetContentMapping {
+-                                    uuid: surface.uuid.clone(),
+-                                    mapping: ContentMapping::Fill,
+-                                });
++                            if ui
++                                .selectable_label(
++                                    surface.content_mapping == ContentMapping::Fill,
++                                    "Fill",
++                                )
++                                .on_hover_text("Entire source scaled to fill this surface")
++                                .clicked()
++                            {
++                                actions
++                                    .surface_actions
++                                    .push(SurfaceAction::SetContentMapping {
++                                        uuid: surface.uuid.clone(),
++                                        mapping: ContentMapping::Fill,
++                                    });
+                             }
+-                            if ui.selectable_label(
+-                                surface.content_mapping == ContentMapping::Mapped,
+-                                "Mapped",
+-                            ).on_hover_text("Surface position on canvas = UV crop into source")
+-                            .clicked() {
+-                                actions.surface_actions.push(SurfaceAction::SetContentMapping {
+-                                    uuid: surface.uuid.clone(),
+-                                    mapping: ContentMapping::Mapped,
+-                                });
++                            if ui
++                                .selectable_label(
++                                    surface.content_mapping == ContentMapping::Mapped,
++                                    "Mapped",
++                                )
++                                .on_hover_text("Surface position on canvas = UV crop into source")
++                                .clicked()
++                            {
++                                actions
++                                    .surface_actions
++                                    .push(SurfaceAction::SetContentMapping {
++                                        uuid: surface.uuid.clone(),
++                                        mapping: ContentMapping::Mapped,
++                                    });
+                             }
+                         });
+                 });
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/stage.rs:354:
+                         .selected_text(format!("{}", surface.output_type))
+                         .width(100.0)
+                         .show_ui(ui, |ui| {
+-                            if ui.selectable_label(
+-                                surface.output_type == SurfaceOutputType::Projection,
+-                                "📽 Projection",
+-                            ).clicked() {
++                            if ui
++                                .selectable_label(
++                                    surface.output_type == SurfaceOutputType::Projection,
++                                    "📽 Projection",
++                                )
++                                .clicked()
++                            {
+                                 actions.surface_actions.push(SurfaceAction::SetOutputType {
+                                     uuid: surface.uuid.clone(),
+                                     output_type: SurfaceOutputType::Projection,
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/stage.rs:364:
+                                 });
+                             }
+-                            if ui.selectable_label(
+-                                surface.output_type == SurfaceOutputType::LEDDirect,
+-                                "💡 LED Direct",
+-                            ).clicked() {
++                            if ui
++                                .selectable_label(
++                                    surface.output_type == SurfaceOutputType::LEDDirect,
++                                    "💡 LED Direct",
++                                )
++                                .clicked()
++                            {
+                                 actions.surface_actions.push(SurfaceAction::SetOutputType {
+                                     uuid: surface.uuid.clone(),
+                                     output_type: SurfaceOutputType::LEDDirect,
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/stage.rs:379:
+     }
+ 
+     if data.surfaces.is_empty() {
+-        ui.label(egui::RichText::new("No surfaces. Add one to define your stage layout.").weak().small());
++        ui.label(
++            egui::RichText::new("No surfaces. Add one to define your stage layout.")
++                .weak()
++                .small(),
++        );
+     }
+ }
+ 
+Diff in /home/runner/work/varda/varda/src/usecases/ui/panels/stage.rs:388:
+ enum SurfaceDragState {
+     #[default]
+     None,
+-    Moving { uuid: String, last_x: f32, last_y: f32 },
+-    DraggingVertex { uuid: String, vert_idx: usize },

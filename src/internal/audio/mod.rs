@@ -80,16 +80,24 @@ impl AudioData {
     /// Get energy in an arbitrary frequency range (Hz).
     /// This is the core method — bass/mid/treble are just presets on top of it.
     pub fn energy_in_range(&self, freq_low: f32, freq_high: f32) -> f32 {
-        if self.fft.is_empty() { return 0.0; }
+        if self.fft.is_empty() {
+            return 0.0;
+        }
         let bw = self.bin_width();
-        if bw <= 0.0 { return 0.0; }
+        if bw <= 0.0 {
+            return 0.0;
+        }
         let bin_low = ((freq_low / bw).floor() as usize).min(self.fft.len() - 1);
         let bin_high = ((freq_high / bw).ceil() as usize).min(self.fft.len());
-        if bin_high <= bin_low { return 0.0; }
+        if bin_high <= bin_low {
+            return 0.0;
+        }
         let slice = &self.fft[bin_low..bin_high];
         // RMS energy then dB-based perceptual mapping
         let rms = (slice.iter().map(|v| v * v).sum::<f32>() / slice.len() as f32).sqrt();
-        if rms < 1e-6 { return 0.0; }
+        if rms < 1e-6 {
+            return 0.0;
+        }
         let db = 20.0 * rms.log10();
         ((db + 60.0) / 60.0).clamp(0.0, 1.0)
     }
@@ -156,14 +164,21 @@ impl AudioManager {
     /// Scan for available audio input devices.
     pub fn scan_devices(&mut self) {
         let host = cpal::default_host();
-        self.devices = host.input_devices()
+        self.devices = host
+            .input_devices()
             .map(|devs| {
-                devs.enumerate().filter_map(|(i, d)| {
-                    let name = d.description()
-                        .map(|desc| desc.name().to_string())
-                        .unwrap_or_else(|_| format!("Audio Input {}", i));
-                    Some(AudioDeviceInfo { id: i as AudioSourceId, name })
-                }).collect()
+                devs.enumerate()
+                    .filter_map(|(i, d)| {
+                        let name = d
+                            .description()
+                            .map(|desc| desc.name().to_string())
+                            .unwrap_or_else(|_| format!("Audio Input {}", i));
+                        Some(AudioDeviceInfo {
+                            id: i as AudioSourceId,
+                            name,
+                        })
+                    })
+                    .collect()
             })
             .unwrap_or_default();
         log::info!("Audio scan: found {} input device(s)", self.devices.len());
@@ -184,17 +199,20 @@ impl AudioManager {
         }
 
         let host = cpal::default_host();
-        let device = host.input_devices()
+        let device = host
+            .input_devices()
             .context("Failed to enumerate audio devices")?
             .nth(id as usize)
             .context("Audio device not found")?;
 
-        let dev_name = device.description()
+        let dev_name = device
+            .description()
             .map(|desc| desc.name().to_string())
             .unwrap_or_else(|_| format!("Audio {}", id));
         log::info!("Opening audio source {}: {}", id, dev_name);
 
-        let config = device.default_input_config()
+        let config = device
+            .default_input_config()
             .context("Failed to get default audio input config")?;
         let sample_rate = config.sample_rate() as f32;
         log::info!("Audio config for '{}': {:?}", dev_name, config);
@@ -202,19 +220,31 @@ impl AudioManager {
         let (sender, receiver) = bounded::<AudioData>(16);
 
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => Self::build_stream::<f32>(&device, &config.into(), sender, sample_rate)?,
-            cpal::SampleFormat::I16 => Self::build_stream::<i16>(&device, &config.into(), sender, sample_rate)?,
-            cpal::SampleFormat::U16 => Self::build_stream::<u16>(&device, &config.into(), sender, sample_rate)?,
+            cpal::SampleFormat::F32 => {
+                Self::build_stream::<f32>(&device, &config.into(), sender, sample_rate)?
+            }
+            cpal::SampleFormat::I16 => {
+                Self::build_stream::<i16>(&device, &config.into(), sender, sample_rate)?
+            }
+            cpal::SampleFormat::U16 => {
+                Self::build_stream::<u16>(&device, &config.into(), sender, sample_rate)?
+            }
             _ => anyhow::bail!("Unsupported sample format"),
         };
 
         stream.play().context("Failed to start audio stream")?;
 
-        self.active.insert(id, ActiveAudioSource {
-            _stream: stream,
-            receiver,
-            latest: AudioData { sample_rate, ..AudioData::default() },
-        });
+        self.active.insert(
+            id,
+            ActiveAudioSource {
+                _stream: stream,
+                receiver,
+                latest: AudioData {
+                    sample_rate,
+                    ..AudioData::default()
+                },
+            },
+        );
 
         Ok(())
     }
@@ -243,10 +273,15 @@ impl AudioManager {
     /// Get the first active source's data (convenience for default/primary audio).
     pub fn get_primary_data(&self) -> &AudioData {
         // Return first active source's data, or a static default
-        self.active.values().next().map(|s| &s.latest).unwrap_or_else(|| {
-            static DEFAULT: std::sync::LazyLock<AudioData> = std::sync::LazyLock::new(AudioData::default);
-            &DEFAULT
-        })
+        self.active
+            .values()
+            .next()
+            .map(|s| &s.latest)
+            .unwrap_or_else(|| {
+                static DEFAULT: std::sync::LazyLock<AudioData> =
+                    std::sync::LazyLock::new(AudioData::default);
+                &DEFAULT
+            })
     }
 
     /// Get IDs of all active (open) sources.
@@ -277,8 +312,7 @@ impl AudioManager {
         // Pre-compute Hann window to reduce spectral leakage
         let hann_window: Vec<f32> = (0..FFT_SIZE)
             .map(|i| {
-                0.5 * (1.0
-                    - (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
+                0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
             })
             .collect();
 
@@ -299,19 +333,19 @@ impl AudioManager {
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 for chunk in data.chunks(channels) {
-                    let sample: f32 = chunk.iter()
+                    let sample: f32 = chunk
+                        .iter()
                         .map(|s| <f32 as Sample>::from_sample(*s))
-                        .sum::<f32>() / channels as f32;
+                        .sum::<f32>()
+                        / channels as f32;
                     sample_buffer.push(sample);
                 }
 
                 while sample_buffer.len() >= FFT_HOP {
                     // Extract waveform chunk for GPU (256 samples)
-                    let waveform: Vec<f32> =
-                        sample_buffer.drain(..FFT_HOP).collect();
-                    let level = (waveform.iter().map(|s| s * s).sum::<f32>()
-                        / FFT_HOP as f32)
-                        .sqrt();
+                    let waveform: Vec<f32> = sample_buffer.drain(..FFT_HOP).collect();
+                    let level =
+                        (waveform.iter().map(|s| s * s).sum::<f32>() / FFT_HOP as f32).sqrt();
 
                     // Write hop into ring buffer (wrapping)
                     for (i, &s) in waveform.iter().enumerate() {
@@ -323,10 +357,7 @@ impl AudioManager {
                     let mut fft_input: Vec<Complex<f32>> = Vec::with_capacity(FFT_SIZE);
                     for i in 0..FFT_SIZE {
                         let idx = (ring_write_pos + i) % FFT_SIZE;
-                        fft_input.push(Complex::new(
-                            ring_buffer[idx] * hann_window[i],
-                            0.0,
-                        ));
+                        fft_input.push(Complex::new(ring_buffer[idx] * hann_window[i], 0.0));
                     }
                     fft.process(&mut fft_input);
 
@@ -337,7 +368,11 @@ impl AudioManager {
                         .iter()
                         .map(|c: &Complex<f32>| {
                             let mag = c.norm() * scale;
-                            if mag < NOISE_FLOOR { 0.0 } else { mag }
+                            if mag < NOISE_FLOOR {
+                                0.0
+                            } else {
+                                mag
+                            }
                         })
                         .collect();
 
@@ -365,8 +400,7 @@ impl AudioManager {
 
                     let now = Instant::now();
                     let elapsed = now.duration_since(last_beat_time).as_secs_f32();
-                    let is_onset =
-                        spectral_flux > onset_threshold && elapsed > MIN_BEAT_INTERVAL;
+                    let is_onset = spectral_flux > onset_threshold && elapsed > MIN_BEAT_INTERVAL;
                     prev_fft_magnitudes.clone_from(&fft_magnitudes);
 
                     // BPM estimation with outlier rejection
@@ -378,20 +412,15 @@ impl AudioManager {
                             }
                             if beat_intervals.len() >= 4 {
                                 let mut sorted = beat_intervals.clone();
-                                sorted
-                                    .sort_by(|a, b| a.partial_cmp(b).unwrap());
+                                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
                                 let median = sorted[sorted.len() / 2];
                                 let stable: Vec<f32> = beat_intervals
                                     .iter()
-                                    .filter(|&&iv| {
-                                        (iv - median).abs() / median
-                                            < TEMPO_TOLERANCE
-                                    })
+                                    .filter(|&&iv| (iv - median).abs() / median < TEMPO_TOLERANCE)
                                     .copied()
                                     .collect();
                                 if stable.len() >= 2 {
-                                    let avg = stable.iter().sum::<f32>()
-                                        / stable.len() as f32;
+                                    let avg = stable.iter().sum::<f32>() / stable.len() as f32;
                                     let bpm = 60.0 / avg;
                                     if (30.0..=300.0).contains(&bpm) {
                                         current_bpm = Some(bpm);
@@ -405,8 +434,7 @@ impl AudioManager {
                         last_beat_time = now;
                     }
 
-                    let time_since_beat =
-                        now.duration_since(last_beat_time).as_secs_f32();
+                    let time_since_beat = now.duration_since(last_beat_time).as_secs_f32();
 
                     let data = AudioData {
                         waveform,
@@ -538,8 +566,7 @@ mod tests {
     fn hann_window_shape() {
         let window: Vec<f32> = (0..FFT_SIZE)
             .map(|i| {
-                0.5 * (1.0
-                    - (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
+                0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
             })
             .collect();
         // Endpoints should be ~0
@@ -609,10 +636,7 @@ mod tests {
             .zip(frame_a.iter())
             .map(|(c, p)| (c - p).max(0.0))
             .sum();
-        assert!(
-            flux_onset > 0.0,
-            "Onset spectral flux should be positive"
-        );
+        assert!(flux_onset > 0.0, "Onset spectral flux should be positive");
 
         // Decrease: energy drop produces zero flux (half-wave rectified)
         let flux_decrease: f32 = frame_a
@@ -645,18 +669,11 @@ mod tests {
             !stable.contains(&1.2),
             "Outlier interval should be rejected"
         );
-        assert!(
-            stable.len() >= 6,
-            "Most intervals should survive filtering"
-        );
+        assert!(stable.len() >= 6, "Most intervals should survive filtering");
 
         let avg = stable.iter().sum::<f32>() / stable.len() as f32;
         let bpm = 60.0 / avg;
-        assert!(
-            (bpm - 120.0).abs() < 5.0,
-            "BPM should be ~120, got {}",
-            bpm
-        );
+        assert!((bpm - 120.0).abs() < 5.0, "BPM should be ~120, got {}", bpm);
     }
 
     #[test]
@@ -733,7 +750,10 @@ mod tests {
         let val = data.energy_in_range(f32::NAN, 1000.0);
         // NaN / bw → NaN, floor as usize → 0 (saturating), .min(len-1) → 0
         // Must not panic
-        assert!(val.is_finite() || val == 0.0, "NaN freq_low should not crash");
+        assert!(
+            val.is_finite() || val == 0.0,
+            "NaN freq_low should not crash"
+        );
     }
 
     #[test]
@@ -776,7 +796,10 @@ mod tests {
         };
         let val = data.energy_in_range(-1000.0, -500.0);
         // Negative / bw → negative, floor as usize → 0 (saturating)
-        assert!(val >= 0.0, "negative freq should not produce negative energy");
+        assert!(
+            val >= 0.0,
+            "negative freq should not produce negative energy"
+        );
     }
 
     #[test]

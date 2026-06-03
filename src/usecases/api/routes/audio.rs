@@ -7,7 +7,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
-use crate::usecases::api::{SharedState, command_response};
+use crate::usecases::api::{command_response, SharedState};
 
 #[derive(Deserialize, ToSchema)]
 pub struct AudioSourceBody {
@@ -28,7 +28,12 @@ pub async fn open_source(
     State(state): State<SharedState>,
     Json(body): Json<AudioSourceBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::OpenAudioSource { source_id: body.source_id }).await {
+    match state
+        .send_command(EngineCommand::OpenAudioSource {
+            source_id: body.source_id,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -39,7 +44,12 @@ pub async fn close_source(
     State(state): State<SharedState>,
     Json(body): Json<AudioSourceBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::CloseAudioSource { source_id: body.source_id }).await {
+    match state
+        .send_command(EngineCommand::CloseAudioSource {
+            source_id: body.source_id,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }

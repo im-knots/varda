@@ -162,9 +162,9 @@ impl ISFMetadata {
     /// Check if this shader is audio reactive
     pub fn is_audio_reactive(&self) -> bool {
         if let Some(inputs) = &self.inputs {
-            inputs.iter().any(|input| {
-                input.input_type == "audio" || input.input_type == "audioFFT"
-            })
+            inputs
+                .iter()
+                .any(|input| input.input_type == "audio" || input.input_type == "audioFFT")
         } else {
             false
         }
@@ -178,8 +178,6 @@ impl ISFMetadata {
             .unwrap_or_else(|| "Uncategorized".to_string())
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -203,7 +201,10 @@ mod tests {
         assert!((pi[0].scale - 0.3).abs() < 1e-5);
         assert_eq!(pi[1].param, "rot_speed");
         assert_eq!(pi[1].index, 1);
-        assert!((pi[1].scale - 1.0).abs() < 1e-5, "Default scale should be 1.0");
+        assert!(
+            (pi[1].scale - 1.0).abs() < 1e-5,
+            "Default scale should be 1.0"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
-use crate::usecases::api::{SharedState, command_response};
+use crate::usecases::api::{command_response, SharedState};
 
 #[derive(Deserialize, ToSchema)]
 pub struct CrossfaderBody {
@@ -38,7 +38,10 @@ pub async fn set_crossfader(
     State(state): State<SharedState>,
     Json(body): Json<CrossfaderBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::SetCrossfader(body.position)).await {
+    match state
+        .send_command(EngineCommand::SetCrossfader(body.position))
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -49,11 +52,14 @@ pub async fn auto_crossfade(
     State(state): State<SharedState>,
     Json(body): Json<AutoCrossfadeBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::AutoCrossfade {
-        target: body.target,
-        duration_secs: body.duration_secs,
-        easing: body.easing,
-    }).await {
+    match state
+        .send_command(EngineCommand::AutoCrossfade {
+            target: body.target,
+            duration_secs: body.duration_secs,
+            easing: body.easing,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
@@ -64,10 +70,13 @@ pub async fn beat_crossfade(
     State(state): State<SharedState>,
     Json(body): Json<BeatCrossfadeBody>,
 ) -> impl IntoResponse {
-    match state.send_command(EngineCommand::BeatCrossfade {
-        target: body.target,
-        beats: body.beats,
-    }).await {
+    match state
+        .send_command(EngineCommand::BeatCrossfade {
+            target: body.target,
+            beats: body.beats,
+        })
+        .await
+    {
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }

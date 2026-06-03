@@ -13,26 +13,78 @@ impl VardaApp {
     pub fn apply_surface_actions(&mut self, ui_actions: &ui::UIActions, grid_size: f32) {
         for action in &ui_actions.surface_actions {
             match action {
-                ui::SurfaceAction::Add { name, source } =>
-                    { self.execute_command(EngineCommand::AddSurface { name: name.clone(), source: source.clone() }); }
-                ui::SurfaceAction::AddPolygon { name, vertices, source } =>
-                    { self.execute_command(EngineCommand::AddPolygonSurface { name: name.clone(), vertices: vertices.clone(), source: source.clone() }); }
-                ui::SurfaceAction::AddCircle { name, hint, source } =>
-                    { self.execute_command(EngineCommand::AddCircleSurface { name: name.clone(), center: hint.center, radius: hint.radius, sides: hint.sides, aspect_ratio: hint.aspect_ratio, source: source.clone() }); }
-                ui::SurfaceAction::Remove { uuid } =>
-                    { self.execute_command(EngineCommand::RemoveSurface { uuid: uuid.clone() }); }
-                ui::SurfaceAction::UpdateVertices { uuid, contour, vertices } =>
-                    { self.execute_command(EngineCommand::UpdateSurfaceContourVertices { uuid: uuid.clone(), contour: *contour, vertices: vertices.clone() }); }
-                ui::SurfaceAction::MoveDelta { uuid, dx, dy } =>
-                    { self.execute_command(EngineCommand::MoveSurface { uuid: uuid.clone(), dx: *dx, dy: *dy }); }
-                ui::SurfaceAction::SetSource { uuid, source } =>
-                    { self.execute_command(EngineCommand::SetSurfaceSource { uuid: uuid.clone(), source: source.clone() }); }
-                ui::SurfaceAction::SetOutputType { uuid, output_type } =>
-                    { self.execute_command(EngineCommand::SetSurfaceOutputType { uuid: uuid.clone(), output_type: *output_type }); }
-                ui::SurfaceAction::SetContentMapping { uuid, mapping } =>
-                    { self.execute_command(EngineCommand::SetSurfaceContentMapping { uuid: uuid.clone(), mapping: *mapping }); }
-                ui::SurfaceAction::Rename { uuid, name } =>
-                    { self.execute_command(EngineCommand::RenameSurface { uuid: uuid.clone(), name: name.clone() }); }
+                ui::SurfaceAction::Add { name, source } => {
+                    self.execute_command(EngineCommand::AddSurface {
+                        name: name.clone(),
+                        source: source.clone(),
+                    });
+                }
+                ui::SurfaceAction::AddPolygon {
+                    name,
+                    vertices,
+                    source,
+                } => {
+                    self.execute_command(EngineCommand::AddPolygonSurface {
+                        name: name.clone(),
+                        vertices: vertices.clone(),
+                        source: source.clone(),
+                    });
+                }
+                ui::SurfaceAction::AddCircle { name, hint, source } => {
+                    self.execute_command(EngineCommand::AddCircleSurface {
+                        name: name.clone(),
+                        center: hint.center,
+                        radius: hint.radius,
+                        sides: hint.sides,
+                        aspect_ratio: hint.aspect_ratio,
+                        source: source.clone(),
+                    });
+                }
+                ui::SurfaceAction::Remove { uuid } => {
+                    self.execute_command(EngineCommand::RemoveSurface { uuid: uuid.clone() });
+                }
+                ui::SurfaceAction::UpdateVertices {
+                    uuid,
+                    contour,
+                    vertices,
+                } => {
+                    self.execute_command(EngineCommand::UpdateSurfaceContourVertices {
+                        uuid: uuid.clone(),
+                        contour: *contour,
+                        vertices: vertices.clone(),
+                    });
+                }
+                ui::SurfaceAction::MoveDelta { uuid, dx, dy } => {
+                    self.execute_command(EngineCommand::MoveSurface {
+                        uuid: uuid.clone(),
+                        dx: *dx,
+                        dy: *dy,
+                    });
+                }
+                ui::SurfaceAction::SetSource { uuid, source } => {
+                    self.execute_command(EngineCommand::SetSurfaceSource {
+                        uuid: uuid.clone(),
+                        source: source.clone(),
+                    });
+                }
+                ui::SurfaceAction::SetOutputType { uuid, output_type } => {
+                    self.execute_command(EngineCommand::SetSurfaceOutputType {
+                        uuid: uuid.clone(),
+                        output_type: *output_type,
+                    });
+                }
+                ui::SurfaceAction::SetContentMapping { uuid, mapping } => {
+                    self.execute_command(EngineCommand::SetSurfaceContentMapping {
+                        uuid: uuid.clone(),
+                        mapping: *mapping,
+                    });
+                }
+                ui::SurfaceAction::Rename { uuid, name } => {
+                    self.execute_command(EngineCommand::RenameSurface {
+                        uuid: uuid.clone(),
+                        name: name.clone(),
+                    });
+                }
                 ui::SurfaceAction::Duplicate { uuid } => {
                     // Duplicate uses grid_size for offset, then MoveSurface
                     self.execute_command(EngineCommand::DuplicateSurface { uuid: uuid.clone() });
@@ -41,23 +93,54 @@ impl VardaApp {
                     // so we apply the offset using the last surface (just added)
                     if let Some(new_surface) = self.output.surface_manager.surfaces.last() {
                         let new_uuid = new_surface.uuid.clone();
-                        self.execute_command(EngineCommand::MoveSurface { uuid: new_uuid, dx: grid_size, dy: grid_size });
+                        self.execute_command(EngineCommand::MoveSurface {
+                            uuid: new_uuid,
+                            dx: grid_size,
+                            dy: grid_size,
+                        });
                     }
                 }
-                ui::SurfaceAction::FlipHorizontal { uuid } =>
-                    { self.execute_command(EngineCommand::FlipSurfaceHorizontal { uuid: uuid.clone() }); }
-                ui::SurfaceAction::FlipVertical { uuid } =>
-                    { self.execute_command(EngineCommand::FlipSurfaceVertical { uuid: uuid.clone() }); }
-                ui::SurfaceAction::InsertVertex { uuid, after_vert_idx, position } =>
-                    { self.execute_command(EngineCommand::InsertSurfaceVertex { uuid: uuid.clone(), after_vert_idx: *after_vert_idx, position: *position }); }
-                ui::SurfaceAction::SetCircleRadius { uuid, radius } =>
-                    { self.execute_command(EngineCommand::SetCircleRadius { uuid: uuid.clone(), radius: *radius }); }
-                ui::SurfaceAction::SetCircleSides { uuid, sides } =>
-                    { self.execute_command(EngineCommand::SetCircleSides { uuid: uuid.clone(), sides: *sides }); }
-                ui::SurfaceAction::ConvertToPolygon { uuid } =>
-                    { self.execute_command(EngineCommand::ConvertSurfaceToPolygon { uuid: uuid.clone() }); }
-                ui::SurfaceAction::Combine { uuids } =>
-                    { self.execute_command(EngineCommand::CombineSurfaces { uuids: uuids.clone() }); }
+                ui::SurfaceAction::FlipHorizontal { uuid } => {
+                    self.execute_command(EngineCommand::FlipSurfaceHorizontal {
+                        uuid: uuid.clone(),
+                    });
+                }
+                ui::SurfaceAction::FlipVertical { uuid } => {
+                    self.execute_command(EngineCommand::FlipSurfaceVertical { uuid: uuid.clone() });
+                }
+                ui::SurfaceAction::InsertVertex {
+                    uuid,
+                    after_vert_idx,
+                    position,
+                } => {
+                    self.execute_command(EngineCommand::InsertSurfaceVertex {
+                        uuid: uuid.clone(),
+                        after_vert_idx: *after_vert_idx,
+                        position: *position,
+                    });
+                }
+                ui::SurfaceAction::SetCircleRadius { uuid, radius } => {
+                    self.execute_command(EngineCommand::SetCircleRadius {
+                        uuid: uuid.clone(),
+                        radius: *radius,
+                    });
+                }
+                ui::SurfaceAction::SetCircleSides { uuid, sides } => {
+                    self.execute_command(EngineCommand::SetCircleSides {
+                        uuid: uuid.clone(),
+                        sides: *sides,
+                    });
+                }
+                ui::SurfaceAction::ConvertToPolygon { uuid } => {
+                    self.execute_command(EngineCommand::ConvertSurfaceToPolygon {
+                        uuid: uuid.clone(),
+                    });
+                }
+                ui::SurfaceAction::Combine { uuids } => {
+                    self.execute_command(EngineCommand::CombineSurfaces {
+                        uuids: uuids.clone(),
+                    });
+                }
                 ui::SurfaceAction::GenerateDomeSlices { setup } => {
                     self.generate_dome_slices(setup);
                 }
@@ -79,7 +162,6 @@ impl VardaApp {
                     let uuids = self.confirm_detected_contours(contours);
                     log::info!("Created {} surfaces from detection", uuids.len());
                 }
-
             }
         }
     }
@@ -88,7 +170,11 @@ impl VardaApp {
     /// create new surfaces with pre-computed WarpMesh per projector.
     fn generate_dome_slices(&mut self, setup: &crate::renderer::slicer::DomeSetup) {
         // Remove existing dome-generated surfaces (named "Dome P*")
-        let dome_uuids: Vec<String> = self.output.surface_manager.surfaces.iter()
+        let dome_uuids: Vec<String> = self
+            .output
+            .surface_manager
+            .surfaces
+            .iter()
             .filter(|s| s.name.starts_with("Dome P"))
             .map(|s| s.uuid.clone())
             .collect();
@@ -105,14 +191,21 @@ impl VardaApp {
             // Compute the convex hull of the warp mesh UVs as the 2D surface polygon
             let vertices = convex_hull_of_uvs(&mesh);
             let uuid = self.output.surface_manager.add_polygon_surface(
-                name.clone(), vertices, OutputSource::Domemaster,
+                name.clone(),
+                vertices,
+                OutputSource::Domemaster,
             );
             // Store the default warp mesh on the surface for auto-assignment
             if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
                 surface.default_warp = Some(WarpMode::Mesh(mesh.clone()));
             }
-            log::info!("Created dome surface '{}' (uuid {}) with {}x{} warp mesh",
-                name, uuid, mesh.cols, mesh.rows);
+            log::info!(
+                "Created dome surface '{}' (uuid {}) with {}x{} warp mesh",
+                name,
+                uuid,
+                mesh.cols,
+                mesh.rows
+            );
         }
 
         // Store dome setup on surface manager
@@ -157,7 +250,9 @@ fn convex_hull_of_uvs(mesh: &crate::renderer::warp::WarpMesh) -> Vec<[f32; 2]> {
     // Upper hull
     let lower_len = hull.len() + 1;
     for &p in points.iter().rev() {
-        while hull.len() >= lower_len && cross_2d(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+        while hull.len() >= lower_len
+            && cross_2d(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+        {
             hull.pop();
         }
         hull.push(p);
@@ -175,7 +270,7 @@ fn cross_2d(o: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::warp::{WarpMesh, MeshPoint};
+    use crate::renderer::warp::{MeshPoint, WarpMesh};
 
     #[test]
     fn convex_hull_of_unit_square_mesh() {
@@ -197,12 +292,25 @@ mod tests {
     #[test]
     fn convex_hull_triangle() {
         let mesh = WarpMesh {
-            cols: 2, rows: 2,
+            cols: 2,
+            rows: 2,
             points: vec![
-                MeshPoint { position: [0.0, 0.0], uv: [0.5, 0.0] },
-                MeshPoint { position: [1.0, 0.0], uv: [1.0, 1.0] },
-                MeshPoint { position: [0.0, 1.0], uv: [0.0, 1.0] },
-                MeshPoint { position: [1.0, 1.0], uv: [0.5, 0.5] }, // UV inside triangle
+                MeshPoint {
+                    position: [0.0, 0.0],
+                    uv: [0.5, 0.0],
+                },
+                MeshPoint {
+                    position: [1.0, 0.0],
+                    uv: [1.0, 1.0],
+                },
+                MeshPoint {
+                    position: [0.0, 1.0],
+                    uv: [0.0, 1.0],
+                },
+                MeshPoint {
+                    position: [1.0, 1.0],
+                    uv: [0.5, 0.5],
+                }, // UV inside triangle
             ],
         };
         let hull = convex_hull_of_uvs(&mesh);
@@ -213,10 +321,17 @@ mod tests {
     #[test]
     fn convex_hull_small_mesh() {
         let mesh = WarpMesh {
-            cols: 2, rows: 1,
+            cols: 2,
+            rows: 1,
             points: vec![
-                MeshPoint { position: [0.0, 0.0], uv: [0.2, 0.3] },
-                MeshPoint { position: [1.0, 0.0], uv: [0.8, 0.7] },
+                MeshPoint {
+                    position: [0.0, 0.0],
+                    uv: [0.2, 0.3],
+                },
+                MeshPoint {
+                    position: [1.0, 0.0],
+                    uv: [0.8, 0.7],
+                },
             ],
         };
         let hull = convex_hull_of_uvs(&mesh);
@@ -228,14 +343,33 @@ mod tests {
     #[test]
     fn convex_hull_nan_uv_does_not_panic() {
         let mesh = WarpMesh {
-            cols: 3, rows: 2,
+            cols: 3,
+            rows: 2,
             points: vec![
-                MeshPoint { position: [0.0, 0.0], uv: [f32::NAN, 0.0] },
-                MeshPoint { position: [1.0, 0.0], uv: [0.5, f32::NAN] },
-                MeshPoint { position: [0.0, 1.0], uv: [0.0, 1.0] },
-                MeshPoint { position: [1.0, 1.0], uv: [1.0, 1.0] },
-                MeshPoint { position: [0.5, 0.5], uv: [f32::NAN, f32::NAN] },
-                MeshPoint { position: [0.5, 0.0], uv: [0.3, 0.7] },
+                MeshPoint {
+                    position: [0.0, 0.0],
+                    uv: [f32::NAN, 0.0],
+                },
+                MeshPoint {
+                    position: [1.0, 0.0],
+                    uv: [0.5, f32::NAN],
+                },
+                MeshPoint {
+                    position: [0.0, 1.0],
+                    uv: [0.0, 1.0],
+                },
+                MeshPoint {
+                    position: [1.0, 1.0],
+                    uv: [1.0, 1.0],
+                },
+                MeshPoint {
+                    position: [0.5, 0.5],
+                    uv: [f32::NAN, f32::NAN],
+                },
+                MeshPoint {
+                    position: [0.5, 0.0],
+                    uv: [0.3, 0.7],
+                },
             ],
         };
         // Must not panic — NaN comparisons fall back to Equal
@@ -245,12 +379,25 @@ mod tests {
     #[test]
     fn convex_hull_all_nan_does_not_panic() {
         let mesh = WarpMesh {
-            cols: 2, rows: 2,
+            cols: 2,
+            rows: 2,
             points: vec![
-                MeshPoint { position: [0.0, 0.0], uv: [f32::NAN, f32::NAN] },
-                MeshPoint { position: [1.0, 0.0], uv: [f32::NAN, f32::NAN] },
-                MeshPoint { position: [0.0, 1.0], uv: [f32::NAN, f32::NAN] },
-                MeshPoint { position: [1.0, 1.0], uv: [f32::NAN, f32::NAN] },
+                MeshPoint {
+                    position: [0.0, 0.0],
+                    uv: [f32::NAN, f32::NAN],
+                },
+                MeshPoint {
+                    position: [1.0, 0.0],
+                    uv: [f32::NAN, f32::NAN],
+                },
+                MeshPoint {
+                    position: [0.0, 1.0],
+                    uv: [f32::NAN, f32::NAN],
+                },
+                MeshPoint {
+                    position: [1.0, 1.0],
+                    uv: [f32::NAN, f32::NAN],
+                },
             ],
         };
         let _hull = convex_hull_of_uvs(&mesh);
@@ -259,12 +406,25 @@ mod tests {
     #[test]
     fn convex_hull_infinity_uv_does_not_panic() {
         let mesh = WarpMesh {
-            cols: 2, rows: 2,
+            cols: 2,
+            rows: 2,
             points: vec![
-                MeshPoint { position: [0.0, 0.0], uv: [f32::INFINITY, 0.0] },
-                MeshPoint { position: [1.0, 0.0], uv: [f32::NEG_INFINITY, 1.0] },
-                MeshPoint { position: [0.0, 1.0], uv: [0.0, f32::INFINITY] },
-                MeshPoint { position: [1.0, 1.0], uv: [1.0, 1.0] },
+                MeshPoint {
+                    position: [0.0, 0.0],
+                    uv: [f32::INFINITY, 0.0],
+                },
+                MeshPoint {
+                    position: [1.0, 0.0],
+                    uv: [f32::NEG_INFINITY, 1.0],
+                },
+                MeshPoint {
+                    position: [0.0, 1.0],
+                    uv: [0.0, f32::INFINITY],
+                },
+                MeshPoint {
+                    position: [1.0, 1.0],
+                    uv: [1.0, 1.0],
+                },
             ],
         };
         let _hull = convex_hull_of_uvs(&mesh);

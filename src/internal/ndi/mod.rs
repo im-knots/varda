@@ -9,7 +9,10 @@ pub mod ffi;
 pub mod sdk;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 /// Discovered NDI source on the network.
 #[derive(Debug, Clone)]
@@ -87,8 +90,12 @@ impl NdiManager {
         }
     }
 
-    pub fn is_available(&self) -> bool { self.sdk.is_some() }
-    pub fn sources(&self) -> &[NdiSource] { &self.sources }
+    pub fn is_available(&self) -> bool {
+        self.sdk.is_some()
+    }
+    pub fn sources(&self) -> &[NdiSource] {
+        &self.sources
+    }
 
     /// Return discovered source names for UI display.
     pub fn discovered_sources(&self) -> Vec<String> {
@@ -159,7 +166,7 @@ impl NdiManager {
         let recv_settings = ffi::NDIlib_recv_create_v3_t {
             source_to_connect_to: ndi_source,
             color_format: 0, // BGRX/BGRA — most reliable for conversion
-            bandwidth: 100, // highest quality
+            bandwidth: 100,  // highest quality
             allow_video_fields: false,
             p_ndi_recv_name: recv_name.as_ptr(),
         };
@@ -174,8 +181,13 @@ impl NdiManager {
         let height = height.max(1);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("NDI Receive: {}", source_name)),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
@@ -293,11 +305,23 @@ impl NdiManager {
                 let fw = fw.max(1);
                 let fh = fh.max(1);
                 if fw != self.receivers[i].width || fh != self.receivers[i].height {
-                    log::info!("NDI receiver {}: resolution changed {}×{} → {}×{}", i, self.receivers[i].width, self.receivers[i].height, fw, fh);
+                    log::info!(
+                        "NDI receiver {}: resolution changed {}×{} → {}×{}",
+                        i,
+                        self.receivers[i].width,
+                        self.receivers[i].height,
+                        fw,
+                        fh
+                    );
                     let texture = device.create_texture(&wgpu::TextureDescriptor {
                         label: Some("NDI Receive (resized)"),
-                        size: wgpu::Extent3d { width: fw, height: fh, depth_or_array_layers: 1 },
-                        mip_level_count: 1, sample_count: 1,
+                        size: wgpu::Extent3d {
+                            width: fw,
+                            height: fh,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
                         format: wgpu::TextureFormat::Rgba8UnormSrgb,
                         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
@@ -310,15 +334,22 @@ impl NdiManager {
                 }
                 queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
-                        texture: &self.textures[i].0, mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+                        texture: &self.textures[i].0,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
                     },
                     &frame.data[..expected],
                     wgpu::TexelCopyBufferLayout {
-                        offset: 0, bytes_per_row: Some(fw * 4),
+                        offset: 0,
+                        bytes_per_row: Some(fw * 4),
                         rows_per_image: Some(fh),
                     },
-                    wgpu::Extent3d { width: fw, height: fh, depth_or_array_layers: 1 },
+                    wgpu::Extent3d {
+                        width: fw,
+                        height: fh,
+                        depth_or_array_layers: 1,
+                    },
                 );
             }
         }
@@ -367,10 +398,13 @@ impl NdiManager {
                 return;
             }
             let uyvy_size = (width as usize) * (height as usize) * 2;
-            self.senders.insert(sender_name.to_string(), NdiSender {
-                instance,
-                uyvy_buf: vec![0u8; uyvy_size],
-            });
+            self.senders.insert(
+                sender_name.to_string(),
+                NdiSender {
+                    instance,
+                    uyvy_buf: vec![0u8; uyvy_size],
+                },
+            );
             log::info!("NDI sender created: '{}'", sender_name);
         }
 
@@ -396,7 +430,7 @@ impl NdiManager {
             frame_rate_D: 1,
             picture_aspect_ratio: 0.0,
             frame_format_type: 1, // progressive
-            timecode: 0, // auto
+            timecode: 0,          // auto
             p_data: sender.uyvy_buf.as_mut_ptr(),
             line_stride_in_bytes: (width * 2) as i32,
             p_metadata: std::ptr::null(),
@@ -419,7 +453,9 @@ impl NdiManager {
     pub fn stop_receive(&mut self, idx: usize) {
         if let Some(r) = self.receivers.get_mut(idx) {
             r.stop_flag.store(true, Ordering::SeqCst);
-            if let Some(t) = r._thread.take() { let _ = t.join(); }
+            if let Some(t) = r._thread.take() {
+                let _ = t.join();
+            }
         }
     }
 }
@@ -429,7 +465,9 @@ impl Drop for NdiManager {
         // Stop all receivers and join their threads before SDK cleanup
         for r in &mut self.receivers {
             r.stop_flag.store(true, Ordering::SeqCst);
-            if let Some(t) = r._thread.take() { let _ = t.join(); }
+            if let Some(t) = r._thread.take() {
+                let _ = t.join();
+            }
         }
         // Destroy all senders
         let sender_names: Vec<String> = self.senders.keys().cloned().collect();
@@ -449,12 +487,21 @@ fn convert_ndi_frame_to_rgba(vf: &ffi::NDIlib_video_frame_v2_t, w: u32, h: u32) 
     let mut rgba = vec![0u8; pixel_count * 4];
 
     if vf.FourCC == ffi::NDIlib_FourCC_video_type_e::UYVY {
-        let stride = if vf.line_stride_in_bytes > 0 { vf.line_stride_in_bytes as usize } else { w as usize * 2 };
+        let stride = if vf.line_stride_in_bytes > 0 {
+            vf.line_stride_in_bytes as usize
+        } else {
+            w as usize * 2
+        };
         let uyvy_data = unsafe { std::slice::from_raw_parts(vf.p_data, h as usize * stride) };
         uyvy_to_rgba(uyvy_data, &mut rgba, w, h, stride);
     } else if vf.FourCC == ffi::NDIlib_FourCC_video_type_e::BGRA
-           || vf.FourCC == ffi::NDIlib_FourCC_video_type_e::BGRX {
-        let stride = if vf.line_stride_in_bytes > 0 { vf.line_stride_in_bytes as usize } else { w as usize * 4 };
+        || vf.FourCC == ffi::NDIlib_FourCC_video_type_e::BGRX
+    {
+        let stride = if vf.line_stride_in_bytes > 0 {
+            vf.line_stride_in_bytes as usize
+        } else {
+            w as usize * 4
+        };
         let bgra_data = unsafe { std::slice::from_raw_parts(vf.p_data, h as usize * stride) };
         for y in 0..h as usize {
             for x in 0..w as usize {
@@ -482,7 +529,9 @@ fn uyvy_to_rgba(uyvy: &[u8], rgba: &mut [u8], w: u32, h: u32, stride: usize) {
     for y in 0..h as usize {
         for x in (0..w as usize).step_by(2) {
             let src = y * stride + x * 2;
-            if src + 3 >= uyvy.len() { break; }
+            if src + 3 >= uyvy.len() {
+                break;
+            }
             let u = uyvy[src] as f32 - 128.0;
             let y0 = uyvy[src + 1] as f32;
             let v = uyvy[src + 2] as f32 - 128.0;
@@ -518,7 +567,11 @@ fn rgba_to_uyvy(rgba: &[u8], uyvy: &mut [u8], w: u32, h: u32) {
             let b0 = rgba[src0 + 2] as f32;
 
             let (r1, g1, b1) = if x + 1 < w as usize && src1 + 2 < rgba.len() {
-                (rgba[src1] as f32, rgba[src1 + 1] as f32, rgba[src1 + 2] as f32)
+                (
+                    rgba[src1] as f32,
+                    rgba[src1 + 1] as f32,
+                    rgba[src1 + 2] as f32,
+                )
             } else {
                 (r0, g0, b0)
             };
@@ -538,8 +591,6 @@ fn rgba_to_uyvy(rgba: &[u8], uyvy: &mut [u8], w: u32, h: u32) {
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -583,14 +634,18 @@ mod tests {
 
     #[test]
     fn ndi_source_debug() {
-        let src = NdiSource { name: "Test Source".to_string() };
+        let src = NdiSource {
+            name: "Test Source".to_string(),
+        };
         let debug = format!("{:?}", src);
         assert!(debug.contains("Test Source"));
     }
 
     #[test]
     fn ndi_source_clone() {
-        let src = NdiSource { name: "Test".to_string() };
+        let src = NdiSource {
+            name: "Test".to_string(),
+        };
         let cloned = src.clone();
         assert_eq!(src.name, cloned.name);
     }
@@ -689,8 +744,14 @@ mod tests {
             for c in 0..3 {
                 let orig = original_rgba[i * 4 + c] as i32;
                 let rest = restored[i * 4 + c] as i32;
-                assert!((orig - rest).abs() <= 2,
-                    "pixel {} channel {} mismatch: {} vs {}", i, c, orig, rest);
+                assert!(
+                    (orig - rest).abs() <= 2,
+                    "pixel {} channel {} mismatch: {} vs {}",
+                    i,
+                    c,
+                    orig,
+                    rest
+                );
             }
         }
     }
@@ -727,7 +788,7 @@ mod tests {
         uyvy[1] = 200; // Y0
         uyvy[2] = 128; // V
         uyvy[3] = 200; // Y1
-        // Bytes 4-7 are padding
+                       // Bytes 4-7 are padding
 
         let mut rgba = vec![0u8; 2 * 4];
         uyvy_to_rgba(&uyvy, &mut rgba, w, h, stride);
