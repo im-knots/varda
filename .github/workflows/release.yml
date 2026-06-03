@@ -22,15 +22,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry & build
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-release-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-release-cargo-
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: Build Linux AppImage
         run: ./scripts/ci/build-linux.sh
@@ -50,15 +43,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry & build
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: macos-arm64-release-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-arm64-release-cargo-
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: Build arm64 binary
         run: |
@@ -80,15 +66,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry & build
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: macos-x86-release-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-x86-release-cargo-
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: Build x86_64 .app
         run: |

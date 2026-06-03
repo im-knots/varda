@@ -33,15 +33,8 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Cache cargo registry & build
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cargo-
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --all -- --check
