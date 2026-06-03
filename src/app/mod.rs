@@ -72,11 +72,40 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Resolve the effective workspace root (CLI flag or cwd).
+    /// Resolve workspace root with three-tier fallback:
+    /// 1. Explicit `--workspace` flag (highest priority)
+    /// 2. CWD if it contains a `.varda/` directory (project-local workspace)
+    /// 3. Home directory as root → uses `~/.varda/` (default workspace)
     pub fn effective_workspace_root(&self) -> std::path::PathBuf {
-        self.workspace_root.clone().unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        })
+        Self::resolve_workspace_root(
+            self.workspace_root.as_deref(),
+            std::env::current_dir().ok().as_deref(),
+            dirs::home_dir().as_deref(),
+        )
+    }
+
+    /// Pure workspace resolution — testable without touching environment.
+    fn resolve_workspace_root(
+        explicit: Option<&std::path::Path>,
+        cwd: Option<&std::path::Path>,
+        home: Option<&std::path::Path>,
+    ) -> std::path::PathBuf {
+        // Tier 1: explicit --workspace flag
+        if let Some(ws) = explicit {
+            return ws.to_path_buf();
+        }
+        // Tier 2: CWD has .varda/
+        if let Some(cwd) = cwd {
+            if cwd.join(".varda").is_dir() {
+                return cwd.to_path_buf();
+            }
+        }
+        // Tier 3: home directory (workspace data lives at ~/.varda/)
+        if let Some(home) = home {
+            return home.to_path_buf();
+        }
+        // Ultimate fallback
+        std::path::PathBuf::from(".")
     }
 }
 
@@ -201,9 +230,36 @@ impl VardaApp {
     /// without a GPU. A default two-channel mixer is always created.
     /// `config` provides session settings from CLI flags + workspace defaults.
     pub fn new(gpu: GpuContext, config: &AppConfig) -> anyhow::Result<Self> {
+        let audio_manager = AudioManager::new();
+
+        let workspace = Workspace::new(config.effective_workspace_root());
+
+        // Build shader registry with all library paths (order = priority for hot-reload):
+        // 1. Bundled shaders (exe-relative, for packaged .app / AppImage)
+        // 2. CWD shaders/ (dev builds / cargo run)
+        // 3. Workspace .varda/shaders/ (per-show user shaders)
+        // 4. Platform user dir (global user shader collection)
         let mut registry = ShaderRegistry::new();
+        if let Some(bundled) = crate::registry::get_bundled_shader_path() {
+            if let Err(e) = registry.add_library_path(&bundled) {
+                log::warn!("Failed to add bundled shaders path: {}", e);
+            }
+        }
         if let Err(e) = registry.add_library_path("shaders") {
             log::warn!("Failed to add shaders path: {}", e);
+        }
+        let ws_shaders = workspace.shaders_dir();
+        if ws_shaders.is_dir() {
+            if let Err(e) = registry.add_library_path(&ws_shaders) {
+                log::warn!("Failed to add workspace shaders path: {}", e);
+            }
+        }
+        for path in crate::registry::get_default_library_paths() {
+            if path.is_dir() {
+                if let Err(e) = registry.add_library_path(&path) {
+                    log::warn!("Failed to add user shader library path {}: {}", path.display(), e);
+                }
+            }
         }
         match registry.scan() {
             Ok(count) => log::info!("Loaded {} shaders", count),
@@ -212,10 +268,6 @@ impl VardaApp {
         if let Err(e) = registry.start_watching() {
             log::warn!("Failed to start shader hot-reload: {}", e);
         }
-
-        let audio_manager = AudioManager::new();
-
-        let workspace = Workspace::new(config.effective_workspace_root());
 
         // Load OSC config from workspace (or use defaults), then apply CLI overrides
         let mut osc_config = if workspace.has_osc() {
@@ -1472,13 +1524,57 @@ mod tests {
     }
 
     #[test]
-    fn app_config_workspace_root_resolution() {
-        let config = parse_args(&["--workspace", "/tmp/show"]);
-        assert_eq!(config.effective_workspace_root(), std::path::PathBuf::from("/tmp/show"));
+    fn workspace_resolution_explicit_flag_wins() {
+        let explicit = std::path::PathBuf::from("/tmp/show");
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir(cwd.path().join(".varda")).unwrap();
+        let home = tempfile::tempdir().unwrap();
 
-        let config = parse_args(&[]);
-        let cwd = std::env::current_dir().unwrap();
-        assert_eq!(config.effective_workspace_root(), cwd);
+        let result = AppConfig::resolve_workspace_root(
+            Some(explicit.as_path()),
+            Some(cwd.path()),
+            Some(home.path()),
+        );
+        assert_eq!(result, explicit);
+    }
+
+    #[test]
+    fn workspace_resolution_cwd_with_varda_dir() {
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir(cwd.path().join(".varda")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        let result = AppConfig::resolve_workspace_root(None, Some(cwd.path()), Some(home.path()));
+        assert_eq!(result, cwd.path());
+    }
+
+    #[test]
+    fn workspace_resolution_falls_back_to_home() {
+        let cwd = tempfile::tempdir().unwrap(); // no .varda/ dir
+        let home = tempfile::tempdir().unwrap();
+
+        let result = AppConfig::resolve_workspace_root(None, Some(cwd.path()), Some(home.path()));
+        assert_eq!(result, home.path());
+    }
+
+    #[test]
+    fn workspace_resolution_no_cwd_no_home() {
+        let result = AppConfig::resolve_workspace_root(None, None, None);
+        assert_eq!(result, std::path::PathBuf::from("."));
+    }
+
+    #[test]
+    fn workspace_resolution_explicit_overrides_cwd_with_varda() {
+        let explicit = std::path::PathBuf::from("/tmp/custom");
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir(cwd.path().join(".varda")).unwrap();
+
+        let result = AppConfig::resolve_workspace_root(
+            Some(explicit.as_path()),
+            Some(cwd.path()),
+            None,
+        );
+        assert_eq!(result, explicit);
     }
 
     #[test]

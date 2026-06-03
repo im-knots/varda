@@ -203,6 +203,11 @@ impl Workspace {
         self.varda_dir().join("presets")
     }
 
+    /// Path to `shaders/` directory for workspace-local ISF shaders.
+    pub fn shaders_dir(&self) -> PathBuf {
+        self.varda_dir().join("shaders")
+    }
+
     /// Path to `presets/decks/` directory.
     pub fn deck_presets_dir(&self) -> PathBuf {
         self.presets_dir().join("decks")
@@ -1158,5 +1163,13 @@ mod tests {
         });
         let errors = prefs.validate();
         assert!(errors.iter().any(|e| e.contains("warp corner")));
+    }
+
+    #[test]
+    fn workspace_shaders_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(tmp.path().to_path_buf());
+        let shaders_dir = ws.shaders_dir();
+        assert_eq!(shaders_dir, tmp.path().join(".varda").join("shaders"));
     }
 }
