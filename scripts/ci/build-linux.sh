@@ -55,9 +55,25 @@ cp target/release/varda Varda.AppDir/usr/bin/
 # Bundle shaders
 cp -r shaders/* Varda.AppDir/usr/share/varda/shaders/
 
-# Bundle FFmpeg shared libs
-for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice libavfilter libsrt; do
-  find /usr/lib -name "${lib}.so*" -exec cp -P {} Varda.AppDir/usr/lib/ \; 2>/dev/null || true
+# Bundle all non-system shared libs (discovered via ldd)
+# System libs we do NOT bundle — the host must provide these:
+EXCLUDE_PATTERN="linux-vdso|ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread|libstdc\+\+|libgcc_s|libX|libxcb|libxkb|libwayland|libvulkan|libGLX|libGLdispatch|libEGL|libdrm|libgbm|libgio|libglib|libgobject|libgtk|libgdk|libpango|libcairo|libatk|libfontconfig|libfreetype|libdbus|libresolv|libnss|libffi|libz\.so"
+
+echo "==> Bundling shared libraries (ldd-based)..."
+ldd Varda.AppDir/usr/bin/varda | grep "=> /" | awk '{print $3}' | sort -u | while read -r lib; do
+  libname=$(basename "$lib")
+  # Skip system/desktop libs that the host provides
+  if echo "$libname" | grep -qE "$EXCLUDE_PATTERN"; then
+    continue
+  fi
+  echo "  bundling: $libname"
+  cp -L "$lib" "Varda.AppDir/usr/lib/$libname" 2>/dev/null || true
+done
+# Also bundle any soname symlinks for the libs we just copied
+for lib in Varda.AppDir/usr/lib/*.so.*; do
+  libname=$(basename "$lib")
+  base=$(echo "$libname" | sed -E 's/\.so\..*//')
+  find /usr/lib -name "${base}.so*" -exec cp -P {} Varda.AppDir/usr/lib/ \; 2>/dev/null || true
 done
 
 # Bundle NDI SDK (runtime-loaded via libloading)
