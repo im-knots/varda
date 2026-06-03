@@ -162,5 +162,4 @@ create-dmg \
 echo "==> Done: Varda-macOS-universal.dmg"
 ls -lh Varda-macOS-universal.dmg
 echo ""
-echo "To add 'varda' to your PATH after installing Varda.app:"
-echo "  ./scripts/install-cli-macos.sh"
+echo "The 'varda' CLI wrapper is auto-installed on first launch."
