@@ -54,6 +54,8 @@ echo "==> [3/5] Building x265 (x86_64)..."
 cd "$BUILDDIR"
 git clone --depth 1 -b Release_4.1 https://bitbucket.org/multicoreware/x265_git.git
 cd x265_git/build
+# Patch out OLD cmake policies that CMake 4.x rejects
+sed -i '' '/cmake_policy(SET CMP0025 OLD)/d; /cmake_policy(SET CMP0054 OLD)/d' ../source/CMakeLists.txt
 cmake ../source \
   -DCMAKE_INSTALL_PREFIX="$PREFIX" \
   -DCMAKE_OSX_ARCHITECTURES=x86_64 \
