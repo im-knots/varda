@@ -116,5 +116,4 @@ ARCH=x86_64 ./appimagetool-x86_64.AppImage --no-appstream Varda.AppDir Varda-x86
 echo "==> Done: Varda-x86_64.AppImage"
 ls -lh Varda-x86_64.AppImage
 echo ""
-echo "To add 'varda' to your PATH:"
-echo "  ./scripts/install-cli-linux.sh ./Varda-x86_64.AppImage"
+echo "The 'varda' CLI symlink is auto-installed to ~/.local/bin/ on first launch."
