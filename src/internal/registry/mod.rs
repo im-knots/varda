@@ -294,6 +294,15 @@ pub fn get_bundled_shader_path() -> Option<PathBuf> {
         }
     }
 
+    // Windows portable: shaders/ next to varda.exe
+    #[cfg(target_os = "windows")]
+    {
+        let exe_shaders = exe_dir.join("shaders");
+        if exe_shaders.is_dir() {
+            return Some(exe_shaders);
+        }
+    }
+
     None
 }
 
@@ -321,6 +330,16 @@ pub fn get_default_library_paths() -> Vec<PathBuf> {
             path.push("share");
             path.push("varda");
             path.push("shaders");
+            paths.push(path);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            let mut path = PathBuf::from(appdata);
+            path.push("Varda");
+            path.push("Shaders");
             paths.push(path);
         }
     }
@@ -544,7 +563,8 @@ void main() {}"#;
     #[test]
     fn get_default_library_paths_returns_platform_path() {
         let paths = get_default_library_paths();
-        // Should return exactly one path on macOS or Linux (when HOME is set)
+        // Should return exactly one path on macOS, Linux (when HOME is set), or Windows (when APPDATA is set)
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if std::env::var_os("HOME").is_some() {
             assert_eq!(paths.len(), 1);
             let path_str = paths[0].to_string_lossy();
@@ -552,6 +572,12 @@ void main() {}"#;
             assert!(path_str.contains("Library/Application Support/Varda/Shaders"));
             #[cfg(target_os = "linux")]
             assert!(path_str.contains(".local/share/varda/shaders"));
+        }
+        #[cfg(target_os = "windows")]
+        if std::env::var_os("APPDATA").is_some() {
+            assert_eq!(paths.len(), 1);
+            let path_str = paths[0].to_string_lossy();
+            assert!(path_str.contains("Varda\\Shaders"));
         }
     }
 }

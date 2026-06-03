@@ -51,7 +51,17 @@ Download the latest release from the [Releases page](https://github.com/im-knots
    ```
    On first launch, a `varda` symlink is created in `~/.local/bin/` so you can run `varda` from any terminal.
 
-Both releases bundle FFmpeg and NDI, no extra dependencies needed.
+### Windows (Portable ZIP)
+
+1. Download `Varda-Windows-x64.zip`
+2. Extract the ZIP to any folder (e.g. `C:\Varda`)
+3. Run `varda.exe`
+
+No installer required. FFmpeg DLLs and shaders are bundled in the ZIP. NDI is included when available.
+
+> **Note:** Windows may show a SmartScreen warning because the binary is not code-signed. Click **"More info"** then **"Run anyway"**. You may also need the [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) if it's not already installed (most Windows 10/11 systems have it).
+
+All releases bundle FFmpeg and NDI, no extra dependencies needed.
 
 ---
 

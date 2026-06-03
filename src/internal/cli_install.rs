@@ -20,9 +20,7 @@ pub fn ensure_cli_installed() {
 
 fn try_install() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {}", e))?;
-    let exe = exe
-        .canonicalize()
-        .unwrap_or_else(|_| exe.clone());
+    let exe = exe.canonicalize().unwrap_or_else(|_| exe.clone());
 
     if cfg!(target_os = "macos") {
         install_macos(&exe)
@@ -46,10 +44,7 @@ fn install_macos(exe: &Path) -> Result<(), String> {
     }
     let contents_dir = macos_dir.parent().ok_or("no Contents dir")?;
     let app_dir = contents_dir.parent().ok_or("no .app dir")?;
-    if !app_dir
-        .extension()
-        .map_or(false, |ext| ext == "app")
-    {
+    if !app_dir.extension().map_or(false, |ext| ext == "app") {
         return Err("not a .app bundle".into());
     }
 
@@ -81,9 +76,7 @@ fn install_macos(exe: &Path) -> Result<(), String> {
 
 fn install_macos_with_admin(wrapper_content: &str) -> Result<(), String> {
     // Use osascript to get admin privileges via GUI prompt
-    let escaped = wrapper_content
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
+    let escaped = wrapper_content.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
         "do shell script \
          \"mkdir -p /usr/local/bin && \
@@ -145,15 +138,17 @@ fn install_linux(exe: &Path) -> Result<(), String> {
     }
 
     log::info!("Installing CLI symlink to ~/.local/bin/varda...");
-    std::fs::create_dir_all(&bin_dir)
-        .map_err(|e| format!("mkdir ~/.local/bin: {}", e))?;
+    std::fs::create_dir_all(&bin_dir).map_err(|e| format!("mkdir ~/.local/bin: {}", e))?;
     std::os::unix::fs::symlink(&appimage_path, &link_path)
         .map_err(|e| format!("symlink: {}", e))?;
 
-    log::info!("CLI symlink installed: {} → {}", link_path.display(), appimage_path.display());
+    log::info!(
+        "CLI symlink installed: {} → {}",
+        link_path.display(),
+        appimage_path.display()
+    );
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
