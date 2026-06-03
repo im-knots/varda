@@ -485,6 +485,7 @@ impl VardaApp {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                     for (bind_group, vb, num_tris) in &prepared {
                         if *num_tris > 0 {
@@ -517,6 +518,7 @@ impl VardaApp {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                     h.blit_pipeline.render(&mut rp, &bind_group);
                 }

@@ -40,9 +40,12 @@ impl GpuContext {
     pub async fn new_for_window(window: &'static Window) -> Result<(Self, WindowSurface)> {
         let size = window.inner_size();
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            flags: wgpu::InstanceFlags::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            display: Default::default(),
+            memory_budget_thresholds: Default::default(),
         });
 
         let surface = instance.create_surface(window)
@@ -130,9 +133,12 @@ impl GpuContext {
     /// compatibility requirements. Falls back to software adapter if no
     /// hardware GPU is available. Used for headless mode and tests.
     pub fn new_headless() -> Result<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            flags: wgpu::InstanceFlags::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            display: Default::default(),
+            memory_budget_thresholds: Default::default(),
         });
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -570,20 +576,25 @@ impl OutputWindow {
     /// Mesh mode bakes warp into triangle vertices directly.
     pub fn render_surfaces(&self, context: &GpuContext, surfaces: &[SurfaceRenderInfo<'_>]) {
         let output = match self.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(output) => output,
+            wgpu::CurrentSurfaceTexture::Suboptimal(output) => {
+                log::warn!("Output '{}': surface suboptimal, will reconfigure", self.name);
+                output
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
                 log::warn!("Output '{}': surface outdated, reconfiguring", self.name);
                 self.surface.configure(&context.device, &self.surface_config);
                 match self.surface.get_current_texture() {
-                    Ok(output) => output,
-                    Err(e) => {
-                        log::error!("Output '{}': failed to get surface texture after reconfigure: {}", self.name, e);
+                    wgpu::CurrentSurfaceTexture::Success(output)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+                    other => {
+                        log::error!("Output '{}': failed to get surface texture after reconfigure: {:?}", self.name, other);
                         return;
                     }
                 }
             }
-            Err(e) => {
-                log::error!("Output '{}': failed to get surface texture: {}", self.name, e);
+            other => {
+                log::debug!("Output '{}': surface unavailable: {:?}", self.name, other);
                 return;
             }
         };
@@ -663,6 +674,7 @@ impl OutputWindow {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             for (bind_group, vb, num_tris) in &prepared {
@@ -704,6 +716,7 @@ impl OutputWindow {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             self.blit_pipeline.render(&mut pass, &blit_bg);
         }

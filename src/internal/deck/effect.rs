@@ -229,6 +229,7 @@ impl Effect {
                             depth_stencil_attachment: None,
                             timestamp_writes: None,
                             occlusion_query_set: None,
+                            multiview_mask: None,
                         });
 
                         render_pass.set_pipeline(self.pipeline.pipeline_for_format(format));
@@ -285,6 +286,7 @@ impl Effect {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 render_pass.set_pipeline(self.pipeline.pipeline_for_format(self.target_format));
@@ -324,6 +326,7 @@ impl Effect {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 render_pass.set_pipeline(&self.pipeline.pipeline);

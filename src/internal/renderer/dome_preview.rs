@@ -204,8 +204,8 @@ impl DomePreviewRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Dome Preview Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -231,13 +231,13 @@ impl DomePreviewRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None, cache: None,
+            multiview_mask: None, cache: None,
         });
 
         // ── Overlay pipeline (colored triangles with alpha blending) ──
@@ -257,8 +257,8 @@ impl DomePreviewRenderer {
         });
         let overlay_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Dome Overlay Pipeline Layout"),
-            bind_group_layouts: &[&overlay_bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&overlay_bgl)],
+            immediate_size: 0,
         });
         let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Dome Slice Overlay Pipeline"),
@@ -284,8 +284,8 @@ impl DomePreviewRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false, // don't write depth (overlay sits on top)
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(false), // don't write depth (overlay sits on top)
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState {
                     constant: -2, // pull overlay slightly toward camera
@@ -294,7 +294,7 @@ impl DomePreviewRenderer {
                 },
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None, cache: None,
+            multiview_mask: None, cache: None,
         });
 
         // Empty initial overlay vertex buffer
@@ -424,6 +424,7 @@ impl DomePreviewRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rp.set_pipeline(&self.pipeline);
             rp.set_bind_group(0, &bind_group, &[]);

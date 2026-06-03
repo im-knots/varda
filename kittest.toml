@@ -1,5 +1,5 @@
 output_path = "tests/snapshots"
 threshold = 0.6
 
-[macos]
+[mac]
 threshold = 0.8
