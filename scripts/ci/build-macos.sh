@@ -13,6 +13,8 @@ SKIP_DEPS=false
 SKIP_BUILD=false
 NATIVE_ONLY=false
 TAG="${GITHUB_REF_NAME:-v0.0.0-dev}"
+TARGET=""
+LIB_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-deps)    SKIP_DEPS=true ;;
@@ -20,6 +22,10 @@ while [ $# -gt 0 ]; do
     --native-only)  NATIVE_ONLY=true ;;
     --tag=*)        TAG="${1#--tag=}" ;;
     --tag)          shift; TAG="$1" ;;
+    --target=*)     TARGET="${1#--target=}" ;;
+    --target)       shift; TARGET="$1" ;;
+    --lib-dir=*)    LIB_DIR="${1#--lib-dir=}" ;;
+    --lib-dir)      shift; LIB_DIR="$1" ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
   shift
@@ -32,6 +38,10 @@ if [ "$NATIVE_ARCH" = "arm64" ]; then
 else
   NATIVE_TARGET="x86_64-apple-darwin"
   CROSS_TARGET="aarch64-apple-darwin"
+fi
+# Override target if explicitly specified
+if [ -n "$TARGET" ]; then
+  NATIVE_TARGET="$TARGET"
 fi
 
 echo "==> Project root: $PROJECT_ROOT"
@@ -47,8 +57,17 @@ fi
 
 # --- Build architectures ---
 if [ "$SKIP_BUILD" = false ]; then
-  echo "==> Building $NATIVE_TARGET (native)..."
-  cargo build --release --target "$NATIVE_TARGET"
+  echo "==> Building $NATIVE_TARGET..."
+  # When cross-compiling (--target differs from native), set pkg-config to find libs in --lib-dir
+  if [ -n "$TARGET" ] && [ "$TARGET" != "$( [ "$NATIVE_ARCH" = "arm64" ] && echo "aarch64-apple-darwin" || echo "x86_64-apple-darwin" )" ]; then
+    echo "    (cross-compiling with lib-dir: ${LIB_DIR:-system})"
+    PKG_CONFIG_PATH="${LIB_DIR:+${LIB_DIR}/pkgconfig}" \
+    PKG_CONFIG_ALLOW_CROSS=1 \
+    CMAKE_OSX_ARCHITECTURES="$( echo "$TARGET" | sed 's/aarch64.*/arm64/; s/x86_64.*/x86_64/' )" \
+    cargo build --release --target "$NATIVE_TARGET"
+  else
+    cargo build --release --target "$NATIVE_TARGET"
+  fi
 
   if [ "$NATIVE_ONLY" = false ]; then
     echo "==> Building $CROSS_TARGET (cross)..."
@@ -84,7 +103,7 @@ cp assets/icon.png Varda.app/Contents/Resources/varda.png
 cp -r shaders/* Varda.app/Contents/Resources/shaders/
 
 # Bundle FFmpeg dylibs and fix paths
-HOMEBREW_LIB="$(brew --prefix)/lib"
+HOMEBREW_LIB="${LIB_DIR:-$(brew --prefix)/lib}"
 for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice libsrt; do
   dylib=$(find "$HOMEBREW_LIB" -maxdepth 1 -name "${lib}*.dylib" -not -name "*_*" | head -1)
   if [ -n "$dylib" ]; then
