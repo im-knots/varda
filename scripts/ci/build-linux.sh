@@ -55,25 +55,35 @@ cp target/release/varda Varda.AppDir/usr/bin/
 # Bundle shaders
 cp -r shaders/* Varda.AppDir/usr/share/varda/shaders/
 
-# Bundle all non-system shared libs (discovered via ldd)
-# System libs we do NOT bundle — the host must provide these:
-EXCLUDE_PATTERN="linux-vdso|ld-linux|libc\.so|libm\.so|libdl\.so|librt\.so|libpthread|libstdc\+\+|libgcc_s|libX|libxcb|libxkb|libwayland|libvulkan|libGLX|libGLdispatch|libEGL|libdrm|libgbm|libgio|libglib|libgobject|libgtk|libgdk|libpango|libcairo|libatk|libfontconfig|libfreetype|libdbus|libresolv|libnss|libffi|libz\.so"
+# Bundle media shared libs — allowlist approach.
+# Ubuntu's system FFmpeg links against dozens of optional deps (Java via libbluray,
+# Intel Media SDK, etc.) that we don't use. Instead of trying to exclude all of those,
+# we bundle only the libs we know we need.
+MEDIA_LIBS="
+  libavcodec libavformat libavutil libswscale libswresample libavdevice libavfilter libpostproc
+  libsrt libsrt-gnutls
+  libx264 libx265 libvpx libopus libvorbis libvorbisenc libogg libmp3lame libfdk-aac
+  libass libharfbuzz libfribidi
+  libaom libdav1d librav1e libSvtAv1Enc
+  libtheoraenc libtheoradec libtheora
+  libwebp libwebpmux
+  libnuma libgnutls libhogweed libnettle libgmp
+  libsoxr libvidstab libzimg librubberband libsamplerate
+  libspeex libshine libtwolame libgsm
+  liblzma libbz2 libsnappy
+  libva libva-drm libva-x11 libva-wayland
+  libOpenCL
+"
 
-echo "==> Bundling shared libraries (ldd-based)..."
-ldd Varda.AppDir/usr/bin/varda | grep "=> /" | awk '{print $3}' | sort -u | while read -r lib; do
-  libname=$(basename "$lib")
-  # Skip system/desktop libs that the host provides
-  if echo "$libname" | grep -qE "$EXCLUDE_PATTERN"; then
-    continue
-  fi
-  echo "  bundling: $libname"
-  cp -L "$lib" "Varda.AppDir/usr/lib/$libname" 2>/dev/null || true
-done
-# Also bundle any soname symlinks for the libs we just copied
-for lib in Varda.AppDir/usr/lib/*.so.*; do
-  libname=$(basename "$lib")
-  base=$(echo "$libname" | sed -E 's/\.so\..*//')
-  find /usr/lib -name "${base}.so*" -exec cp -P {} Varda.AppDir/usr/lib/ \; 2>/dev/null || true
+echo "==> Bundling media shared libraries..."
+for lib_base in $MEDIA_LIBS; do
+  find /usr/lib -name "${lib_base}.so*" -print0 2>/dev/null | while IFS= read -r -d '' lib; do
+    libname=$(basename "$lib")
+    if [ ! -e "Varda.AppDir/usr/lib/$libname" ]; then
+      echo "  bundling: $libname"
+      cp -P "$lib" "Varda.AppDir/usr/lib/" 2>/dev/null || true
+    fi
+  done
 done
 
 # Bundle NDI SDK (runtime-loaded via libloading)
