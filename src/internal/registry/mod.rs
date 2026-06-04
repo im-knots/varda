@@ -285,12 +285,12 @@ pub fn get_bundled_shader_path() -> Option<PathBuf> {
         }
     }
 
-    // Linux AppImage: exe is at usr/bin/varda, shaders at usr/share/varda/shaders
+    // Linux portable tarball: exe is at bin/varda, shaders at shaders/
     #[cfg(target_os = "linux")]
     {
-        let appimage_shaders = exe_dir.join("../share/varda/shaders");
-        if appimage_shaders.is_dir() {
-            return Some(appimage_shaders);
+        let tarball_shaders = exe_dir.join("../shaders");
+        if tarball_shaders.is_dir() {
+            return Some(tarball_shaders);
         }
     }
 

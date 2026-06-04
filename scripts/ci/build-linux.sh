@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-# Build Varda Linux AppImage
+# Build Varda Linux portable tarball
 # Usage: ./scripts/ci/build-linux.sh [--skip-deps] [--skip-build]
 #
-# Produces: Varda-x86_64.AppImage in the project root
+# Produces: Varda-Linux-x86_64.tar.gz in the project root
+#
+# Portable layout — extract anywhere, run ./varda:
+#   Varda-Linux-x86_64/
+#   ├── varda              (launcher script — sets LD_LIBRARY_PATH, execs bin/varda)
+#   ├── bin/varda          (the actual binary)
+#   ├── lib/               (bundled FFmpeg, codec, SRT shared libs)
+#   ├── shaders/
+#   ├── LICENSE
+#   └── FFMPEG-LICENSE
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -33,8 +42,7 @@ if [ "$SKIP_DEPS" = false ]; then
     libasound2-dev \
     libv4l-dev \
     libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev \
-    libgtk-3-dev \
-    libfuse2
+    libgtk-3-dev
 fi
 
 # --- Build release binary ---
@@ -43,22 +51,32 @@ if [ "$SKIP_BUILD" = false ]; then
   cargo build --release
 fi
 
-echo "==> Preparing AppDir..."
-rm -rf Varda.AppDir
-mkdir -p Varda.AppDir/usr/bin
-mkdir -p Varda.AppDir/usr/lib
-mkdir -p Varda.AppDir/usr/share/varda/shaders
-mkdir -p Varda.AppDir/usr/share/licenses
+STAGE="Varda-Linux-x86_64"
+rm -rf "$STAGE"
+mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/shaders"
 
-cp target/release/varda Varda.AppDir/usr/bin/
+echo "==> Preparing portable directory..."
 
-# Bundle shaders
-cp -r shaders/* Varda.AppDir/usr/share/varda/shaders/
+# Binary
+cp target/release/varda "$STAGE/bin/varda"
 
-# Bundle media shared libs — allowlist approach.
-# Ubuntu's system FFmpeg links against dozens of optional deps (Java via libbluray,
-# Intel Media SDK, etc.) that we don't use. Instead of trying to exclude all of those,
-# we bundle only the libs we know we need.
+# Shaders
+cp -r shaders/* "$STAGE/shaders/"
+
+# Launcher script
+cat > "$STAGE/varda" << 'WRAPPER_EOF'
+#!/bin/bash
+# Varda launcher — resolves bundled libs relative to this script
+SELF=$(readlink -f "$0")
+HERE=$(dirname "$SELF")
+export LD_LIBRARY_PATH="${HERE}/lib:${LD_LIBRARY_PATH:-}"
+exec "${HERE}/bin/varda" "$@"
+WRAPPER_EOF
+chmod +x "$STAGE/varda"
+
+# --- Bundle media shared libs (allowlist) ---
+# Only bundle the media libs we need. System libs (libc, X11, Vulkan, GTK,
+# ALSA, etc.) are left to the host.
 MEDIA_LIBS="
   libavcodec libavformat libavutil libswscale libswresample libavdevice libavfilter libpostproc
   libsrt libsrt-gnutls
@@ -79,14 +97,14 @@ echo "==> Bundling media shared libraries..."
 for lib_base in $MEDIA_LIBS; do
   find /usr/lib -name "${lib_base}.so*" -print0 2>/dev/null | while IFS= read -r -d '' lib; do
     libname=$(basename "$lib")
-    if [ ! -e "Varda.AppDir/usr/lib/$libname" ]; then
+    if [ ! -e "$STAGE/lib/$libname" ]; then
       echo "  bundling: $libname"
-      cp -P "$lib" "Varda.AppDir/usr/lib/" 2>/dev/null || true
+      cp -P "$lib" "$STAGE/lib/" 2>/dev/null || true
     fi
   done
 done
 
-# Bundle NDI SDK (runtime-loaded via libloading)
+# --- Bundle NDI SDK (optional, runtime-loaded via libloading) ---
 NDI_SDK_DIR=""
 for d in "/tmp/NDI SDK for Linux" "$HOME/NDI SDK for Linux"; do
   if [ -d "$d" ]; then
@@ -96,61 +114,30 @@ for d in "/tmp/NDI SDK for Linux" "$HOME/NDI SDK for Linux"; do
 done
 if [ -n "$NDI_SDK_DIR" ]; then
   echo "==> Bundling NDI SDK from: $NDI_SDK_DIR"
-  cp -P "$NDI_SDK_DIR/lib/x86_64-linux-gnu/"libndi.so* Varda.AppDir/usr/lib/ 2>/dev/null || true
+  cp -P "$NDI_SDK_DIR/lib/x86_64-linux-gnu/"libndi.so* "$STAGE/lib/" 2>/dev/null || true
 else
   echo "==> NDI SDK not found, skipping bundle"
 fi
 
-# Bundle licenses
-cp LICENSE Varda.AppDir/usr/share/licenses/ 2>/dev/null || echo "MIT License" > Varda.AppDir/usr/share/licenses/LICENSE
-echo "FFmpeg is licensed under the LGPL v2.1+. See https://ffmpeg.org/legal.html" > Varda.AppDir/usr/share/licenses/FFMPEG-LICENSE
+# --- Licenses ---
+cp LICENSE "$STAGE/LICENSE" 2>/dev/null || echo "MIT License" > "$STAGE/LICENSE"
+cat > "$STAGE/FFMPEG-LICENSE" << 'LIC_EOF'
+FFmpeg is licensed under the GNU Lesser General Public License (LGPL) version 2.1 or later.
+See https://ffmpeg.org/legal.html for details.
 
-# Desktop entry
-cat > Varda.AppDir/varda.desktop << 'DESKTOP_EOF'
-[Desktop Entry]
-Name=Varda
-Exec=varda
-Icon=varda
-Type=Application
-Categories=AudioVideo;Video;
-Comment=Live visuals engine
-DESKTOP_EOF
+The FFmpeg shared libraries bundled with Varda are dynamically linked,
+preserving LGPL compliance. Source code is available at https://ffmpeg.org.
+LIC_EOF
 
-# Icon
-cp assets/icon.png Varda.AppDir/varda.png
+# --- Create tarball ---
+echo "==> Creating tarball..."
+tar czf "Varda-Linux-x86_64.tar.gz" "$STAGE"
+rm -rf "$STAGE"
 
-# AppRun
-cat > Varda.AppDir/AppRun << 'APPRUN_EOF'
-#!/bin/bash
-SELF=$(readlink -f "$0")
-HERE=${SELF%/*}
-export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
-exec "${HERE}/usr/bin/varda" "$@"
-APPRUN_EOF
-chmod +x Varda.AppDir/AppRun
-
-# Download appimagetool (static binary, no FUSE needed to run it)
-if [ ! -f appimagetool ]; then
-  echo "==> Downloading appimagetool (static)..."
-  wget -qO appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-  chmod +x appimagetool
-fi
-
-# Download FUSE3-compatible runtime for the output AppImage
-# This replaces the default FUSE2 runtime so the AppImage works on Ubuntu 24.04+
-if [ ! -f runtime-x86_64 ]; then
-  echo "==> Downloading FUSE3-compatible runtime..."
-  wget -q https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
-fi
-
-echo "==> Building AppImage..."
-# Extract appimagetool to avoid needing FUSE just to run the tool itself
-rm -rf squashfs-root
-./appimagetool --appimage-extract >/dev/null 2>&1
-ARCH=x86_64 ./squashfs-root/AppRun --no-appstream --runtime-file runtime-x86_64 Varda.AppDir Varda-x86_64.AppImage
-rm -rf squashfs-root
-
-echo "==> Done: Varda-x86_64.AppImage"
-ls -lh Varda-x86_64.AppImage
+echo "==> Done: Varda-Linux-x86_64.tar.gz"
+ls -lh "Varda-Linux-x86_64.tar.gz"
 echo ""
-echo "The 'varda' CLI symlink is auto-installed to ~/.local/bin/ on first launch."
+echo "Extract and run:"
+echo "  tar xzf Varda-Linux-x86_64.tar.gz"
+echo "  cd Varda-Linux-x86_64"
+echo "  ./varda"

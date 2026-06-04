@@ -29,7 +29,7 @@ jobs:
           fi
 
   build-linux:
-    name: Linux (test + AppImage)
+    name: Linux (test + portable tarball)
     needs: [preflight]
     runs-on: ubuntu-22.04
     steps:
@@ -64,14 +64,14 @@ jobs:
       - name: Run tests
         run: cargo test --lib
 
-      - name: Build Linux AppImage
+      - name: Build Linux portable tarball
         run: ./scripts/ci/build-linux.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
-          name: linux-appimage
-          path: Varda-x86_64.AppImage
+          name: linux-tarball
+          path: Varda-Linux-x86_64.tar.gz
 
   build-macos:
     name: macOS Universal DMG
@@ -214,6 +214,6 @@ jobs:
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
           generate_release_notes: true
           files: |
-            linux-appimage/Varda-x86_64.AppImage
+            linux-tarball/Varda-Linux-x86_64.tar.gz
             macos-dmg/Varda-macOS-universal.dmg
             windows-zip/Varda-Windows-x64.zip
