@@ -111,14 +111,15 @@ impl Mixer {
         }
 
         self.sync_transition_progress();
-        self.composite_channels(context)?;
-        self.apply_master_effects(context, audio_data, time)?;
+        let composite_cmds = self.composite_channels(context)?;
+        self.apply_master_effects(context, audio_data, time, composite_cmds)?;
 
         self.frame_count += 1;
         Ok(())
     }
 
-    fn composite_channels(&mut self, context: &GpuContext) -> Result<()> {
+    fn composite_channels(&mut self, context: &GpuContext) -> Result<Vec<wgpu::CommandBuffer>> {
+        let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
         let channel_count = self.channels.len();
         if channel_count == 0 {
             let mut encoder =
@@ -145,8 +146,8 @@ impl Mixer {
                     multiview_mask: None,
                 });
             }
-            context.queue.submit(std::iter::once(encoder.finish()));
-            return Ok(());
+            cmd_buffers.push(encoder.finish());
+            return Ok(cmd_buffers);
         }
 
         // If we have exactly 2 channels and a transition shader is active, use it
@@ -179,7 +180,7 @@ impl Mixer {
                     transition.params.buffer(),
                 );
 
-                return Ok(());
+                return Ok(Vec::new());
             }
         }
 
@@ -194,14 +195,9 @@ impl Mixer {
         // the crossfader value is used solely as the second channel's composite
         // opacity.  The composite shader performs `mix(dst, src, src_a)`, which
         // yields the correct linear crossfade: (1-cf)·A + cf·B.
-        let opacities: Vec<f32> = if channel_count == 2 {
-            vec![1.0, self.crossfader]
-        } else {
-            self.channels.iter().map(|ch| ch.opacity).collect()
-        };
+        let opacities = self.compositing_opacities();
 
-        // Submit per-channel to ensure each channel's uniform buffer writes
-        // are consumed before the next channel overwrites them.
+        // Batch channel compositing into command buffers for deferred submission.
         let mut is_first = true;
         for (_i, (channel, &opacity)) in self.channels.iter().zip(opacities.iter()).enumerate() {
             if opacity <= 0.0 {
@@ -239,7 +235,7 @@ impl Mixer {
                     });
                     self.blit_pipeline.render(&mut render_pass, &bind_group);
                 }
-                context.queue.submit(std::iter::once(encoder.finish()));
+                cmd_buffers.push(encoder.finish());
                 is_first = false;
             } else {
                 // Subsequent channels: snapshot + composite shader
@@ -294,13 +290,12 @@ impl Mixer {
                     self.composite_pipeline
                         .render(&mut render_pass, &bind_group);
                 }
-                context
-                    .queue
-                    .submit([copy_encoder.finish(), encoder.finish()]);
+                cmd_buffers.push(copy_encoder.finish());
+                cmd_buffers.push(encoder.finish());
             }
         }
 
-        Ok(())
+        Ok(cmd_buffers)
     }
 
     /// Prepare sub-mix textures for all unique multi-channel surface sources.
@@ -329,16 +324,9 @@ impl Mixer {
             None => return,
         };
 
-        let channel_count = self.channels.len();
-        // Same linear-crossfade formula as composite_channels (see comment there).
-        let opacities: Vec<f32> = if channel_count == 2 {
-            vec![1.0, self.crossfader]
-        } else {
-            self.channels.iter().map(|ch| ch.opacity).collect()
-        };
+        let opacities = self.compositing_opacities();
 
-        // Submit per-channel to ensure each channel's uniform buffer writes
-        // are consumed before the next channel overwrites them.
+        let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
         let mut is_first = true;
         for &ch_idx in indices {
             if ch_idx >= self.channels.len() {
@@ -381,7 +369,7 @@ impl Mixer {
                     });
                     self.blit_pipeline.render(&mut render_pass, &bind_group);
                 }
-                context.queue.submit(std::iter::once(encoder.finish()));
+                cmd_buffers.push(encoder.finish());
                 is_first = false;
             } else {
                 // Subsequent channels: snapshot sub-mix → effect_ping, composite shader
@@ -436,9 +424,8 @@ impl Mixer {
                     self.composite_pipeline
                         .render(&mut render_pass, &bind_group);
                 }
-                context
-                    .queue
-                    .submit([copy_encoder.finish(), encoder.finish()]);
+                cmd_buffers.push(copy_encoder.finish());
+                cmd_buffers.push(encoder.finish());
             }
         }
 
@@ -467,7 +454,24 @@ impl Mixer {
                     multiview_mask: None,
                 });
             }
-            context.queue.submit(std::iter::once(encoder.finish()));
+            cmd_buffers.push(encoder.finish());
+        }
+
+        if !cmd_buffers.is_empty() {
+            context.queue.submit(cmd_buffers);
+        }
+    }
+
+    /// Compute per-channel compositing opacities.
+    ///
+    /// For 2-channel mode the first channel is always 1.0 (blitted at full
+    /// opacity) and the crossfader value drives the second channel's composite
+    /// weight.  For N-channel mode each channel uses its own opacity.
+    fn compositing_opacities(&self) -> Vec<f32> {
+        if self.channels.len() == 2 {
+            vec![1.0, self.crossfader]
+        } else {
+            self.channels.iter().map(|ch| ch.opacity).collect()
         }
     }
 
@@ -481,8 +485,12 @@ impl Mixer {
         context: &GpuContext,
         audio_data: &crate::audio::AudioData,
         time: f32,
+        mut cmd_buffers: Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         if self.master_effects.is_empty() {
+            if !cmd_buffers.is_empty() {
+                context.queue.submit(cmd_buffers);
+            }
             return Ok(());
         }
 
@@ -506,7 +514,6 @@ impl Mixer {
         };
 
         let mut read_from_composite = true;
-        let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
 
         for effect in self.master_effects.iter_mut() {
             if !effect.enabled {

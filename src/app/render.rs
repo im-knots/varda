@@ -264,13 +264,14 @@ impl VardaApp {
 
         // Prepare sub-mixes for any Channels(...) sources
         {
+            let mut seen: std::collections::HashSet<Vec<usize>> = std::collections::HashSet::new();
             let mut sub_mix_sources: Vec<Vec<usize>> = Vec::new();
             for surface in &self.output.surface_manager.surfaces {
                 if let OutputSource::Channels(indices) = &surface.source {
                     let mut sorted = indices.clone();
                     sorted.sort();
                     sorted.dedup();
-                    if !sub_mix_sources.contains(&sorted) {
+                    if seen.insert(sorted.clone()) {
                         sub_mix_sources.push(sorted);
                     }
                 }
