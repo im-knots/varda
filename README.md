@@ -41,15 +41,16 @@ Download the latest release from the [Releases page](https://github.com/im-knots
    This removes the macOS quarantine flag. Varda is not yet signed with an Apple Developer certificate, so Gatekeeper will block it without this step.
 4. Launch Varda — on first run it will prompt for your password to install the `varda` CLI command to `/usr/local/bin/`
 
-### Linux (AppImage)
+### Linux (Portable Tarball)
 
-1. Download `Varda-x86_64.AppImage`
-2. Make it executable and run:
+1. Download `Varda-Linux-x86_64.tar.gz`
+2. Extract and run:
    ```bash
-   chmod +x Varda-x86_64.AppImage
-   ./Varda-x86_64.AppImage
+   tar xzf Varda-Linux-x86_64.tar.gz
+   cd Varda-Linux-x86_64
+   ./varda
    ```
-   On first launch, a `varda` symlink is created in `~/.local/bin/` so you can run `varda` from any terminal.
+   Put the folder anywhere — on a USB drive, in your home directory, wherever. FFmpeg and codec libs are bundled.
 
 ### Windows (Portable ZIP)
 
