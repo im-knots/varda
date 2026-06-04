@@ -136,8 +136,17 @@ if [ ! -f appimagetool-x86_64.AppImage ]; then
   chmod +x appimagetool-x86_64.AppImage
 fi
 
+# Extract appimagetool if FUSE is unavailable (common on WSL, Docker, Ubuntu 24.04+)
 echo "==> Building AppImage..."
-ARCH=x86_64 ./appimagetool-x86_64.AppImage --no-appstream Varda.AppDir Varda-x86_64.AppImage
+if ARCH=x86_64 ./appimagetool-x86_64.AppImage --no-appstream Varda.AppDir Varda-x86_64.AppImage 2>/dev/null; then
+  true
+else
+  echo "  FUSE unavailable, extracting appimagetool..."
+  rm -rf squashfs-root
+  ./appimagetool-x86_64.AppImage --appimage-extract >/dev/null 2>&1
+  ARCH=x86_64 ./squashfs-root/AppRun --no-appstream Varda.AppDir Varda-x86_64.AppImage
+  rm -rf squashfs-root
+fi
 
 echo "==> Done: Varda-x86_64.AppImage"
 ls -lh Varda-x86_64.AppImage
