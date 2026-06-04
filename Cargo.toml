@@ -92,6 +92,10 @@ harness = false
 name = "shader_params"
 harness = false
 
+[[bench]]
+name = "audio_analysis"
+harness = false
+
 
 [profile.release]
 opt-level = 3

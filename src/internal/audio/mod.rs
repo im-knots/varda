@@ -128,6 +128,51 @@ impl AudioData {
     }
 }
 
+/// Compute the adaptive onset threshold from a window of spectral flux values.
+/// Returns `median(flux_history) * ONSET_THRESHOLD_MULTIPLIER + ONSET_THRESHOLD_OFFSET`.
+///
+/// Uses `select_nth_unstable_by` (quickselect, O(n)) instead of a full sort
+/// to find the median without allocating a new Vec.
+pub fn compute_onset_threshold(flux_history: &[f32]) -> f32 {
+    if flux_history.is_empty() {
+        return ONSET_THRESHOLD_OFFSET;
+    }
+    let mut buf = flux_history.to_vec();
+    let mid = buf.len() / 2;
+    buf.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
+    buf[mid] * ONSET_THRESHOLD_MULTIPLIER + ONSET_THRESHOLD_OFFSET
+}
+
+/// Estimate BPM from a history of beat intervals using median-based outlier rejection.
+/// Returns `None` if fewer than 4 intervals, or if the resulting BPM is outside 30-300.
+///
+/// Uses `select_nth_unstable_by` (quickselect, O(n)) for the median, then
+/// filters outliers using the original (unsorted) slice to avoid a second allocation.
+pub fn estimate_bpm(beat_intervals: &[f32]) -> Option<f32> {
+    if beat_intervals.len() < 4 {
+        return None;
+    }
+    let mut buf = beat_intervals.to_vec();
+    let mid = buf.len() / 2;
+    buf.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
+    let median = buf[mid];
+    // Filter outliers and compute average in a single pass — no intermediate Vec.
+    let (sum, count) = beat_intervals.iter().fold((0.0f32, 0u32), |(s, c), &iv| {
+        if (iv - median).abs() / median < TEMPO_TOLERANCE {
+            (s + iv, c + 1)
+        } else {
+            (s, c)
+        }
+    });
+    if count >= 2 {
+        let bpm = 60.0 / (sum / count as f32);
+        if (30.0..=300.0).contains(&bpm) {
+            return Some(bpm);
+        }
+    }
+    None
+}
+
 /// An active audio source with its own capture stream.
 struct ActiveAudioSource {
     _stream: cpal::Stream,
@@ -387,16 +432,7 @@ impl AudioManager {
                     if flux_history.len() > ONSET_MEDIAN_WINDOW {
                         flux_history.remove(0);
                     }
-                    let onset_threshold = {
-                        let mut sorted = flux_history.clone();
-                        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                        if sorted.is_empty() {
-                            ONSET_THRESHOLD_OFFSET
-                        } else {
-                            sorted[sorted.len() / 2] * ONSET_THRESHOLD_MULTIPLIER
-                                + ONSET_THRESHOLD_OFFSET
-                        }
-                    };
+                    let onset_threshold = compute_onset_threshold(&flux_history);
 
                     let now = Instant::now();
                     let elapsed = now.duration_since(last_beat_time).as_secs_f32();
@@ -410,22 +446,8 @@ impl AudioManager {
                             if beat_intervals.len() > BPM_HISTORY_SIZE {
                                 beat_intervals.remove(0);
                             }
-                            if beat_intervals.len() >= 4 {
-                                let mut sorted = beat_intervals.clone();
-                                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                                let median = sorted[sorted.len() / 2];
-                                let stable: Vec<f32> = beat_intervals
-                                    .iter()
-                                    .filter(|&&iv| (iv - median).abs() / median < TEMPO_TOLERANCE)
-                                    .copied()
-                                    .collect();
-                                if stable.len() >= 2 {
-                                    let avg = stable.iter().sum::<f32>() / stable.len() as f32;
-                                    let bpm = 60.0 / avg;
-                                    if (30.0..=300.0).contains(&bpm) {
-                                        current_bpm = Some(bpm);
-                                    }
-                                }
+                            if let Some(bpm) = estimate_bpm(&beat_intervals) {
+                                current_bpm = Some(bpm);
                             }
                         } else {
                             beat_intervals.clear();
