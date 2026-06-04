@@ -129,34 +129,26 @@ exec "${HERE}/usr/bin/varda" "$@"
 APPRUN_EOF
 chmod +x Varda.AppDir/AppRun
 
-# Download appimagetool if not present
-# Use the type2-runtime (FUSE3-compatible) build for Ubuntu 24.04+ support
-if [ ! -f appimagetool-x86_64.AppImage ]; then
-  echo "==> Downloading appimagetool..."
-  wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-  chmod +x appimagetool-x86_64.AppImage
+# Download appimagetool (static binary, no FUSE needed to run it)
+if [ ! -f appimagetool ]; then
+  echo "==> Downloading appimagetool (static)..."
+  wget -qO appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+  chmod +x appimagetool
 fi
 
-# Build the AppImage with type2 runtime (FUSE3 support)
-# Download the FUSE3-compatible runtime so the OUTPUT AppImage works on modern distros
+# Download FUSE3-compatible runtime for the output AppImage
+# This replaces the default FUSE2 runtime so the AppImage works on Ubuntu 24.04+
 if [ ! -f runtime-x86_64 ]; then
   echo "==> Downloading FUSE3-compatible runtime..."
   wget -q https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
 fi
 
 echo "==> Building AppImage..."
-APPIMAGETOOL="./appimagetool-x86_64.AppImage"
-APPIMAGETOOL_ARGS="--no-appstream --runtime-file runtime-x86_64 Varda.AppDir Varda-x86_64.AppImage"
-
-if ARCH=x86_64 $APPIMAGETOOL $APPIMAGETOOL_ARGS 2>/dev/null; then
-  true
-else
-  echo "  FUSE unavailable for appimagetool, extracting..."
-  rm -rf squashfs-root
-  ./appimagetool-x86_64.AppImage --appimage-extract >/dev/null 2>&1
-  ARCH=x86_64 ./squashfs-root/AppRun $APPIMAGETOOL_ARGS
-  rm -rf squashfs-root
-fi
+# Extract appimagetool to avoid needing FUSE just to run the tool itself
+rm -rf squashfs-root
+./appimagetool --appimage-extract >/dev/null 2>&1
+ARCH=x86_64 ./squashfs-root/AppRun --no-appstream --runtime-file runtime-x86_64 Varda.AppDir Varda-x86_64.AppImage
+rm -rf squashfs-root
 
 echo "==> Done: Varda-x86_64.AppImage"
 ls -lh Varda-x86_64.AppImage
