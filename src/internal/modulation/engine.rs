@@ -20,6 +20,15 @@ pub struct ModulationEngine {
     current_values: Vec<f32>,
     #[serde(skip)]
     prev_time: Option<f32>,
+    /// Cached topological evaluation order. Invalidated when assignments change.
+    #[serde(skip)]
+    cached_order: Vec<usize>,
+    /// Whether cached_order needs recomputation.
+    #[serde(skip)]
+    order_dirty: bool,
+    /// Per-source flag: does this source have any mod-on-mod assignments targeting it?
+    #[serde(skip)]
+    has_mod_on_mod: Vec<bool>,
 }
 
 impl ModulationEngine {
@@ -38,7 +47,13 @@ impl ModulationEngine {
     pub fn ensure_index(&mut self) {
         if self.uuid_to_idx.len() != self.sources.len() {
             self.rebuild_uuid_index();
+            self.invalidate_order();
         }
+    }
+
+    /// Mark the cached evaluation order as stale.
+    fn invalidate_order(&mut self) {
+        self.order_dirty = true;
     }
 
     /// Add a new source, returns its UUID
@@ -48,8 +63,10 @@ impl ModulationEngine {
         self.sources.push(entry);
         self.prev_values.push(0.0);
         self.current_values.push(0.0);
+        self.has_mod_on_mod.push(false);
         self.uuid_to_idx
             .insert(uuid.clone(), self.sources.len() - 1);
+        self.invalidate_order();
         uuid
     }
 
@@ -59,8 +76,10 @@ impl ModulationEngine {
         self.sources.push(entry);
         self.prev_values.push(0.0);
         self.current_values.push(0.0);
+        self.has_mod_on_mod.push(false);
         self.uuid_to_idx
             .insert(uuid.clone(), self.sources.len() - 1);
+        self.invalidate_order();
         uuid
     }
 
@@ -74,6 +93,9 @@ impl ModulationEngine {
             if idx < self.current_values.len() {
                 self.current_values.remove(idx);
             }
+            if idx < self.has_mod_on_mod.len() {
+                self.has_mod_on_mod.remove(idx);
+            }
             // Remove assignments referencing this source (no reindexing needed)
             for mods in self.assignments.values_mut() {
                 mods.retain(|m| m.source_id != uuid);
@@ -82,6 +104,7 @@ impl ModulationEngine {
             let mod_prefix = format!("mod:{}:", uuid);
             self.assignments.retain(|k, _| !k.starts_with(&mod_prefix));
             self.rebuild_uuid_index();
+            self.invalidate_order();
         }
     }
 
@@ -92,6 +115,7 @@ impl ModulationEngine {
         self.assignments.retain(|k, _| !k.starts_with(prefix));
         let removed = before - self.assignments.len();
         if removed > 0 {
+            self.invalidate_order();
             log::info!(
                 "Removed {} orphaned modulation assignments with prefix '{}'",
                 removed,
@@ -122,6 +146,7 @@ impl ModulationEngine {
             .entry(param_name.to_string())
             .or_default()
             .push(modulation);
+        self.invalidate_order();
     }
 
     pub fn assign_mod_on_mod(
@@ -133,15 +158,18 @@ impl ModulationEngine {
     ) {
         let key = format!("mod:{}:{}", target_uuid, param_name);
         self.assign(&key, modulator_uuid, amount, None);
+        // assign() already calls invalidate_order()
     }
 
     pub fn clear_mod_on_mod(&mut self, target_uuid: &str, param_name: &str) {
         let key = format!("mod:{}:{}", target_uuid, param_name);
         self.assignments.remove(&key);
+        self.invalidate_order();
     }
 
     pub fn clear_assignments(&mut self, param_name: &str) {
         self.assignments.remove(param_name);
+        self.invalidate_order();
     }
 
     pub fn trigger_adsr(&mut self, uuid: &str) {
@@ -170,13 +198,32 @@ impl ModulationEngine {
         self.sources.iter().any(|e| e.uuid == uuid)
     }
 
-    fn source_idx(&self, uuid: &str) -> Option<usize> {
-        self.sources.iter().position(|e| e.uuid == uuid)
-    }
-
     fn get_mod_source_offset(&self, source_uuid: &str, param_name: &str) -> f32 {
-        let key = format!("mod:{}:{}", source_uuid, param_name);
-        self.get_modulation(&key)
+        // Look up "mod:{uuid}:{param}" without allocating a String.
+        // We scan assignments for keys matching this pattern.
+        let prefix = "mod:";
+        for (key, mods) in &self.assignments {
+            if key.starts_with(prefix)
+                && key[prefix.len()..].starts_with(source_uuid)
+                && key.len() > prefix.len() + source_uuid.len()
+                && key.as_bytes()[prefix.len() + source_uuid.len()] == b':'
+                && &key[prefix.len() + source_uuid.len() + 1..] == param_name
+            {
+                let mut total = 0.0;
+                for m in mods {
+                    let idx = if let Some(&i) = self.uuid_to_idx.get(&m.source_id) {
+                        i
+                    } else {
+                        continue;
+                    };
+                    if idx < self.current_values.len() {
+                        total += self.current_values[idx] * m.amount;
+                    }
+                }
+                return total;
+            }
+        }
+        0.0
     }
 
     fn apply_mod_on_mod(&self, idx: usize, source: &ModulationSource) -> ModulationSource {
@@ -221,19 +268,30 @@ impl ModulationEngine {
         modified
     }
 
-    pub(crate) fn evaluation_order(&self) -> Vec<usize> {
+    /// Recompute the cached evaluation order and per-source mod-on-mod flags.
+    fn recompute_order(&mut self) {
         const MAX_MOD_DEPTH: usize = 4;
         let n = self.sources.len();
+
+        // Rebuild has_mod_on_mod flags
+        self.has_mod_on_mod.clear();
+        self.has_mod_on_mod.resize(n, false);
+
+        self.cached_order.clear();
         if n == 0 {
-            return vec![];
+            self.order_dirty = false;
+            return;
         }
 
         let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (key, mods) in &self.assignments {
             if let Some(target_uuid) = Self::parse_mod_target(key) {
-                if let Some(target_idx) = self.source_idx(target_uuid) {
+                if let Some(&target_idx) = self.uuid_to_idx.get(target_uuid) {
+                    if target_idx < n {
+                        self.has_mod_on_mod[target_idx] = true;
+                    }
                     for m in mods {
-                        if let Some(src_idx) = self.source_idx(&m.source_id) {
+                        if let Some(&src_idx) = self.uuid_to_idx.get(&m.source_id) {
                             if src_idx != target_idx {
                                 deps[target_idx].push(src_idx);
                             }
@@ -243,7 +301,7 @@ impl ModulationEngine {
             }
         }
 
-        let mut order = Vec::with_capacity(n);
+        self.cached_order.reserve(n);
         let mut evaluated = vec![false; n];
         for _pass in 0..MAX_MOD_DEPTH {
             let mut progress = false;
@@ -252,7 +310,7 @@ impl ModulationEngine {
                     continue;
                 }
                 if deps[i].iter().all(|&d| evaluated[d]) {
-                    order.push(i);
+                    self.cached_order.push(i);
                     evaluated[i] = true;
                     progress = true;
                 }
@@ -263,20 +321,33 @@ impl ModulationEngine {
         }
         for i in 0..n {
             if !evaluated[i] {
-                order.push(i);
+                self.cached_order.push(i);
             }
         }
-        order
+        self.order_dirty = false;
+    }
+
+    /// Get the evaluation order, recomputing if stale. Used by tests.
+    #[cfg(test)]
+    pub(crate) fn evaluation_order(&mut self) -> Vec<usize> {
+        if self.order_dirty {
+            self.recompute_order();
+        }
+        self.cached_order.clone()
     }
 
     /// Parse mod-on-mod key: "mod:{uuid}:{param}" → Some(uuid)
     pub(crate) fn parse_mod_target(key: &str) -> Option<&str> {
-        let parts: Vec<&str> = key.splitn(3, ':').collect();
-        if parts.len() >= 2 && parts[0] == "mod" {
-            Some(parts[1])
-        } else {
-            None
+        // Avoid allocating a Vec for splitn — just find the delimiters.
+        let key = key.as_bytes();
+        if key.len() < 5 || &key[..4] != b"mod:" {
+            return None;
         }
+        let rest = &key[4..];
+        // Find the next ':' separating uuid from param_name
+        rest.iter()
+            .position(|&b| b == b':')
+            .map(|pos| std::str::from_utf8(&rest[..pos]).unwrap_or(""))
     }
 
     /// Update all source values for the current frame
@@ -292,14 +363,22 @@ impl ModulationEngine {
             self.current_values.push(0.0);
         }
 
-        let order = self.evaluation_order();
-        for i in order {
-            let mut effective = self.apply_mod_on_mod(i, &self.sources[i].source);
-            let value = effective.calculate(time, dt, audio, self.prev_values[i]);
+        if self.order_dirty {
+            self.recompute_order();
+        }
 
-            // Copy back mutable state changes (ADSR stage progression)
-            match (&mut self.sources[i].source, &effective) {
-                (
+        // Iterate over cached order (clone the slice to avoid borrow conflict)
+        let order_len = self.cached_order.len();
+        for oi in 0..order_len {
+            let i = self.cached_order[oi];
+
+            // Only clone + apply mod-on-mod if this source actually has mod-on-mod assignments
+            let value = if i < self.has_mod_on_mod.len() && self.has_mod_on_mod[i] {
+                let mut effective = self.apply_mod_on_mod(i, &self.sources[i].source);
+                let v = effective.calculate(time, dt, audio, self.prev_values[i]);
+
+                // Copy back mutable state changes (ADSR stage progression)
+                if let (
                     ModulationSource::ADSR {
                         stage,
                         stage_time,
@@ -312,13 +391,19 @@ impl ModulationEngine {
                         current_level: eff_cl,
                         ..
                     },
-                ) => {
+                ) = (&mut self.sources[i].source, &effective)
+                {
                     *stage = *eff_stage;
                     *stage_time = *eff_st;
                     *current_level = *eff_cl;
                 }
-                _ => {}
-            }
+                v
+            } else {
+                // No mod-on-mod: calculate directly on the source (no clone)
+                self.sources[i]
+                    .source
+                    .calculate(time, dt, audio, self.prev_values[i])
+            };
 
             self.current_values[i] = value;
             self.prev_values[i] = value;

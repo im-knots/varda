@@ -123,6 +123,8 @@ pub struct ShaderParams {
     /// Reusable scratch buffer for serialization (avoids per-frame heap allocation).
     /// Capacity stabilises after the first frame at `buffer_size()`.
     scratch: Vec<u8>,
+    /// Reusable scratch string for modulation key construction (avoids per-param allocation).
+    mod_key_scratch: String,
 }
 
 impl ShaderParams {
@@ -151,6 +153,7 @@ impl ShaderParams {
             buffer: None,
             dirty: true,
             scratch: Vec::new(),
+            mod_key_scratch: String::new(),
         }
     }
 
@@ -363,7 +366,8 @@ impl ShaderParams {
         self.scratch.clear();
         self.scratch.reserve(self.buffer_size());
 
-        for name in &self.param_order {
+        for idx in 0..self.param_order.len() {
+            let name = &self.param_order[idx];
             if let Some(value) = self.values.get(name) {
                 let alignment = match value {
                     ParamValue::Float(_) | ParamValue::Bool(_) | ParamValue::Long(_) => 4,
@@ -374,8 +378,20 @@ impl ShaderParams {
                     self.scratch.push(0);
                 }
 
-                let modulated =
-                    self.apply_modulation_to_value(name, value, modulation, param_prefix);
+                // Build modulation key in reusable scratch string (zero alloc after first frame)
+                self.mod_key_scratch.clear();
+                if let Some(prefix) = param_prefix {
+                    self.mod_key_scratch.push_str(prefix);
+                    self.mod_key_scratch.push(':');
+                }
+                self.mod_key_scratch.push_str(name);
+
+                let modulated = Self::apply_modulation_to_value_with_key(
+                    &self.mod_key_scratch,
+                    value,
+                    modulation,
+                    self.definitions.get(name.as_str()),
+                );
                 modulated.write_bytes(&mut self.scratch);
             }
         }
@@ -388,31 +404,19 @@ impl ShaderParams {
         &self.scratch
     }
 
-    /// Apply modulation to a parameter value
-    /// `param_prefix` is used to look up modulation (e.g., "deck0" to look up "deck0:paramname")
-    fn apply_modulation_to_value(
-        &self,
-        name: &str,
+    /// Apply modulation to a parameter value using a pre-built modulation key.
+    fn apply_modulation_to_value_with_key(
+        mod_key: &str,
         value: &ParamValue,
         modulation: &ModulationEngine,
-        param_prefix: Option<&str>,
+        definition: Option<&ISFInput>,
     ) -> ParamValue {
-        // Get min/max from definition for clamping
-        let definition = self.definitions.get(name);
-
-        // Build the full modulation key
-        let mod_key = match param_prefix {
-            Some(prefix) => format!("{}:{}", prefix, name),
-            None => name.to_string(),
-        };
-
         match value {
             ParamValue::Float(base) => {
-                let offset = modulation.get_modulation(&mod_key);
+                let offset = modulation.get_modulation(mod_key);
                 if offset == 0.0 {
                     return *value;
                 }
-                // Get range from definition
                 let (min_val, max_val) = definition
                     .map(|d| {
                         let min = d.min.unwrap_or(0.0);
@@ -427,7 +431,7 @@ impl ShaderParams {
             ParamValue::Color(base) => {
                 let mut result = *base;
                 for i in 0..4 {
-                    let offset = modulation.get_modulation_for_component(&mod_key, Some(i));
+                    let offset = modulation.get_modulation_for_component(mod_key, Some(i));
                     if offset != 0.0 {
                         result[i] = (result[i] + offset).clamp(0.0, 1.0);
                     }
@@ -437,14 +441,13 @@ impl ShaderParams {
             ParamValue::Point2D(base) => {
                 let mut result = *base;
                 for i in 0..2 {
-                    let offset = modulation.get_modulation_for_component(&mod_key, Some(i));
+                    let offset = modulation.get_modulation_for_component(mod_key, Some(i));
                     if offset != 0.0 {
-                        result[i] = result[i] + offset; // Point2D can be unbounded
+                        result[i] = result[i] + offset;
                     }
                 }
                 ParamValue::Point2D(result)
             }
-            // Bool and Long don't support continuous modulation
             _ => *value,
         }
     }

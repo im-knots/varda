@@ -1,10 +1,40 @@
 # Getting Started
 
-## Prerequisites
+## Install
 
-- **Rust toolchain** — install via [rustup.rs](https://rustup.rs)
-- **GPU** — Vulkan-capable (Linux) or Metal-capable (macOS)
-- **ffmpeg** — required for video playback, recording, and streaming (`brew install ffmpeg` on macOS, or your package manager on Linux). Build with `--enable-libsrt` for SRT streaming support.
+Download the latest release from the [Releases page](https://github.com/im-knots/varda/releases). All releases bundle FFmpeg and NDI — no extra dependencies needed.
+
+### macOS (Universal DMG)
+
+1. Download `Varda-macOS-universal.dmg`
+2. Open the DMG and drag **Varda.app** to `/Applications`
+3. Before first launch, open Terminal and run:
+   ```bash
+   xattr -cr /Applications/Varda.app
+   ```
+   This removes the macOS quarantine flag. Varda is not yet signed with an Apple Developer certificate, so Gatekeeper will block it without this step.
+4. Launch Varda — on first run it will prompt for your password to install the `varda` CLI command to `/usr/local/bin/`
+
+### Linux (Portable Tarball)
+
+1. Download `Varda-Linux-x86_64.tar.gz`
+2. Extract and run:
+   ```bash
+   tar xzf Varda-Linux-x86_64.tar.gz
+   cd Varda-Linux-x86_64
+   ./varda
+   ```
+   Put the folder anywhere — on a USB drive, in your home directory, wherever. FFmpeg and codec libs are bundled.
+
+### Windows (Portable ZIP)
+
+1. Download `Varda-Windows-x64.zip`
+2. Extract the ZIP to any folder (e.g. `C:\Varda`)
+3. Run `varda.exe`
+
+No installer required. FFmpeg DLLs and shaders are bundled in the ZIP.
+
+> **Note:** Windows may show a SmartScreen warning because the binary is not code-signed. Click **"More info"** then **"Run anyway"**. You may also need the [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) if it's not already installed (most Windows 10/11 systems have it).
 
 ## Workspace & Content
 
@@ -28,7 +58,34 @@ Shaders in `shaders/` appear automatically in the Library panel under **Generato
 | **HAP Video** | MOV with HAP, HAP Alpha, HAP Q, HAP Q Alpha, HAP R — GPU-native decode, no CPU overhead |
 | **Images** | PNG, JPG/JPEG |
 
-## Build & Run
+## Build from Source
+
+Requires [Rust](https://rustup.rs/) (stable) and a GPU with Metal (macOS), Vulkan (Linux), or DirectX 12 (Windows) support.
+
+### Ubuntu / Debian
+
+```bash
+sudo apt install build-essential cmake pkg-config libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavdevice-dev libsrt-gnutls-dev libasound2-dev libv4l-dev libshaderc-dev libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
+```
+
+```bash
+cargo build --release
+./target/release/varda
+```
+
+### macOS
+
+```bash
+brew tap homebrew-ffmpeg/ffmpeg
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
+```
+
+```bash
+cargo build --release
+./target/release/varda
+```
+
+### Run from source
 
 ```sh
 cargo run --release

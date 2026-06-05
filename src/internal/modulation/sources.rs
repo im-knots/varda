@@ -388,7 +388,9 @@ impl ModulationSource {
                 }
                 let total_steps = steps.len() as f32;
                 let position = (time * *rate) % total_steps;
-                let current_idx = position.floor() as usize % steps.len();
+                // position is already in [0, total_steps) after the modulo above,
+                // so truncation to usize is bounded by [0, steps.len()-1].
+                let current_idx = position as usize;
                 let raw = match interpolation {
                     StepInterpolation::None => steps[current_idx],
                     StepInterpolation::Linear => {

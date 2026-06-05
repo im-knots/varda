@@ -110,6 +110,40 @@ Recording uses non-blocking frame delivery — if the encoder can't keep up, fra
 
 ---
 
+## RTMP / RTMPS
+
+### Output (Streaming to Platforms)
+
+Push video directly to Twitch, YouTube, Kick, or any RTMP/RTMPS ingest endpoint — no OBS relay needed.
+
+1. Click **"+ Stream"** → select **RTMP**
+2. Enter the ingest URL (e.g., `rtmp://live.twitch.tv/app/<stream-key>` or `rtmps://a.rtmps.youtube.com/live2/<stream-key>`)
+3. Choose a codec: **H.264**, **H.265**, or **AV1** (H.265 and AV1 via Enhanced RTMP)
+4. Start the output
+
+Varda uses FLV muxing with auto-scaled CBR bitrate and 2-second keyframe intervals. Frame delivery is non-blocking.
+
+### Input (Receiving RTMP Streams)
+
+RTMP input supports two modes:
+
+**Pull mode** — connect to a remote RTMP stream:
+
+1. In the Library, open **📡 RTMP Sources** (under Stream Sources)
+2. Add a stream URL (e.g., `rtmp://192.168.1.50/live/stream`)
+3. **Drag** into a channel to create a live deck
+
+**Listen mode** — accept pushes from OBS, vMix, or other RTMP senders:
+
+1. In the Library, add an RTMP source and select **Listen** mode
+2. Varda generates a listen URL (starting at port 1935, incrementing for additional listeners)
+3. Configure OBS or other software to push to the generated URL
+4. **Drag** the source into a channel
+
+Stream sources are grouped under a single **Stream Sources** header in the Library panel. All stream source types (NDI, SRT, HLS, DASH, RTMP) share the same drag-to-channel workflow.
+
+---
+
 ## Syphon (macOS)
 
 Syphon enables inter-application GPU texture sharing on macOS. Varda includes framework detection and server discovery.

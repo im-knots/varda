@@ -142,6 +142,28 @@ Real-time rotation applied in the GPU shader — does not recompute meshes:
 
 All three axes are **MIDI-mappable** for live performance. Rotation order: Roll → Elevation → Azimuth.
 
+### Surface Auto-Detection
+
+Import stage plans and auto-detect projection surfaces instead of drawing them manually. Varda supports three file types:
+
+| Format | Detection Method |
+|--------|-----------------|
+| **PNG / JPG** | Canny edge detection + contour tracing. Best for photos of venues or simple stage plan images. |
+| **SVG** | Path flattening — extracts shapes directly from vector paths. Best for designed floor plans. |
+| **DXF** | Geometric entity extraction (lines, polylines, circles, arcs, ellipses). Best for CAD venue plans. |
+
+**Workflow:**
+
+1. In the Stage Editor, click **Import** and select a file (PNG, JPG, SVG, or DXF)
+2. Varda detects contours and presents them as candidate surfaces
+3. Review and confirm — detected surfaces are added to the stage canvas
+
+Detection is configurable: edge thresholds, simplification tolerance, and minimum area can be adjusted. Small contours are filtered out, near-circular shapes are detected and created as circles, and surfaces are named by position (e.g., "Top-Left", "Center").
+
+This feature is also available via the HTTP API: `POST /api/stage/detect/image`, `/svg`, `/dxf`, and `POST /api/stage/detect/confirm`.
+
+---
+
 ### Mesh Import/Export
 
 | Format | Description |
