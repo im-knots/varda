@@ -156,14 +156,18 @@ impl VardaApp {
         // Compute effective channel opacities to determine which cameras are needed
         let channel_count = self.mixer.channel_count();
         let crossfader = self.mixer.crossfader();
-        let effective_opacities: Vec<f32> = if channel_count == 2 {
+        let two_ch_buf: [f32; 2];
+        let n_ch_buf: Vec<f32>;
+        let effective_opacities: &[f32] = if channel_count == 2 {
             let channels = self.mixer.channels();
-            vec![
+            two_ch_buf = [
                 (1.0 - crossfader) * channels[0].opacity,
                 crossfader * channels[1].opacity,
-            ]
+            ];
+            &two_ch_buf
         } else {
-            self.mixer.channels().iter().map(|ch| ch.opacity).collect()
+            n_ch_buf = self.mixer.channels().iter().map(|ch| ch.opacity).collect();
+            &n_ch_buf
         };
 
         // Collect camera IDs needed by visible channels
@@ -264,13 +268,14 @@ impl VardaApp {
 
         // Prepare sub-mixes for any Channels(...) sources
         {
+            let mut seen: std::collections::HashSet<Vec<usize>> = std::collections::HashSet::new();
             let mut sub_mix_sources: Vec<Vec<usize>> = Vec::new();
             for surface in &self.output.surface_manager.surfaces {
                 if let OutputSource::Channels(indices) = &surface.source {
                     let mut sorted = indices.clone();
                     sorted.sort();
                     sorted.dedup();
-                    if !sub_mix_sources.contains(&sorted) {
+                    if seen.insert(sorted.clone()) {
                         sub_mix_sources.push(sorted);
                     }
                 }

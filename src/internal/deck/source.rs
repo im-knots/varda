@@ -329,8 +329,12 @@ impl Deck {
             _ => None,
         };
 
+        let uuid = super::generate_short_uuid();
+        let param_prefix = format!("deck_{}", uuid);
+
         Ok(Self {
-            uuid: super::generate_short_uuid(),
+            uuid,
+            param_prefix,
             source_name,
             source_path,
             source,
@@ -742,8 +746,12 @@ impl Deck {
         let now = Instant::now();
         let generator_params = ShaderParams::from_inputs(&[]);
 
+        let uuid = super::generate_short_uuid();
+        let param_prefix = format!("deck_{}", uuid);
+
         Ok(Self {
-            uuid: super::generate_short_uuid(),
+            uuid,
+            param_prefix,
             source_name,
             source_path,
             source,

@@ -522,7 +522,7 @@ impl Channel {
         for (_deck_idx, slot) in self.decks.iter_mut().enumerate() {
             if !slot.mute && (!any_solo || slot.solo) && slot.opacity > 0.0 {
                 active_count += 1;
-                let param_prefix = format!("deck_{}", slot.deck.uuid());
+                let param_prefix = slot.deck.param_prefix().to_owned();
                 slot.deck.render_with_prefix(
                     context,
                     audio_data,
@@ -638,9 +638,9 @@ impl Channel {
                         "progress",
                         crate::params::ParamValue::Float(progress as f32),
                     );
-                    let params_data = effect.params.build_buffer_data();
+                    effect.params.build_buffer_data();
                     if let Some(buf) = effect.params.buffer() {
-                        context.queue.write_buffer(buf, 0, &params_data);
+                        context.queue.write_buffer(buf, 0, effect.params.scratch());
                     }
 
                     let cmd = effect.pipeline.render_to_cmd(
@@ -905,14 +905,12 @@ impl Channel {
                     (&self.effect_ping_view, &self.composite_view)
                 };
 
-                let fx_prefix = format!("fx_{}", effect.uuid);
                 if let Err(e) = effect.apply_with_modulation(
                     context,
                     input_view,
                     output_view,
                     &uniforms,
                     Some(modulation),
-                    Some(&fx_prefix),
                     &mut fx_cmd_buffers,
                 ) {
                     log::warn!("Effect {} failed, skipping: {}", _eff_idx, e);

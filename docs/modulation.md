@@ -10,13 +10,13 @@ A low-frequency oscillator that cycles through a waveform continuously.
 
 | Setting | Range | Description |
 |---------|-------|-------------|
-| **Waveform** | Sine, Triangle, Sawtooth, Square, Random | Shape of the cycle |
+| **Waveform** | Sine, Triangle, Sawtooth, Square, Random, Smooth Random | Shape of the cycle |
 | **Frequency** | 0.01–10+ Hz | How fast the LFO cycles |
 | **Amplitude** | 0.0–1.0 | How wide the sweep is (fraction of parameter range) |
 | **Phase** | 0.0–1.0 | Offset in the cycle (0.5 = start halfway through) |
 | **Bipolar** | on/off | Off: output 0–1 (unipolar). On: output -1 to +1 (bipolar) |
 
-**Random** waveform produces sample-and-hold noise — a new random value each quarter-cycle, held constant until the next.
+**Random** waveform produces sample-and-hold noise — a new random value each quarter-cycle, held constant until the next. **Smooth Random** interpolates between random values for organic, non-repeating motion.
 
 ### Audio
 

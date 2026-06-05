@@ -451,14 +451,12 @@ impl Deck {
             } else {
                 (&self.texture_view, &self.texture_b_view)
             };
-            let fx_prefix = format!("fx_{}", self.effects[effect_idx].uuid);
             self.effects[effect_idx].apply_with_modulation(
                 context,
                 input_view,
                 output_view,
                 &uniforms,
                 Some(modulation),
-                Some(&fx_prefix),
                 cmd_buffers,
             )?;
             read_from_b = !read_from_b;

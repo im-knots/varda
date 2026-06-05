@@ -175,6 +175,8 @@ impl ExternalSourceKind {
 pub struct Effect {
     /// Stable UUID for this effect (8-char hex)
     pub uuid: String,
+    /// Cached "fx_{uuid}" prefix for modulation key lookups (avoids per-frame format!)
+    pub param_prefix: String,
     pub shader: ISFShader,
     pub pipeline: UnifiedPipeline,
     pub enabled: bool,
@@ -215,6 +217,9 @@ pub struct PassBuffer {
 pub struct Deck {
     /// Stable UUID for this deck (8-char hex, persists across moves/saves)
     uuid: String,
+
+    /// Cached "deck_{uuid}" prefix for modulation key lookups (avoids per-frame format!)
+    param_prefix: String,
 
     /// Name of this deck's source
     source_name: String,
@@ -275,8 +280,14 @@ impl Deck {
         &self.uuid
     }
 
+    /// Get the cached param prefix ("deck_{uuid}")
+    pub fn param_prefix(&self) -> &str {
+        &self.param_prefix
+    }
+
     /// Set the UUID (used during scene restore to preserve identity)
     pub fn set_uuid(&mut self, uuid: String) {
+        self.param_prefix = format!("deck_{}", uuid);
         self.uuid = uuid;
     }
 

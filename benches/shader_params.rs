@@ -92,25 +92,99 @@ fn bench_shader_params_buffer(c: &mut Criterion) {
     g.sample_size(500);
 
     for n_floats in [2usize, 6, 14] {
-        let params = make_params(n_floats);
         let total = n_floats + 2;
         let lfo_key = format!("deck0:p0");
         let eng_empty = ModulationEngine::new();
         let eng_lfo = engine_with_lfo(&lfo_key);
 
+        let mut params_no = make_params(n_floats);
         g.bench_with_input(BenchmarkId::new("no_mod", total), &total, |b, _| {
-            b.iter(|| params.build_buffer_data())
+            b.iter(|| {
+                params_no.build_buffer_data();
+                criterion::black_box(params_no.scratch().len())
+            })
         });
+        let mut params_em = make_params(n_floats);
         g.bench_with_input(BenchmarkId::new("empty_mod", total), &total, |b, _| {
-            b.iter(|| params.build_modulated_buffer_data(&eng_empty, Some("deck0")))
+            b.iter(|| {
+                params_em.build_modulated_buffer_data(&eng_empty, Some("deck0"));
+                criterion::black_box(params_em.scratch().len())
+            })
         });
+        let mut params_lfo = make_params(n_floats);
         g.bench_with_input(BenchmarkId::new("active_lfo", total), &total, |b, _| {
-            b.iter(|| params.build_modulated_buffer_data(&eng_lfo, Some("deck0")))
+            b.iter(|| {
+                params_lfo.build_modulated_buffer_data(&eng_lfo, Some("deck0"));
+                criterion::black_box(params_lfo.scratch().len())
+            })
         });
     }
 
     g.finish();
 }
 
-criterion_group!(benches, bench_shader_params_buffer);
+/// Measures the combined cost of prefix construction + modulated buffer build.
+///
+/// In the render loop, each deck/effect creates its prefix via format!() then
+/// passes it to build_modulated_buffer_data. This benchmark captures both
+/// steps together so we can measure the effect of caching the prefix.
+fn bench_prefix_construction(c: &mut Criterion) {
+    let mut g = c.benchmark_group("prefix_construction");
+    g.sample_size(500);
+
+    // Simulate the deck render path: format!("deck_{}", uuid) + modulated buffer build
+    let deck_uuid = "a1b2c3d4";
+    let fx_uuid = "e5f6a7b8";
+
+    for n_floats in [2usize, 6, 14] {
+        let total = n_floats + 2;
+        let eng = ModulationEngine::new();
+
+        // Deck prefix: format!("deck_{}", uuid) each frame
+        let mut params_df = make_params(n_floats);
+        g.bench_with_input(BenchmarkId::new("deck_format", total), &total, |b, _| {
+            b.iter(|| {
+                let prefix = format!("deck_{}", deck_uuid);
+                params_df.build_modulated_buffer_data(&eng, Some(&prefix));
+                criterion::black_box(params_df.scratch().len())
+            })
+        });
+
+        // Effect prefix: format!("fx_{}", uuid) each frame
+        let mut params_ff = make_params(n_floats);
+        g.bench_with_input(BenchmarkId::new("fx_format", total), &total, |b, _| {
+            b.iter(|| {
+                let prefix = format!("fx_{}", fx_uuid);
+                params_ff.build_modulated_buffer_data(&eng, Some(&prefix));
+                criterion::black_box(params_ff.scratch().len())
+            })
+        });
+
+        // Cached: prefix already exists, just pass &str (no allocation)
+        let cached_deck_prefix = format!("deck_{}", deck_uuid);
+        let cached_fx_prefix = format!("fx_{}", fx_uuid);
+        let mut params_dc = make_params(n_floats);
+        g.bench_with_input(BenchmarkId::new("deck_cached", total), &total, |b, _| {
+            b.iter(|| {
+                params_dc.build_modulated_buffer_data(&eng, Some(&cached_deck_prefix));
+                criterion::black_box(params_dc.scratch().len())
+            })
+        });
+        let mut params_fc = make_params(n_floats);
+        g.bench_with_input(BenchmarkId::new("fx_cached", total), &total, |b, _| {
+            b.iter(|| {
+                params_fc.build_modulated_buffer_data(&eng, Some(&cached_fx_prefix));
+                criterion::black_box(params_fc.scratch().len())
+            })
+        });
+    }
+
+    g.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_shader_params_buffer,
+    bench_prefix_construction
+);
 criterion_main!(benches);

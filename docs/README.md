@@ -1,6 +1,6 @@
 # Varda
 
-Varda is a free, open-source live visual mixer and broadcast router for Linux and macOS, written in Rust. It routes video sources — shaders, video files, cameras, NDI, SRT, HLS/DASH streams — through a broadcast-style signal matrix (Deck → Channel → Mixer → Surface → Output), composites them with per-parameter modulation and ISF effect chains, and delivers the result to projectors, network streams, recordings, and the web.
+Varda is a free, open-source live visual mixer and broadcast router for Linux, macOS, and Windows, written in Rust. It routes video sources — shaders, video files, cameras, NDI, SRT, HLS/DASH streams — through a broadcast-style signal matrix (Deck → Channel → Mixer → Surface → Output), composites them with per-parameter modulation and ISF effect chains, and delivers the result to projectors, network streams, recordings, and the web.
 
 Varda is built for live VJ performance, dome projection, multi-projector installations, and headless media serving — controlled via MIDI, OSC, keyboard shortcuts, or a full REST/WebSocket API.
 
@@ -13,12 +13,13 @@ Varda is built for live VJ performance, dome projection, multi-projector install
   - [Modulation](concepts.md#modulation) — LFO, audio bands, ADSR, step sequencer
   - [Persistence](concepts.md#persistence) — scene vs stage, presets, asset handling
 - [Getting Started](getting-started.md)
+  - [Install](getting-started.md#install) — macOS DMG, Linux tarball, Windows ZIP
   - [Workspace & Content](getting-started.md#workspace--content) — project layout, supported formats
-  - [Build & Run](getting-started.md#build--run)
+  - [Build from Source](getting-started.md#build-from-source)
   - [UI Layout](getting-started.md#ui-layout) — panel map
   - [Load Content](getting-started.md#load-content)
   - [Output to a Display](getting-started.md#output-to-a-display)
-  - [Audio Setup](getting-started.md#audio-setup) — input device, beat detection
+  - [Audio Reactivity](getting-started.md#audio-reactivity) — input device, beat detection
   - [Next Steps](getting-started.md#next-steps)
   - [CLI Flags](getting-started.md#cli-flags)
 - [Performance & Automation](performance.md)
