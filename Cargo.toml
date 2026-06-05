@@ -1,6 +1,6 @@
 [package]
 name = "varda"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["Varda Contributors"]
 description = "Linux and MacOS native VJ software with ISF/GLSL shader support"
