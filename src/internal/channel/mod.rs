@@ -638,9 +638,9 @@ impl Channel {
                         "progress",
                         crate::params::ParamValue::Float(progress as f32),
                     );
-                    let params_data = effect.params.build_buffer_data();
+                    effect.params.build_buffer_data();
                     if let Some(buf) = effect.params.buffer() {
-                        context.queue.write_buffer(buf, 0, &params_data);
+                        context.queue.write_buffer(buf, 0, effect.params.scratch());
                     }
 
                     let cmd = effect.pipeline.render_to_cmd(

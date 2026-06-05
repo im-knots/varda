@@ -120,6 +120,9 @@ pub struct ShaderParams {
     buffer: Option<wgpu::Buffer>,
     /// Buffer needs re-upload
     dirty: bool,
+    /// Reusable scratch buffer for serialization (avoids per-frame heap allocation).
+    /// Capacity stabilises after the first frame at `buffer_size()`.
+    scratch: Vec<u8>,
 }
 
 impl ShaderParams {
@@ -147,6 +150,7 @@ impl ShaderParams {
             definitions,
             buffer: None,
             dirty: true,
+            scratch: Vec::new(),
         }
     }
 
@@ -255,42 +259,39 @@ impl ShaderParams {
         (size.max(16) + 15) & !15
     }
 
-    /// Build byte buffer for GPU upload (respects std140 alignment rules)
-    pub fn build_buffer_data(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(self.buffer_size());
+    /// Serialize parameter values into the reusable scratch buffer (std140 layout).
+    /// Returns a slice valid until the next `build_*` or mutable call.
+    /// After the first call the scratch capacity stabilises — zero heap allocation
+    /// on subsequent frames.
+    pub fn build_buffer_data(&mut self) -> &[u8] {
+        self.scratch.clear();
+        self.scratch.reserve(self.buffer_size());
         for name in &self.param_order {
             if let Some(value) = self.values.get(name) {
-                // std140 alignment rules:
-                // - float, bool, int: 4-byte alignment
-                // - vec2: 8-byte alignment
-                // - vec3, vec4: 16-byte alignment
                 let alignment = match value {
                     ParamValue::Float(_) | ParamValue::Bool(_) | ParamValue::Long(_) => 4,
                     ParamValue::Point2D(_) => 8,
                     ParamValue::Color(_) => 16,
                 };
-                // Pad to required alignment
-                while data.len() % alignment != 0 {
-                    data.push(0);
+                while self.scratch.len() % alignment != 0 {
+                    self.scratch.push(0);
                 }
-                value.write_bytes(&mut data);
+                value.write_bytes(&mut self.scratch);
             }
         }
-        // Pad to minimum 16 bytes
-        while data.len() < 16 {
-            data.push(0);
+        while self.scratch.len() < 16 {
+            self.scratch.push(0);
         }
-        // Align to 16 bytes (uniform buffer requirement)
-        while data.len() % 16 != 0 {
-            data.push(0);
+        while self.scratch.len() % 16 != 0 {
+            self.scratch.push(0);
         }
-        data
+        &self.scratch
     }
 
     /// Create or get GPU buffer
     pub fn ensure_buffer(&mut self, device: &wgpu::Device) -> &wgpu::Buffer {
         if self.buffer.is_none() {
-            let data = self.build_buffer_data();
+            let data = self.build_buffer_data().to_vec();
             self.buffer = Some(
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Shader Params Buffer"),
@@ -308,17 +309,24 @@ impl ShaderParams {
     /// Update GPU buffer if dirty
     pub fn update_buffer(&mut self, queue: &wgpu::Queue) {
         if self.dirty {
+            // Reborrow: build into scratch, then write to GPU buffer.
+            self.build_buffer_data();
             if let Some(buffer) = &self.buffer {
-                let data = self.build_buffer_data();
-                queue.write_buffer(buffer, 0, &data);
-                self.dirty = false;
+                queue.write_buffer(buffer, 0, &self.scratch);
             }
+            self.dirty = false;
         }
     }
 
     /// Get the buffer reference (panics if not created)
     pub fn buffer(&self) -> Option<&wgpu::Buffer> {
         self.buffer.as_ref()
+    }
+
+    /// Read-only access to the last serialized scratch data.
+    /// Valid after a `build_buffer_data` or `build_modulated_buffer_data` call.
+    pub fn scratch(&self) -> &[u8] {
+        &self.scratch
     }
 
     /// Mark as needing re-upload
@@ -345,44 +353,39 @@ impl ShaderParams {
         self.dirty = true;
     }
 
-    /// Build byte buffer with modulation applied
-    /// This creates a temporary modulated value for GPU upload without modifying base values
-    /// `param_prefix` is used to look up modulation (e.g., "deck0" to look up "deck0:paramname")
+    /// Serialize parameter values with modulation applied into the reusable scratch buffer.
+    /// Returns a slice valid until the next `build_*` or mutable call.
     pub fn build_modulated_buffer_data(
-        &self,
+        &mut self,
         modulation: &ModulationEngine,
         param_prefix: Option<&str>,
-    ) -> Vec<u8> {
-        let mut data = Vec::with_capacity(self.buffer_size());
+    ) -> &[u8] {
+        self.scratch.clear();
+        self.scratch.reserve(self.buffer_size());
 
         for name in &self.param_order {
             if let Some(value) = self.values.get(name) {
-                // std140 alignment rules
                 let alignment = match value {
                     ParamValue::Float(_) | ParamValue::Bool(_) | ParamValue::Long(_) => 4,
                     ParamValue::Point2D(_) => 8,
                     ParamValue::Color(_) => 16,
                 };
-                // Pad to required alignment
-                while data.len() % alignment != 0 {
-                    data.push(0);
+                while self.scratch.len() % alignment != 0 {
+                    self.scratch.push(0);
                 }
 
-                // Apply modulation and write
                 let modulated =
                     self.apply_modulation_to_value(name, value, modulation, param_prefix);
-                modulated.write_bytes(&mut data);
+                modulated.write_bytes(&mut self.scratch);
             }
         }
-        // Pad to minimum 16 bytes
-        while data.len() < 16 {
-            data.push(0);
+        while self.scratch.len() < 16 {
+            self.scratch.push(0);
         }
-        // Align to 16 bytes (uniform buffer requirement)
-        while data.len() % 16 != 0 {
-            data.push(0);
+        while self.scratch.len() % 16 != 0 {
+            self.scratch.push(0);
         }
-        data
+        &self.scratch
     }
 
     /// Apply modulation to a parameter value
@@ -454,9 +457,10 @@ impl ShaderParams {
         modulation: &ModulationEngine,
         param_prefix: Option<&str>,
     ) {
+        // Build into scratch first, then write to GPU buffer.
+        self.build_modulated_buffer_data(modulation, param_prefix);
         if let Some(buffer) = &self.buffer {
-            let data = self.build_modulated_buffer_data(modulation, param_prefix);
-            queue.write_buffer(buffer, 0, &data);
+            queue.write_buffer(buffer, 0, &self.scratch);
         }
         // Note: we don't clear dirty flag here since base values may have changed
     }
@@ -750,7 +754,7 @@ mod tests {
             make_float_input("brightness", 0.5, 0.0, 1.0),
             make_bool_input("invert", true),
         ];
-        let params = ShaderParams::from_inputs(&inputs);
+        let mut params = ShaderParams::from_inputs(&inputs);
         let data = params.build_buffer_data();
         assert!(data.len() >= 16);
         assert_eq!(data.len() % 16, 0);
@@ -777,17 +781,17 @@ mod tests {
     #[test]
     fn shader_params_modulated_buffer_no_modulation() {
         let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
-        let params = ShaderParams::from_inputs(&inputs);
+        let mut params = ShaderParams::from_inputs(&inputs);
         let engine = ModulationEngine::new();
-        let data = params.build_modulated_buffer_data(&engine, None);
-        let base = params.build_buffer_data();
+        let data = params.build_modulated_buffer_data(&engine, None).to_vec();
+        let base = params.build_buffer_data().to_vec();
         assert_eq!(data, base, "No modulation should produce identical buffer");
     }
 
     #[test]
     fn shader_params_modulated_buffer_with_modulation() {
         let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
-        let params = ShaderParams::from_inputs(&inputs);
+        let mut params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(crate::modulation::ModulationSource::LFO {
             waveform: crate::modulation::LFOWaveform::Sine,
@@ -799,8 +803,8 @@ mod tests {
         engine.update(0.25, &crate::modulation::AudioValues::default());
         engine.assign("brightness", &uuid, 0.5, None);
 
-        let modulated = params.build_modulated_buffer_data(&engine, None);
-        let base = params.build_buffer_data();
+        let modulated = params.build_modulated_buffer_data(&engine, None).to_vec();
+        let base = params.build_buffer_data().to_vec();
         // Modulated should differ from base (LFO at t=0.25 is non-zero)
         assert_ne!(modulated, base, "Modulated buffer should differ from base");
     }
@@ -808,15 +812,17 @@ mod tests {
     #[test]
     fn shader_params_modulated_with_prefix() {
         let inputs = vec![make_float_input("brightness", 0.5, 0.0, 1.0)];
-        let params = ShaderParams::from_inputs(&inputs);
+        let mut params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(crate::modulation::ModulationSource::sine_lfo(1.0));
         engine.update(0.25, &crate::modulation::AudioValues::default());
         // Assign with prefix "deck0:brightness"
         engine.assign("deck0:brightness", &uuid, 0.5, None);
 
-        let modulated = params.build_modulated_buffer_data(&engine, Some("deck0"));
-        let base = params.build_buffer_data();
+        let modulated = params
+            .build_modulated_buffer_data(&engine, Some("deck0"))
+            .to_vec();
+        let base = params.build_buffer_data().to_vec();
         assert_ne!(modulated, base, "Prefixed modulation should apply");
     }
 
@@ -827,7 +833,7 @@ mod tests {
             make_float_input("a", 1.0, 0.0, 1.0), // 4 bytes at offset 0
             make_point2d_input("center"),         // should align to offset 8
         ];
-        let params = ShaderParams::from_inputs(&inputs);
+        let mut params = ShaderParams::from_inputs(&inputs);
         let data = params.build_buffer_data();
         // offset 0..4: float a
         // offset 4..8: padding (align to 8 for vec2)
@@ -846,7 +852,7 @@ mod tests {
             make_float_input("a", 1.0, 0.0, 1.0), // 4 bytes at offset 0
             make_color_input("tint"),             // should align to offset 16
         ];
-        let params = ShaderParams::from_inputs(&inputs);
+        let mut params = ShaderParams::from_inputs(&inputs);
         let data = params.build_buffer_data();
         assert!(data.len() >= 32);
         // tint starts at offset 16

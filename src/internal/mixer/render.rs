@@ -177,7 +177,7 @@ impl Mixer {
 
         // If we have exactly 2 channels and a transition shader is active, use it
         if channel_count == 2 {
-            if let Some(transition) = &self.active_transition {
+            if let Some(transition) = &mut self.active_transition {
                 let width = self.composite_texture.width();
                 let height = self.composite_texture.height();
 
@@ -191,9 +191,11 @@ impl Mixer {
                     ..Default::default()
                 };
 
-                let params_data = transition.params.build_buffer_data();
+                transition.params.build_buffer_data();
                 if let Some(buf) = transition.params.buffer() {
-                    context.queue.write_buffer(buf, 0, &params_data);
+                    context
+                        .queue
+                        .write_buffer(buf, 0, transition.params.scratch());
                 }
 
                 transition.pipeline.render_to(
