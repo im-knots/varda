@@ -30,7 +30,9 @@
         {"NAME": "contrast",       "TYPE": "float", "DEFAULT": 1.3,  "MIN": 0.5, "MAX": 3.0,  "LABEL": "Contrast"},
         {"NAME": "invert",         "TYPE": "float", "DEFAULT": 0.0,  "MIN": 0.0, "MAX": 1.0,  "LABEL": "Invert"},
         {"NAME": "color_mode",     "TYPE": "float", "DEFAULT": 0.0,  "MIN": 0.0, "MAX": 1.0,  "LABEL": "Color Mode"},
-        {"NAME": "hue_shift",      "TYPE": "float", "DEFAULT": 0.0,  "MIN": 0.0, "MAX": 1.0,  "LABEL": "Hue Shift"}
+        {"NAME": "hue_shift",      "TYPE": "float", "DEFAULT": 0.0,  "MIN": 0.0, "MAX": 1.0,  "LABEL": "Hue Shift"},
+        {"NAME": "bg_color",       "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 1.0], "LABEL": "Background"},
+        {"NAME": "transparent",    "TYPE": "bool",  "DEFAULT": false, "LABEL": "Transparent"}
     ],
     "PHASE_INPUTS": [
         {"PARAM": "camera_speed", "INDEX": 0, "SCALE": 1.0},
@@ -62,6 +64,8 @@ layout(set = 0, binding = 1) uniform UserParams {
     float pulse_rate;
     float distortion; float bloom; float contrast; float invert;
     float color_mode; float hue_shift;
+    vec4 bg_color;
+    uint transparent;
 };
 
 const float PI  = 3.14159265;
@@ -519,8 +523,9 @@ void main() {
     lum = mix(lum, 1.0 - lum, invert);
 
     // Color output
+    vec3 rgb;
     if (color_mode < 0.01) {
-        fragColor = vec4(vec3(lum), 1.0);
+        rgb = vec3(lum);
     } else {
         // Map different elements to different hues
         float totalE = shell + dots + clouds + jetVal + crysVal + 0.001;
@@ -535,7 +540,14 @@ void main() {
                     + crysVal * hCrystals + dots * hDots) / totalE;
         // Saturation: stronger color for brighter elements
         float sat = color_mode * (0.5 + 0.5 * lum);
-        vec3 rgb = hsv2rgb(vec3(fract(hue), sat, lum));
-        fragColor = vec4(rgb, 1.0);
+        rgb = hsv2rgb(vec3(fract(hue), sat, lum));
+    }
+
+    // Background color blend and transparency
+    if (transparent != 0u) {
+        fragColor = vec4(rgb, lum);
+    } else {
+        vec3 final_col = mix(bg_color.rgb, rgb, clamp(lum, 0.0, 1.0));
+        fragColor = vec4(final_col, 1.0);
     }
 }
