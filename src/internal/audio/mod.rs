@@ -369,6 +369,9 @@ impl AudioManager {
         let mut prev_fft_magnitudes: Vec<f32> = vec![0.0; FFT_SIZE / 2];
         let mut flux_history: Vec<f32> = Vec::with_capacity(ONSET_MEDIAN_WINDOW + 1);
 
+        // Pre-allocated FFT input buffer (H4: avoid per-callback allocation)
+        let mut fft_input: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); FFT_SIZE];
+
         // BPM detection state
         let mut last_beat_time = Instant::now();
         let mut beat_intervals: Vec<f32> = Vec::with_capacity(BPM_HISTORY_SIZE);
@@ -399,10 +402,10 @@ impl AudioManager {
                     ring_write_pos = (ring_write_pos + FFT_HOP) % FFT_SIZE;
 
                     // Extract linearized 2048-sample frame, apply Hann window
-                    let mut fft_input: Vec<Complex<f32>> = Vec::with_capacity(FFT_SIZE);
+                    // Reuse pre-allocated fft_input buffer (H4 optimisation)
                     for i in 0..FFT_SIZE {
                         let idx = (ring_write_pos + i) % FFT_SIZE;
-                        fft_input.push(Complex::new(ring_buffer[idx] * hann_window[i], 0.0));
+                        fft_input[i] = Complex::new(ring_buffer[idx] * hann_window[i], 0.0);
                     }
                     fft.process(&mut fft_input);
 

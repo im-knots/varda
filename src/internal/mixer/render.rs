@@ -4,6 +4,27 @@ use super::{AutoCrossfade, CrossfadeEasing, Mixer};
 use crate::renderer::{GpuContext, ISFUniforms};
 use anyhow::Result;
 
+/// Stack-friendly container for per-channel compositing opacities.
+///
+/// The common 2-channel case uses a fixed-size array on the stack, avoiding a
+/// heap allocation.  N-channel mode falls back to `Vec`.  Derefs to `&[f32]`
+/// so callers can use `.iter()`, `.get()`, indexing, etc. unchanged.
+enum CompositingOpacities {
+    Two([f32; 2]),
+    Many(Vec<f32>),
+}
+
+impl std::ops::Deref for CompositingOpacities {
+    type Target = [f32];
+
+    fn deref(&self) -> &[f32] {
+        match self {
+            CompositingOpacities::Two(arr) => arr,
+            CompositingOpacities::Many(vec) => vec,
+        }
+    }
+}
+
 impl Mixer {
     /// Pre-update modulation engine with latest audio data.
     pub fn update_modulation(&mut self, audio_values: &crate::modulation::AudioValues) {
@@ -79,15 +100,19 @@ impl Mixer {
         let time = self.start_time.elapsed().as_secs_f32();
         self.modulation.update(time, audio_values);
 
-        // Compute effective opacity per channel
+        // Compute effective opacity per channel (stack-allocated for the common 2-channel case)
         let channel_count = self.channels.len();
-        let effective_opacities: Vec<f32> = if channel_count == 2 {
-            vec![
+        let two_ch_buf: [f32; 2];
+        let n_ch_buf: Vec<f32>;
+        let effective_opacities: &[f32] = if channel_count == 2 {
+            two_ch_buf = [
                 (1.0 - self.crossfader) * self.channels[0].opacity,
                 self.crossfader * self.channels[1].opacity,
-            ]
+            ];
+            &two_ch_buf
         } else {
-            self.channels.iter().map(|ch| ch.opacity).collect()
+            n_ch_buf = self.channels.iter().map(|ch| ch.opacity).collect();
+            &n_ch_buf
         };
 
         // Always tick video frames on every channel so players stay in sync
@@ -467,11 +492,11 @@ impl Mixer {
     /// For 2-channel mode the first channel is always 1.0 (blitted at full
     /// opacity) and the crossfader value drives the second channel's composite
     /// weight.  For N-channel mode each channel uses its own opacity.
-    fn compositing_opacities(&self) -> Vec<f32> {
+    fn compositing_opacities(&self) -> CompositingOpacities {
         if self.channels.len() == 2 {
-            vec![1.0, self.crossfader]
+            CompositingOpacities::Two([1.0, self.crossfader])
         } else {
-            self.channels.iter().map(|ch| ch.opacity).collect()
+            CompositingOpacities::Many(self.channels.iter().map(|ch| ch.opacity).collect())
         }
     }
 

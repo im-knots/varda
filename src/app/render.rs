@@ -156,14 +156,18 @@ impl VardaApp {
         // Compute effective channel opacities to determine which cameras are needed
         let channel_count = self.mixer.channel_count();
         let crossfader = self.mixer.crossfader();
-        let effective_opacities: Vec<f32> = if channel_count == 2 {
+        let two_ch_buf: [f32; 2];
+        let n_ch_buf: Vec<f32>;
+        let effective_opacities: &[f32] = if channel_count == 2 {
             let channels = self.mixer.channels();
-            vec![
+            two_ch_buf = [
                 (1.0 - crossfader) * channels[0].opacity,
                 crossfader * channels[1].opacity,
-            ]
+            ];
+            &two_ch_buf
         } else {
-            self.mixer.channels().iter().map(|ch| ch.opacity).collect()
+            n_ch_buf = self.mixer.channels().iter().map(|ch| ch.opacity).collect();
+            &n_ch_buf
         };
 
         // Collect camera IDs needed by visible channels
