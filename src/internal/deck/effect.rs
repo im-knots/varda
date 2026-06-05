@@ -128,8 +128,12 @@ impl Effect {
         let params = ShaderParams::from_inputs(inputs);
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
 
+        let uuid = crate::deck::generate_short_uuid();
+        let param_prefix = format!("fx_{}", uuid);
+
         Ok(Self {
-            uuid: crate::deck::generate_short_uuid(),
+            uuid,
+            param_prefix,
             shader,
             pipeline,
             enabled: true,
@@ -159,7 +163,6 @@ impl Effect {
             output_view,
             uniforms,
             None,
-            None,
             cmd_buffers,
         )
     }
@@ -172,7 +175,6 @@ impl Effect {
         output_view: &wgpu::TextureView,
         uniforms: &ISFUniforms,
         modulation: Option<&crate::modulation::ModulationEngine>,
-        mod_prefix: Option<&str>,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         if !self.enabled {
@@ -182,8 +184,11 @@ impl Effect {
         // Ensure user params buffer exists and update it (with modulation if available)
         self.params.ensure_buffer(&context.device);
         if let Some(mod_engine) = modulation {
-            self.params
-                .update_buffer_with_modulation(&context.queue, mod_engine, mod_prefix);
+            self.params.update_buffer_with_modulation(
+                &context.queue,
+                mod_engine,
+                Some(&self.param_prefix),
+            );
         } else {
             self.params.update_buffer(&context.queue);
         }

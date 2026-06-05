@@ -112,5 +112,57 @@ fn bench_shader_params_buffer(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_shader_params_buffer);
+/// Measures the combined cost of prefix construction + modulated buffer build.
+///
+/// In the render loop, each deck/effect creates its prefix via format!() then
+/// passes it to build_modulated_buffer_data. This benchmark captures both
+/// steps together so we can measure the effect of caching the prefix.
+fn bench_prefix_construction(c: &mut Criterion) {
+    let mut g = c.benchmark_group("prefix_construction");
+    g.sample_size(500);
+
+    // Simulate the deck render path: format!("deck_{}", uuid) + modulated buffer build
+    let deck_uuid = "a1b2c3d4";
+    let fx_uuid = "e5f6a7b8";
+
+    for n_floats in [2usize, 6, 14] {
+        let params = make_params(n_floats);
+        let total = n_floats + 2;
+        let eng = ModulationEngine::new();
+
+        // Deck prefix: format!("deck_{}", uuid) each frame
+        g.bench_with_input(BenchmarkId::new("deck_format", total), &total, |b, _| {
+            b.iter(|| {
+                let prefix = format!("deck_{}", deck_uuid);
+                params.build_modulated_buffer_data(&eng, Some(&prefix))
+            })
+        });
+
+        // Effect prefix: format!("fx_{}", uuid) each frame
+        g.bench_with_input(BenchmarkId::new("fx_format", total), &total, |b, _| {
+            b.iter(|| {
+                let prefix = format!("fx_{}", fx_uuid);
+                params.build_modulated_buffer_data(&eng, Some(&prefix))
+            })
+        });
+
+        // Cached: prefix already exists, just pass &str (no allocation)
+        let cached_deck_prefix = format!("deck_{}", deck_uuid);
+        let cached_fx_prefix = format!("fx_{}", fx_uuid);
+        g.bench_with_input(BenchmarkId::new("deck_cached", total), &total, |b, _| {
+            b.iter(|| params.build_modulated_buffer_data(&eng, Some(&cached_deck_prefix)))
+        });
+        g.bench_with_input(BenchmarkId::new("fx_cached", total), &total, |b, _| {
+            b.iter(|| params.build_modulated_buffer_data(&eng, Some(&cached_fx_prefix)))
+        });
+    }
+
+    g.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_shader_params_buffer,
+    bench_prefix_construction
+);
 criterion_main!(benches);
