@@ -64,7 +64,6 @@ struct AccActions {
     scaling_mode_updates_count: usize,
 
     // Collapsing header item actions
-    solid_color_to_add: Option<(usize, [f32; 4])>,
     open_image_dialog_for_channel: Option<usize>,
     open_video_dialog_for_channel: Option<usize>,
     midi_device_toggles_count: usize,
@@ -151,9 +150,6 @@ impl AccActions {
         self.scaling_mode_updates_count += a.scaling_mode_updates.len();
 
         // Collapsing header items
-        if a.solid_color_to_add.is_some() {
-            self.solid_color_to_add = a.solid_color_to_add;
-        }
         if a.open_image_dialog_for_channel.is_some() {
             self.open_image_dialog_for_channel = a.open_image_dialog_for_channel;
         }
@@ -716,29 +712,6 @@ fn combo_scaling_mode_exists_when_deck_selected() {
 // ═══════════════════════════════════════════════════════════════════
 // Collapsing header tests (expand header, then click button inside)
 // ═══════════════════════════════════════════════════════════════════
-
-// ── Library: Solid Color ────────────────────────────────────────────
-
-#[test]
-fn collapsing_solid_color_add() {
-    let mut data = UIData::test_fixture();
-    data.library_panel_open = true;
-    let mut harness = make_harness(data);
-
-    // Expand the "🎨 Solid Color" collapsing header
-    harness.get_by_label("🎨 Solid Color").click();
-    harness.run();
-    *harness.state_mut() = AccActions::default();
-
-    // Click "Add to Ch A" button inside
-    harness.get_by_label("Add to Ch A").click();
-    harness.run();
-
-    assert!(
-        harness.state().solid_color_to_add.is_some(),
-        "Expected solid_color_to_add after clicking Add to Ch A"
-    );
-}
 
 // ── Library: Image File Dialog ──────────────────────────────────────
 

@@ -181,6 +181,89 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 - Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers
 - Optional `FLOAT: true` for 32-bit float buffers (HDR, simulation data)
 
+## Analyzer Preprocessors (Advanced)
+
+Some effects need **structured data about the input frame** that plain GLSL can't compute — face detection bounding boxes, depth maps, segmentation masks, optical flow fields. Varda's analyzer/preprocessor system bridges this gap: CPU-side analysis (often ML-powered via ONNX Runtime) produces data textures that are automatically injected into your shader as additional texture bindings.
+
+This is an advanced feature for shader authors building ML integrations, sensor-driven effects, or rich data processing pipelines.
+
+### Declaring Preprocessors
+
+Add a `PREPROCESSORS` array to your ISF JSON header:
+
+```json
+{
+  "DESCRIPTION": "Surveillance overlay with face detection",
+  "CATEGORIES": ["Filter", "Analysis"],
+  "INPUTS": [
+    {"NAME": "inputImage", "TYPE": "image"},
+    {"NAME": "overlay_opacity", "TYPE": "float", "DEFAULT": 0.8, "MIN": 0.0, "MAX": 1.0}
+  ],
+  "PREPROCESSORS": [
+    {"NAME": "landmarks", "TYPE": "face_detect"},
+    {"NAME": "face_data", "TYPE": "face_detect"},
+    {"NAME": "dossier_text", "TYPE": "face_detect"}
+  ]
+}
+```
+
+Each preprocessor entry declares:
+- **NAME**: the texture binding name your shader will use
+- **TYPE**: which analyzer to run (e.g. `face_detect`, `depth_estimate`, `edge_detect`)
+- **OPTIONS** (optional): JSON object passed to the analyzer for configuration (e.g. `{"resolution": "half"}`)
+
+### How It Works
+
+1. Varda parses `PREPROCESSORS` from your shader's ISF header
+2. The engine starts the requested analyzer(s) on dedicated background threads
+3. Analyzers receive downscaled input frames and produce data textures asynchronously
+4. Data textures are uploaded to the GPU and bound as `texture2D` samplers alongside your other inputs
+5. Your shader reads them with standard `texture()` calls
+
+Preprocessor textures are bound **after** imported textures and **before** user params in the binding layout. They never block the render loop — if analysis is slower than the frame rate, the shader uses the most recent available result.
+
+### Available Analyzer Types
+
+| Type | Outputs | Description |
+|------|---------|-------------|
+| `face_detect` | `landmarks` (wireframe overlay), `face_data` (bbox/scores), `dossier_text` (character indices) | ONNX-based face detection with 468-point mesh landmarks |
+
+Additional analyzer types (`depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`) are planned.
+
+### Shader Access
+
+Preprocessor textures are accessed like any other texture. Bindings follow the standard layout — preprocessor textures appear after imported textures:
+
+```glsl
+layout(set = 0, binding = N) uniform texture2D landmarks;    // wireframe overlay
+layout(set = 0, binding = N+1) uniform texture2D face_data;  // packed bbox/score data
+layout(set = 0, binding = N+2) uniform texture2D dossier_text; // character indices
+
+void main() {
+    // Read face bounding box from data texture
+    vec4 bbox = texelFetch(sampler2D(face_data, texSampler), ivec2(0, 0), 0);
+    float x = bbox.r;  // normalized x position
+    float y = bbox.g;  // normalized y position
+    float w = bbox.b;  // normalized width
+    float h = bbox.a;  // normalized height
+    // ...
+}
+```
+
+### Lifecycle
+
+- Analyzers start automatically when a shader declaring them is loaded onto a deck
+- Multiple shaders requesting the same analyzer type share a single instance (refcounted)
+- When the last shader using an analyzer is removed, the analyzer stops and frees resources
+- If an analyzer fails to initialize (missing model file, unsupported platform), the shader still loads — preprocessor textures fall back to 1×1 black
+
+### Use Cases
+
+- **ML-powered effects**: face detection overlays, body segmentation masks, depth-aware fog
+- **Sensor integration**: external data sources encoded as textures (hardware sensors, network data)
+- **Rich data processing**: any CPU-side computation too complex for fragment shaders (physics simulations, pathfinding, text layout)
+
+
 ## Hot-Reload
 
 Shaders in the `shaders/` directory are watched for changes. Save a `.fs` file and Varda:

@@ -803,7 +803,11 @@ mod tests {
             amplitude: 1.0,
             bipolar: true,
         });
-        engine.update(0.25, &crate::modulation::AudioValues::default());
+        engine.update(
+            0.25,
+            &crate::modulation::AudioValues::default(),
+            &crate::modulation::AnalyzerValues::default(),
+        );
         engine.assign("brightness", &uuid, 0.5, None);
 
         let modulated = params.build_modulated_buffer_data(&engine, None).to_vec();
@@ -818,7 +822,11 @@ mod tests {
         let mut params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(crate::modulation::ModulationSource::sine_lfo(1.0));
-        engine.update(0.25, &crate::modulation::AudioValues::default());
+        engine.update(
+            0.25,
+            &crate::modulation::AudioValues::default(),
+            &crate::modulation::AnalyzerValues::default(),
+        );
         // Assign with prefix "deck0:brightness"
         engine.assign("deck0:brightness", &uuid, 0.5, None);
 

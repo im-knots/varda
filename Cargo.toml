@@ -73,6 +73,9 @@ usvg = "0.47.0"
 dxf = "0.6.1"
 base64 = "0.22.1"
 dirs = "6.0.0"
+arc-swap = "1.9.1"
+ort = "2.0.0-rc.12"
+ndarray = "0.17.2"
 
 [features]
 test-fixtures = []

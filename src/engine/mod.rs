@@ -704,6 +704,26 @@ pub enum EngineCommand {
         param_name: String,
     },
 
+    // ── Analyzers ──────────────────────────────────────────────────
+    RequestAnalyzer {
+        deck_id: String,
+        analyzer_type: String,
+        options: serde_json::Value,
+    },
+    ReleaseAnalyzer {
+        deck_id: String,
+        analyzer_type: String,
+    },
+    AddAnalyzerModSource {
+        deck_id: String,
+        analyzer_type: String,
+        output_name: String,
+    },
+    UpdateAnalyzerSmoothing {
+        uuid: String,
+        smoothing: f32,
+    },
+
     // ── Device Scanning ────────────────────────────────────────
     RescanNdi,
     RescanSyphon,

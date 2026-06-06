@@ -1,6 +1,8 @@
 //! ModulationEngine — manages sources, assignments, and per-frame evaluation.
 
-use super::{AudioValues, ModulationSource, ModulationSourceEntry, ParamModulation};
+use super::{
+    AnalyzerValues, AudioValues, ModulationSource, ModulationSourceEntry, ParamModulation,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -264,6 +266,10 @@ impl ModulationEngine {
             ModulationSource::StepSequencer { rate, .. } => {
                 *rate = (*rate + self.get_mod_source_offset(uuid, "rate")).max(0.01);
             }
+            ModulationSource::Analyzer { smoothing, .. } => {
+                *smoothing =
+                    (*smoothing + self.get_mod_source_offset(uuid, "smoothing")).clamp(0.0, 0.99);
+            }
         }
         modified
     }
@@ -351,7 +357,7 @@ impl ModulationEngine {
     }
 
     /// Update all source values for the current frame
-    pub fn update(&mut self, time: f32, audio: &AudioValues) {
+    pub fn update(&mut self, time: f32, audio: &AudioValues, analyzers: &AnalyzerValues) {
         self.ensure_index();
         let dt = self.prev_time.map_or(0.016, |prev| time - prev);
         self.prev_time = Some(time);
@@ -375,7 +381,7 @@ impl ModulationEngine {
             // Only clone + apply mod-on-mod if this source actually has mod-on-mod assignments
             let value = if i < self.has_mod_on_mod.len() && self.has_mod_on_mod[i] {
                 let mut effective = self.apply_mod_on_mod(i, &self.sources[i].source);
-                let v = effective.calculate(time, dt, audio, self.prev_values[i]);
+                let v = effective.calculate(time, dt, audio, analyzers, self.prev_values[i]);
 
                 // Copy back mutable state changes (ADSR stage progression)
                 if let (
@@ -402,7 +408,7 @@ impl ModulationEngine {
                 // No mod-on-mod: calculate directly on the source (no clone)
                 self.sources[i]
                     .source
-                    .calculate(time, dt, audio, self.prev_values[i])
+                    .calculate(time, dt, audio, analyzers, self.prev_values[i])
             };
 
             self.current_values[i] = value;

@@ -158,7 +158,8 @@ impl Deck {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let tex_b = context.device.create_texture(&wgpu::TextureDescriptor {
@@ -173,7 +174,8 @@ impl Deck {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             (tex, tex_b)
@@ -190,7 +192,8 @@ impl Deck {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let tex_b = context.device.create_texture(&wgpu::TextureDescriptor {
@@ -205,7 +208,8 @@ impl Deck {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             (tex, tex_b)
@@ -293,6 +297,37 @@ impl Deck {
         let imported_textures =
             load_imported_textures(&shader.metadata, shader.file_path.as_deref(), context);
 
+        // Create preprocessor texture slots from ISF PREPROCESSORS declarations
+        let preprocessor_textures: Vec<super::PreprocessorSlot> = shader
+            .metadata
+            .preprocessors
+            .iter()
+            .map(|pp| {
+                let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(&format!("Preprocessor: {}", pp.name)),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                super::PreprocessorSlot {
+                    name: pp.name.clone(),
+                    analyzer_type: pp.preprocessor_type.clone(),
+                    options: pp.options.clone(),
+                    texture,
+                    view,
+                }
+            })
+            .collect();
+
         let pipeline = UnifiedPipeline::new(
             &context.device,
             &spirv,
@@ -301,6 +336,7 @@ impl Deck {
             pass_buffers.len(),
             uses_float,
             imported_textures.len(),
+            preprocessor_textures.len(),
         )
         .context("Failed to create shader pipeline")?;
 
@@ -322,6 +358,7 @@ impl Deck {
             pass_buffers,
             passes,
             imported_textures,
+            preprocessor_textures,
         };
 
         let source_path = match &source {
@@ -352,6 +389,7 @@ impl Deck {
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,
+            analyzers: crate::analyzer::DeckAnalyzers::new(),
         })
     }
 
@@ -722,7 +760,9 @@ impl Deck {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -738,7 +778,9 @@ impl Deck {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let texture_b_view = texture_b.create_view(&wgpu::TextureViewDescriptor::default());
@@ -769,6 +811,7 @@ impl Deck {
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs: None,
+            analyzers: crate::analyzer::DeckAnalyzers::new(),
         })
     }
 

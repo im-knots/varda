@@ -6,7 +6,7 @@ mod audio;
 mod engine;
 mod sources;
 
-pub use audio::{AudioSourceValues, AudioValues};
+pub use audio::{AnalyzerValues, AudioSourceValues, AudioValues};
 pub use engine::ModulationEngine;
 pub use sources::ModulationSource;
 
@@ -146,6 +146,10 @@ mod tests {
         AudioValues::default()
     }
 
+    fn empty_analyzers() -> AnalyzerValues {
+        AnalyzerValues::default()
+    }
+
     // ── LFO waveform tests ───────────────────────────────────────────
 
     #[test]
@@ -154,7 +158,7 @@ mod tests {
         let audio = empty_audio();
         for i in 0..100 {
             let t = i as f32 / 100.0;
-            let val = lfo.calculate(t, 0.01, &audio, 0.0);
+            let val = lfo.calculate(t, 0.01, &audio, &empty_analyzers(), 0.0);
             assert!(
                 val >= 0.0 && val <= 1.0,
                 "Sine unipolar out of range: {val} at t={t}"
@@ -174,7 +178,7 @@ mod tests {
         let audio = empty_audio();
         for i in 0..100 {
             let t = i as f32 / 100.0;
-            let val = lfo.calculate(t, 0.01, &audio, 0.0);
+            let val = lfo.calculate(t, 0.01, &audio, &empty_analyzers(), 0.0);
             assert!(
                 val >= -1.0 && val <= 1.0,
                 "Sine bipolar out of range: {val}"
@@ -192,8 +196,8 @@ mod tests {
             bipolar: true,
         };
         let audio = empty_audio();
-        let val_first = lfo.calculate(0.1, 0.01, &audio, 0.0);
-        let val_second = lfo.calculate(0.6, 0.01, &audio, 0.0);
+        let val_first = lfo.calculate(0.1, 0.01, &audio, &empty_analyzers(), 0.0);
+        let val_second = lfo.calculate(0.6, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!((val_first - 1.0).abs() < 1e-5);
         assert!((val_second - (-1.0)).abs() < 1e-5);
     }
@@ -208,8 +212,8 @@ mod tests {
             bipolar: true,
         };
         let audio = empty_audio();
-        let val_start = lfo.calculate(0.0, 0.01, &audio, 0.0);
-        let val_mid = lfo.calculate(0.5, 0.01, &audio, 0.0);
+        let val_start = lfo.calculate(0.0, 0.01, &audio, &empty_analyzers(), 0.0);
+        let val_mid = lfo.calculate(0.5, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!(
             (val_start - (-1.0)).abs() < 1e-5,
             "Triangle at 0: {val_start}"
@@ -227,8 +231,8 @@ mod tests {
             bipolar: true,
         };
         let audio = empty_audio();
-        let val_0 = lfo.calculate(0.0, 0.01, &audio, 0.0);
-        let val_half = lfo.calculate(0.5, 0.01, &audio, 0.0);
+        let val_0 = lfo.calculate(0.0, 0.01, &audio, &empty_analyzers(), 0.0);
+        let val_half = lfo.calculate(0.5, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!((val_0 - (-1.0)).abs() < 1e-5);
         assert!((val_half - 0.0).abs() < 1e-5);
     }
@@ -245,7 +249,7 @@ mod tests {
         let audio = empty_audio();
         for i in 0..100 {
             let t = i as f32 / 100.0;
-            let val = lfo.calculate(t, 0.01, &audio, 0.0);
+            let val = lfo.calculate(t, 0.01, &audio, &empty_analyzers(), 0.0);
             assert!(val >= -0.5 && val <= 0.5, "Amplitude scaling off: {val}");
         }
     }
@@ -255,8 +259,8 @@ mod tests {
         let mut lfo_slow = ModulationSource::sine_lfo(1.0);
         let mut lfo_fast = ModulationSource::sine_lfo(2.0);
         let audio = empty_audio();
-        let slow = lfo_slow.calculate(0.25, 0.01, &audio, 0.0);
-        let fast = lfo_fast.calculate(0.25, 0.01, &audio, 0.0);
+        let slow = lfo_slow.calculate(0.25, 0.01, &audio, &empty_analyzers(), 0.0);
+        let fast = lfo_fast.calculate(0.25, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!((slow - fast).abs() > 0.1);
     }
 
@@ -270,8 +274,8 @@ mod tests {
             bipolar: true,
         };
         let audio = empty_audio();
-        let val1 = lfo.calculate(0.3, 0.01, &audio, 0.0);
-        let val2 = lfo.calculate(0.3, 0.01, &audio, 0.0);
+        let val1 = lfo.calculate(0.3, 0.01, &audio, &empty_analyzers(), 0.0);
+        let val2 = lfo.calculate(0.3, 0.01, &audio, &empty_analyzers(), 0.0);
         assert_eq!(
             val1, val2,
             "Random LFO should be deterministic for same time"
@@ -284,7 +288,7 @@ mod tests {
     fn adsr_idle_is_zero() {
         let mut adsr = ModulationSource::adsr(0.1, 0.1, 0.5, 0.1);
         let audio = empty_audio();
-        let val = adsr.calculate(0.0, 0.016, &audio, 0.0);
+        let val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), 0.0);
         assert_eq!(val, 0.0);
     }
 
@@ -295,7 +299,7 @@ mod tests {
         let audio = empty_audio();
         let mut val = 0.0;
         for _ in 0..20 {
-            val = adsr.calculate(0.0, 0.01, &audio, val);
+            val = adsr.calculate(0.0, 0.01, &audio, &empty_analyzers(), val);
         }
         assert!(
             val > 0.4,
@@ -310,7 +314,7 @@ mod tests {
         let audio = empty_audio();
         let mut val = 0.0;
         for _ in 0..100 {
-            val = adsr.calculate(0.0, 0.01, &audio, val);
+            val = adsr.calculate(0.0, 0.01, &audio, &empty_analyzers(), val);
         }
         assert!(
             (val - 0.7).abs() < 0.05,
@@ -325,11 +329,11 @@ mod tests {
         let audio = empty_audio();
         let mut val = 0.0;
         for _ in 0..50 {
-            val = adsr.calculate(0.0, 0.01, &audio, val);
+            val = adsr.calculate(0.0, 0.01, &audio, &empty_analyzers(), val);
         }
         adsr.gate_off();
         for _ in 0..50 {
-            val = adsr.calculate(0.0, 0.01, &audio, val);
+            val = adsr.calculate(0.0, 0.01, &audio, &empty_analyzers(), val);
         }
         assert!(val < 0.05, "ADSR should release to near zero: {val}");
     }
@@ -339,7 +343,7 @@ mod tests {
         let mut adsr = ModulationSource::adsr(0.1, 0.1, 0.5, 0.1);
         adsr.gate_off();
         let audio = empty_audio();
-        let val = adsr.calculate(0.0, 0.016, &audio, 0.0);
+        let val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), 0.0);
         assert_eq!(val, 0.0);
     }
 
@@ -354,9 +358,9 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = seq.calculate(0.0, 0.01, &audio, 0.0);
+        let val = seq.calculate(0.0, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!((val - 0.0).abs() < 1e-5);
-        let val = seq.calculate(0.25, 0.01, &audio, 0.0);
+        let val = seq.calculate(0.25, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!((val - 0.5).abs() < 1e-5);
     }
 
@@ -369,7 +373,7 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = seq.calculate(0.5, 0.01, &audio, 0.0);
+        let val = seq.calculate(0.5, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!((val - 0.5).abs() < 0.01, "Linear interp mid: {val}");
     }
 
@@ -382,9 +386,9 @@ mod tests {
             bipolar: true,
         };
         let audio = empty_audio();
-        let val = seq.calculate(0.0, 0.01, &audio, 0.0);
+        let val = seq.calculate(0.0, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!((val - (-1.0)).abs() < 1e-5);
-        let val = seq.calculate(1.0, 0.01, &audio, 0.0);
+        let val = seq.calculate(1.0, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!((val - 1.0).abs() < 1e-5);
     }
 
@@ -397,7 +401,7 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = seq.calculate(0.5, 0.01, &audio, 0.0);
+        let val = seq.calculate(0.5, 0.01, &audio, &empty_analyzers(), 0.0);
         assert_eq!(val, 0.0);
     }
 
@@ -410,7 +414,7 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = seq.calculate(0.5, 0.01, &audio, 0.0);
+        let val = seq.calculate(0.5, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!(val > 0.0 && val < 1.0, "Smooth interp: {val}");
         assert!(
             (val - 0.5).abs() < 0.01,
@@ -519,7 +523,7 @@ mod tests {
     fn engine_assign_and_get_modulation() {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.update(0.25, &empty_audio());
+        engine.update(0.25, &empty_audio(), &empty_analyzers());
         engine.assign("brightness", &uuid, 1.0, None);
         let _mod_val = engine.get_modulation("brightness");
     }
@@ -538,7 +542,7 @@ mod tests {
     fn engine_update_computes_values() {
         let mut engine = ModulationEngine::new();
         engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.update(0.0, &empty_audio());
+        engine.update(0.0, &empty_audio(), &empty_analyzers());
         let values = engine.current_values();
         assert_eq!(values.len(), 1);
     }
@@ -549,7 +553,7 @@ mod tests {
         let lfo0 = engine.add_source(ModulationSource::sine_lfo(1.0));
         let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
         engine.assign_mod_on_mod(&lfo0, "frequency", &lfo1, 0.5);
-        engine.update(1.0, &empty_audio());
+        engine.update(1.0, &empty_audio(), &empty_analyzers());
         assert!(engine.current_values().len() == 2);
     }
 
@@ -570,7 +574,7 @@ mod tests {
         let uuid = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
         engine.trigger_adsr(&uuid);
         for i in 0..20 {
-            engine.update(i as f32 * 0.01, &empty_audio());
+            engine.update(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
         }
         let val = engine.current_value_for(&uuid);
         assert!(val > 0.0, "ADSR should produce non-zero after trigger");
@@ -582,11 +586,11 @@ mod tests {
         let uuid = engine.add_source(ModulationSource::adsr(0.01, 0.01, 0.5, 0.01));
         engine.trigger_adsr(&uuid);
         for i in 0..30 {
-            engine.update(i as f32 * 0.01, &empty_audio());
+            engine.update(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
         }
         engine.release_adsr(&uuid);
         for i in 30..80 {
-            engine.update(i as f32 * 0.01, &empty_audio());
+            engine.update(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
         }
         let val = engine.current_value_for(&uuid);
         assert!(val < 0.1, "ADSR should be near zero after release: {}", val);
@@ -611,7 +615,7 @@ mod tests {
     fn engine_component_modulation() {
         let mut engine = ModulationEngine::new();
         let uuid = engine.add_source(ModulationSource::sine_lfo(1.0));
-        engine.update(0.25, &empty_audio());
+        engine.update(0.25, &empty_audio(), &empty_analyzers());
         engine.assign("color", &uuid, 1.0, Some(0));
         engine.assign("color", &uuid, 0.5, Some(1));
         let r_mod = engine.get_modulation_for_component("color", Some(0));
@@ -702,7 +706,7 @@ mod tests {
                 sample_rate: 48000.0,
             },
         );
-        let val = source.calculate(0.0, 0.01, &audio, 0.0);
+        let val = source.calculate(0.0, 0.01, &audio, &empty_analyzers(), 0.0);
         assert_eq!(val, 0.0, "Below noise gate should be silent");
     }
 
@@ -792,7 +796,7 @@ mod tests {
         engine.assign_mod_on_mod(&a, "frequency", &c, 0.5);
         // Must complete without hanging, values must be finite
         let audio = AudioValues::default();
-        engine.update(1.0, &audio);
+        engine.update(1.0, &audio, &empty_analyzers());
         for v in engine.current_values() {
             assert!(v.is_finite(), "circular chain produced non-finite value");
         }
@@ -810,7 +814,7 @@ mod tests {
             engine.assign_mod_on_mod(&uuids[i + 1], "frequency", &uuids[i], 0.1);
         }
         let audio = AudioValues::default();
-        engine.update(1.0, &audio);
+        engine.update(1.0, &audio, &empty_analyzers());
         // All 5 sources should have been evaluated
         assert_eq!(engine.current_values().len(), 5);
         for v in engine.current_values() {
@@ -853,7 +857,7 @@ mod tests {
         assert_eq!(engine.source_count(), 2);
         // Should still update without panic
         let audio = AudioValues::default();
-        engine.update(1.0, &audio);
+        engine.update(1.0, &audio, &empty_analyzers());
         assert!(engine.has_source(&a));
         assert!(engine.has_source(&c));
     }
@@ -876,7 +880,7 @@ mod tests {
         let mut engine = ModulationEngine::new();
         let audio = AudioValues::default();
         // Update with 0 sources → no crash
-        engine.update(0.0, &audio);
+        engine.update(0.0, &audio, &empty_analyzers());
         assert_eq!(engine.source_count(), 0);
         assert!(engine.current_values().is_empty());
     }
@@ -920,7 +924,7 @@ mod tests {
         };
         let audio = empty_audio();
         for i in 0..100 {
-            let val = lfo.calculate(i as f32 * 0.01, 0.01, &audio, 0.0);
+            let val = lfo.calculate(i as f32 * 0.01, 0.01, &audio, &empty_analyzers(), 0.0);
             assert!(val.is_finite(), "LFO freq=0 produced non-finite: {val}");
         }
     }
@@ -935,7 +939,7 @@ mod tests {
             bipolar: true,
         };
         let audio = empty_audio();
-        let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
+        let val = lfo.calculate(1.0, 0.01, &audio, &empty_analyzers(), 0.0);
         // (Inf * 1.0 + 0.0) % 1.0 = NaN — document this
         let _ = val; // must not panic
     }
@@ -950,7 +954,7 @@ mod tests {
             bipolar: true,
         };
         let audio = empty_audio();
-        let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
+        let val = lfo.calculate(1.0, 0.01, &audio, &empty_analyzers(), 0.0);
         let _ = val; // must not panic
     }
 
@@ -964,7 +968,7 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = lfo.calculate(0.5, 0.01, &audio, 0.0);
+        let val = lfo.calculate(0.5, 0.01, &audio, &empty_analyzers(), 0.0);
         let _ = val; // must not panic
     }
 
@@ -978,7 +982,7 @@ mod tests {
             bipolar: true,
         };
         let audio = empty_audio();
-        let val = lfo.calculate(1.0, 0.01, &audio, 0.0);
+        let val = lfo.calculate(1.0, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!(
             val.is_finite(),
             "negative freq should produce finite: {val}"
@@ -1002,7 +1006,7 @@ mod tests {
                 amplitude: 1.0,
                 bipolar: true,
             };
-            let val = lfo.calculate(1e10, 0.01, &audio, 0.0);
+            let val = lfo.calculate(1e10, 0.01, &audio, &empty_analyzers(), 0.0);
             let _ = val; // must not panic
         }
     }
@@ -1018,7 +1022,7 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = seq.calculate(0.5, 0.01, &audio, 0.0);
+        let val = seq.calculate(0.5, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!(val.is_finite(), "single step produced non-finite: {val}");
     }
 
@@ -1031,7 +1035,7 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = seq.calculate(1.0, 0.01, &audio, 0.0);
+        let val = seq.calculate(1.0, 0.01, &audio, &empty_analyzers(), 0.0);
         let _ = val; // must not panic
     }
 
@@ -1044,7 +1048,7 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = seq.calculate(1.0, 0.01, &audio, 0.0);
+        let val = seq.calculate(1.0, 0.01, &audio, &empty_analyzers(), 0.0);
         let _ = val; // must not panic
     }
 
@@ -1057,7 +1061,7 @@ mod tests {
             bipolar: false,
         };
         let audio = empty_audio();
-        let val = seq.calculate(1.0, 0.01, &audio, 0.0);
+        let val = seq.calculate(1.0, 0.01, &audio, &empty_analyzers(), 0.0);
         assert!(val.is_finite(), "zero rate produced non-finite: {val}");
     }
 
@@ -1071,7 +1075,7 @@ mod tests {
         };
         let audio = empty_audio();
         for i in 0..20 {
-            let val = seq.calculate(i as f32 * 0.25, 0.01, &audio, 0.0);
+            let val = seq.calculate(i as f32 * 0.25, 0.01, &audio, &empty_analyzers(), 0.0);
             let _ = val; // must not panic
         }
     }
@@ -1085,12 +1089,12 @@ mod tests {
         let audio = empty_audio();
         let mut val = 0.0;
         for _ in 0..50 {
-            val = adsr.calculate(0.0, 0.016, &audio, val);
+            val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), val);
             assert!(val.is_finite(), "zero-time ADSR produced non-finite: {val}");
         }
         adsr.gate_off();
         for _ in 0..50 {
-            val = adsr.calculate(0.0, 0.016, &audio, val);
+            val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), val);
             assert!(val.is_finite(), "zero-time ADSR release non-finite: {val}");
         }
     }
@@ -1111,7 +1115,7 @@ mod tests {
         let audio = empty_audio();
         let mut val = 0.0;
         for _ in 0..20 {
-            val = adsr.calculate(0.0, 0.016, &audio, val);
+            val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), val);
         }
         // must not panic
     }
@@ -1123,7 +1127,7 @@ mod tests {
         let audio = empty_audio();
         let mut val = 0.0;
         for _ in 0..100 {
-            val = adsr.calculate(0.0, 0.016, &audio, val);
+            val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), val);
         }
         // Sustain = -1.0 may produce negative values — document, must not panic
     }
@@ -1135,11 +1139,11 @@ mod tests {
         let audio = empty_audio();
         let mut val = 0.0;
         for _ in 0..50 {
-            val = adsr.calculate(0.0, 0.016, &audio, val);
+            val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), val);
         }
         adsr.gate_off();
         for _ in 0..50 {
-            val = adsr.calculate(0.0, 0.016, &audio, val);
+            val = adsr.calculate(0.0, 0.016, &audio, &empty_analyzers(), val);
             // progress = stage_time / INFINITY = 0 — never completes release
         }
         // must not panic
@@ -1157,11 +1161,69 @@ mod tests {
             if i % 5 == 0 {
                 adsr.gate_off();
             }
-            val = adsr.calculate(0.0, 0.001, &audio, val);
+            val = adsr.calculate(0.0, 0.001, &audio, &empty_analyzers(), val);
             assert!(
                 val.is_finite(),
                 "rapid gate toggle produced non-finite at step {i}: {val}"
             );
         }
+    }
+
+    // ── Analyzer source tests ────────────────────────────────────────
+
+    #[test]
+    fn analyzer_source_reads_from_values() {
+        let mut src = ModulationSource::Analyzer {
+            deck_id: "deck-1".into(),
+            analyzer_type: "brightness".into(),
+            output_name: "brightness".into(),
+            smoothing: 0.0, // no smoothing
+        };
+        let audio = empty_audio();
+        let mut av = AnalyzerValues::default();
+        av.insert(
+            "deck-1".into(),
+            "brightness".into(),
+            "brightness".into(),
+            0.75,
+        );
+        let val = src.calculate(0.0, 0.016, &audio, &av, 0.0);
+        assert!((val - 0.75).abs() < 1e-5, "Expected 0.75, got {val}");
+    }
+
+    #[test]
+    fn analyzer_source_smoothing() {
+        let mut src = ModulationSource::Analyzer {
+            deck_id: "d".into(),
+            analyzer_type: "brightness".into(),
+            output_name: "brightness".into(),
+            smoothing: 0.5,
+        };
+        let audio = empty_audio();
+        let mut av = AnalyzerValues::default();
+        av.insert("d".into(), "brightness".into(), "brightness".into(), 1.0);
+
+        // First frame: alpha=0.5, prev=0.0 → 0.5*1.0 + 0.5*0.0 = 0.5
+        let v1 = src.calculate(0.0, 0.016, &audio, &av, 0.0);
+        assert!((v1 - 0.5).abs() < 1e-5, "Expected 0.5, got {v1}");
+
+        // Second frame: 0.5*1.0 + 0.5*0.5 = 0.75
+        let v2 = src.calculate(0.016, 0.016, &audio, &av, v1);
+        assert!((v2 - 0.75).abs() < 1e-5, "Expected 0.75, got {v2}");
+    }
+
+    #[test]
+    fn analyzer_source_missing_returns_zero() {
+        let mut src = ModulationSource::Analyzer {
+            deck_id: "nonexistent".into(),
+            analyzer_type: "brightness".into(),
+            output_name: "brightness".into(),
+            smoothing: 0.0,
+        };
+        let val = src.calculate(0.0, 0.016, &empty_audio(), &empty_analyzers(), 0.5);
+        assert!(
+            val.abs() < 1e-5,
+            "Missing analyzer should return 0.0, got {val}"
+        );
     }
 }

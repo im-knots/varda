@@ -1,12 +1,17 @@
 //! Modulation source types and their computation logic.
 
 use super::{
-    ADSRStage, AudioBandPreset, AudioReactMode, AudioValues, LFOWaveform, StepInterpolation,
+    ADSRStage, AnalyzerValues, AudioBandPreset, AudioReactMode, AudioValues, LFOWaveform,
+    StepInterpolation,
 };
 use serde::{Deserialize, Serialize};
 
 fn default_noise_gate() -> f32 {
     0.1
+}
+
+fn default_analyzer_smoothing() -> f32 {
+    0.3
 }
 
 /// Modulation source types
@@ -53,6 +58,18 @@ pub enum ModulationSource {
         rate: f32,
         interpolation: StepInterpolation,
         bipolar: bool,
+    },
+    /// Analyzer output — reads scalar values from a running analyzer on a specific deck.
+    Analyzer {
+        /// UUID of the deck whose analyzer to read from.
+        deck_id: String,
+        /// Type of analyzer (e.g. "brightness", "face_detect").
+        analyzer_type: String,
+        /// Name of the scalar output (e.g. "brightness", "face_x").
+        output_name: String,
+        /// Smoothing factor (0.0 = no smoothing, 0.99 = heavy smoothing).
+        #[serde(default = "default_analyzer_smoothing")]
+        smoothing: f32,
     },
 }
 
@@ -135,6 +152,20 @@ impl ModulationSource {
                     bipolar: b2,
                 },
             ) => s1 == s2 && r1 == r2 && i1 == i2 && b1 == b2,
+            (
+                ModulationSource::Analyzer {
+                    deck_id: d1,
+                    analyzer_type: at1,
+                    output_name: on1,
+                    smoothing: sm1,
+                },
+                ModulationSource::Analyzer {
+                    deck_id: d2,
+                    analyzer_type: at2,
+                    output_name: on2,
+                    smoothing: sm2,
+                },
+            ) => d1 == d2 && at1 == at2 && on1 == on2 && sm1 == sm2,
             _ => false,
         }
     }
@@ -216,7 +247,14 @@ impl ModulationSource {
 
     /// Calculate current value of this modulation source.
     /// Returns value in range [-1, 1] for bipolar or [0, 1] for unipolar.
-    pub fn calculate(&mut self, time: f32, dt: f32, audio: &AudioValues, prev_value: f32) -> f32 {
+    pub fn calculate(
+        &mut self,
+        time: f32,
+        dt: f32,
+        audio: &AudioValues,
+        analyzers: &AnalyzerValues,
+        prev_value: f32,
+    ) -> f32 {
         match self {
             ModulationSource::LFO {
                 waveform,
@@ -410,6 +448,17 @@ impl ModulationSource {
                 } else {
                     raw
                 }
+            }
+            ModulationSource::Analyzer {
+                deck_id,
+                analyzer_type,
+                output_name,
+                smoothing,
+            } => {
+                let raw = analyzers.get(deck_id, analyzer_type, output_name);
+                // Exponential smoothing: smoothed = α * raw + (1 - α) * prev
+                let alpha = 1.0 - *smoothing;
+                alpha * raw + *smoothing * prev_value
             }
         }
     }

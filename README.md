@@ -10,9 +10,10 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
 - **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, HLS, DASH, RTMP/RTMPS, images
 - **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 6 blend modes
-- **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations. 
+- **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations.
 - **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
 - **Modulation**: LFO, audio-reactive, ADSR, step sequencer, mod-on-mod chaining on any parameter
+- **Analyzer preprocessors**: ML-powered analysis, sensor data interpretation, and more injected as shader data textures via ISF `PREPROCESSORS` declarations. CPU/GPU hybrid pipeline for effects that need structured data vanilla GLSL can't produce
 - **Audio**: 2048-bin FFT, beat detection, bass/mid/treble bands, BPM with beat phase
 - **Control**: MIDI, OSC, and HTTP API co-equal consumers of the same engine
 - **Projection mapping**: 2D stage editor, polygon/circle surfaces, per-surface corner-pin warp, calibration cards, edge blending (Auto with precise polygon overlap detection, Manual per-edge)
@@ -22,7 +23,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 - **Presets**: save/load deck and channel presets with modulation recipes
 - **Persistence**: full scene/venue/MIDI state saved and restored across sessions
 
-Experimental: 
+Experimental:
 - **Dome projection**: fisheye to equirectangular (360°) and cubemap (3D) rendering with configurable lens correction and chromatic aberration.
 - **Surface overlap zones**: manual and auto-detect modes for precise edge blending.
 
@@ -68,6 +69,8 @@ All releases bundle FFmpeg and NDI, no extra dependencies needed.
 
 ## Build from source
 
+For bleeding edge features and bug fixes you can compile Varda from source.
+
 Requires [Rust](https://rustup.rs/) (stable) and a GPU with Metal (macOS) or Vulkan (Linux) support.
 
 ### Ubuntu / Debian
@@ -90,7 +93,7 @@ sudo ./Install_NDI_SDK_v6_Linux.sh
 sudo cp -P NDI\ SDK\ for\ Linux/lib/x86_64-linux-gnu/* /usr/local/lib/
 sudo ldconfig
 ```
-Without it, NDI features are silently disabled 
+Without it, NDI features are silently disabled
 
 ### macOS
 
@@ -111,7 +114,7 @@ cargo build --release
 ### Run from source
 
 ```
-cargo run
+cargo run --release
 ```
 
 ## The Varda workspace
@@ -127,7 +130,7 @@ your-show/
     presets/
       decks/              # saved deck presets (JSON)
       channels/           # saved channel presets (JSON)
-    shaders/              # ISF shaders 
+    shaders/              # ISF shaders
     controller-profiles/  # MIDI controller profiles (JSON)
     recordings/           # recording output files
     streams/              # HLS/DASH output files

@@ -1,3 +1,4 @@
+pub mod analyzer;
 pub mod audio;
 pub mod camera;
 pub mod channel;

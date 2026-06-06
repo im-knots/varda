@@ -61,6 +61,9 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                         format!("ADSR {} {}", idx + 1, stage_icon)
                     }
                     ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", idx + 1),
+                    ModSourceUI::Analyzer { analyzer_type, .. } => {
+                        format!("Analyzer {} {}", analyzer_type, idx + 1)
+                    }
                 };
                 // Show current value in header if available
                 let value_text = data.modulation_current_values.get(sid)
@@ -422,6 +425,12 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                             }
                             ModSourceUI::StepSequencer { steps, rate, interpolation, bipolar } => {
                                 render_step_sequencer_controls(ui, idx, sid, steps, *rate, interpolation, *bipolar, mod_color, data, actions);
+                            }
+                            ModSourceUI::Analyzer { deck_id, analyzer_type, output_name, smoothing } => {
+                                ui.label(format!("Deck: {}", deck_id));
+                                ui.label(format!("Type: {}", analyzer_type));
+                                ui.label(format!("Output: {}", output_name));
+                                ui.label(format!("Smoothing: {:.2}", smoothing));
                             }
                         }
                     });
@@ -824,6 +833,9 @@ pub(super) fn render_mod_on_mod_dropdown(
                     } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
                     ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                     ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
+                    ModSourceUI::Analyzer { analyzer_type, .. } => {
+                        format!("Analyzer {} {}", analyzer_type, src_idx + 1)
+                    }
                 };
                 if ui
                     .button(

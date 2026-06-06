@@ -173,6 +173,7 @@ pub(crate) mod tests {
                         video_playback: None,
                         auto_transition: None,
                         fps: 60.0,
+                        running_analyzers: vec![],
                     }],
                     effects: vec![],
                     render_time_ms: 0.5,
@@ -265,6 +266,7 @@ pub(crate) mod tests {
             syphon_sources: vec![],
             syphon_available: false,
             stream_receivers: vec![],
+            analyzers: vec![],
         }
     }
 

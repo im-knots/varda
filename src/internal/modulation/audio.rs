@@ -49,3 +49,54 @@ impl AudioValues {
             .map(|(_, v)| v)
     }
 }
+
+/// Analyzer scalar values collected from all decks for the current frame.
+/// Used by `ModulationSource::Analyzer` to read analysis results.
+#[derive(Debug, Default)]
+pub struct AnalyzerValues {
+    entries: Vec<AnalyzerValueEntry>,
+}
+
+#[derive(Debug)]
+struct AnalyzerValueEntry {
+    deck_id: String,
+    analyzer_type: String,
+    output_name: String,
+    value: f32,
+}
+
+impl AnalyzerValues {
+    /// Look up a scalar analyzer output. Returns 0.0 if not found.
+    pub fn get(&self, deck_id: &str, analyzer_type: &str, output_name: &str) -> f32 {
+        self.entries
+            .iter()
+            .find(|e| {
+                e.deck_id == deck_id
+                    && e.analyzer_type == analyzer_type
+                    && e.output_name == output_name
+            })
+            .map(|e| e.value)
+            .unwrap_or(0.0)
+    }
+
+    /// Add a scalar value entry. Called when collecting from deck analyzers.
+    pub fn insert(
+        &mut self,
+        deck_id: String,
+        analyzer_type: String,
+        output_name: String,
+        value: f32,
+    ) {
+        self.entries.push(AnalyzerValueEntry {
+            deck_id,
+            analyzer_type,
+            output_name,
+            value,
+        });
+    }
+
+    /// Clear all entries (for reuse across frames without reallocation).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}

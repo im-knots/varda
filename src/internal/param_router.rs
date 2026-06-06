@@ -231,6 +231,10 @@ fn apply_mod_param(source: &mut ModulationSource, param_name: &str, value: f32) 
             "rate" => *rate = 0.1 + value * 19.9,
             _ => log::warn!("Unknown StepSeq param: {}", param_name),
         },
+        ModulationSource::Analyzer { smoothing, .. } => match param_name {
+            "smoothing" => *smoothing = (value * 0.99).clamp(0.0, 0.99),
+            _ => log::warn!("Unknown Analyzer param: {}", param_name),
+        },
     }
 }
 

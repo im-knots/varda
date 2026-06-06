@@ -831,3 +831,58 @@ pub async fn reset_generator_params(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
+
+#[derive(Deserialize, ToSchema)]
+pub struct RequestAnalyzerBody {
+    /// Analyzer type to request (e.g. "face_detect", "brightness").
+    pub analyzer_type: String,
+    /// Options passed to the analyzer (optional, default empty object).
+    #[serde(default)]
+    pub options: serde_json::Value,
+}
+
+#[utoipa::path(post, path = "/api/decks/{deck_id}/analyzers",
+    params(("deck_id" = String, Path, description = "Deck UUID")),
+    request_body = RequestAnalyzerBody,
+    responses((status = 200, body = CommandResult)),
+    tag = "Analyzers")]
+pub async fn request_analyzer(
+    State(state): State<SharedState>,
+    Path(deck_id): Path<String>,
+    Json(body): Json<RequestAnalyzerBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RequestAnalyzer {
+            deck_id,
+            analyzer_type: body.analyzer_type,
+            options: body.options,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(delete, path = "/api/decks/{deck_id}/analyzers/{analyzer_type}",
+    params(
+        ("deck_id" = String, Path, description = "Deck UUID"),
+        ("analyzer_type" = String, Path, description = "Analyzer type to release"),
+    ),
+    responses((status = 200, body = CommandResult)),
+    tag = "Analyzers")]
+pub async fn release_analyzer(
+    State(state): State<SharedState>,
+    Path((deck_id, analyzer_type)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::ReleaseAnalyzer {
+            deck_id,
+            analyzer_type,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}

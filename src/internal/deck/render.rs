@@ -1,6 +1,8 @@
 //! Deck rendering — source rendering, effect chain, video frame updates, and resize.
 
-use super::{Deck, DeckSource, PassBuffer, ScalingMode};
+use super::{Deck, DeckSource, PassBuffer, PreprocessorSlot, ScalingMode};
+use crate::analyzer::traits::TextureData;
+use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers};
 use crate::audio::AudioData;
 use crate::isf::{ISFPass, PhaseInput};
 use crate::modulation::ModulationEngine;
@@ -10,6 +12,61 @@ use crate::renderer::{GpuContext, ISFUniforms, UnifiedPipeline};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::time::Instant;
+
+/// Upload analyzer texture data to a preprocessor slot's GPU texture.
+///
+/// If dimensions changed, recreates the texture and view. Otherwise writes data in place.
+fn upload_texture_to_slot(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    slot: &mut PreprocessorSlot,
+    tex_data: &TextureData,
+) {
+    if tex_data.width == 0 || tex_data.height == 0 || tex_data.data.is_empty() {
+        return;
+    }
+
+    let current_size = slot.texture.size();
+    if current_size.width != tex_data.width || current_size.height != tex_data.height {
+        // Dimensions changed — recreate texture
+        let new_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("Preprocessor: {}", slot.name)),
+            size: wgpu::Extent3d {
+                width: tex_data.width,
+                height: tex_data.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        slot.view = new_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        slot.texture = new_texture;
+    }
+
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &slot.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &tex_data.data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * tex_data.width),
+            rows_per_image: Some(tex_data.height),
+        },
+        wgpu::Extent3d {
+            width: tex_data.width,
+            height: tex_data.height,
+            depth_or_array_layers: 1,
+        },
+    );
+}
 
 /// Accumulate phase times: for each PhaseInput, adds `dt * param_value * scale` to the accumulator.
 fn accumulate_phase_times(
@@ -142,6 +199,55 @@ impl Deck {
         self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers)
     }
 
+    /// Ensure analyzers are running for all preprocessor slots that need them.
+    ///
+    /// Called once at deck creation or when effects change. Automatically
+    /// requests analyzer types declared in PREPROCESSORS blocks.
+    pub(crate) fn ensure_preprocessor_analyzers(&mut self, registry: &AnalyzerRegistry) {
+        // Collect all (analyzer_type, options) needed by preprocessor slots
+        let mut needed: Vec<(String, serde_json::Value)> = Vec::new();
+        if let DeckSource::Shader {
+            preprocessor_textures,
+            ..
+        } = &self.source
+        {
+            for slot in preprocessor_textures {
+                needed.push((slot.analyzer_type.clone(), slot.options.clone()));
+            }
+        }
+        for effect in &self.effects {
+            for slot in &effect.preprocessor_textures {
+                needed.push((slot.analyzer_type.clone(), slot.options.clone()));
+            }
+        }
+
+        // Deduplicate by analyzer_type and request each
+        let mut seen = std::collections::HashSet::new();
+        for (analyzer_type, options) in &needed {
+            if seen.insert(analyzer_type.clone())
+                && self.analyzers.latest_snapshot(analyzer_type).is_none()
+            {
+                if self
+                    .analyzers
+                    .request(analyzer_type, registry, options)
+                    .is_some()
+                {
+                    log::info!(
+                        "Deck '{}': auto-started analyzer '{}'",
+                        self.uuid,
+                        analyzer_type
+                    );
+                } else {
+                    log::warn!(
+                        "Deck '{}': failed to start analyzer '{}'",
+                        self.uuid,
+                        analyzer_type
+                    );
+                }
+            }
+        }
+    }
+
     /// Render the deck with a custom param prefix for modulation key lookup
     pub fn render_with_prefix(
         &mut self,
@@ -151,6 +257,17 @@ impl Deck {
         param_prefix: &str,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
+        // Update preprocessor textures from analyzer snapshots before rendering
+        if self.analyzers.has_active_instances() {
+            Self::update_preprocessor_textures(
+                &self.analyzers,
+                &context.device,
+                &context.queue,
+                &mut self.source,
+                &mut self.effects,
+            );
+        }
+
         let now = Instant::now();
         let time = (now - self.start_time).as_secs_f32();
         let time_delta = (now - self.last_frame_time).as_secs_f32();
@@ -193,10 +310,13 @@ impl Deck {
                 pass_buffers,
                 passes,
                 imported_textures,
+                preprocessor_textures,
                 ..
             } => {
                 let imported_views: Vec<&wgpu::TextureView> =
                     imported_textures.iter().map(|(_, _, v)| v).collect();
+                let preprocessor_views: Vec<&wgpu::TextureView> =
+                    preprocessor_textures.iter().map(|pp| &pp.view).collect();
                 if pipeline.num_pass_buffers > 0 {
                     Self::render_multi_pass_static(
                         context,
@@ -214,6 +334,7 @@ impl Deck {
                         modulation,
                         &param_prefix,
                         &imported_views,
+                        &preprocessor_views,
                         generator_phase_times,
                         cmd_buffers,
                     )?;
@@ -231,6 +352,7 @@ impl Deck {
                         modulation,
                         &param_prefix,
                         &imported_views,
+                        &preprocessor_views,
                         generator_phase_times,
                         cmd_buffers,
                     )?;
@@ -462,7 +584,49 @@ impl Deck {
             read_from_b = !read_from_b;
         }
 
+        // Capture frame for analyzer pipeline (non-blocking, one-frame latency)
+        if let Some(readback_cmd) = self.analyzers.capture_frame(&context.device, &self.texture) {
+            cmd_buffers.push(readback_cmd);
+        }
+
         Ok(())
+    }
+
+    /// Upload analyzer texture data into preprocessor slots.
+    ///
+    /// For each preprocessor slot (on source and effects), looks up the matching
+    /// analyzer snapshot and uploads texture data via `queue.write_texture()`.
+    /// If the texture dimensions changed, recreates the GPU texture.
+    fn update_preprocessor_textures(
+        analyzers: &DeckAnalyzers,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &mut DeckSource,
+        effects: &mut [super::Effect],
+    ) {
+        if let DeckSource::Shader {
+            preprocessor_textures,
+            ..
+        } = source
+        {
+            for slot in preprocessor_textures.iter_mut() {
+                if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type) {
+                    if let Some(tex_data) = snapshot.textures.get(&slot.name) {
+                        upload_texture_to_slot(device, queue, slot, tex_data);
+                    }
+                }
+            }
+        }
+
+        for effect in effects.iter_mut() {
+            for slot in effect.preprocessor_textures.iter_mut() {
+                if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type) {
+                    if let Some(tex_data) = snapshot.textures.get(&slot.name) {
+                        upload_texture_to_slot(device, queue, slot, tex_data);
+                    }
+                }
+            }
+        }
     }
 
     /// Render simple (non-multi-pass) shader (static version)
@@ -479,6 +643,7 @@ impl Deck {
         modulation: &ModulationEngine,
         param_prefix: &str,
         imported_views: &[&wgpu::TextureView],
+        preprocessor_views: &[&wgpu::TextureView],
         phase_times: [f32; 4],
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
@@ -515,6 +680,7 @@ impl Deck {
             None,
             &[],
             imported_views,
+            preprocessor_views,
             Some(user_params_buffer),
         );
 
@@ -568,6 +734,7 @@ impl Deck {
         modulation: &ModulationEngine,
         param_prefix: &str,
         imported_views: &[&wgpu::TextureView],
+        preprocessor_views: &[&wgpu::TextureView],
         phase_times: [f32; 4],
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
@@ -646,6 +813,7 @@ impl Deck {
                     None,
                     &pass_buffer_views,
                     imported_views,
+                    preprocessor_views,
                     Some(user_params_buffer),
                 );
 
@@ -726,6 +894,7 @@ impl Deck {
                 None,
                 &pass_buffer_views,
                 imported_views,
+                preprocessor_views,
                 Some(user_params_buffer),
             );
 
@@ -831,7 +1000,9 @@ impl Deck {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         self.texture_view = self
@@ -848,7 +1019,9 @@ impl Deck {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         self.texture_b_view = self

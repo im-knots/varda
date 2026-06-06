@@ -94,6 +94,13 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         video_playback,
                         auto_transition,
                         fps: slot.deck.fps(),
+                        running_analyzers: slot
+                            .deck
+                            .analyzers
+                            .running_types()
+                            .into_iter()
+                            .map(|t| RunningAnalyzerSnapshot { analyzer_type: t })
+                            .collect(),
                     }
                 })
                 .collect();
@@ -437,6 +444,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         #[cfg(not(target_os = "macos"))]
         syphon_available: false,
         stream_receivers: build_stream_receiver_snapshots(app),
+        analyzers: app.available_analyzers(),
     }
 }
 
@@ -624,6 +632,17 @@ pub(crate) fn build_ui_data(
                     rate: *rate,
                     interpolation: *interpolation,
                     bipolar: *bipolar,
+                },
+                ModulationSourceSnapshot::Analyzer {
+                    deck_id,
+                    analyzer_type,
+                    output_name,
+                    smoothing,
+                } => ModSourceUI::Analyzer {
+                    deck_id: deck_id.clone(),
+                    analyzer_type: analyzer_type.clone(),
+                    output_name: output_name.clone(),
+                    smoothing: *smoothing,
                 },
             };
             ModSourceUIEntry {

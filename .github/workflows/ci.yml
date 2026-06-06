@@ -16,7 +16,10 @@ env:
 jobs:
   check:
     name: fmt + test
-    runs-on: ubuntu-22.04
+    # ubuntu-24.04 (glibc 2.39) required: ort's prebuilt ONNX Runtime
+    # references __isoc23_strtol / __isoc23_strtoull / __isoc23_strtoll
+    # which only exist in glibc >= 2.38. ubuntu-22.04 (glibc 2.35) fails.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
