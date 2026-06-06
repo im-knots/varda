@@ -3,7 +3,7 @@
 //! These types are used in engine trait signatures and snapshot structs.
 //! They MUST NOT reference wgpu, egui, winit, or any GPU/UI framework types.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // Re-export existing clean value types from domain modules
 pub use crate::audio::AudioSourceId;
@@ -56,6 +56,7 @@ pub struct EngineState {
     pub syphon_available: bool,
     /// Active stream receiver configs (url, mode, connected)
     pub stream_receivers: Vec<StreamReceiverSnapshot>,
+    pub analyzers: Vec<AnalyzerTypeInfo>,
 }
 
 /// Snapshot of an active stream receiver for UI consumption.
@@ -163,6 +164,7 @@ pub struct DeckSnapshot {
     pub auto_transition: Option<AutoTransitionSnapshot>,
     /// Smoothed FPS from actual deck render pipeline timing
     pub fps: f32,
+    pub running_analyzers: Vec<RunningAnalyzerSnapshot>,
 }
 
 #[derive(Clone, Serialize)]
@@ -418,7 +420,7 @@ pub struct CameraSnapshot {
 // ── Analyzer Snapshot ──────────────────────────────────────────────
 
 /// Info about an available analyzer type (for UI discovery).
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AnalyzerTypeInfo {
     pub analyzer_type: String,
     pub scalar_outputs: Vec<AnalyzerScalarInfo>,
@@ -426,12 +428,17 @@ pub struct AnalyzerTypeInfo {
 }
 
 /// Info about a scalar output an analyzer produces.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AnalyzerScalarInfo {
     pub name: String,
     pub description: String,
     pub range: (f32, f32),
     pub default_smoothing: f32,
+}
+
+#[derive(Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RunningAnalyzerSnapshot {
+    pub analyzer_type: String,
 }
 
 #[cfg(test)]
@@ -548,6 +555,7 @@ mod tests {
             syphon_sources: vec![],
             syphon_available: false,
             stream_receivers: vec![],
+            analyzers: vec![],
         };
         assert!((state.fps - 60.0).abs() < 1e-5);
         assert_eq!(state.frame_count, 0);
@@ -621,6 +629,7 @@ mod tests {
             syphon_sources: vec![],
             syphon_available: false,
             stream_receivers: vec![],
+            analyzers: vec![],
         };
         let cloned = state.clone();
         assert!((cloned.mixer.crossfader - 0.5).abs() < 1e-5);
@@ -715,6 +724,7 @@ mod tests {
             video_playback: None,
             auto_transition: None,
             fps: 59.5,
+            running_analyzers: vec![],
         };
         assert!(d.mute);
         assert!(!d.solo);

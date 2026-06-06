@@ -247,6 +247,10 @@ impl DeckAnalyzers {
         !self.instances.is_empty()
     }
 
+    pub(crate) fn running_types(&self) -> Vec<String> {
+        self.instances.keys().cloned().collect()
+    }
+
     /// Stop all running instances.
     pub(crate) fn shutdown(&mut self) {
         let types: Vec<String> = self.instances.keys().cloned().collect();

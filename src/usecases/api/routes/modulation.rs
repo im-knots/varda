@@ -691,3 +691,56 @@ pub async fn remove_mod_on_mod(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
+
+#[derive(Deserialize, ToSchema)]
+pub struct AddAnalyzerModSourceBody {
+    /// UUID of the deck running the analyzer.
+    pub deck_id: String,
+    /// Analyzer type (e.g. "face_detect", "brightness").
+    pub analyzer_type: String,
+    /// Scalar output name from the analyzer (e.g. "face_x", "brightness").
+    pub output_name: String,
+}
+
+#[utoipa::path(post, path = "/api/modulation/analyzer",
+    request_body = AddAnalyzerModSourceBody,
+    responses((status = 200, body = CommandResult)),
+    tag = "Modulation")]
+pub async fn add_analyzer_mod_source(
+    State(state): State<SharedState>,
+    Json(body): Json<AddAnalyzerModSourceBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::AddAnalyzerModSource {
+            deck_id: body.deck_id,
+            analyzer_type: body.analyzer_type,
+            output_name: body.output_name,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(put, path = "/api/modulation/{uuid}/analyzer/smoothing",
+    params(("uuid" = String, Path, description = "Modulation source UUID")),
+    request_body = FloatBody,
+    responses((status = 200, body = CommandResult)),
+    tag = "Modulation")]
+pub async fn update_analyzer_smoothing(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<FloatBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::UpdateAnalyzerSmoothing {
+            uuid,
+            smoothing: b.value,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}

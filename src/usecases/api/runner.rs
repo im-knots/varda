@@ -88,6 +88,10 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::modulation::update_step_seq_bipolar, routes::modulation::set_step_seq_count,
         routes::modulation::update_step_seq_value,
         routes::modulation::assign_mod_on_mod, routes::modulation::remove_mod_on_mod,
+        // Analyzers
+        routes::library::analyzers,
+        routes::decks::request_analyzer, routes::decks::release_analyzer,
+        routes::modulation::add_analyzer_mod_source, routes::modulation::update_analyzer_smoothing,
         // Surfaces
         routes::surfaces::add_rect, routes::surfaces::add_polygon,
         routes::surfaces::add_circle, routes::surfaces::remove,
@@ -132,6 +136,7 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Effects", description = "Effect chain management"),
         (name = "Audio", description = "Audio device management"),
         (name = "Modulation", description = "LFO, audio-reactive, ADSR, step sequencer sources"),
+        (name = "Analyzers", description = "Analyzer lifecycle on decks"),
         (name = "Surfaces", description = "Surface geometry and mapping"),
         (name = "Outputs", description = "Output window management and warp"),
         (name = "Sequences", description = "Transition sequence automation"),
@@ -229,6 +234,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/library/ndi", get(routes::library::ndi))
         .route("/api/library/syphon", get(routes::library::syphon))
         .route("/api/library/monitors", get(routes::library::monitors))
+        .route("/api/library/analyzers", get(routes::library::analyzers))
         // ── Write: Mixer ────────────────────────────────────────
         .route(
             "/api/mixer/crossfader",
@@ -597,6 +603,22 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/modulation/mod-on-mod/remove",
             axum::routing::post(routes::modulation::remove_mod_on_mod),
+        )
+        .route(
+            "/api/decks/{deck_id}/analyzers",
+            axum::routing::post(routes::decks::request_analyzer),
+        )
+        .route(
+            "/api/decks/{deck_id}/analyzers/{analyzer_type}",
+            axum::routing::delete(routes::decks::release_analyzer),
+        )
+        .route(
+            "/api/modulation/analyzer",
+            axum::routing::post(routes::modulation::add_analyzer_mod_source),
+        )
+        .route(
+            "/api/modulation/{uuid}/analyzer/smoothing",
+            axum::routing::put(routes::modulation::update_analyzer_smoothing),
         )
         // ── Write: Surfaces extras ──────────────────────────────
         .route(

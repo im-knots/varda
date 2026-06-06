@@ -139,3 +139,14 @@ pub async fn monitors(State(state): State<SharedState>) -> impl IntoResponse {
         Err((status, msg)) => (status, msg).into_response(),
     }
 }
+
+/// GET /api/library/analyzers
+#[utoipa::path(get, path = "/api/library/analyzers",
+    responses((status = 200, body = Vec<crate::engine::types::AnalyzerTypeInfo>)),
+    tag = "Analyzers")]
+pub async fn analyzers(State(state): State<SharedState>) -> impl IntoResponse {
+    match read_or_error(&state) {
+        Ok(s) => Json(s.analyzers).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
+    }
+}

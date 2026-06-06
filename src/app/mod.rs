@@ -1586,6 +1586,59 @@ impl VardaApp {
                 CommandResult::Ok
             }
 
+            // ── Analyzers ────────────────────────────────────────
+            EngineCommand::RequestAnalyzer {
+                deck_id,
+                analyzer_type,
+                options,
+            } => match self.request_analyzer(&deck_id, &analyzer_type, &options) {
+                Ok(_) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::ReleaseAnalyzer {
+                deck_id,
+                analyzer_type,
+            } => {
+                self.release_analyzer(&deck_id, &analyzer_type);
+                CommandResult::Ok
+            }
+            EngineCommand::AddAnalyzerModSource {
+                deck_id,
+                analyzer_type,
+                output_name,
+            } => {
+                let source = crate::modulation::ModulationSource::Analyzer {
+                    deck_id,
+                    analyzer_type,
+                    output_name,
+                    smoothing: 0.3,
+                };
+                let uuid = self.mixer.modulation_mut().add_source(source);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::UpdateAnalyzerSmoothing { uuid, smoothing } => {
+                if let Some(src) = self.mixer.modulation_mut().source_mut(&uuid) {
+                    if let crate::modulation::ModulationSource::Analyzer { smoothing: s, .. } = src
+                    {
+                        *s = smoothing.clamp(0.0, 0.99);
+                        CommandResult::Ok
+                    } else {
+                        CommandResult::Err {
+                            code: ErrorCode::InvalidInput,
+                            message: "Source is not an analyzer".into(),
+                        }
+                    }
+                } else {
+                    CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: format!("Modulation source '{uuid}' not found"),
+                    }
+                }
+            }
+
             // ── Device Scanning ───────────────────────────────────
             EngineCommand::RescanNdi => {
                 self.external_io.ndi_manager.discover();
