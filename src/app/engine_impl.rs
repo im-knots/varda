@@ -44,12 +44,13 @@ impl MixerCommands for VardaApp {
             .iter()
             .find(|s| s.name() == shader_name)
             .context("Shader not found")?;
-        let deck = Deck::new(
+        let mut deck = Deck::new(
             &self.context,
             (*shader).clone(),
             self.render_width,
             self.render_height,
         )?;
+        deck.ensure_preprocessor_analyzers(&self.analyzer_registry);
         let ch = self
             .mixer
             .channel_mut(channel_idx)
@@ -329,6 +330,9 @@ impl MixerCommands for VardaApp {
                 let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
                 if deck_idx < ch.decks.len() {
                     ch.decks[deck_idx].deck.add_effect(effect);
+                    ch.decks[deck_idx]
+                        .deck
+                        .ensure_preprocessor_analyzers(&self.analyzer_registry);
                     log::info!(
                         "Added effect {} to ch{} deck {}",
                         shader_name,
@@ -651,6 +655,17 @@ impl ModulationQueries for VardaApp {
                         rate: *rate,
                         interpolation: *interpolation,
                         bipolar: *bipolar,
+                    },
+                    ModulationSource::Analyzer {
+                        deck_id,
+                        analyzer_type,
+                        output_name,
+                        smoothing,
+                    } => ModulationSourceSnapshot::Analyzer {
+                        deck_id: deck_id.clone(),
+                        analyzer_type: analyzer_type.clone(),
+                        output_name: output_name.clone(),
+                        smoothing: *smoothing,
                     },
                 };
                 ModulationSourceSnapshotEntry {
@@ -1088,6 +1103,78 @@ impl SurfaceQueries for VardaApp {
                 default_warp: s.default_warp.clone(),
             })
             .collect()
+    }
+}
+
+// ── Analyzer trait implementations ──────────────────────────────────
+
+impl AnalyzerQueries for VardaApp {
+    fn available_analyzers(&self) -> Vec<AnalyzerTypeInfo> {
+        self.analyzer_registry
+            .available_types()
+            .into_iter()
+            .filter_map(|t| {
+                let schema = self.analyzer_registry.schema_for(t)?;
+                Some(AnalyzerTypeInfo {
+                    analyzer_type: t.to_owned(),
+                    scalar_outputs: schema
+                        .scalars
+                        .iter()
+                        .map(|s| AnalyzerScalarInfo {
+                            name: s.name.clone(),
+                            description: s.description.clone(),
+                            range: s.range,
+                            default_smoothing: s.default_smoothing,
+                        })
+                        .collect(),
+                    texture_outputs: schema.textures.iter().map(|t| t.name.clone()).collect(),
+                })
+            })
+            .collect()
+    }
+
+    fn is_analyzer_running(&self, deck_id: &str, analyzer_type: &str) -> bool {
+        if let Some((ch, dk)) = self.mixer.find_deck_by_uuid(deck_id) {
+            self.mixer
+                .channel(ch)
+                .and_then(|c| c.decks.get(dk))
+                .and_then(|slot| slot.deck.analyzers.latest_snapshot(analyzer_type))
+                .is_some()
+        } else {
+            false
+        }
+    }
+}
+
+impl AnalyzerCommands for VardaApp {
+    fn request_analyzer(
+        &mut self,
+        deck_id: &str,
+        analyzer_type: &str,
+        options: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let (ch, dk) = self
+            .mixer
+            .find_deck_by_uuid(deck_id)
+            .ok_or_else(|| anyhow::anyhow!("Deck '{deck_id}' not found"))?;
+        let slot = self
+            .mixer
+            .channel_mut(ch)
+            .and_then(|c| c.decks.get_mut(dk))
+            .ok_or_else(|| anyhow::anyhow!("Deck slot not accessible"))?;
+        slot.deck
+            .analyzers
+            .request(analyzer_type, &self.analyzer_registry, options)
+            .ok_or_else(|| anyhow::anyhow!("Failed to start analyzer '{analyzer_type}'"))?;
+        Ok(())
+    }
+
+    fn release_analyzer(&mut self, deck_id: &str, analyzer_type: &str) {
+        if let Some((ch, dk)) = self.mixer.find_deck_by_uuid(deck_id) {
+            if let Some(slot) = self.mixer.channel_mut(ch).and_then(|c| c.decks.get_mut(dk)) {
+                slot.deck.analyzers.release(analyzer_type);
+            }
+        }
     }
 }
 

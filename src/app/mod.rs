@@ -197,6 +197,7 @@ pub struct VardaApp {
     audio_manager: AudioManager,
     camera_manager: CameraManager,
     registry: ShaderRegistry,
+    analyzer_registry: crate::analyzer::AnalyzerRegistry,
     context: GpuContext,
 
     // ── Domain sub-structs ───────────────────────────────────────
@@ -365,6 +366,7 @@ impl VardaApp {
             audio_manager,
             camera_manager: CameraManager::new(),
             registry,
+            analyzer_registry: crate::analyzer::default_registry(),
             context: gpu,
             input: InputSubsystem {
                 osc_receiver,

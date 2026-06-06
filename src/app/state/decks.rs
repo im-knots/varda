@@ -15,6 +15,7 @@ impl VardaApp {
         deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
     ) {
         let context = &self.context;
+        let analyzer_registry = &self.analyzer_registry;
         let mixer = &mut self.mixer;
 
         // Remove deck if requested
@@ -899,6 +900,9 @@ impl VardaApp {
                         match Effect::new(context, filter_shader.clone()) {
                             Ok(effect) => {
                                 ch.decks[deck_idx].deck.add_effect(effect);
+                                ch.decks[deck_idx]
+                                    .deck
+                                    .ensure_preprocessor_analyzers(analyzer_registry);
                                 log::info!(
                                     "Added effect {} to ch{} deck {}",
                                     filter_shader.name(),

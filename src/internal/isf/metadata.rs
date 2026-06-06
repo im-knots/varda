@@ -39,6 +39,27 @@ pub struct ISFMetadata {
     /// Phase input mappings: which params drive which phase accumulators
     #[serde(rename = "PHASE_INPUTS")]
     pub phase_inputs: Option<Vec<PhaseInput>>,
+
+    /// Preprocessor declarations (analyzers whose outputs are bound as textures/uniforms)
+    #[serde(rename = "PREPROCESSORS", default)]
+    pub preprocessors: Vec<ISFPreprocessor>,
+}
+
+/// Declares a preprocessor dependency — an analyzer whose texture/uniform outputs
+/// the shader wants injected as bindings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ISFPreprocessor {
+    /// Shader-visible name prefix (e.g. "depth" → `depth_depth_map` uniform)
+    #[serde(rename = "NAME")]
+    pub name: String,
+
+    /// Analyzer type to source from (e.g. "depth_estimate", "edge_detect", "face_detect")
+    #[serde(rename = "TYPE")]
+    pub preprocessor_type: String,
+
+    /// Options passed to the analyzer when starting it
+    #[serde(rename = "OPTIONS", default)]
+    pub options: serde_json::Value,
 }
 
 /// ISF input definition
@@ -215,6 +236,38 @@ mod tests {
         }"#;
         let meta: ISFMetadata = serde_json::from_str(json).unwrap();
         assert!(meta.phase_inputs.is_none());
+    }
+
+    #[test]
+    fn parse_preprocessors() {
+        let json = r#"{
+            "DESCRIPTION": "test",
+            "INPUTS": [],
+            "PREPROCESSORS": [
+                {
+                    "NAME": "depth",
+                    "TYPE": "depth_estimate",
+                    "OPTIONS": { "resolution": "half" }
+                },
+                {
+                    "NAME": "edges",
+                    "TYPE": "edge_detect"
+                }
+            ]
+        }"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.preprocessors.len(), 2);
+        assert_eq!(meta.preprocessors[0].name, "depth");
+        assert_eq!(meta.preprocessors[0].preprocessor_type, "depth_estimate");
+        assert_eq!(meta.preprocessors[1].name, "edges");
+        assert_eq!(meta.preprocessors[1].options, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn parse_without_preprocessors() {
+        let json = r#"{"DESCRIPTION": "test", "INPUTS": []}"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.preprocessors.is_empty());
     }
 
     #[test]

@@ -176,6 +176,22 @@ impl VardaApp {
                             for warn in &result.warnings {
                                 self.session.notifications.warn(warn.clone());
                             }
+
+                            // Start preprocessor analyzers for active decks restored from save.
+                            // A deck is "active" when it is not muted and has non-zero opacity.
+                            for ch in self.mixer.channels_mut() {
+                                let any_solo = ch.decks.iter().any(|s| s.solo);
+                                for slot in &mut ch.decks {
+                                    let active = !slot.mute
+                                        && (!any_solo || slot.solo)
+                                        && slot.opacity > 0.0;
+                                    if active {
+                                        slot.deck
+                                            .ensure_preprocessor_analyzers(&self.analyzer_registry);
+                                    }
+                                }
+                            }
+
                             log::info!(
                                 "Loaded scene with {} channels",
                                 scene_config.channels.len()

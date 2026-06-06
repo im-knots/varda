@@ -625,6 +625,17 @@ pub(crate) fn build_ui_data(
                     interpolation: *interpolation,
                     bipolar: *bipolar,
                 },
+                ModulationSourceSnapshot::Analyzer {
+                    deck_id,
+                    analyzer_type,
+                    output_name,
+                    smoothing,
+                } => ModSourceUI::Analyzer {
+                    deck_id: deck_id.clone(),
+                    analyzer_type: analyzer_type.clone(),
+                    output_name: output_name.clone(),
+                    smoothing: *smoothing,
+                },
             };
             ModSourceUIEntry {
                 uuid: entry.uuid.clone(),

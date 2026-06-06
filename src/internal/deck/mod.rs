@@ -93,6 +93,8 @@ pub enum DeckSource {
         passes: Vec<ISFPass>,
         /// GPU textures loaded from ISF IMPORTED images (sorted by name for deterministic binding)
         imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
+        /// Preprocessor texture slots for analyzer-driven textures
+        preprocessor_textures: Vec<PreprocessorSlot>,
     },
     /// Video file playback (ffmpeg CPU decode → RGBA)
     Video {
@@ -171,6 +173,20 @@ impl ExternalSourceKind {
     }
 }
 
+/// A preprocessor texture slot — holds a GPU texture that gets updated with analyzer output.
+pub struct PreprocessorSlot {
+    /// Name prefix for shader uniforms (e.g. "depth" → `depth_depth_map`)
+    pub name: String,
+    /// Analyzer type this preprocessor needs (e.g. "depth_estimate")
+    pub analyzer_type: String,
+    /// Options to pass when starting the analyzer
+    pub options: serde_json::Value,
+    /// GPU texture (initially 1×1 black, updated at runtime)
+    pub texture: wgpu::Texture,
+    /// Texture view for shader binding
+    pub view: wgpu::TextureView,
+}
+
 /// An effect in the deck's effect chain (ISF filter)
 pub struct Effect {
     /// Stable UUID for this effect (8-char hex)
@@ -186,6 +202,8 @@ pub struct Effect {
     pub target_format: wgpu::TextureFormat,
     /// GPU textures loaded from ISF IMPORTED images (sorted by name for deterministic binding)
     pub imported_textures: Vec<(String, wgpu::Texture, wgpu::TextureView)>,
+    /// Preprocessor textures from PREPROCESSORS declarations (placeholder until analyzer provides data)
+    pub preprocessor_textures: Vec<PreprocessorSlot>,
     /// Phase accumulators for smooth speed transitions
     pub phase_accumulators: [f32; 4],
     /// Phase input config from shader metadata
@@ -270,6 +288,9 @@ pub struct Deck {
 
     /// Phase input config from generator shader metadata
     generator_phase_inputs: Option<Vec<crate::isf::PhaseInput>>,
+
+    /// Per-deck analyzer instances (brightness, beat detection, etc.)
+    pub(crate) analyzers: crate::analyzer::DeckAnalyzers,
 }
 
 /// Accessors for Deck properties.

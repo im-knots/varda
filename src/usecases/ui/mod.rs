@@ -506,6 +506,12 @@ pub enum ModSourceUI {
         interpolation: StepInterpolation,
         bipolar: bool,
     },
+    Analyzer {
+        deck_id: String,
+        analyzer_type: String,
+        output_name: String,
+        smoothing: f32,
+    },
 }
 
 /// Infinite non-colliding modulation source colors via binary hue subdivision.

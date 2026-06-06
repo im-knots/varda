@@ -48,9 +48,9 @@ impl Default for ISFUniforms {
 /// Binding layout adapts to shader needs:
 ///   Simple generator:   [0: Uniforms, 1: UserParams]
 ///   Simple filter:      [0: Uniforms, 1: Sampler, 2: inputImage, 3: UserParams]
-///   Multi-pass gen:     [0: Uniforms, 1: Sampler, 2..N: passBuffers, N+1..M: imported, M+1: UserParams]
-///   Multi-pass filter:  [0: Uniforms, 1: Sampler, 2: inputImage, 3..N: passBuffers, N+1..M: imported, M+1: UserParams]
-///   With imported:      [0: Uniforms, 1: Sampler, ..., N+1..M: imported, M+1: UserParams]
+///   Multi-pass gen:     [0: Uniforms, 1: Sampler, 2..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: UserParams]
+///   Multi-pass filter:  [0: Uniforms, 1: Sampler, 2: inputImage, 3..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: UserParams]
+///   With imported:      [0: Uniforms, 1: Sampler, ..., N+1..M: imported, M+1..P: preprocessor, P+1: UserParams]
 pub struct UnifiedPipeline {
     /// Pipeline for the primary target format (surface_format passed at creation)
     pub pipeline: wgpu::RenderPipeline,
@@ -69,6 +69,8 @@ pub struct UnifiedPipeline {
     pub num_pass_buffers: usize,
     /// Number of imported texture bindings
     pub num_imported_textures: usize,
+    /// Number of preprocessor texture bindings
+    pub num_preprocessor_textures: usize,
     /// Default user params buffer (256 bytes of zeros)
     pub default_user_params_buffer: wgpu::Buffer,
     /// The binding index where user params live
@@ -84,6 +86,7 @@ impl UnifiedPipeline {
     /// - `num_pass_buffers`: number of persistent/pass buffer textures
     /// - `needs_float_pipeline`: create additional pipeline for Rgba32Float targets
     /// - `num_imported_textures`: number of ISF IMPORTED image textures
+    /// - `num_preprocessor_textures`: number of preprocessor texture bindings
     /// - `surface_format`: target texture format (Rgba8Unorm for decks, surface format for master)
     pub fn new(
         device: &wgpu::Device,
@@ -93,6 +96,7 @@ impl UnifiedPipeline {
         num_pass_buffers: usize,
         needs_float_pipeline: bool,
         num_imported_textures: usize,
+        num_preprocessor_textures: usize,
     ) -> Result<Self> {
         // Convert SPIR-V to WGSL using naga
         let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
@@ -121,7 +125,10 @@ impl UnifiedPipeline {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let has_textures = has_input_image || num_pass_buffers > 0 || num_imported_textures > 0;
+        let has_textures = has_input_image
+            || num_pass_buffers > 0
+            || num_imported_textures > 0
+            || num_preprocessor_textures > 0;
 
         // Build bind group layout entries dynamically
         let mut layout_entries = vec![];
@@ -222,6 +229,21 @@ impl UnifiedPipeline {
                     },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
+                },
+                count: None,
+            });
+            next_binding += 1;
+        }
+
+        // Preprocessor texture bindings (after imported, before user params)
+        for _ in 0..num_preprocessor_textures {
+            layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: next_binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
                 },
                 count: None,
             });
@@ -345,6 +367,7 @@ impl UnifiedPipeline {
             has_input_image,
             num_pass_buffers,
             num_imported_textures,
+            num_preprocessor_textures,
             default_user_params_buffer,
             user_params_binding,
             surface_format,
@@ -356,6 +379,7 @@ impl UnifiedPipeline {
     /// - `input_view`: Required for filters, the input texture to process
     /// - `pass_buffer_views`: Pass buffer textures (empty for non-multi-pass)
     /// - `imported_views`: ISF IMPORTED image texture views (empty if none)
+    /// - `preprocessor_views`: Preprocessor texture views (empty if none)
     /// - `user_params_buffer`: User params buffer (uses default if None)
     pub fn create_bind_group(
         &self,
@@ -363,6 +387,7 @@ impl UnifiedPipeline {
         input_view: Option<&wgpu::TextureView>,
         pass_buffer_views: &[&wgpu::TextureView],
         imported_views: &[&wgpu::TextureView],
+        preprocessor_views: &[&wgpu::TextureView],
         user_params_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
         let mut entries = vec![];
@@ -412,6 +437,15 @@ impl UnifiedPipeline {
             next_binding += 1;
         }
 
+        // Preprocessor texture views (after imported)
+        for view in preprocessor_views {
+            entries.push(wgpu::BindGroupEntry {
+                binding: next_binding,
+                resource: wgpu::BindingResource::TextureView(view),
+            });
+            next_binding += 1;
+        }
+
         // User params (always last)
         let params_buf = user_params_buffer.unwrap_or(&self.default_user_params_buffer);
         entries.push(wgpu::BindGroupEntry {
@@ -432,7 +466,7 @@ impl UnifiedPipeline {
         device: &wgpu::Device,
         user_params_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
-        self.create_bind_group(device, None, &[], &[], Some(user_params_buffer))
+        self.create_bind_group(device, None, &[], &[], &[], Some(user_params_buffer))
     }
 
     /// Update uniforms

@@ -186,6 +186,11 @@ pub fn render_params(
                                         ModSourceUI::StepSequencer { .. } => {
                                             format!("StepSeq {}", src_idx + 1)
                                         }
+                                        ModSourceUI::Analyzer {
+                                            ref analyzer_type, ..
+                                        } => {
+                                            format!("Analyzer {} {}", analyzer_type, src_idx + 1)
+                                        }
                                     };
                                     if ui
                                         .button(egui::RichText::new(&src_name).color(color))
@@ -378,6 +383,11 @@ pub fn render_effect_params(
                                         ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                                         ModSourceUI::StepSequencer { .. } => {
                                             format!("StepSeq {}", src_idx + 1)
+                                        }
+                                        ModSourceUI::Analyzer {
+                                            ref analyzer_type, ..
+                                        } => {
+                                            format!("Analyzer {} {}", analyzer_type, src_idx + 1)
                                         }
                                     };
                                     if ui

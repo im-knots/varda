@@ -67,7 +67,8 @@ impl VardaApp {
                     );
                 }
             }
-            self.mixer.update_modulation(&av);
+            let analyzer_vals = crate::modulation::AnalyzerValues::default();
+            self.mixer.update_modulation(&av, &analyzer_vals);
         }
 
         // Process OSC messages via shared param router

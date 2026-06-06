@@ -150,6 +150,27 @@ impl VardaApp {
         self.frame_stats.system_monitor.update();
     }
 
+    /// Collect all analyzer scalar values from all decks into a flat lookup table.
+    fn collect_analyzer_values(&self) -> crate::modulation::AnalyzerValues {
+        let mut vals = crate::modulation::AnalyzerValues::default();
+        for ch in self.mixer.channels() {
+            for slot in &ch.decks {
+                let deck_id = slot.deck.uuid();
+                for (analyzer_type, snapshot) in slot.deck.analyzers.all_snapshots() {
+                    for (name, value) in &snapshot.scalars {
+                        vals.insert(
+                            deck_id.to_owned(),
+                            analyzer_type.clone(),
+                            name.clone(),
+                            *value,
+                        );
+                    }
+                }
+            }
+        }
+        vals
+    }
+
     /// Render the mixer frame: update cameras, NDI, Syphon, collect audio, render mixer.
     /// This performs all GPU work that doesn't need the surface texture.
     pub fn render_mixer_frame(&mut self) {
@@ -254,10 +275,15 @@ impl VardaApp {
             primary_audio.time_since_beat = clock.beat_phase * (60.0 / clock.bpm);
         }
 
-        if let Err(e) = self
-            .mixer
-            .render(&self.context, &primary_audio, &audio_values)
-        {
+        // Collect analyzer scalar values from all decks
+        let analyzer_values = self.collect_analyzer_values();
+
+        if let Err(e) = self.mixer.render(
+            &self.context,
+            &primary_audio,
+            &audio_values,
+            &analyzer_values,
+        ) {
             log::error!("Failed to render mixer: {}", e);
         }
     }

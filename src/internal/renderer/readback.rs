@@ -137,25 +137,19 @@ impl ReadbackBuffer {
         // Mark mapped so we can clean up on timeout or next call
         self.mapped[read_idx] = true;
 
-        let poll_start = std::time::Instant::now();
-        loop {
-            match device.poll(wgpu::PollType::Poll) {
-                Ok(status) if status.is_queue_empty() => break,
-                Err(e) => {
-                    log::warn!("GPU poll error during readback: {}", e);
-                    // Buffer may or may not have completed mapping; leave mapped flag
-                    // set so begin_readback or next try_read will unmap defensively.
-                    return None;
-                }
-                _ => {}
-            }
-            if poll_start.elapsed() > std::time::Duration::from_millis(16) {
-                log::warn!("GPU readback timeout, skipping frame");
-                // map_async callback may fire later; mapped flag stays true
-                // so begin_readback will unmap before reusing this buffer.
+        // Block until the GPU copy from the previous frame completes.
+        // We use a generous timeout (100ms) rather than indefinite wait to avoid
+        // stalling the render thread if something goes wrong. The copy was submitted
+        // last frame so it should complete well within this window.
+        match device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_millis(100)),
+        }) {
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!("GPU readback poll error: {}", e);
                 return None;
             }
-            std::thread::yield_now();
         }
 
         match rx.recv() {

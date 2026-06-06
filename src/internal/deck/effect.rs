@@ -31,6 +31,38 @@ impl Effect {
         let imported_textures =
             load_imported_textures(&shader.metadata, shader.file_path.as_deref(), context);
 
+        // Create preprocessor texture slots from ISF PREPROCESSORS declarations
+        let preprocessor_textures: Vec<crate::deck::PreprocessorSlot> = shader
+            .metadata
+            .preprocessors
+            .iter()
+            .map(|pp| {
+                // Create a 1×1 placeholder texture (will be resized when analyzer provides data)
+                let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(&format!("Preprocessor: {}", pp.name)),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                crate::deck::PreprocessorSlot {
+                    name: pp.name.clone(),
+                    analyzer_type: pp.preprocessor_type.clone(),
+                    options: pp.options.clone(),
+                    texture,
+                    view,
+                }
+            })
+            .collect();
+
         let pipeline = UnifiedPipeline::new(
             &context.device,
             &spirv,
@@ -39,6 +71,7 @@ impl Effect {
             num_passes,
             uses_float,
             imported_textures.len(),
+            preprocessor_textures.len(),
         )
         .context("Failed to create effect pipeline")?;
 
@@ -142,6 +175,7 @@ impl Effect {
             passes,
             target_format,
             imported_textures,
+            preprocessor_textures,
             phase_accumulators: [0.0; 4],
             phase_inputs_config,
         })
@@ -199,6 +233,11 @@ impl Effect {
 
         let imported_views: Vec<&wgpu::TextureView> =
             self.imported_textures.iter().map(|(_, _, v)| v).collect();
+        let preprocessor_views: Vec<&wgpu::TextureView> = self
+            .preprocessor_textures
+            .iter()
+            .map(|pp| &pp.view)
+            .collect();
 
         let has_targeted_passes = self.passes.iter().any(|p| p.target.is_some());
 
@@ -238,6 +277,7 @@ impl Effect {
                         Some(input_view),
                         &pass_buffer_views,
                         &imported_views,
+                        &preprocessor_views,
                         Some(user_params_buffer),
                     );
 
@@ -307,6 +347,7 @@ impl Effect {
                 Some(input_view),
                 &pass_buffer_views,
                 &imported_views,
+                &preprocessor_views,
                 Some(user_params_buffer),
             );
 
@@ -350,6 +391,7 @@ impl Effect {
                 Some(input_view),
                 &[],
                 &imported_views,
+                &preprocessor_views,
                 Some(user_params_buffer),
             );
 

@@ -26,10 +26,14 @@ impl std::ops::Deref for CompositingOpacities {
 }
 
 impl Mixer {
-    /// Pre-update modulation engine with latest audio data.
-    pub fn update_modulation(&mut self, audio_values: &crate::modulation::AudioValues) {
+    /// Pre-update modulation engine with latest audio + analyzer data.
+    pub fn update_modulation(
+        &mut self,
+        audio_values: &crate::modulation::AudioValues,
+        analyzer_values: &crate::modulation::AnalyzerValues,
+    ) {
         let time = self.start_time.elapsed().as_secs_f32();
-        self.modulation.update(time, audio_values);
+        self.modulation.update(time, audio_values, analyzer_values);
     }
 
     /// Render all channels and composite them via crossfader, then apply master effects.
@@ -38,6 +42,7 @@ impl Mixer {
         context: &GpuContext,
         audio_data: &crate::audio::AudioData,
         audio_values: &crate::modulation::AudioValues,
+        analyzer_values: &crate::modulation::AnalyzerValues,
     ) -> Result<()> {
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
@@ -98,7 +103,7 @@ impl Mixer {
 
         // Update global modulation engine
         let time = self.start_time.elapsed().as_secs_f32();
-        self.modulation.update(time, audio_values);
+        self.modulation.update(time, audio_values, analyzer_values);
 
         // Compute effective opacity per channel (stack-allocated for the common 2-channel case)
         let channel_count = self.channels.len();

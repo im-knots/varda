@@ -160,3 +160,28 @@ pub trait DetectCommands {
 pub trait SurfaceQueries {
     fn surface_snapshot(&self) -> Vec<SurfaceSnapshot>;
 }
+
+// ── Analyzers ──────────────────────────────────────────────────────
+
+/// Read-only queries for analyzer state.
+pub trait AnalyzerQueries {
+    /// List available analyzer types and their output schemas.
+    fn available_analyzers(&self) -> Vec<AnalyzerTypeInfo>;
+
+    /// Check if an analyzer is running on a specific deck.
+    fn is_analyzer_running(&self, deck_id: &str, analyzer_type: &str) -> bool;
+}
+
+/// Commands for managing analyzer lifecycle on decks.
+pub trait AnalyzerCommands {
+    /// Request an analyzer on a deck. If already running, increments refcount.
+    fn request_analyzer(
+        &mut self,
+        deck_id: &str,
+        analyzer_type: &str,
+        options: &serde_json::Value,
+    ) -> anyhow::Result<()>;
+
+    /// Release an analyzer on a deck. Stops it when refcount reaches zero.
+    fn release_analyzer(&mut self, deck_id: &str, analyzer_type: &str);
+}

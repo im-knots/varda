@@ -281,6 +281,12 @@ pub enum ModulationSourceSnapshot {
         interpolation: StepInterpolation,
         bipolar: bool,
     },
+    Analyzer {
+        deck_id: String,
+        analyzer_type: String,
+        output_name: String,
+        smoothing: f32,
+    },
 }
 
 #[derive(Clone, Serialize)]
@@ -407,6 +413,25 @@ pub struct MidiMappingSnapshot {
 #[derive(Clone, Serialize)]
 pub struct CameraSnapshot {
     pub devices: Vec<(String, CameraId)>,
+}
+
+// ── Analyzer Snapshot ──────────────────────────────────────────────
+
+/// Info about an available analyzer type (for UI discovery).
+#[derive(Clone, Serialize)]
+pub struct AnalyzerTypeInfo {
+    pub analyzer_type: String,
+    pub scalar_outputs: Vec<AnalyzerScalarInfo>,
+    pub texture_outputs: Vec<String>,
+}
+
+/// Info about a scalar output an analyzer produces.
+#[derive(Clone, Serialize)]
+pub struct AnalyzerScalarInfo {
+    pub name: String,
+    pub description: String,
+    pub range: (f32, f32),
+    pub default_smoothing: f32,
 }
 
 #[cfg(test)]

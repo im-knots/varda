@@ -83,6 +83,7 @@ fn engine_with_lfo(param_key: &str) -> ModulationEngine {
         &AudioValues {
             sources: Default::default(),
         },
+        &varda::modulation::AnalyzerValues::default(),
     );
     engine
 }
