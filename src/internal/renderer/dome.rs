@@ -351,13 +351,11 @@ impl DomemasterRenderer {
         ];
 
         for (i, (opacity, uv_scale, uv_offset)) in face_uv_configs.iter().enumerate() {
-            let bind_group = self.face_blit.create_bind_group_with_params(
-                device,
-                source_view,
-                *opacity,
-                *uv_scale,
-                *uv_offset,
-            );
+            self.face_blit
+                .write_params_slot(queue, i, *opacity, *uv_scale, *uv_offset);
+            let bind_group = self
+                .face_blit
+                .create_ring_bind_group(device, source_view, i);
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Dome Face Render"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -375,7 +373,7 @@ impl DomemasterRenderer {
                 multiview_mask: None,
             });
             if *opacity > 0.0 {
-                self.face_blit.render(&mut rp, &bind_group);
+                self.face_blit.render_at_slot(&mut rp, &bind_group);
             }
         }
 

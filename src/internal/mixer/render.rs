@@ -231,17 +231,26 @@ impl Mixer {
 
         // Batch channel compositing into command buffers for deferred submission.
         let mut is_first = true;
+        let mut slot: usize = 0;
         for (_i, (channel, &opacity)) in self.channels.iter().zip(opacities.iter()).enumerate() {
             if opacity <= 0.0 {
                 continue;
             }
 
             if is_first {
-                // First visible channel: simple blit copy
-                self.blit_pipeline.set_opacity(&context.queue, opacity);
-                let bind_group = self
-                    .blit_pipeline
-                    .create_bind_group(&context.device, &channel.composite_view);
+                // First visible channel: per-draw params blit
+                self.blit_pipeline.write_params_slot(
+                    &context.queue,
+                    slot,
+                    opacity,
+                    [1.0, 1.0],
+                    [0.0, 0.0],
+                );
+                let bind_group = self.blit_pipeline.create_ring_bind_group(
+                    &context.device,
+                    &channel.composite_view,
+                    slot,
+                );
                 let mut encoder =
                     context
                         .device
@@ -265,12 +274,13 @@ impl Mixer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    self.blit_pipeline.render(&mut render_pass, &bind_group);
+                    self.blit_pipeline
+                        .render_at_slot(&mut render_pass, &bind_group);
                 }
                 cmd_buffers.push(encoder.finish());
                 is_first = false;
             } else {
-                // Subsequent channels: snapshot + composite shader
+                // Subsequent channels: snapshot + per-draw params composite
                 let mut copy_encoder =
                     context
                         .device
@@ -284,17 +294,19 @@ impl Mixer {
                 );
 
                 let blend_mode = channel.blend_mode;
-                self.composite_pipeline.set_params(
+                self.composite_pipeline.write_params_slot(
                     &context.queue,
+                    slot,
                     opacity,
                     blend_mode.to_index(),
                     [1.0, 1.0],
                     [0.0, 0.0],
                 );
-                let bind_group = self.composite_pipeline.create_bind_group(
+                let bind_group = self.composite_pipeline.create_ring_bind_group(
                     &context.device,
                     &channel.composite_view,
                     &self.effect_ping_view,
+                    slot,
                 );
                 let mut encoder =
                     context
@@ -320,11 +332,12 @@ impl Mixer {
                         multiview_mask: None,
                     });
                     self.composite_pipeline
-                        .render(&mut render_pass, &bind_group);
+                        .render_at_slot(&mut render_pass, &bind_group);
                 }
                 cmd_buffers.push(copy_encoder.finish());
                 cmd_buffers.push(encoder.finish());
             }
+            slot += 1;
         }
 
         Ok(cmd_buffers)
@@ -360,6 +373,7 @@ impl Mixer {
 
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
         let mut is_first = true;
+        let mut slot: usize = 0;
         for &ch_idx in indices {
             if ch_idx >= self.channels.len() {
                 continue;
@@ -371,11 +385,19 @@ impl Mixer {
             }
 
             if is_first {
-                // First visible channel: simple blit copy
-                self.blit_pipeline.set_opacity(&context.queue, opacity);
-                let bind_group = self
-                    .blit_pipeline
-                    .create_bind_group(&context.device, &channel.composite_view);
+                // First visible channel: per-draw params blit
+                self.blit_pipeline.write_params_slot(
+                    &context.queue,
+                    slot,
+                    opacity,
+                    [1.0, 1.0],
+                    [0.0, 0.0],
+                );
+                let bind_group = self.blit_pipeline.create_ring_bind_group(
+                    &context.device,
+                    &channel.composite_view,
+                    slot,
+                );
                 let mut encoder =
                     context
                         .device
@@ -399,12 +421,13 @@ impl Mixer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    self.blit_pipeline.render(&mut render_pass, &bind_group);
+                    self.blit_pipeline
+                        .render_at_slot(&mut render_pass, &bind_group);
                 }
                 cmd_buffers.push(encoder.finish());
                 is_first = false;
             } else {
-                // Subsequent channels: snapshot sub-mix → effect_ping, composite shader
+                // Subsequent channels: snapshot sub-mix → effect_ping, per-draw params composite
                 let mut copy_encoder =
                     context
                         .device
@@ -418,17 +441,19 @@ impl Mixer {
                 );
 
                 let blend_mode = channel.blend_mode;
-                self.composite_pipeline.set_params(
+                self.composite_pipeline.write_params_slot(
                     &context.queue,
+                    slot,
                     opacity,
                     blend_mode.to_index(),
                     [1.0, 1.0],
                     [0.0, 0.0],
                 );
-                let bind_group = self.composite_pipeline.create_bind_group(
+                let bind_group = self.composite_pipeline.create_ring_bind_group(
                     &context.device,
                     &channel.composite_view,
                     &self.effect_ping_view,
+                    slot,
                 );
                 let mut encoder =
                     context
@@ -454,11 +479,12 @@ impl Mixer {
                         multiview_mask: None,
                     });
                     self.composite_pipeline
-                        .render(&mut render_pass, &bind_group);
+                        .render_at_slot(&mut render_pass, &bind_group);
                 }
                 cmd_buffers.push(copy_encoder.finish());
                 cmd_buffers.push(encoder.finish());
             }
+            slot += 1;
         }
 
         if is_first {

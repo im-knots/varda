@@ -597,10 +597,13 @@ impl Channel {
             .collect();
 
         // Composite all decks to the composite texture.
-        // Submit per-deck to ensure each deck's uniform buffer writes
-        // are consumed before the next deck overwrites them.
+        // Per-draw params are written into a persistent ring buffer (one slot per
+        // deck) so all command buffers can batch into a single queue.submit().
+        // This eliminates N-1 submit calls per channel — critical for Intel
+        // integrated GPUs where each Metal command buffer commit is expensive.
         let width = self.composite_texture.width();
         let height = self.composite_texture.height();
+        let mut composite_cmds: Vec<wgpu::CommandBuffer> = Vec::new();
 
         for (i, info) in ordered.iter().enumerate() {
             let slot = &mut self.decks[info.deck_idx];
@@ -620,7 +623,7 @@ impl Channel {
                         self.effect_ping_texture.as_image_copy(),
                         self.composite_texture.size(),
                     );
-                    context.queue.submit(std::iter::once(copy_encoder.finish()));
+                    composite_cmds.push(copy_encoder.finish());
 
                     // Run transition shader: start=deck (outgoing), end=composite-below (incoming)
                     let uniforms = ISFUniforms {
@@ -651,7 +654,7 @@ impl Channel {
                         &uniforms,
                         effect.params.buffer(),
                     );
-                    context.queue.submit(std::iter::once(cmd));
+                    composite_cmds.push(cmd);
                     continue;
                 }
 
@@ -659,10 +662,18 @@ impl Channel {
                 let fade_opacity = info.opacity * (1.0 - progress as f32);
                 if i == 0 {
                     // First deck: simple blit with alpha blending
-                    self.blit_pipeline.set_opacity(&context.queue, fade_opacity);
-                    let bind_group = self
-                        .blit_pipeline
-                        .create_bind_group(&context.device, &slot.deck.texture_view);
+                    self.blit_pipeline.write_params_slot(
+                        &context.queue,
+                        i,
+                        fade_opacity,
+                        [1.0, 1.0],
+                        [0.0, 0.0],
+                    );
+                    let bind_group = self.blit_pipeline.create_ring_bind_group(
+                        &context.device,
+                        &slot.deck.texture_view,
+                        i,
+                    );
                     let mut encoder =
                         context
                             .device
@@ -687,9 +698,10 @@ impl Channel {
                                 occlusion_query_set: None,
                                 multiview_mask: None,
                             });
-                        self.blit_pipeline.render(&mut render_pass, &bind_group);
+                        self.blit_pipeline
+                            .render_at_slot(&mut render_pass, &bind_group);
                     }
-                    context.queue.submit(std::iter::once(encoder.finish()));
+                    composite_cmds.push(encoder.finish());
                 } else {
                     // Subsequent decks: snapshot + composite shader
                     let mut copy_encoder =
@@ -704,17 +716,19 @@ impl Channel {
                         self.composite_texture.size(),
                     );
 
-                    self.composite_pipeline.set_params(
+                    self.composite_pipeline.write_params_slot(
                         &context.queue,
+                        i,
                         fade_opacity,
                         info.blend_mode.to_index(),
                         [1.0, 1.0],
                         [0.0, 0.0],
                     );
-                    let bind_group = self.composite_pipeline.create_bind_group(
+                    let bind_group = self.composite_pipeline.create_ring_bind_group(
                         &context.device,
                         &slot.deck.texture_view,
                         &self.effect_ping_view,
+                        i,
                     );
                     let mut encoder =
                         context
@@ -741,22 +755,29 @@ impl Channel {
                                 multiview_mask: None,
                             });
                         self.composite_pipeline
-                            .render(&mut render_pass, &bind_group);
+                            .render_at_slot(&mut render_pass, &bind_group);
                     }
-                    context
-                        .queue
-                        .submit([copy_encoder.finish(), encoder.finish()]);
+                    composite_cmds.push(copy_encoder.finish());
+                    composite_cmds.push(encoder.finish());
                 }
                 continue;
             }
 
             // Normal compositing
             if i == 0 {
-                // First deck: simple blit with alpha blending (Normal = just copy)
-                self.blit_pipeline.set_opacity(&context.queue, info.opacity);
-                let bind_group = self
-                    .blit_pipeline
-                    .create_bind_group(&context.device, &slot.deck.texture_view);
+                // First deck: simple blit with per-draw params
+                self.blit_pipeline.write_params_slot(
+                    &context.queue,
+                    i,
+                    info.opacity,
+                    [1.0, 1.0],
+                    [0.0, 0.0],
+                );
+                let bind_group = self.blit_pipeline.create_ring_bind_group(
+                    &context.device,
+                    &slot.deck.texture_view,
+                    i,
+                );
                 let mut encoder =
                     context
                         .device
@@ -780,9 +801,10 @@ impl Channel {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    self.blit_pipeline.render(&mut render_pass, &bind_group);
+                    self.blit_pipeline
+                        .render_at_slot(&mut render_pass, &bind_group);
                 }
-                context.queue.submit(std::iter::once(encoder.finish()));
+                composite_cmds.push(encoder.finish());
             } else {
                 // Subsequent decks: snapshot composite → ping, blend src + ping → composite
                 let mut copy_encoder =
@@ -797,17 +819,19 @@ impl Channel {
                     self.composite_texture.size(),
                 );
 
-                self.composite_pipeline.set_params(
+                self.composite_pipeline.write_params_slot(
                     &context.queue,
+                    i,
                     info.opacity,
                     info.blend_mode.to_index(),
                     [1.0, 1.0],
                     [0.0, 0.0],
                 );
-                let bind_group = self.composite_pipeline.create_bind_group(
+                let bind_group = self.composite_pipeline.create_ring_bind_group(
                     &context.device,
                     &slot.deck.texture_view,
                     &self.effect_ping_view,
+                    i,
                 );
                 let mut encoder =
                     context
@@ -833,12 +857,16 @@ impl Channel {
                         multiview_mask: None,
                     });
                     self.composite_pipeline
-                        .render(&mut render_pass, &bind_group);
+                        .render_at_slot(&mut render_pass, &bind_group);
                 }
-                context
-                    .queue
-                    .submit([copy_encoder.finish(), encoder.finish()]);
+                composite_cmds.push(copy_encoder.finish());
+                composite_cmds.push(encoder.finish());
             }
+        }
+
+        // Batch submit all channel composite commands at once
+        if !composite_cmds.is_empty() {
+            context.queue.submit(composite_cmds);
         }
 
         // If no decks, clear the composite texture to transparent
