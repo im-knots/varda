@@ -8,6 +8,8 @@ struct HapConvertParams {
     /// 0.0 = single plane (alpha from color texture), 1.0 = dual plane (alpha from separate texture)
     has_alpha_plane: f32,
     _pad: f32,
+    uv_scale: vec2<f32>,
+    uv_offset: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -38,7 +40,8 @@ fn ycocg_to_rgb(color: vec4<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, tex_sampler, uv);
+    let scaled_uv = uv * params.uv_scale + params.uv_offset;
+    let color = textureSample(color_texture, tex_sampler, scaled_uv);
 
     var rgb: vec3<f32>;
     if (params.do_ycocg > 0.5) {
@@ -50,7 +53,7 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     var alpha: f32;
     if (params.has_alpha_plane > 0.5) {
         // Dual-plane: alpha comes from separate BC4 texture (red channel)
-        let alpha_sample = textureSample(alpha_texture, tex_sampler, uv);
+        let alpha_sample = textureSample(alpha_texture, tex_sampler, scaled_uv);
         alpha = alpha_sample.r;
     } else {
         alpha = color.a;

@@ -367,6 +367,26 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         .show(|ui| {
                             render_resolution_popover(ui, data, &mut actions);
                         });
+
+                    ui.separator();
+
+                    // FPS target selector
+                    let fps_target_label = if data.target_fps == 0 {
+                        "🎯 Uncapped".to_string()
+                    } else {
+                        format!("🎯 {}fps", data.target_fps)
+                    };
+                    let fps_target_response = ui
+                        .add(
+                            egui::Label::new(egui::RichText::new(&fps_target_label).monospace())
+                                .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Click to change target FPS");
+                    egui::Popup::from_toggle_button_response(&fps_target_response)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            render_target_fps_popover(ui, data, &mut actions);
+                        });
                 });
             });
         });
@@ -1359,6 +1379,40 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
         egui::RichText::new(format!("Current: {}×{}", current_w, current_h))
             .weak()
             .small(),
+    );
+}
+
+/// Render the target FPS popover (shown when clicking FPS target in the top bar).
+fn render_target_fps_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    ui.set_min_width(180.0);
+    ui.label(egui::RichText::new("🎯 Target FPS").strong());
+    ui.separator();
+
+    let current = data.target_fps;
+
+    let presets: &[(&str, u32)] = &[
+        ("30 FPS", 30),
+        ("60 FPS", 60),
+        ("120 FPS", 120),
+        ("Uncapped", 0),
+    ];
+
+    for &(label, fps) in presets {
+        let is_current = current == fps;
+        if ui.radio(is_current, label).clicked() && !is_current {
+            actions.target_fps_change = Some(fps);
+        }
+    }
+
+    ui.separator();
+    ui.label(
+        egui::RichText::new(if current == 0 {
+            "Current: Uncapped".to_string()
+        } else {
+            format!("Current: {} FPS", current)
+        })
+        .weak()
+        .small(),
     );
 }
 

@@ -114,6 +114,11 @@ pub enum EngineCommand {
         deck_idx: usize,
         mute: bool,
     },
+    SetDeckRenderFps {
+        channel_idx: usize,
+        deck_idx: usize,
+        render_fps: DeckRenderFps,
+    },
     SetDeckScalingMode {
         channel_idx: usize,
         deck_idx: usize,
@@ -787,6 +792,11 @@ pub enum EngineCommand {
     SetRenderResolution {
         width: u32,
         height: u32,
+    },
+
+    // ── Frame pacing ─────────────────────────────────────────
+    SetTargetFps {
+        fps: u32,
     },
 
     // ── Persistence ────────────────────────────────────────────

@@ -558,6 +558,9 @@ impl Deck {
                 convert_pipeline,
                 blit_pipeline,
                 hap_format: hap_fmt,
+                source_width: vid_w,
+                source_height: vid_h,
+                scaling_mode: ScalingMode::default(),
             }
         } else {
             let player = VideoPlayer::new(&path)?;
@@ -580,11 +583,16 @@ impl Deck {
             let blit_pipeline =
                 BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
 
+            let vid_w = player.width();
+            let vid_h = player.height();
             DeckSource::Video {
                 player,
                 texture: video_texture,
                 texture_view: video_texture_view,
                 blit_pipeline,
+                source_width: vid_w,
+                source_height: vid_h,
+                scaling_mode: ScalingMode::default(),
             }
         };
 

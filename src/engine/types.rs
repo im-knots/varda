@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // Re-export existing clean value types from domain modules
 pub use crate::audio::AudioSourceId;
 pub use crate::camera::CameraId;
-pub use crate::channel::BlendMode;
+pub use crate::channel::{BlendMode, DeckRenderFps};
 pub use crate::deck::ScalingMode;
 pub use crate::mixer::CrossfadeEasing;
 pub use crate::modulation::{
@@ -46,6 +46,8 @@ pub struct EngineState {
     pub clock: ClockSnapshot,
     pub fps: f32,
     pub frame_count: u64,
+    /// Target FPS (0 = uncapped)
+    pub target_fps: u32,
     /// Discovered NDI sources (names)
     pub ndi_sources: Vec<String>,
     /// Whether NDI runtime is available
@@ -162,6 +164,12 @@ pub struct DeckSnapshot {
     pub effects: Vec<EffectSnapshot>,
     pub video_playback: Option<VideoPlaybackSnapshot>,
     pub auto_transition: Option<AutoTransitionSnapshot>,
+    /// Configured render FPS (Auto or fixed value)
+    pub render_fps: DeckRenderFps,
+    /// Effective render rate (actual FPS this deck is rendering at)
+    pub effective_render_fps: f32,
+    /// Smoothed render cost in microseconds
+    pub render_cost_us: f32,
     /// Smoothed FPS from actual deck render pipeline timing
     pub fps: f32,
     pub running_analyzers: Vec<RunningAnalyzerSnapshot>,
@@ -550,6 +558,7 @@ mod tests {
             },
             fps: 60.0,
             frame_count: 0,
+            target_fps: 60,
             ndi_sources: vec![],
             ndi_available: false,
             syphon_sources: vec![],
@@ -624,6 +633,7 @@ mod tests {
             },
             fps: 59.9,
             frame_count: 42,
+            target_fps: 60,
             ndi_sources: vec![],
             ndi_available: false,
             syphon_sources: vec![],
@@ -723,6 +733,9 @@ mod tests {
             effects: vec![],
             video_playback: None,
             auto_transition: None,
+            render_fps: DeckRenderFps::Auto,
+            effective_render_fps: 0.0,
+            render_cost_us: 0.0,
             fps: 59.5,
             running_analyzers: vec![],
         };

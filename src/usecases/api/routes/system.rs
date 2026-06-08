@@ -88,6 +88,25 @@ pub async fn set_resolution(
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct TargetFpsBody {
+    /// Target FPS (0 = uncapped).
+    pub fps: u32,
+}
+#[utoipa::path(put, path = "/api/target-fps", request_body = TargetFpsBody, responses((status = 200, body = CommandResult)), tag = "System")]
+pub async fn set_target_fps(
+    State(state): State<SharedState>,
+    Json(b): Json<TargetFpsBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetTargetFps { fps: b.fps })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct ClockPreferenceBody {
     /// Clock source preference.
     pub preference: crate::clock::ClockPreference,

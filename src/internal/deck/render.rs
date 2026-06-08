@@ -362,8 +362,19 @@ impl Deck {
             DeckSource::Video {
                 ref texture_view,
                 ref blit_pipeline,
+                source_width,
+                source_height,
+                scaling_mode,
                 ..
             } => {
+                let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
+                    *source_width,
+                    *source_height,
+                    self.texture.width(),
+                    self.texture.height(),
+                );
+                blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
+
                 let bind_group = blit_pipeline.create_bind_group(&context.device, texture_view);
                 let mut encoder =
                     context
@@ -399,11 +410,27 @@ impl Deck {
                 ref convert_pipeline,
                 ref hap_format,
                 ref player,
+                source_width,
+                source_height,
+                scaling_mode,
                 ..
             } => {
                 let needs_ycocg = hap_format.needs_ycocg_convert();
                 let has_alpha = player.is_dual_plane && alpha_texture_view.is_some();
-                convert_pipeline.set_params(&context.queue, 1.0, needs_ycocg, has_alpha);
+                let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
+                    *source_width,
+                    *source_height,
+                    self.texture.width(),
+                    self.texture.height(),
+                );
+                convert_pipeline.set_params_with_uv(
+                    &context.queue,
+                    1.0,
+                    needs_ycocg,
+                    has_alpha,
+                    uv_scale,
+                    uv_offset,
+                );
 
                 let alpha_view = if let Some(ref av) = alpha_texture_view {
                     av

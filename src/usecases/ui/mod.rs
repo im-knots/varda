@@ -5,6 +5,7 @@ pub mod widgets;
 
 use crate::audio::AudioSourceId;
 use crate::camera::CameraId;
+use crate::channel::DeckRenderFps;
 use crate::mixer::CrossfadeEasing;
 use crate::modulation::{
     ADSRStage, AudioBandPreset, AudioReactMode, LFOWaveform, StepInterpolation,
@@ -597,6 +598,12 @@ pub struct DeckUIInfo {
     pub video_playback: Option<VideoPlaybackUI>,
     /// Auto-transition state (None = no auto-transition configured)
     pub auto_transition: Option<AutoTransitionUI>,
+    /// Per-deck render FPS setting
+    pub render_fps: DeckRenderFps,
+    /// Effective render rate this deck is achieving
+    pub effective_render_fps: f32,
+    /// Smoothed render cost in microseconds
+    pub render_cost_us: f32,
 }
 
 /// Channel info for UI display
@@ -845,6 +852,8 @@ pub struct UIData {
     pub render_width: u32,
     /// Current master render height
     pub render_height: u32,
+    /// Target FPS (0 = uncapped)
+    pub target_fps: u32,
     /// Whether undo is available
     pub can_undo: bool,
     /// Whether redo is available
@@ -1173,6 +1182,8 @@ pub struct UIActions {
     pub deck_updates: Vec<(usize, usize, f32, BlendMode, bool, bool)>,
     /// (ch_idx, deck_idx, scaling_mode) — change scaling mode for an image deck
     pub scaling_mode_updates: Vec<(usize, usize, ScalingMode)>,
+    /// (ch_idx, deck_idx, render_fps) — change render FPS for a deck
+    pub render_fps_updates: Vec<(usize, usize, DeckRenderFps)>,
     /// (ch_idx, deck_idx, filter_registry_idx) — add effect to deck
     pub effect_to_add: Option<(usize, usize, usize)>,
     /// (ch_idx, deck_idx, effect_idx) — remove effect from deck
@@ -1321,6 +1332,8 @@ pub struct UIActions {
     pub manual_bpm: Option<f32>,
     /// Resolution change request: (width, height)
     pub resolution_change: Option<(u32, u32)>,
+    /// Target FPS change request (0 = uncapped)
+    pub target_fps_change: Option<u32>,
     /// Undo last undoable action
     pub undo_requested: bool,
     /// Redo last undone action
@@ -1468,6 +1481,7 @@ impl UIActions {
             deck_to_remove: None,
             deck_updates: Vec::new(),
             scaling_mode_updates: Vec::new(),
+            render_fps_updates: Vec::new(),
             effect_to_add: None,
             effect_to_remove: None,
             effect_to_toggle: None,
@@ -1545,6 +1559,7 @@ impl UIActions {
             clock_preference: None,
             manual_bpm: None,
             resolution_change: None,
+            target_fps_change: None,
             undo_requested: false,
             redo_requested: false,
             deck_preset_to_add: None,
@@ -1562,6 +1577,7 @@ impl UIActions {
             || self.deck_to_remove.is_some()
             || !self.deck_updates.is_empty()
             || !self.scaling_mode_updates.is_empty()
+            || !self.render_fps_updates.is_empty()
             || !self.param_updates.is_empty()
             || !self.modulation_actions.is_empty()
             || self.effect_to_add.is_some()
@@ -1707,6 +1723,9 @@ impl UIData {
             )],
             video_playback: None,
             auto_transition: None,
+            render_fps: DeckRenderFps::Auto,
+            effective_render_fps: 0.0,
+            render_cost_us: 0.0,
         };
 
         let deck_a1 = DeckUIInfo {
@@ -1726,6 +1745,9 @@ impl UIData {
             effects: vec![],
             video_playback: None,
             auto_transition: None,
+            render_fps: DeckRenderFps::Auto,
+            effective_render_fps: 0.0,
+            render_cost_us: 0.0,
         };
 
         let channel_a = ChannelUIInfo {
@@ -1763,6 +1785,9 @@ impl UIData {
             effects: vec![],
             video_playback: None,
             auto_transition: None,
+            render_fps: DeckRenderFps::Auto,
+            effective_render_fps: 0.0,
+            render_cost_us: 0.0,
         };
 
         let deck_b1 = DeckUIInfo {
@@ -1782,6 +1807,9 @@ impl UIData {
             effects: vec![],
             video_playback: None,
             auto_transition: None,
+            render_fps: DeckRenderFps::Auto,
+            effective_render_fps: 0.0,
+            render_cost_us: 0.0,
         };
 
         let channel_b = ChannelUIInfo {
@@ -1942,6 +1970,7 @@ impl UIData {
             clock_manual_bpm: None,
             render_width: 1920,
             render_height: 1080,
+            target_fps: 60,
             can_undo: false,
             can_redo: false,
             pending_deck_loads: 0,

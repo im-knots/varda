@@ -4,7 +4,7 @@
 //! to reconstruct a show: channels, decks, effects, modulation.
 //! Surfaces and outputs live in `stage.json` (venue-specific, not show-specific).
 
-use crate::channel::BlendMode;
+use crate::channel::{BlendMode, DeckRenderFps};
 use crate::modulation::ModulationEngine;
 use crate::params::ParamValue;
 use anyhow::{Context, Result};
@@ -132,6 +132,10 @@ pub struct DeckConfig {
     /// Z-index for layer ordering
     #[serde(default)]
     pub z_index: i32,
+
+    /// Per-deck render FPS cap (default: auto adaptive)
+    #[serde(default)]
+    pub render_fps: DeckRenderFps,
 
     /// Auto-transition configuration (None = no auto-transition)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -768,6 +772,7 @@ mod tests {
                     z_index: 0,
                     auto_transition: None,
                     modulation: vec![],
+                    render_fps: DeckRenderFps::default(),
                 }],
                 effects: vec![],
             }],
@@ -1047,6 +1052,7 @@ mod tests {
                     z_index: 0,
                     auto_transition: None,
                     modulation: vec![],
+                    render_fps: DeckRenderFps::default(),
                 }],
                 effects: vec![],
             }],
@@ -1129,6 +1135,7 @@ mod tests {
             z_index: 0,
             auto_transition: None,
             modulation: vec![],
+            render_fps: DeckRenderFps::default(),
         };
         let errors = deck.validate("d[0]");
         assert!(errors.iter().any(|e| e.contains("opacity")));

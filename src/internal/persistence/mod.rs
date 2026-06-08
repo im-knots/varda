@@ -455,6 +455,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                         mute: slot.mute,
                         solo: slot.solo,
                         z_index: slot.z_index,
+                        render_fps: slot.render_fps,
                         auto_transition,
                         modulation: vec![],
                     })
@@ -811,6 +812,7 @@ pub fn restore_scene(
                     slot.mute = deck_config.mute;
                     slot.solo = deck_config.solo;
                     slot.z_index = deck_config.z_index;
+                    slot.render_fps = deck_config.render_fps;
 
                     // Restore auto-transition config
                     if let Some(at_config) = &deck_config.auto_transition {

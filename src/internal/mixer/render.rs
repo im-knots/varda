@@ -37,12 +37,14 @@ impl Mixer {
     }
 
     /// Render all channels and composite them via crossfader, then apply master effects.
+    /// `target_fps` is used for adaptive deck render skipping budget calculation.
     pub fn render(
         &mut self,
         context: &GpuContext,
         audio_data: &crate::audio::AudioData,
         audio_values: &crate::modulation::AudioValues,
         analyzer_values: &crate::modulation::AnalyzerValues,
+        target_fps: u32,
     ) -> Result<()> {
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
@@ -126,6 +128,15 @@ impl Mixer {
             channel.tick_video_frames(context);
         }
 
+        // Count total active decks from last frame for per-deck budget calculation
+        let total_active_decks: u32 = self.channels.iter().map(|ch| ch.active_deck_count).sum();
+
+        // Snapshot the current GPU load ratio for this frame's skip decisions.
+        // This is updated at the end of the frame based on actual vs CPU-measured time.
+        let gpu_load_ratio = self.gpu_load_ratio;
+
+        let t_channels = std::time::Instant::now();
+        let mut rendered_channels: u32 = 0;
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
             if effective_opacities.get(ch_idx).copied().unwrap_or(0.0) < 0.001 {
                 // Reset stats so culled channels don't show stale render metrics
@@ -133,18 +144,67 @@ impl Mixer {
                 channel.active_deck_count = 0;
                 continue;
             }
-            if let Err(e) = channel.render(context, audio_data, &self.modulation, ch_idx, time, dt)
-            {
+            if let Err(e) = channel.render(
+                context,
+                audio_data,
+                &self.modulation,
+                ch_idx,
+                time,
+                dt,
+                target_fps,
+                total_active_decks,
+                gpu_load_ratio,
+            ) {
                 log::error!("Channel {} render failed, skipping: {}", ch_idx, e);
                 continue;
             }
+            rendered_channels += 1;
         }
+        let channels_us = t_channels.elapsed().as_micros();
 
         self.sync_transition_progress();
+        let t_mixer_composite = std::time::Instant::now();
         let composite_cmds = self.composite_channels(context)?;
+        let mixer_composite_us = t_mixer_composite.elapsed().as_micros();
+
+        let t_master_fx = std::time::Instant::now();
         self.apply_master_effects(context, audio_data, time, composite_cmds)?;
+        let master_fx_us = t_master_fx.elapsed().as_micros();
 
         self.frame_count += 1;
+
+        // Update GPU load ratio: actual frame interval vs CPU-measured render time.
+        // `dt` includes GPU execution (absorbed by poll(Wait) at frame start).
+        // `channels_us` is CPU-side encoding only. When GPU-bound, dt >> channels_us
+        // and the ratio tells us how much render_cost_us underestimates true GPU cost.
+        let cpu_render_us = channels_us + mixer_composite_us + master_fx_us;
+        if cpu_render_us > 100 && dt > 0.0 {
+            let actual_frame_us = (dt * 1_000_000.0) as u128;
+            let raw_ratio = actual_frame_us as f32 / cpu_render_us as f32;
+            // Clamp to [1.0, 200.0] — ratio < 1 means CPU-bound (no scaling needed),
+            // ratio > 200 is likely a stall or first-frame artifact.
+            let clamped = raw_ratio.clamp(1.0, 200.0);
+            // EMA smoothing (α = 0.15) — responsive but not jittery
+            self.gpu_load_ratio = 0.15 * clamped + 0.85 * self.gpu_load_ratio;
+        }
+
+        // Log mixer-level timing every 120 frames
+        if self.frame_count % 120 == 0 {
+            let total_us = now.elapsed().as_micros();
+            log::info!(
+                "[PERF] mixer | channels_rendered={} channels={}us | \
+                 mixer_composite={}us master_fx={}us | gpu_load_ratio={:.1}x | \
+                 total={}us ({:.1}ms)",
+                rendered_channels,
+                channels_us,
+                mixer_composite_us,
+                master_fx_us,
+                self.gpu_load_ratio,
+                total_us,
+                total_us as f64 / 1000.0,
+            );
+        }
+
         Ok(())
     }
 

@@ -102,6 +102,9 @@ pub enum DeckSource {
         texture: wgpu::Texture,
         texture_view: wgpu::TextureView,
         blit_pipeline: BlitPipeline,
+        source_width: u32,
+        source_height: u32,
+        scaling_mode: ScalingMode,
     },
     /// HAP video playback (GPU-native BCn compressed textures)
     HapVideo {
@@ -114,6 +117,9 @@ pub enum DeckSource {
         convert_pipeline: HapConvertPipeline,
         blit_pipeline: BlitPipeline,
         hap_format: HapTextureFormat,
+        source_width: u32,
+        source_height: u32,
+        scaling_mode: ScalingMode,
     },
     /// Static image
     Image {
@@ -394,15 +400,19 @@ impl Deck {
     pub fn scaling_mode(&self) -> Option<ScalingMode> {
         match &self.source {
             DeckSource::Image { scaling_mode, .. }
+            | DeckSource::Video { scaling_mode, .. }
+            | DeckSource::HapVideo { scaling_mode, .. }
             | DeckSource::ExternalSource { scaling_mode, .. } => Some(*scaling_mode),
             _ => None,
         }
     }
 
-    /// Set the scaling mode (applies to Image and ExternalSource sources)
+    /// Set the scaling mode (applies to Image, Video, HapVideo, and ExternalSource sources)
     pub fn set_scaling_mode(&mut self, mode: ScalingMode) {
         match &mut self.source {
             DeckSource::Image { scaling_mode, .. }
+            | DeckSource::Video { scaling_mode, .. }
+            | DeckSource::HapVideo { scaling_mode, .. }
             | DeckSource::ExternalSource { scaling_mode, .. } => *scaling_mode = mode,
             _ => {}
         }

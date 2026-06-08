@@ -93,6 +93,13 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         effects,
                         video_playback,
                         auto_transition,
+                        render_fps: slot.render_fps,
+                        effective_render_fps: if slot.render_cost_us > 0.0 {
+                            1_000_000.0 / slot.render_cost_us
+                        } else {
+                            0.0
+                        },
+                        render_cost_us: slot.render_cost_us,
                         fps: slot.deck.fps(),
                         running_analyzers: slot
                             .deck
@@ -433,6 +440,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         clock: build_clock_snapshot(app),
         fps: app.frame_stats.fps_smoothed,
         frame_count: app.frame_stats.frame_count,
+        target_fps: app.target_fps,
         ndi_sources: app.external_io.ndi_manager.discovered_sources(),
         ndi_available: app.external_io.ndi_manager.is_available(),
         #[cfg(target_os = "macos")]
@@ -549,6 +557,9 @@ pub(crate) fn build_ui_data(
                         effects,
                         video_playback,
                         auto_transition,
+                        render_fps: d.render_fps,
+                        effective_render_fps: d.effective_render_fps,
+                        render_cost_us: d.render_cost_us,
                     }
                 })
                 .collect();
@@ -1075,6 +1086,7 @@ pub(crate) fn build_ui_data(
         clock_manual_bpm: engine.clock.manual_bpm,
         render_width: app.render_width,
         render_height: app.render_height,
+        target_fps: app.target_fps,
         // Populated by UIRunner after build (history/pending loads live on runner, not app)
         can_undo: false,
         can_redo: false,

@@ -181,6 +181,7 @@ mod tests {
             z_index: 0,
             auto_transition: None,
             modulation: vec![],
+            render_fps: crate::channel::DeckRenderFps::default(),
         }
     }
 

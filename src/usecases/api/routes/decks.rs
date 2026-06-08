@@ -6,6 +6,7 @@ use axum::Json;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
+use crate::channel::DeckRenderFps;
 use crate::engine::{CommandResult, EngineCommand};
 use crate::usecases::api::{command_response, SharedState};
 
@@ -329,6 +330,30 @@ pub async fn reorder_deck(
         .await
     {
         Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct DeckRenderFpsBody {
+    pub render_fps: DeckRenderFps,
+}
+
+#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/render-fps", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckRenderFpsBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn set_render_fps(
+    State(state): State<SharedState>,
+    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Json(body): Json<DeckRenderFpsBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetDeckRenderFps {
+            channel_idx: ch_idx,
+            deck_idx,
+            render_fps: body.render_fps,
+        })
+        .await
+    {
+        Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
 }

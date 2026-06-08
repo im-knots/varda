@@ -34,7 +34,7 @@ pub struct AppConfig {
     #[arg(long = "port", default_value_t = 8080)]
     pub api_port: u16,
 
-    /// Target render FPS in headless mode (ignored in windowed)
+    /// Target render FPS (default: 60, 0 = uncapped)
     #[arg(long = "fps", default_value_t = 60)]
     pub target_fps: u32,
 
@@ -214,6 +214,9 @@ pub struct VardaApp {
     // ── Render resolution (configurable, scene-level) ───────
     render_width: u32,
     render_height: u32,
+
+    // ── Frame pacing (global, runtime-mutable) ──────────
+    target_fps: u32,
 
     // ── Pending MIDI-triggered actions (consumed by runner) ──
     pub(crate) midi_pending_undo: bool,
@@ -428,6 +431,7 @@ impl VardaApp {
             audio_textures,
             render_width: DEFAULT_RENDER_WIDTH,
             render_height: DEFAULT_RENDER_HEIGHT,
+            target_fps: config.target_fps,
             midi_pending_undo: false,
             midi_pending_redo: false,
             midi_pending_save: false,
@@ -612,6 +616,28 @@ impl VardaApp {
             } => {
                 self.set_deck_mute(channel_idx, deck_idx, mute);
                 CommandResult::Ok
+            }
+            EngineCommand::SetDeckRenderFps {
+                channel_idx,
+                deck_idx,
+                render_fps,
+            } => {
+                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
+                    if let Some(slot) = ch.decks.get_mut(deck_idx) {
+                        slot.render_fps = render_fps;
+                        CommandResult::Ok
+                    } else {
+                        CommandResult::Err {
+                            code: ErrorCode::NotFound,
+                            message: format!("Deck {} not found", deck_idx),
+                        }
+                    }
+                } else {
+                    CommandResult::Err {
+                        code: ErrorCode::NotFound,
+                        message: format!("Channel {} not found", channel_idx),
+                    }
+                }
             }
             EngineCommand::SetDeckScalingMode {
                 channel_idx,
@@ -1788,6 +1814,11 @@ impl VardaApp {
                 CommandResult::Ok
             }
 
+            EngineCommand::SetTargetFps { fps } => {
+                self.set_target_fps(fps);
+                CommandResult::Ok
+            }
+
             // ── Persistence ───────────────────────────────────────
             EngineCommand::SaveWorkspace => {
                 let layout = crate::usecases::ui::UILayoutState::default();
@@ -2076,6 +2107,20 @@ impl VardaApp {
         self.session
             .notifications
             .info(format!("📐 Resolution changed to {}×{}", width, height));
+    }
+
+    /// Current target FPS (0 = uncapped).
+    pub fn target_fps(&self) -> u32 {
+        self.target_fps
+    }
+
+    /// Set the target FPS. 0 = uncapped.
+    pub fn set_target_fps(&mut self, fps: u32) {
+        if fps == self.target_fps {
+            return;
+        }
+        log::info!("Target FPS: {} → {}", self.target_fps, fps);
+        self.target_fps = fps;
     }
 }
 

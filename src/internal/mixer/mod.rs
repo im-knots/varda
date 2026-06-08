@@ -54,6 +54,11 @@ pub struct Mixer {
     /// Frame counter
     frame_count: u32,
 
+    /// Smoothed GPU load ratio (EMA): actual_frame_time / cpu_render_time.
+    /// When > 1.0, GPU execution takes longer than CPU encoding — shaders are
+    /// GPU-bound and render_cost_us underestimates true cost by this factor.
+    gpu_load_ratio: f32,
+
     /// Shader-based composite pipeline for blending channels (all blend modes via uniform)
     composite_pipeline: CompositeBlitPipeline,
 
@@ -109,6 +114,7 @@ impl Mixer {
             effect_ping_view,
             master_effects: Vec::new(),
             frame_count: 0,
+            gpu_load_ratio: 1.0,
             composite_pipeline,
             blit_pipeline,
             active_transition: None,

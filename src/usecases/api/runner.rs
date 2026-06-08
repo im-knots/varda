@@ -22,7 +22,8 @@ use utoipa_swagger_ui::SwaggerUi;
         // System
         routes::system::health, routes::system::get_state,
         routes::system::shutdown, routes::system::undo, routes::system::redo,
-        routes::system::set_resolution, routes::system::set_clock_preference,
+        routes::system::set_resolution, routes::system::set_target_fps,
+        routes::system::set_clock_preference,
         routes::system::set_manual_bpm, routes::system::save_workspace,
         routes::system::load_workspace,
         // Devices
@@ -48,7 +49,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::set_solo, routes::decks::set_mute,
         routes::decks::add_image_deck, routes::decks::add_video_deck,
         routes::decks::add_solid_color_deck, routes::decks::add_camera_deck,
-        routes::decks::move_deck, routes::decks::reorder_deck, routes::decks::set_scaling_mode,
+        routes::decks::move_deck, routes::decks::reorder_deck, routes::decks::set_scaling_mode, routes::decks::set_render_fps,
         routes::decks::set_transition, routes::decks::set_param,
         routes::decks::add_ndi_deck, routes::decks::add_syphon_deck,
         routes::decks::add_srt_deck, routes::decks::add_hls_deck, routes::decks::add_dash_deck, routes::decks::add_rtmp_deck,
@@ -293,6 +294,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/channels/{ch_idx}/decks/{deck_idx}/scaling-mode",
             axum::routing::put(routes::decks::set_scaling_mode),
+        )
+        .route(
+            "/api/channels/{ch_idx}/decks/{deck_idx}/render-fps",
+            axum::routing::put(routes::decks::set_render_fps),
         )
         .route(
             "/api/channels/{ch_idx}/decks/image",
@@ -777,6 +782,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/resolution",
             axum::routing::put(routes::system::set_resolution),
+        )
+        .route(
+            "/api/target-fps",
+            axum::routing::put(routes::system::set_target_fps),
         )
         .route(
             "/api/clock/preference",
