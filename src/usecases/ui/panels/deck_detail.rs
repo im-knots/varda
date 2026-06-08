@@ -574,7 +574,10 @@ pub(super) fn render_selected_deck_detail(
                                         actions.render_fps_updates.push((ch_idx, deck_idx, new_fps));
                                     }
                                     // Show render cost
-                                    if deck.render_cost_us > 0.0 {
+                                    if deck.gpu_render_cost_us > 0.0 {
+                                        let ms = deck.gpu_render_cost_us / 1000.0;
+                                        ui.label(egui::RichText::new(format!("⚡{:.1}ms GPU", ms)).small().weak());
+                                    } else if deck.render_cost_us > 0.0 {
                                         let ms = deck.render_cost_us / 1000.0;
                                         ui.label(egui::RichText::new(format!("⚡{:.1}ms", ms)).small().weak());
                                     }

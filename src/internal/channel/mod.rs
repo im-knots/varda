@@ -2,6 +2,7 @@
 
 use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
+use crate::mixer::GpuTimingFrame;
 use crate::modulation::ModulationEngine;
 use crate::params::ShaderParams;
 use crate::renderer::{
@@ -313,6 +314,8 @@ pub struct DeckSlot {
     pub render_cost_us: f32,
     /// Frame counter for skip logic
     pub skip_counter: u32,
+    /// GPU-measured render cost in microseconds (EMA, 0 = no data yet)
+    pub gpu_render_cost_us: f32,
 }
 
 impl DeckSlot {
@@ -329,6 +332,7 @@ impl DeckSlot {
             render_fps: DeckRenderFps::default(),
             render_cost_us: 0.0,
             skip_counter: 0,
+            gpu_render_cost_us: 0.0,
         }
     }
 
@@ -546,6 +550,8 @@ impl Channel {
         total_active_decks: u32,
         gpu_load_ratio: f32,
         prefix_cmds: &mut Vec<wgpu::CommandBuffer>,
+        mut timing: Option<&mut GpuTimingFrame>,
+        query_set: Option<&wgpu::QuerySet>,
     ) -> Result<()> {
         let render_start = std::time::Instant::now();
 
@@ -596,16 +602,18 @@ impl Channel {
                         slot.skip_counter % skip_interval == 0
                     }
                     DeckRenderFps::Auto => {
-                        // Auto: skip if GPU-estimated cost > 2x budget share.
-                        // CPU-measured render_cost_us only captures command encoding;
-                        // multiply by gpu_load_ratio to estimate actual GPU execution time.
-                        let estimated_gpu_cost = slot.render_cost_us * gpu_load_ratio;
-                        if slot.render_cost_us > 0.0
+                        // Auto: skip if estimated cost exceeds budget share.
+                        // Always use CPU-measured cost × gpu_load_ratio for skip decisions.
+                        // GPU timestamps only measure shader execution, missing pipeline
+                        // setup, compositing, and submission overhead that scales with
+                        // deck count. The systemic estimate (cpu × ratio) captures the
+                        // true per-deck impact on frame timing.
+                        let estimated_cost = slot.render_cost_us * gpu_load_ratio;
+                        if estimated_cost > 0.0
                             && per_deck_budget_us < f32::MAX
-                            && estimated_gpu_cost > per_deck_budget_us * 2.0
+                            && estimated_cost > per_deck_budget_us
                         {
-                            let skip_interval =
-                                (estimated_gpu_cost / per_deck_budget_us).ceil() as u32;
+                            let skip_interval = (estimated_cost / per_deck_budget_us).ceil() as u32;
                             slot.skip_counter % skip_interval.max(1) == 0
                         } else {
                             true // under budget or no data yet
@@ -624,6 +632,14 @@ impl Channel {
                     };
                     slot.deck.set_render_dt(render_dt);
 
+                    // Allocate GPU timing queries for this deck
+                    let gpu_timing = match (&mut timing, query_set) {
+                        (Some(t), Some(qs)) => {
+                            t.allocate(_channel_idx, _deck_idx).map(|(b, e)| (qs, b, e))
+                        }
+                        _ => None,
+                    };
+
                     let param_prefix = slot.deck.param_prefix().to_owned();
                     let t_single = std::time::Instant::now();
                     slot.deck.render_with_prefix(
@@ -632,6 +648,7 @@ impl Channel {
                         modulation,
                         &param_prefix,
                         &mut cmd_buffers,
+                        gpu_timing,
                     )?;
                     let elapsed_us = t_single.elapsed().as_micros() as f32;
                     // Update EMA render cost (α = 0.2 for responsive adaptation)
@@ -1125,8 +1142,10 @@ impl Channel {
         let raw_ms = render_start.elapsed().as_secs_f32() * 1000.0;
         self.render_time_ms = 0.1 * raw_ms + 0.9 * self.render_time_ms;
 
-        // Log detailed timing every 120 frames (~2s at 60fps)
-        if self.frame_count % 120 == 0 && active_count > 0 {
+        // Log detailed timing every 127 frames (~2s at 60fps).
+        // Prime interval avoids systematic alignment with skip intervals
+        // (e.g., 120 % 2/3/4/5/6 == 0 would always sample render frames).
+        if self.frame_count % 127 == 0 && active_count > 0 {
             let total_us = render_start.elapsed().as_micros();
             // Build per-deck breakdown string: "shader_name=123us" or "shader_name=SKIP"
             let deck_breakdown: String = per_deck_timings
@@ -1140,7 +1159,7 @@ impl Channel {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            log::info!(
+            log::debug!(
                 "[PERF] ch={} decks={} | deck_render={}us [{}] deck_submit={}us | \
                  composite_encode={}us composite_submit={}us copies={} \
                  copy_encode={}us bind_groups={} bind_group={}us | \
@@ -1711,6 +1730,8 @@ mod tests {
             2,
             1.0,
             &mut Vec::new(),
+            None,
+            None,
         )
         .unwrap();
 
@@ -1741,6 +1762,8 @@ mod tests {
             2,
             1.0,
             &mut Vec::new(),
+            None,
+            None,
         )
         .unwrap();
 
@@ -1768,6 +1791,8 @@ mod tests {
             2,
             1.0,
             &mut Vec::new(),
+            None,
+            None,
         )
         .unwrap();
 
@@ -1796,6 +1821,8 @@ mod tests {
                 2,
                 1.0,
                 &mut Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         }
@@ -1814,6 +1841,8 @@ mod tests {
                 2,
                 1.0,
                 &mut Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         }
@@ -1843,6 +1872,8 @@ mod tests {
             2,
             1.0,
             &mut Vec::new(),
+            None,
+            None,
         )
         .unwrap();
 
@@ -1882,6 +1913,8 @@ mod tests {
                 2,
                 1.0,
                 &mut Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         }
@@ -1916,6 +1949,8 @@ mod tests {
             2,
             1.0,
             &mut Vec::new(),
+            None,
+            None,
         )
         .unwrap();
         let fps = ch.decks[0].deck.fps();
@@ -1950,6 +1985,8 @@ mod tests {
                 2,
                 1.0,
                 &mut Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         }
@@ -1983,6 +2020,8 @@ mod tests {
                 2,
                 1.0,
                 &mut Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         }
@@ -2001,6 +2040,8 @@ mod tests {
             2,
             1.0,
             &mut Vec::new(),
+            None,
+            None,
         )
         .unwrap();
 

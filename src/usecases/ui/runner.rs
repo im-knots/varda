@@ -139,8 +139,12 @@ pub struct UIRunner {
     // ── HTTP API server (background thread) ──────────────────────────
     api_handle: Option<crate::usecases::api::runner::ApiServerHandle>,
 
-    // ── Frame pacing (windowed + headless) ─────────────────────────
-    last_frame_instant: Option<std::time::Instant>,
+    // ── Adaptive frame pacing (windowed + headless) ────────────────
+    /// The ideal start time for the next frame. Advances by `frame_budget`
+    /// each frame to maintain a steady cadence. When a frame overshoots its
+    /// budget, the anchor snaps forward to `now + budget` to avoid catch-up
+    /// bursts.
+    cadence_anchor: Option<std::time::Instant>,
 
     // ── Signal-driven shutdown (SIGINT/SIGTERM) ─────────────────────
     shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -194,7 +198,7 @@ impl UIRunner {
             history: HistoryManager::new(),
             publish_counter: 0,
             api_handle: None,
-            last_frame_instant: None,
+            cadence_anchor: None,
             shutdown_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             egui_start_time: std::time::Instant::now(),
             cached_screen_size: winit::dpi::PhysicalSize::new(0, 0),
@@ -420,48 +424,81 @@ impl ApplicationHandler for UIRunner {
             .unwrap_or(self.config.target_fps);
 
         if self.config.headless {
-            // Headless: sleep-based pacing (no window/WaitUntil available)
+            // Headless: adaptive sleep-based pacing
             if target_fps > 0 {
-                let frame_budget = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
-                if let Some(last) = self.last_frame_instant {
-                    let elapsed = last.elapsed();
-                    if elapsed < frame_budget {
-                        std::thread::sleep(frame_budget - elapsed);
+                if let Some(deadline) = self.cadence_anchor {
+                    let now = std::time::Instant::now();
+                    if deadline > now {
+                        std::thread::sleep(deadline - now);
                     }
                 }
             }
-            self.last_frame_instant = Some(std::time::Instant::now());
             self.render_headless(event_loop);
+            self.advance_cadence_anchor(target_fps);
         } else {
-            // Windowed: use ControlFlow::WaitUntil for OS-level pacing
+            // Windowed: adaptive cadence pacing.
+            // Only request_redraw when the cadence anchor says it's time.
+            // Between frames, let WaitUntil handle OS-level sleeping so we
+            // don't burn CPU or produce burst-pause patterns.
             if target_fps > 0 {
-                let frame_budget = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
                 let now = std::time::Instant::now();
-                let next_deadline = self
-                    .last_frame_instant
-                    .map(|last| {
-                        let target = last + frame_budget;
-                        if target > now {
-                            target
-                        } else {
-                            now
-                        }
-                    })
-                    .unwrap_or(now);
-                event_loop
-                    .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_deadline));
+                let deadline = self.cadence_anchor.unwrap_or(now);
+
+                if deadline > now {
+                    // Not time yet — let the OS sleep until the deadline.
+                    // Do NOT request_redraw; winit will call about_to_wait
+                    // again when the timer fires.
+                    event_loop
+                        .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline));
+                } else {
+                    // At or past deadline — render now.
+                    event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(now));
+                    if let Some(w) = self.window {
+                        w.request_redraw();
+                    }
+                }
             } else {
                 // Uncapped: poll continuously
                 event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-            }
-            if let Some(w) = self.window {
-                w.request_redraw();
+                if let Some(w) = self.window {
+                    w.request_redraw();
+                }
             }
         }
     }
 }
 
 impl UIRunner {
+    /// Advance the cadence anchor after a frame completes (render or headless).
+    ///
+    /// The anchor represents the ideal start time for the next frame. Each call
+    /// advances it by one frame budget to maintain a steady cadence. If the
+    /// frame overshot its budget (anchor is already in the past), the anchor
+    /// snaps forward to `now + budget` instead of trying to catch up — this
+    /// prevents the burst-pause pattern where multiple short frames fire in
+    /// rapid succession after one long frame.
+    fn advance_cadence_anchor(&mut self, target_fps: u32) {
+        if target_fps == 0 {
+            self.cadence_anchor = None;
+            return;
+        }
+        let budget = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
+        let now = std::time::Instant::now();
+        self.cadence_anchor = Some(match self.cadence_anchor {
+            Some(anchor) => {
+                let ideal_next = anchor + budget;
+                if ideal_next > now {
+                    // Frame finished before deadline — cadence maintained
+                    ideal_next
+                } else {
+                    // Frame overshot — restart cadence from now
+                    now + budget
+                }
+            }
+            None => now + budget,
+        });
+    }
+
     /// Register GPU textures with egui for deck/channel/output previews and main output.
     fn register_preview_textures(&mut self) {
         let Some(varda) = &self.varda else { return };
@@ -1364,14 +1401,19 @@ impl UIRunner {
         );
         let submit_us = t_submit.elapsed().as_micros();
 
-        // Record frame instant for pacing in about_to_wait()
-        self.last_frame_instant = Some(std::time::Instant::now());
+        // Advance the cadence anchor for adaptive frame pacing.
+        let target_fps = self
+            .varda
+            .as_ref()
+            .map(|v| v.target_fps())
+            .unwrap_or(self.config.target_fps);
+        self.advance_cadence_anchor(target_fps);
 
         // Frame loop timing (log every 120 frames)
         self.frame_loop_counter += 1;
         if self.frame_loop_counter % 120 == 0 {
             let total_us = mixer_us + submit_us + outputs_us + poll_us;
-            log::info!(
+            log::debug!(
                 "[PERF] frame_loop | egui={}us mixer={}us outputs={}us submit_ui={}us poll={}us | total={}us ({:.1}ms)",
                 egui_us,
                 mixer_us,

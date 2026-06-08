@@ -176,6 +176,7 @@ pub(crate) mod tests {
                         render_fps: DeckRenderFps::Auto,
                         effective_render_fps: 0.0,
                         render_cost_us: 0.0,
+                        gpu_render_cost_us: 0.0,
                         fps: 60.0,
                         running_analyzers: vec![],
                     }],

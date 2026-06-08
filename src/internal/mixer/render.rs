@@ -103,6 +103,54 @@ impl Mixer {
         let bpm = audio_data.bpm.map(|b| b as f64);
         self.tick_sequence(dt, bpm);
 
+        // ── GPU Timestamp: read previous frame results ──────────────────
+        // Only read if the map_async callback has fired (buffer is actually mapped).
+        if self
+            .staging_mapped
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            if let Some(ref staging) = self.staging_buffers {
+                let read_idx = 1 - self.staging_index;
+                let buf = &staging[read_idx];
+                {
+                    let slice = buf.slice(..);
+                    let mapped = slice.get_mapped_range();
+                    let timestamps: &[u64] = bytemuck::cast_slice(&mapped);
+                    let period_us = self.timestamp_period / 1000.0; // ns → µs
+                    self.last_frame_gpu_times.clear();
+                    for &(ch_idx, deck_idx, begin, end) in &self.prev_timing_allocations {
+                        if (end as usize) < timestamps.len() {
+                            let begin_ts = timestamps[begin as usize];
+                            let end_ts = timestamps[end as usize];
+                            if end_ts > begin_ts {
+                                let gpu_us = (end_ts - begin_ts) as f32 * period_us;
+                                self.last_frame_gpu_times.insert((ch_idx, deck_idx), gpu_us);
+                            }
+                        }
+                    }
+                    drop(mapped);
+                }
+                buf.unmap();
+                self.staging_mapped
+                    .store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+
+        // Apply GPU timing results to deck slots (EMA smoothing)
+        if !self.last_frame_gpu_times.is_empty() {
+            for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
+                for (dk_idx, slot) in channel.decks.iter_mut().enumerate() {
+                    if let Some(&gpu_us) = self.last_frame_gpu_times.get(&(ch_idx, dk_idx)) {
+                        if slot.gpu_render_cost_us > 0.0 {
+                            slot.gpu_render_cost_us = 0.2 * gpu_us + 0.8 * slot.gpu_render_cost_us;
+                        } else {
+                            slot.gpu_render_cost_us = gpu_us;
+                        }
+                    }
+                }
+            }
+        }
+
         // Update global modulation engine
         let t_modulation = std::time::Instant::now();
         let time = self.start_time.elapsed().as_secs_f32();
@@ -151,6 +199,13 @@ impl Mixer {
         // This is updated at the end of the frame based on actual vs CPU-measured time.
         let gpu_load_ratio = self.gpu_load_ratio;
 
+        // Allocate per-frame GPU timing context (128 queries = 64 deck measurements)
+        let mut timing_frame = if self.query_set.is_some() {
+            Some(super::GpuTimingFrame::new(128))
+        } else {
+            None
+        };
+
         let profiling = self.perf_profile_frames > 0;
         let t_channels = std::time::Instant::now();
         let mut rendered_channels: u32 = 0;
@@ -173,6 +228,8 @@ impl Mixer {
                 total_active_decks,
                 gpu_load_ratio,
                 &mut prefix_cmds,
+                timing_frame.as_mut(),
+                self.query_set.as_ref(),
             ) {
                 log::error!("Channel {} render failed, skipping: {}", ch_idx, e);
                 continue;
@@ -238,21 +295,94 @@ impl Mixer {
             0
         };
 
+        // ── GPU Timestamp: resolve + readback ───────────────────────────
+        if let (Some(ref qs), Some(ref resolve_buf), Some(ref staging)) =
+            (&self.query_set, &self.resolve_buffer, &self.staging_buffers)
+        {
+            if let Some(ref timing) = timing_frame {
+                let query_count = timing.query_count();
+                if query_count > 0 {
+                    let mut enc =
+                        context
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("GPU Timing Resolve"),
+                            });
+                    enc.resolve_query_set(qs, 0..query_count, resolve_buf, 0);
+                    let byte_count = (query_count as u64) * 8;
+                    enc.copy_buffer_to_buffer(
+                        resolve_buf,
+                        0,
+                        &staging[self.staging_index],
+                        0,
+                        byte_count,
+                    );
+                    context.queue.submit(std::iter::once(enc.finish()));
+
+                    // Map the staging buffer for reading next frame.
+                    // The callback sets staging_mapped so we only read once
+                    // the GPU has actually finished the copy.
+                    let mapped_flag = self.staging_mapped.clone();
+                    staging[self.staging_index].slice(..).map_async(
+                        wgpu::MapMode::Read,
+                        move |result| {
+                            if result.is_ok() {
+                                mapped_flag.store(true, std::sync::atomic::Ordering::Release);
+                            }
+                        },
+                    );
+
+                    // Save allocations for readback next frame
+                    self.prev_timing_allocations = timing.allocations.clone();
+                    self.staging_index = 1 - self.staging_index;
+                }
+            }
+        }
+
         self.frame_count += 1;
 
-        // Update GPU load ratio: actual frame interval vs CPU-measured render time.
-        // `dt` includes GPU execution (absorbed by poll(Wait) at frame start).
-        // `channels_us` is CPU-side encoding only. When GPU-bound, dt >> channels_us
-        // and the ratio tells us how much render_cost_us underestimates true GPU cost.
+        // Update GPU load ratio: how much CPU-measured render cost underestimates
+        // true GPU cost. Only meaningful when we're actually GPU-bound (missing target).
+        // When meeting target, dt includes vsync idle wait which would inflate the ratio.
         let cpu_render_us = channels_us + mixer_composite_us + master_fx_us;
+        let frame_budget_us = if target_fps > 0 {
+            1_000_000.0 / target_fps as f32
+        } else {
+            f32::MAX
+        };
+        let actual_frame_us = dt * 1_000_000.0;
         if cpu_render_us > 100 && dt > 0.0 {
-            let actual_frame_us = (dt * 1_000_000.0) as u128;
-            let raw_ratio = actual_frame_us as f32 / cpu_render_us as f32;
-            // Clamp to [1.0, 200.0] — ratio < 1 means CPU-bound (no scaling needed),
-            // ratio > 200 is likely a stall or first-frame artifact.
+            let raw_ratio = if actual_frame_us > frame_budget_us * 1.05 {
+                // GPU-bound: frame time exceeds budget, ratio captures real pressure
+                actual_frame_us / cpu_render_us as f32
+            } else {
+                // Meeting target: decay toward 1.0 (no GPU pressure)
+                1.0
+            };
             let clamped = raw_ratio.clamp(1.0, 200.0);
             // EMA smoothing (α = 0.15) — responsive but not jittery
             self.gpu_load_ratio = 0.15 * clamped + 0.85 * self.gpu_load_ratio;
+        }
+
+        // Update GPU utilization %: sum of per-deck GPU costs / frame budget.
+        // Prefer GPU timestamp data; fall back to CPU cost × gpu_load_ratio.
+        if frame_budget_us < f32::MAX {
+            let total_gpu_us: f32 = self
+                .channels
+                .iter()
+                .flat_map(|ch| ch.decks.iter())
+                .filter(|s| !s.mute && s.opacity > 0.0)
+                .map(|s| {
+                    if s.gpu_render_cost_us > 0.0 {
+                        s.gpu_render_cost_us
+                    } else {
+                        s.render_cost_us * self.gpu_load_ratio
+                    }
+                })
+                .sum();
+            let raw_util = (total_gpu_us / frame_budget_us) * 100.0;
+            let clamped = raw_util.clamp(0.0, 999.0);
+            self.gpu_utilization = 0.15 * clamped + 0.85 * self.gpu_utilization;
         }
 
         // GPU profiling: detailed per-frame log
@@ -289,11 +419,11 @@ impl Mixer {
         // Log mixer-level timing every 120 frames
         if self.frame_count % 120 == 0 {
             let total_us = now.elapsed().as_micros();
-            log::info!(
+            log::debug!(
                 "[PERF] mixer | channels_rendered={} channels={}us | \
                  mixer_composite={}us master_fx={}us | \
                  modulation={}us video_tick={}us | \
-                 gpu_load_ratio={:.1}x | \
+                 gpu_load_ratio={:.1}x gpu_util={:.0}% | \
                  total={}us ({:.1}ms)",
                 rendered_channels,
                 channels_us,
@@ -302,6 +432,7 @@ impl Mixer {
                 modulation_us,
                 video_tick_us,
                 self.gpu_load_ratio,
+                self.gpu_utilization,
                 total_us,
                 total_us as f64 / 1000.0,
             );

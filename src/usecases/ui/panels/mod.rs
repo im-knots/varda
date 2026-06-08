@@ -284,13 +284,8 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 
                     ui.separator();
 
-                    // GPU load — render budget % (total render time / 16.67ms target)
-                    let total_render_ms: f32 = data
-                        .channel_render_stats
-                        .iter()
-                        .map(|s| s.render_time_ms)
-                        .sum();
-                    let gpu_load_pct = (total_render_ms / 16.67) * 100.0;
+                    // GPU utilization % from GPU timestamp data
+                    let gpu_load_pct = data.gpu_utilization;
                     let gpu_color = if gpu_load_pct < 50.0 {
                         egui::Color32::from_rgb(100, 220, 100)
                     } else if gpu_load_pct < 80.0 {
@@ -307,7 +302,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                             )
                             .sense(egui::Sense::click()),
                         )
-                        .on_hover_text("GPU render load — click for details");
+                        .on_hover_text("GPU utilization — click for details");
                     egui::Popup::from_toggle_button_response(&gpu_response)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
@@ -1190,27 +1185,19 @@ fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
             ui.end_row();
         }
 
-        let total_render_ms: f32 = data
-            .channel_render_stats
-            .iter()
-            .map(|s| s.render_time_ms)
-            .sum();
-        let load_pct = (total_render_ms / 16.67) * 100.0;
-        ui.label(egui::RichText::new("Render load").strong().small());
-        let load_color = if load_pct < 50.0 {
+        let util = data.gpu_utilization;
+        ui.label(egui::RichText::new("Utilization").strong().small());
+        let util_color = if util < 50.0 {
             egui::Color32::from_rgb(100, 220, 100)
-        } else if load_pct < 80.0 {
+        } else if util < 80.0 {
             egui::Color32::from_rgb(220, 200, 60)
         } else {
             egui::Color32::from_rgb(220, 60, 60)
         };
         ui.label(
-            egui::RichText::new(format!(
-                "{:.1}ms / 16.7ms ({:.0}%)",
-                total_render_ms, load_pct
-            ))
-            .color(load_color)
-            .monospace(),
+            egui::RichText::new(format!("{:.0}%", util))
+                .color(util_color)
+                .monospace(),
         );
         ui.end_row();
     });

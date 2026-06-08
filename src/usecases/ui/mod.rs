@@ -604,6 +604,8 @@ pub struct DeckUIInfo {
     pub effective_render_fps: f32,
     /// Smoothed render cost in microseconds
     pub render_cost_us: f32,
+    /// GPU-measured render cost in microseconds (0 = not available)
+    pub gpu_render_cost_us: f32,
 }
 
 /// Channel info for UI display
@@ -820,6 +822,8 @@ pub struct UIData {
     pub gpu_driver_info: String,
     /// GPU device type (e.g. "DiscreteGpu", "IntegratedGpu")
     pub gpu_device_type: String,
+    /// GPU utilization % (0–100), from GPU timestamp data
+    pub gpu_utilization: f32,
     /// CPU usage % (0–100)
     pub cpu_usage: f32,
     /// RAM used in bytes
@@ -1726,6 +1730,7 @@ impl UIData {
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
             render_cost_us: 0.0,
+            gpu_render_cost_us: 0.0,
         };
 
         let deck_a1 = DeckUIInfo {
@@ -1748,6 +1753,7 @@ impl UIData {
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
             render_cost_us: 0.0,
+            gpu_render_cost_us: 0.0,
         };
 
         let channel_a = ChannelUIInfo {
@@ -1788,6 +1794,7 @@ impl UIData {
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
             render_cost_us: 0.0,
+            gpu_render_cost_us: 0.0,
         };
 
         let deck_b1 = DeckUIInfo {
@@ -1810,6 +1817,7 @@ impl UIData {
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
             render_cost_us: 0.0,
+            gpu_render_cost_us: 0.0,
         };
 
         let channel_b = ChannelUIInfo {
@@ -1954,6 +1962,7 @@ impl UIData {
             gpu_driver: "Apple".to_string(),
             gpu_driver_info: "Metal 3".to_string(),
             gpu_device_type: "IntegratedGpu".to_string(),
+            gpu_utilization: 45.0,
             cpu_usage: 25.0,
             ram_used: 8 * 1024 * 1024 * 1024,
             ram_total: 16 * 1024 * 1024 * 1024,

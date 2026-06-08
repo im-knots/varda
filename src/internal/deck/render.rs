@@ -162,7 +162,7 @@ impl Deck {
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         let prefix = format!("deck{}", deck_idx);
-        self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers)
+        self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers, None)
     }
 
     /// Ensure analyzers are running for all preprocessor slots that need them.
@@ -222,6 +222,7 @@ impl Deck {
         modulation: &ModulationEngine,
         param_prefix: &str,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+        gpu_timing: Option<(&wgpu::QuerySet, u32, u32)>,
     ) -> Result<()> {
         // Update preprocessor textures from analyzer snapshots before rendering
         if self.analyzers.has_active_instances() {
@@ -232,6 +233,17 @@ impl Deck {
                 &mut self.source,
                 &mut self.effects,
             );
+        }
+
+        // Write begin GPU timestamp if timing is enabled
+        if let Some((query_set, begin_idx, _)) = gpu_timing {
+            let mut enc = context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("GPU Timing Begin"),
+                });
+            enc.write_timestamp(query_set, begin_idx);
+            cmd_buffers.push(enc.finish());
         }
 
         // Advance render_time by a fixed dt so skipped frames don't cause
@@ -585,6 +597,17 @@ impl Deck {
         // Capture frame for analyzer pipeline (non-blocking, one-frame latency)
         if let Some(readback_cmd) = self.analyzers.capture_frame(&context.device, &self.texture) {
             cmd_buffers.push(readback_cmd);
+        }
+
+        // Write end GPU timestamp if timing is enabled
+        if let Some((query_set, _, end_idx)) = gpu_timing {
+            let mut enc = context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("GPU Timing End"),
+                });
+            enc.write_timestamp(query_set, end_idx);
+            cmd_buffers.push(enc.finish());
         }
 
         Ok(())

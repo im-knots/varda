@@ -102,6 +102,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                             0.0
                         },
                         render_cost_us: slot.render_cost_us,
+                        gpu_render_cost_us: slot.gpu_render_cost_us,
                         fps: slot.deck.fps(),
                         running_analyzers: slot
                             .deck
@@ -562,6 +563,7 @@ pub(crate) fn build_ui_data(
                         render_fps: d.render_fps,
                         effective_render_fps: d.effective_render_fps,
                         render_cost_us: d.render_cost_us,
+                        gpu_render_cost_us: d.gpu_render_cost_us,
                     }
                 })
                 .collect();
@@ -1040,17 +1042,23 @@ pub(crate) fn build_ui_data(
             .map(|c| c.name.clone())
             .collect(),
         channel_render_stats: {
-            let frame_fps = app.frame_stats.fps_smoothed;
             let stats: Vec<crate::usecases::ui::ChannelRenderStats> = engine
                 .mixer
                 .channels
                 .iter()
                 .map(|ch| {
-                    // Use wall-clock frame rate when channel has active decks
-                    let avg_fps = if ch.active_deck_count > 0 {
-                        frame_fps
-                    } else {
+                    // Average the per-deck wall-clock FPS across active decks
+                    let active_decks: Vec<f32> = ch
+                        .decks
+                        .iter()
+                        .filter(|s| !s.mute && s.opacity > 0.0)
+                        .map(|s| s.fps)
+                        .filter(|&fps| fps > 0.0)
+                        .collect();
+                    let avg_fps = if active_decks.is_empty() {
                         0.0
+                    } else {
+                        active_decks.iter().sum::<f32>() / active_decks.len() as f32
                     };
                     crate::usecases::ui::ChannelRenderStats {
                         name: ch.name.clone(),
@@ -1072,6 +1080,7 @@ pub(crate) fn build_ui_data(
         gpu_driver: app.context.adapter.get_info().driver,
         gpu_driver_info: app.context.adapter.get_info().driver_info,
         gpu_device_type: format!("{:?}", app.context.adapter.get_info().device_type),
+        gpu_utilization: app.mixer_ref().gpu_utilization(),
         cpu_usage: app.frame_stats.system_monitor.cpu_usage(),
         ram_used: app.frame_stats.system_monitor.ram_used(),
         ram_total: app.frame_stats.system_monitor.ram_total(),

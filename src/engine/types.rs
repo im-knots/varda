@@ -170,6 +170,8 @@ pub struct DeckSnapshot {
     pub effective_render_fps: f32,
     /// Smoothed render cost in microseconds
     pub render_cost_us: f32,
+    /// GPU-measured render cost in microseconds (0 = not available)
+    pub gpu_render_cost_us: f32,
     /// Smoothed FPS from actual deck render pipeline timing
     pub fps: f32,
     pub running_analyzers: Vec<RunningAnalyzerSnapshot>,
@@ -736,6 +738,7 @@ mod tests {
             render_fps: DeckRenderFps::Auto,
             effective_render_fps: 0.0,
             render_cost_us: 0.0,
+            gpu_render_cost_us: 0.0,
             fps: 59.5,
             running_analyzers: vec![],
         };
