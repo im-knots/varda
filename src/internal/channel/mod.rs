@@ -512,11 +512,18 @@ impl Channel {
     /// Tick video frames for all decks without doing a full render.
     /// Call this every frame even for off-screen channels so video players
     /// stay in sync and don't show stale/black frames when faded back in.
-    pub fn tick_video_frames(&mut self, context: &GpuContext) {
+    pub fn tick_video_frames(&mut self, encoder: &mut wgpu::CommandEncoder) {
         for slot in self.decks.iter_mut() {
-            if let Err(e) = slot.deck.update_video_frame(context) {
+            if let Err(e) = slot.deck.update_video_frame(encoder) {
                 log::warn!("Video frame update failed: {}", e);
             }
+        }
+    }
+
+    /// Request re-mapping of staging buffers after queue.submit().
+    pub fn request_video_remap(&mut self) {
+        for slot in self.decks.iter_mut() {
+            slot.deck.request_video_remap();
         }
     }
 
@@ -538,6 +545,7 @@ impl Channel {
         target_fps: u32,
         total_active_decks: u32,
         gpu_load_ratio: f32,
+        prefix_cmds: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         let render_start = std::time::Instant::now();
 
@@ -607,6 +615,15 @@ impl Channel {
                 };
 
                 if should_render {
+                    // Set the fixed time step so the shader TIME uniform advances
+                    // by consistent increments regardless of skip gaps.
+                    let render_dt = if target_fps > 0 {
+                        1.0 / target_fps as f32
+                    } else {
+                        dt // uncapped: use actual frame delta
+                    };
+                    slot.deck.set_render_dt(render_dt);
+
                     let param_prefix = slot.deck.param_prefix().to_owned();
                     let t_single = std::time::Instant::now();
                     slot.deck.render_with_prefix(
@@ -636,9 +653,16 @@ impl Channel {
         }
         self.active_deck_count = active_count;
         let deck_render_us = t_deck_render.elapsed().as_micros();
-        // Batch submit all deck renders at once
+        // Batch submit all deck renders at once.
+        // Drain any prefix command buffers (e.g. video upload copies) and
+        // prepend them so they execute before deck render passes that read
+        // the updated textures — all in a single queue.submit() call.
         let t_deck_submit = std::time::Instant::now();
-        if !cmd_buffers.is_empty() {
+        if !prefix_cmds.is_empty() {
+            let mut all_cmds: Vec<wgpu::CommandBuffer> = prefix_cmds.drain(..).collect();
+            all_cmds.extend(cmd_buffers);
+            context.queue.submit(all_cmds);
+        } else if !cmd_buffers.is_empty() {
             context.queue.submit(cmd_buffers);
         }
         let deck_submit_us = t_deck_submit.elapsed().as_micros();
@@ -1248,13 +1272,10 @@ impl Channel {
                         TransitionTrigger::Timer => *elapsed >= play_secs,
                         TransitionTrigger::ClipEnd => {
                             // Check if video reached end
-                            let clip_ended = slot
-                                .deck
-                                .playback_state()
-                                .map_or(false, |ps| ps.reached_end);
+                            let snap = slot.deck.playback_snapshot();
+                            let clip_ended = snap.as_ref().map_or(false, |ps| ps.reached_end);
                             // Also respect timer as fallback for non-video sources
-                            clip_ended
-                                || (slot.deck.playback_state().is_none() && *elapsed >= play_secs)
+                            clip_ended || (snap.is_none() && *elapsed >= play_secs)
                         }
                     };
 
@@ -1679,8 +1700,19 @@ mod tests {
 
         let audio = crate::audio::AudioData::default();
         let modulation = crate::modulation::ModulationEngine::new();
-        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-            .unwrap();
+        ch.render(
+            &gpu,
+            &audio,
+            &modulation,
+            0,
+            0.0,
+            1.0 / 60.0,
+            60,
+            2,
+            1.0,
+            &mut Vec::new(),
+        )
+        .unwrap();
 
         // After one render, render_time_ms should be > 0 (something was measured)
         assert!(ch.render_time_ms > 0.0);
@@ -1698,8 +1730,19 @@ mod tests {
 
         let audio = crate::audio::AudioData::default();
         let modulation = crate::modulation::ModulationEngine::new();
-        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-            .unwrap();
+        ch.render(
+            &gpu,
+            &audio,
+            &modulation,
+            0,
+            0.0,
+            1.0 / 60.0,
+            60,
+            2,
+            1.0,
+            &mut Vec::new(),
+        )
+        .unwrap();
 
         assert_eq!(ch.active_deck_count, 1);
     }
@@ -1714,8 +1757,19 @@ mod tests {
 
         let audio = crate::audio::AudioData::default();
         let modulation = crate::modulation::ModulationEngine::new();
-        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-            .unwrap();
+        ch.render(
+            &gpu,
+            &audio,
+            &modulation,
+            0,
+            0.0,
+            1.0 / 60.0,
+            60,
+            2,
+            1.0,
+            &mut Vec::new(),
+        )
+        .unwrap();
 
         assert_eq!(ch.active_deck_count, 1);
     }
@@ -1731,15 +1785,37 @@ mod tests {
 
         // Render multiple frames — EMA should converge
         for _ in 0..10 {
-            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-                .unwrap();
+            ch.render(
+                &gpu,
+                &audio,
+                &modulation,
+                0,
+                0.0,
+                1.0 / 60.0,
+                60,
+                2,
+                1.0,
+                &mut Vec::new(),
+            )
+            .unwrap();
         }
         let time_after_10 = ch.render_time_ms;
 
         // Render more frames
         for _ in 0..10 {
-            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-                .unwrap();
+            ch.render(
+                &gpu,
+                &audio,
+                &modulation,
+                0,
+                0.0,
+                1.0 / 60.0,
+                60,
+                2,
+                1.0,
+                &mut Vec::new(),
+            )
+            .unwrap();
         }
         let time_after_20 = ch.render_time_ms;
 
@@ -1756,8 +1832,19 @@ mod tests {
 
         let audio = crate::audio::AudioData::default();
         let modulation = crate::modulation::ModulationEngine::new();
-        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-            .unwrap();
+        ch.render(
+            &gpu,
+            &audio,
+            &modulation,
+            0,
+            0.0,
+            1.0 / 60.0,
+            60,
+            2,
+            1.0,
+            &mut Vec::new(),
+        )
+        .unwrap();
 
         // Time should be >= 0 (even empty channels do some work)
         assert!(ch.render_time_ms >= 0.0);
@@ -1784,8 +1871,19 @@ mod tests {
 
         // Render several frames so EMA has time to converge
         for _ in 0..5 {
-            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-                .unwrap();
+            ch.render(
+                &gpu,
+                &audio,
+                &modulation,
+                0,
+                0.0,
+                1.0 / 60.0,
+                60,
+                2,
+                1.0,
+                &mut Vec::new(),
+            )
+            .unwrap();
         }
 
         let deck_fps = ch.decks[0].deck.fps();
@@ -1807,8 +1905,19 @@ mod tests {
 
         // First render — time_delta may be very large (time since Deck creation)
         // but the guard (time_delta < 1.0) should keep FPS sane
-        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-            .unwrap();
+        ch.render(
+            &gpu,
+            &audio,
+            &modulation,
+            0,
+            0.0,
+            1.0 / 60.0,
+            60,
+            2,
+            1.0,
+            &mut Vec::new(),
+        )
+        .unwrap();
         let fps = ch.decks[0].deck.fps();
         // Either 0 (if first delta was >= 1s) or some reasonable value
         assert!(fps >= 0.0);
@@ -1830,8 +1939,19 @@ mod tests {
         let modulation = crate::modulation::ModulationEngine::new();
 
         for _ in 0..5 {
-            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-                .unwrap();
+            ch.render(
+                &gpu,
+                &audio,
+                &modulation,
+                0,
+                0.0,
+                1.0 / 60.0,
+                60,
+                2,
+                1.0,
+                &mut Vec::new(),
+            )
+            .unwrap();
         }
 
         // Both decks should have positive FPS
@@ -1852,15 +1972,37 @@ mod tests {
 
         // Render to establish FPS
         for _ in 0..5 {
-            ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-                .unwrap();
+            ch.render(
+                &gpu,
+                &audio,
+                &modulation,
+                0,
+                0.0,
+                1.0 / 60.0,
+                60,
+                2,
+                1.0,
+                &mut Vec::new(),
+            )
+            .unwrap();
         }
         let fps_before = ch.decks[0].deck.fps();
 
         // Mute the deck — it won't render
         ch.decks[0].mute = true;
-        ch.render(&gpu, &audio, &modulation, 0, 0.0, 1.0 / 60.0, 60, 2, 1.0)
-            .unwrap();
+        ch.render(
+            &gpu,
+            &audio,
+            &modulation,
+            0,
+            0.0,
+            1.0 / 60.0,
+            60,
+            2,
+            1.0,
+            &mut Vec::new(),
+        )
+        .unwrap();
 
         // FPS should remain unchanged (deck wasn't rendered, no EMA update)
         let fps_after = ch.decks[0].deck.fps();

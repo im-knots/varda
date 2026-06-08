@@ -41,16 +41,18 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         .collect();
 
                     let video_playback =
-                        slot.deck.playback_state().map(|ps| VideoPlaybackSnapshot {
-                            playing: ps.playing,
-                            position: ps.position,
-                            duration: ps.duration,
-                            speed: ps.speed,
-                            loop_mode: ps.loop_mode,
-                            in_point: ps.in_point,
-                            out_point: ps.out_point,
-                            frame_rate: ps.frame_rate,
-                        });
+                        slot.deck
+                            .playback_snapshot()
+                            .map(|ps| VideoPlaybackSnapshot {
+                                playing: ps.playing,
+                                position: ps.position,
+                                duration: ps.duration,
+                                speed: ps.speed,
+                                loop_mode: ps.loop_mode,
+                                in_point: ps.in_point,
+                                out_point: ps.out_point,
+                                frame_rate: ps.frame_rate,
+                            });
 
                     let auto_transition =
                         slot.auto_transition

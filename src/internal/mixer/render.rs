@@ -104,8 +104,10 @@ impl Mixer {
         self.tick_sequence(dt, bpm);
 
         // Update global modulation engine
+        let t_modulation = std::time::Instant::now();
         let time = self.start_time.elapsed().as_secs_f32();
         self.modulation.update(time, audio_values, analyzer_values);
+        let modulation_us = t_modulation.elapsed().as_micros();
 
         // Compute effective opacity per channel (stack-allocated for the common 2-channel case)
         let channel_count = self.channels.len();
@@ -124,9 +126,23 @@ impl Mixer {
 
         // Always tick video frames on every channel so players stay in sync
         // even when a channel is fully faded out by the crossfader.
+        // Uses a dedicated encoder for double-buffered staging uploads
+        // (copy_buffer_to_texture) to avoid per-frame staging allocation stalls.
+        // The finished command buffer is NOT submitted here — it is passed as a
+        // prefix to the first channel's deck submit, eliminating a separate
+        // queue.submit() call that would stall under GPU pressure.
+        let t_video_tick = std::time::Instant::now();
+        let mut video_encoder =
+            context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Video Upload Encoder"),
+                });
         for channel in self.channels.iter_mut() {
-            channel.tick_video_frames(context);
+            channel.tick_video_frames(&mut video_encoder);
         }
+        let mut prefix_cmds = vec![video_encoder.finish()];
+        let video_tick_us = t_video_tick.elapsed().as_micros();
 
         // Count total active decks from last frame for per-deck budget calculation
         let total_active_decks: u32 = self.channels.iter().map(|ch| ch.active_deck_count).sum();
@@ -154,6 +170,7 @@ impl Mixer {
                 target_fps,
                 total_active_decks,
                 gpu_load_ratio,
+                &mut prefix_cmds,
             ) {
                 log::error!("Channel {} render failed, skipping: {}", ch_idx, e);
                 continue;
@@ -161,6 +178,19 @@ impl Mixer {
             rendered_channels += 1;
         }
         let channels_us = t_channels.elapsed().as_micros();
+
+        // If no channel consumed the video upload prefix (all channels faded
+        // out or errored), submit it now so video players still advance.
+        if !prefix_cmds.is_empty() {
+            context.queue.submit(prefix_cmds);
+        }
+
+        // Request re-mapping of staging buffers AFTER the submit that
+        // included the video upload commands. map_async can complete
+        // synchronously on Metal/UMA so must not be called before that submit.
+        for channel in self.channels.iter_mut() {
+            channel.request_video_remap();
+        }
 
         self.sync_transition_progress();
         let t_mixer_composite = std::time::Instant::now();
@@ -193,12 +223,16 @@ impl Mixer {
             let total_us = now.elapsed().as_micros();
             log::info!(
                 "[PERF] mixer | channels_rendered={} channels={}us | \
-                 mixer_composite={}us master_fx={}us | gpu_load_ratio={:.1}x | \
+                 mixer_composite={}us master_fx={}us | \
+                 modulation={}us video_tick={}us | \
+                 gpu_load_ratio={:.1}x | \
                  total={}us ({:.1}ms)",
                 rendered_channels,
                 channels_us,
                 mixer_composite_us,
                 master_fx_us,
+                modulation_us,
+                video_tick_us,
                 self.gpu_load_ratio,
                 total_us,
                 total_us as f64 / 1000.0,

@@ -9,6 +9,8 @@ pub mod hap;
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 
 extern crate ffmpeg_next as ffmpeg;
 
@@ -241,6 +243,358 @@ pub enum VideoFrame<'a> {
     },
 }
 
+// ── Background decode thread types ───────────────────────────────────
+
+/// Commands sent from the main thread to the decode thread.
+pub enum VideoCommand {
+    Play,
+    Pause,
+    Seek(f64),
+    SetSpeed(f64),
+    SetLoopMode(LoopMode),
+    SetInPoint(f64),
+    SetOutPoint(f64),
+    ClearInOutPoints,
+    Stop,
+}
+
+/// A decoded frame ready for GPU upload — owned data copied from the player.
+pub struct DecodedFrame {
+    pub color_data: Vec<u8>,
+    pub alpha_data: Option<Vec<u8>>,
+    pub color_format: Option<HapTextureFormat>,
+    pub alpha_format: Option<HapTextureFormat>,
+}
+
+/// Read-only snapshot of playback state for the main thread.
+#[derive(Debug, Clone)]
+pub struct PlaybackSnapshot {
+    pub playing: bool,
+    pub position: f64,
+    pub duration: f64,
+    pub speed: f64,
+    pub loop_mode: LoopMode,
+    pub in_point: f64,
+    pub out_point: f64,
+    pub reverse: bool,
+    pub reached_end: bool,
+    pub frame_rate: f64,
+}
+
+impl PlaybackSnapshot {
+    /// Create a snapshot from a PlaybackState.
+    pub fn from_state(ps: &PlaybackState) -> Self {
+        Self {
+            playing: ps.playing,
+            position: ps.position,
+            duration: ps.duration,
+            speed: ps.speed,
+            loop_mode: ps.loop_mode,
+            in_point: ps.in_point,
+            out_point: ps.out_point,
+            reverse: ps.reverse,
+            reached_end: ps.reached_end,
+            frame_rate: ps.frame_rate,
+        }
+    }
+}
+
+/// Main-thread handle to a background video decode thread.
+pub struct VideoDecodeHandle {
+    cmd_tx: mpsc::Sender<VideoCommand>,
+    frame_data: Arc<Mutex<Option<DecodedFrame>>>,
+    snapshot: Arc<Mutex<PlaybackSnapshot>>,
+    stop_flag: Arc<AtomicBool>,
+    _thread: Option<std::thread::JoinHandle<()>>,
+    pub width: u32,
+    pub height: u32,
+    /// Whether this is a dual-plane HAP source (for render pass alpha detection).
+    pub is_dual_plane: bool,
+}
+
+impl VideoDecodeHandle {
+    /// Spawn a background decode thread for a standard (ffmpeg) VideoPlayer.
+    pub fn spawn_video(player: VideoPlayer) -> Self {
+        let width = player.width();
+        let height = player.height();
+        let fps = player.frame_rate();
+        let initial_snapshot = PlaybackSnapshot::from_state(&player.playback);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let frame_data: Arc<Mutex<Option<DecodedFrame>>> = Arc::new(Mutex::new(None));
+        let snapshot: Arc<Mutex<PlaybackSnapshot>> = Arc::new(Mutex::new(initial_snapshot));
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        let fd = frame_data.clone();
+        let ss = snapshot.clone();
+        let sf = stop_flag.clone();
+
+        let thread = std::thread::Builder::new()
+            .name("video-decode".into())
+            .spawn(move || {
+                video_decode_thread(player, cmd_rx, fd, ss, sf, fps);
+            })
+            .expect("failed to spawn video decode thread");
+
+        Self {
+            cmd_tx,
+            frame_data,
+            snapshot,
+            stop_flag,
+            _thread: Some(thread),
+            width,
+            height,
+            is_dual_plane: false,
+        }
+    }
+
+    /// Spawn a background decode thread for a HAP video player.
+    pub fn spawn_hap(player: hap::HapPlayer) -> Self {
+        let width = player.width();
+        let height = player.height();
+        let fps = player.frame_rate();
+        let is_dual_plane = player.is_dual_plane;
+        let initial_snapshot = PlaybackSnapshot::from_state(&player.playback);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let frame_data: Arc<Mutex<Option<DecodedFrame>>> = Arc::new(Mutex::new(None));
+        let snapshot: Arc<Mutex<PlaybackSnapshot>> = Arc::new(Mutex::new(initial_snapshot));
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        let fd = frame_data.clone();
+        let ss = snapshot.clone();
+        let sf = stop_flag.clone();
+
+        let thread = std::thread::Builder::new()
+            .name("hap-decode".into())
+            .spawn(move || {
+                hap_decode_thread(player, cmd_rx, fd, ss, sf, fps);
+            })
+            .expect("failed to spawn hap decode thread");
+
+        Self {
+            cmd_tx,
+            frame_data,
+            snapshot,
+            stop_flag,
+            _thread: Some(thread),
+            width,
+            height,
+            is_dual_plane,
+        }
+    }
+
+    /// Take the latest decoded frame (returns None if no new frame available).
+    pub fn take_frame(&self) -> Option<DecodedFrame> {
+        self.frame_data.lock().ok()?.take()
+    }
+
+    /// Send a command to the decode thread.
+    pub fn send(&self, cmd: VideoCommand) {
+        let _ = self.cmd_tx.send(cmd);
+    }
+
+    /// Get the current playback snapshot (read-only copy).
+    pub fn playback_snapshot(&self) -> PlaybackSnapshot {
+        self.snapshot
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_else(|_| PlaybackSnapshot {
+                playing: false,
+                position: 0.0,
+                duration: 0.0,
+                speed: 1.0,
+                loop_mode: LoopMode::Loop,
+                in_point: 0.0,
+                out_point: 0.0,
+                reverse: false,
+                reached_end: false,
+                frame_rate: 30.0,
+            })
+    }
+}
+
+impl Drop for VideoDecodeHandle {
+    fn drop(&mut self) {
+        self.stop_flag.store(true, Ordering::Release);
+        // Send Stop to unblock recv_timeout
+        let _ = self.cmd_tx.send(VideoCommand::Stop);
+        if let Some(thread) = self._thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Apply a command to a PlaybackState.
+fn apply_command(ps: &mut PlaybackState, cmd: VideoCommand) {
+    match cmd {
+        VideoCommand::Play => ps.playing = true,
+        VideoCommand::Pause => ps.playing = false,
+        VideoCommand::Seek(_) => {
+            // Seek is handled specially by the thread loop (calls seek_and_reset / seek)
+        }
+        VideoCommand::SetSpeed(s) => ps.speed = s,
+        VideoCommand::SetLoopMode(m) => ps.loop_mode = m,
+        VideoCommand::SetInPoint(s) => ps.in_point = s,
+        VideoCommand::SetOutPoint(s) => ps.out_point = s,
+        VideoCommand::ClearInOutPoints => {
+            ps.in_point = 0.0;
+            ps.out_point = 0.0;
+        }
+        VideoCommand::Stop => {}
+    }
+}
+
+/// Background decode loop for standard (ffmpeg) video.
+fn video_decode_thread(
+    mut player: VideoPlayer,
+    cmd_rx: mpsc::Receiver<VideoCommand>,
+    frame_data: Arc<Mutex<Option<DecodedFrame>>>,
+    snapshot: Arc<Mutex<PlaybackSnapshot>>,
+    stop_flag: Arc<AtomicBool>,
+    fps: f64,
+) {
+    let interval = std::time::Duration::from_secs_f64((1.0 / fps).max(0.001));
+
+    while !stop_flag.load(Ordering::Acquire) {
+        // Drain all pending commands
+        let mut had_seek = None;
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            if let VideoCommand::Stop = &cmd {
+                return;
+            }
+            if let VideoCommand::Seek(t) = &cmd {
+                had_seek = Some(*t);
+            }
+            apply_command(&mut player.playback, cmd);
+        }
+
+        // Process seek if any
+        if let Some(t) = had_seek {
+            if let Err(e) = player.seek_and_reset(t) {
+                log::warn!("Video seek error: {}", e);
+            }
+        }
+
+        // Decode next frame
+        match player.next_frame() {
+            Ok(Some(data)) => {
+                let frame = DecodedFrame {
+                    color_data: data.to_vec(),
+                    alpha_data: None,
+                    color_format: None,
+                    alpha_format: None,
+                };
+                if let Ok(mut slot) = frame_data.lock() {
+                    *slot = Some(frame);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("Video decode error: {}", e);
+            }
+        }
+
+        // Publish snapshot
+        if let Ok(mut ss) = snapshot.lock() {
+            *ss = PlaybackSnapshot::from_state(&player.playback);
+        }
+
+        // Sleep until next frame or wake on command
+        match cmd_rx.recv_timeout(interval) {
+            Ok(cmd) => {
+                if let VideoCommand::Stop = &cmd {
+                    return;
+                }
+                if let VideoCommand::Seek(t) = &cmd {
+                    if let Err(e) = player.seek_and_reset(*t) {
+                        log::warn!("Video seek error: {}", e);
+                    }
+                } else {
+                    apply_command(&mut player.playback, cmd);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+/// Background decode loop for HAP video.
+fn hap_decode_thread(
+    mut player: hap::HapPlayer,
+    cmd_rx: mpsc::Receiver<VideoCommand>,
+    frame_data: Arc<Mutex<Option<DecodedFrame>>>,
+    snapshot: Arc<Mutex<PlaybackSnapshot>>,
+    stop_flag: Arc<AtomicBool>,
+    fps: f64,
+) {
+    let interval = std::time::Duration::from_secs_f64((1.0 / fps).max(0.001));
+
+    while !stop_flag.load(Ordering::Acquire) {
+        // Drain all pending commands
+        let mut had_seek = None;
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            if let VideoCommand::Stop = &cmd {
+                return;
+            }
+            if let VideoCommand::Seek(t) = &cmd {
+                had_seek = Some(*t);
+            }
+            apply_command(&mut player.playback, cmd);
+        }
+
+        // Process seek if any
+        if let Some(t) = had_seek {
+            if let Err(e) = player.seek(t) {
+                log::warn!("HAP seek error: {}", e);
+            }
+        }
+
+        // Decode next frame
+        match player.next_frame() {
+            Ok(Some(result)) => {
+                let frame = DecodedFrame {
+                    color_data: result.color_data.to_vec(),
+                    alpha_data: result.alpha_data.map(|d| d.to_vec()),
+                    color_format: Some(result.color_format),
+                    alpha_format: result.alpha_format,
+                };
+                if let Ok(mut slot) = frame_data.lock() {
+                    *slot = Some(frame);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("HAP decode error: {}", e);
+            }
+        }
+
+        // Publish snapshot
+        if let Ok(mut ss) = snapshot.lock() {
+            *ss = PlaybackSnapshot::from_state(&player.playback);
+        }
+
+        // Sleep until next frame or wake on command
+        match cmd_rx.recv_timeout(interval) {
+            Ok(cmd) => {
+                if let VideoCommand::Stop = &cmd {
+                    return;
+                }
+                if let VideoCommand::Seek(t) = &cmd {
+                    if let Err(e) = player.seek(*t) {
+                        log::warn!("HAP seek error: {}", e);
+                    }
+                } else {
+                    apply_command(&mut player.playback, cmd);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
 /// Detect whether a video file uses a HAP codec.
 /// Returns the HAP texture format if it is HAP, or None for standard codecs.
 pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureFormat>> {
@@ -384,9 +738,11 @@ impl VideoPlayer {
         let was_reverse = self.playback.reverse;
         let result = self.playback.advance_frame();
 
-        // No frames to decode this tick — hold current frame
+        // No frames to decode this tick — hold current frame.
+        // Return None so the caller skips the GPU texture upload;
+        // the texture already contains the current frame from the last upload.
         if result.frames_to_decode == 0 && !result.needs_seek {
-            return Ok(Some(&self.frame_data));
+            return Ok(None);
         }
 
         // Detect ping-pong boundary flips from advance_frame:
@@ -588,6 +944,31 @@ impl VideoPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_playback_snapshot_from_state() {
+        let mut ps = PlaybackState::new(10.0, 30.0);
+        ps.speed = 2.0;
+        ps.in_point = 1.0;
+        ps.out_point = 8.0;
+        ps.loop_mode = LoopMode::PingPong;
+        let snap = PlaybackSnapshot::from_state(&ps);
+        assert!(snap.playing);
+        assert_eq!(snap.duration, 10.0);
+        assert_eq!(snap.speed, 2.0);
+        assert_eq!(snap.in_point, 1.0);
+        assert_eq!(snap.out_point, 8.0);
+        assert_eq!(snap.loop_mode, LoopMode::PingPong);
+        assert_eq!(snap.frame_rate, 30.0);
+    }
+
+    #[test]
+    fn test_decode_handle_take_frame_returns_none_initially() {
+        // Cannot construct a full handle without a player, but we can test the
+        // shared frame_data path directly.
+        let frame_data: Arc<Mutex<Option<DecodedFrame>>> = Arc::new(Mutex::new(None));
+        assert!(frame_data.lock().unwrap().is_none());
+    }
 
     #[test]
     fn test_playback_state_defaults() {

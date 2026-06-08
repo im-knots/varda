@@ -7,8 +7,10 @@ pub use render::get_current_date;
 use crate::isf::{ISFPass, ISFShader};
 use crate::params::ShaderParams;
 use crate::renderer::{BlitPipeline, HapConvertPipeline, UnifiedPipeline};
-use crate::video::{hap::HapPlayer, HapTextureFormat, VideoPlayer};
+use crate::video::{HapTextureFormat, PlaybackSnapshot, VideoCommand, VideoDecodeHandle};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Generate a short 8-character hex UUID for entity identity.
@@ -83,6 +85,150 @@ impl ScalingMode {
     }
 }
 
+/// Double-buffered staging buffers for non-blocking GPU texture uploads.
+///
+/// Uses a ping-pong pattern: CPU writes to buffer\[current\], GPU copies from
+/// buffer\[1-current\]. By the time we circle back two frames later, the GPU
+/// is done with the buffer and it can be re-mapped without stalling.
+///
+/// This eliminates the per-frame staging buffer allocation that
+/// `queue.write_texture()` performs internally, which can block for 2-9ms
+/// under GPU saturation.
+pub struct VideoStagingBuffers {
+    buffers: [wgpu::Buffer; 2],
+    current: usize,
+    mapped: [Arc<AtomicBool>; 2],
+    /// Bytes per row padded to wgpu::COPY_BYTES_PER_ROW_ALIGNMENT (256).
+    padded_bpr: u32,
+    /// Unpadded bytes per row (actual source data stride).
+    unpadded_bpr: u32,
+    /// Number of rows (height for RGBA, blocks_y for compressed).
+    rows: u32,
+    /// Tracks which buffers need map_async after the next queue.submit().
+    needs_remap: [bool; 2],
+}
+
+impl VideoStagingBuffers {
+    /// Create a new double-buffered staging pair.
+    /// Buffers start unmapped — call `request_remap()` after the first
+    /// `queue.submit()` to begin the mapping lifecycle.
+    pub fn new(device: &wgpu::Device, unpadded_bpr: u32, rows: u32, label: &str) -> Self {
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bpr = (unpadded_bpr + align - 1) & !(align - 1);
+        let buffer_size = (padded_bpr as u64) * (rows as u64);
+
+        let make_buf = |idx: usize| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("{} Staging {}", label, idx)),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        };
+
+        let mapped_0 = Arc::new(AtomicBool::new(false));
+        let mapped_1 = Arc::new(AtomicBool::new(false));
+
+        Self {
+            buffers: [make_buf(0), make_buf(1)],
+            current: 0,
+            mapped: [mapped_0, mapped_1],
+            padded_bpr,
+            unpadded_bpr,
+            rows,
+            needs_remap: [true, true],
+        }
+    }
+
+    /// Write frame data into the current staging buffer and encode a copy
+    /// to the destination texture. Returns true if the upload was performed.
+    pub fn upload(
+        &mut self,
+        data: &[u8],
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> bool {
+        let idx = self.current;
+        if !self.mapped[idx].load(Ordering::Acquire) {
+            // Buffer not yet mapped — skip this upload.
+            // The stale texture from last frame will remain on screen.
+            return false;
+        }
+
+        {
+            let buf = &self.buffers[idx];
+            let mut view = buf.slice(..).get_mapped_range_mut();
+            if self.padded_bpr == self.unpadded_bpr {
+                // Row stride matches — single memcpy
+                let copy_len = (self.unpadded_bpr as usize) * (self.rows as usize);
+                view.slice(..copy_len).copy_from_slice(&data[..copy_len]);
+            } else {
+                // Need to copy row-by-row with padding
+                for row in 0..self.rows as usize {
+                    let src_start = row * self.unpadded_bpr as usize;
+                    let dst_start = row * self.padded_bpr as usize;
+                    view.slice(dst_start..dst_start + self.unpadded_bpr as usize)
+                        .copy_from_slice(&data[src_start..src_start + self.unpadded_bpr as usize]);
+                }
+            }
+        }
+
+        self.buffers[idx].unmap();
+        self.mapped[idx].store(false, Ordering::Release);
+
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.buffers[idx],
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.padded_bpr),
+                    rows_per_image: Some(self.rows),
+                },
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Mark for re-mapping after submit
+        self.needs_remap[idx] = true;
+
+        // Advance to next buffer
+        self.current = 1 - self.current;
+        true
+    }
+
+    /// Request re-mapping of any buffers that were used since the last call.
+    /// **Must be called AFTER `queue.submit()`** — calling `map_async` before
+    /// submit can complete synchronously on UMA/Metal, leaving the buffer
+    /// mapped during submit (which is a validation error).
+    pub fn request_remap(&mut self) {
+        for i in 0..2 {
+            if self.needs_remap[i] {
+                self.needs_remap[i] = false;
+                let flag = self.mapped[i].clone();
+                self.buffers[i]
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Write, move |result| {
+                        if result.is_ok() {
+                            flag.store(true, Ordering::Release);
+                        }
+                    });
+            }
+        }
+    }
+}
+
 /// Source type for a deck - what generates the base image
 pub enum DeckSource {
     /// ISF shader generator
@@ -96,19 +242,20 @@ pub enum DeckSource {
         /// Preprocessor texture slots for analyzer-driven textures
         preprocessor_textures: Vec<PreprocessorSlot>,
     },
-    /// Video file playback (ffmpeg CPU decode → RGBA)
+    /// Video file playback (ffmpeg CPU decode → RGBA, background decode thread)
     Video {
-        player: VideoPlayer,
+        handle: VideoDecodeHandle,
         texture: wgpu::Texture,
         texture_view: wgpu::TextureView,
         blit_pipeline: BlitPipeline,
         source_width: u32,
         source_height: u32,
         scaling_mode: ScalingMode,
+        staging: VideoStagingBuffers,
     },
-    /// HAP video playback (GPU-native BCn compressed textures)
+    /// HAP video playback (GPU-native BCn, background decode thread)
     HapVideo {
-        player: HapPlayer,
+        handle: VideoDecodeHandle,
         texture: wgpu::Texture,
         texture_view: wgpu::TextureView,
         alpha_texture: Option<wgpu::Texture>,
@@ -120,6 +267,8 @@ pub enum DeckSource {
         source_width: u32,
         source_height: u32,
         scaling_mode: ScalingMode,
+        staging: VideoStagingBuffers,
+        alpha_staging: Option<VideoStagingBuffers>,
     },
     /// Static image
     Image {
@@ -274,13 +423,18 @@ pub struct Deck {
     /// Deck opacity (0.0 - 1.0)
     pub opacity: f32,
 
-    /// Start time for TIME uniform
-    start_time: Instant,
+    /// Accumulated render time for TIME uniform (advances by fixed dt each render).
+    /// Decoupled from wall clock so skipped frames don't cause animation jumps.
+    render_time: f32,
+
+    /// Fixed time step per render (1/target_fps). Updated by the channel when
+    /// the deck is rendered, so skipped frames simply don't advance render_time.
+    render_dt: f32,
 
     /// Frame counter
     frame_count: u32,
 
-    /// Last frame time
+    /// Last wall-clock render instant (for FPS measurement only, not for TIME uniform)
     last_frame_time: Instant,
 
     /// External source texture view (set each frame for ExternalSource decks)
@@ -344,31 +498,77 @@ impl Deck {
         }
     }
 
-    /// Get a reference to the video playback state, if this is a video deck.
-    pub fn playback_state(&self) -> Option<&crate::video::PlaybackState> {
+    /// Get a read-only snapshot of the video playback state.
+    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         match &self.source {
-            DeckSource::Video { player, .. } => Some(&player.playback),
-            DeckSource::HapVideo { player, .. } => Some(&player.playback),
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                Some(handle.playback_snapshot())
+            }
             _ => None,
         }
     }
 
-    /// Get a mutable reference to the video playback state, if this is a video deck.
-    pub fn playback_state_mut(&mut self) -> Option<&mut crate::video::PlaybackState> {
-        match &mut self.source {
-            DeckSource::Video { player, .. } => Some(&mut player.playback),
-            DeckSource::HapVideo { player, .. } => Some(&mut player.playback),
-            _ => None,
+    /// Send a command to the video decode thread (no-op for non-video decks).
+    fn video_send(&self, cmd: VideoCommand) -> bool {
+        match &self.source {
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                handle.send(cmd);
+                true
+            }
+            _ => false,
         }
     }
 
-    /// Seek the video to a specific position in seconds (resets cache for ping-pong).
-    pub fn video_seek(&mut self, time_secs: f64) -> anyhow::Result<()> {
-        match &mut self.source {
-            DeckSource::Video { player, .. } => player.seek_and_reset(time_secs),
-            DeckSource::HapVideo { player, .. } => player.seek(time_secs),
-            _ => Ok(()),
+    /// Toggle play/pause on the video decode thread.
+    pub fn video_toggle_play(&self) -> bool {
+        if let Some(snap) = self.playback_snapshot() {
+            if snap.playing {
+                self.video_send(VideoCommand::Pause)
+            } else {
+                self.video_send(VideoCommand::Play)
+            }
+        } else {
+            false
         }
+    }
+
+    /// Set playing state on the video decode thread.
+    pub fn video_set_playing(&self, playing: bool) -> bool {
+        if playing {
+            self.video_send(VideoCommand::Play)
+        } else {
+            self.video_send(VideoCommand::Pause)
+        }
+    }
+
+    /// Set playback speed on the video decode thread.
+    pub fn video_set_speed(&self, speed: f64) -> bool {
+        self.video_send(VideoCommand::SetSpeed(speed))
+    }
+
+    /// Set loop mode on the video decode thread.
+    pub fn video_set_loop_mode(&self, mode: crate::video::LoopMode) -> bool {
+        self.video_send(VideoCommand::SetLoopMode(mode))
+    }
+
+    /// Set in-point on the video decode thread.
+    pub fn video_set_in_point(&self, secs: f64) -> bool {
+        self.video_send(VideoCommand::SetInPoint(secs))
+    }
+
+    /// Set out-point on the video decode thread.
+    pub fn video_set_out_point(&self, secs: f64) -> bool {
+        self.video_send(VideoCommand::SetOutPoint(secs))
+    }
+
+    /// Clear in/out points on the video decode thread.
+    pub fn video_clear_in_out_points(&self) -> bool {
+        self.video_send(VideoCommand::ClearInOutPoints)
+    }
+
+    /// Seek the video to a specific position in seconds.
+    pub fn video_seek(&self, time_secs: f64) -> bool {
+        self.video_send(VideoCommand::Seek(time_secs))
     }
 
     /// Get the solid color value (if source is a solid color)
@@ -488,6 +688,12 @@ impl Deck {
             DeckSource::Shader { shader, .. } => Some(shader),
             _ => None,
         }
+    }
+
+    /// Set the fixed time step used for the TIME uniform.
+    /// Called by the channel to keep render_dt in sync with the target FPS.
+    pub fn set_render_dt(&mut self, dt: f32) {
+        self.render_dt = dt;
     }
 
     /// Get the smoothed FPS derived from actual render pipeline timing

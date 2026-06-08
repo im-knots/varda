@@ -947,8 +947,7 @@ impl VardaApp {
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
-                        if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
-                            ps.playing = !ps.playing;
+                        if ch.decks[deck_idx].deck.video_toggle_play() {
                             return CommandResult::Ok;
                         }
                     }
@@ -965,13 +964,9 @@ impl VardaApp {
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
-                        if let Err(e) = ch.decks[deck_idx].deck.video_seek(position_secs) {
-                            return CommandResult::Err {
-                                code: ErrorCode::InvalidInput,
-                                message: e.to_string(),
-                            };
+                        if ch.decks[deck_idx].deck.video_seek(position_secs) {
+                            return CommandResult::Ok;
                         }
-                        return CommandResult::Ok;
                     }
                 }
                 CommandResult::Err {
@@ -986,8 +981,7 @@ impl VardaApp {
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
-                        if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
-                            ps.speed = speed;
+                        if ch.decks[deck_idx].deck.video_set_speed(speed) {
                             return CommandResult::Ok;
                         }
                     }
@@ -1004,8 +998,7 @@ impl VardaApp {
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
-                        if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
-                            ps.loop_mode = mode;
+                        if ch.decks[deck_idx].deck.video_set_loop_mode(mode) {
                             return CommandResult::Ok;
                         }
                     }
@@ -1022,8 +1015,7 @@ impl VardaApp {
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
-                        if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
-                            ps.in_point = secs;
+                        if ch.decks[deck_idx].deck.video_set_in_point(secs) {
                             return CommandResult::Ok;
                         }
                     }
@@ -1040,8 +1032,7 @@ impl VardaApp {
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
-                        if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
-                            ps.out_point = secs;
+                        if ch.decks[deck_idx].deck.video_set_out_point(secs) {
                             return CommandResult::Ok;
                         }
                     }
@@ -1057,9 +1048,7 @@ impl VardaApp {
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                     if deck_idx < ch.decks.len() {
-                        if let Some(ps) = ch.decks[deck_idx].deck.playback_state_mut() {
-                            ps.in_point = 0.0;
-                            ps.out_point = 0.0;
+                        if ch.decks[deck_idx].deck.video_clear_in_out_points() {
                             return CommandResult::Ok;
                         }
                     }

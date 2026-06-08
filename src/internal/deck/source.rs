@@ -1,10 +1,12 @@
 //! Deck constructors — creating decks from shaders, videos, images, cameras, and solid colors.
 
-use super::{Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, ScalingMode};
+use super::{
+    Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, ScalingMode, VideoStagingBuffers,
+};
 use crate::isf::{compile_glsl_to_spirv, ISFMetadata, ISFShader};
 use crate::params::ShaderParams;
 use crate::renderer::{BlitPipeline, GpuContext, HapConvertPipeline, UnifiedPipeline};
-use crate::video::{hap::HapPlayer, HapTextureFormat, VideoPlayer};
+use crate::video::{hap::HapPlayer, HapTextureFormat, VideoDecodeHandle, VideoPlayer};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -382,7 +384,8 @@ impl Deck {
             texture_b_view,
             effects: Vec::new(),
             opacity: 1.0,
-            start_time: now,
+            render_time: 0.0,
+            render_dt: 1.0 / 60.0,
             frame_count: 0,
             last_frame_time: now,
             external_source_view: None,
@@ -548,8 +551,29 @@ impl Deck {
                 BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
 
             log::info!("Using HAP GPU path for '{}' ({:?})", source_name, hap_fmt);
+
+            let blocks_x = (vid_w + 3) / 4;
+            let blocks_y = (vid_h + 3) / 4;
+            let color_bpr = blocks_x * hap_fmt.block_bytes();
+            let staging =
+                VideoStagingBuffers::new(&context.device, color_bpr, blocks_y, "HAP Color");
+
+            let alpha_staging = if matches!(hap_fmt, HapTextureFormat::Bc3YCoCg) {
+                let alpha_bpr = blocks_x * HapTextureFormat::Bc4.block_bytes();
+                Some(VideoStagingBuffers::new(
+                    &context.device,
+                    alpha_bpr,
+                    blocks_y,
+                    "HAP Alpha",
+                ))
+            } else {
+                None
+            };
+
+            let handle = VideoDecodeHandle::spawn_hap(player);
+
             DeckSource::HapVideo {
-                player,
+                handle,
                 texture: video_texture,
                 texture_view: video_texture_view,
                 alpha_texture,
@@ -561,14 +585,18 @@ impl Deck {
                 source_width: vid_w,
                 source_height: vid_h,
                 scaling_mode: ScalingMode::default(),
+                staging,
+                alpha_staging,
             }
         } else {
             let player = VideoPlayer::new(&path)?;
+            let vid_w = player.width();
+            let vid_h = player.height();
             let video_texture = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Video Frame Texture"),
                 size: wgpu::Extent3d {
-                    width: player.width(),
-                    height: player.height(),
+                    width: vid_w,
+                    height: vid_h,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -583,16 +611,24 @@ impl Deck {
             let blit_pipeline =
                 BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
 
-            let vid_w = player.width();
-            let vid_h = player.height();
+            let staging = VideoStagingBuffers::new(
+                &context.device,
+                vid_w * 4, // RGBA = 4 bytes per pixel
+                vid_h,
+                "Video",
+            );
+
+            let handle = VideoDecodeHandle::spawn_video(player);
+
             DeckSource::Video {
-                player,
+                handle,
                 texture: video_texture,
                 texture_view: video_texture_view,
                 blit_pipeline,
                 source_width: vid_w,
                 source_height: vid_h,
                 scaling_mode: ScalingMode::default(),
+                staging,
             }
         };
 
@@ -812,7 +848,8 @@ impl Deck {
             texture_b_view,
             effects: Vec::new(),
             opacity: 1.0,
-            start_time: now,
+            render_time: 0.0,
+            render_dt: 1.0 / 60.0,
             frame_count: 0,
             last_frame_time: now,
             external_source_view: None,
