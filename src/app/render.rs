@@ -278,11 +278,13 @@ impl VardaApp {
         // Collect analyzer scalar values from all decks
         let analyzer_values = self.collect_analyzer_values();
 
+        let target_fps = self.target_fps;
         if let Err(e) = self.mixer.render(
             &self.context,
             &primary_audio,
             &audio_values,
             &analyzer_values,
+            target_fps,
         ) {
             log::error!("Failed to render mixer: {}", e);
         }

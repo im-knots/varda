@@ -2,7 +2,7 @@
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 
-/// Uniform buffer for HAP convert shader — 16 bytes (4 x f32).
+/// Uniform buffer for HAP convert shader — 32 bytes (8 x f32).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HapConvertParams {
@@ -10,6 +10,8 @@ struct HapConvertParams {
     do_ycocg: f32,
     has_alpha_plane: f32,
     _pad: f32,
+    uv_scale: [f32; 2],
+    uv_offset: [f32; 2],
 }
 
 pub struct HapConvertPipeline {
@@ -74,6 +76,8 @@ impl HapConvertPipeline {
                 do_ycocg: 0.0,
                 has_alpha_plane: 0.0,
                 _pad: 0.0,
+                uv_scale: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -154,6 +158,32 @@ impl HapConvertPipeline {
                 do_ycocg: if do_ycocg { 1.0 } else { 0.0 },
                 has_alpha_plane: if has_alpha_plane { 1.0 } else { 0.0 },
                 _pad: 0.0,
+                uv_scale: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
+            }]),
+        );
+    }
+
+    /// Update conversion parameters with UV transform for scaling modes.
+    pub fn set_params_with_uv(
+        &self,
+        queue: &wgpu::Queue,
+        opacity: f32,
+        do_ycocg: bool,
+        has_alpha_plane: bool,
+        uv_scale: [f32; 2],
+        uv_offset: [f32; 2],
+    ) {
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[HapConvertParams {
+                opacity,
+                do_ycocg: if do_ycocg { 1.0 } else { 0.0 },
+                has_alpha_plane: if has_alpha_plane { 1.0 } else { 0.0 },
+                _pad: 0.0,
+                uv_scale,
+                uv_offset,
             }]),
         );
     }

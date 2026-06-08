@@ -14,6 +14,45 @@ use crate::modulation::ModulationEngine;
 use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext};
 use anyhow::Result;
 
+/// Per-frame GPU timing allocation context.
+/// Hands out (begin_query, end_query) index pairs from a shared QuerySet.
+pub struct GpuTimingFrame {
+    /// Maximum number of queries in the set (must be even: pairs of begin/end)
+    max_queries: u32,
+    /// Next available query index
+    next_index: u32,
+    /// Records which (ch_idx, deck_idx) owns which query pair
+    pub allocations: Vec<(usize, usize, u32, u32)>,
+}
+
+impl GpuTimingFrame {
+    pub fn new(max_queries: u32) -> Self {
+        Self {
+            max_queries,
+            next_index: 0,
+            allocations: Vec::new(),
+        }
+    }
+
+    /// Allocate a (begin, end) query index pair for a deck.
+    /// Returns None if capacity exhausted.
+    pub fn allocate(&mut self, ch_idx: usize, deck_idx: usize) -> Option<(u32, u32)> {
+        if self.next_index + 2 > self.max_queries {
+            return None;
+        }
+        let begin = self.next_index;
+        let end = self.next_index + 1;
+        self.next_index += 2;
+        self.allocations.push((ch_idx, deck_idx, begin, end));
+        Some((begin, end))
+    }
+
+    /// Number of queries actually written this frame.
+    pub fn query_count(&self) -> u32 {
+        self.next_index
+    }
+}
+
 /// Mixer - Top-level compositor
 pub struct Mixer {
     /// Channels (default 2: A and B)
@@ -54,6 +93,16 @@ pub struct Mixer {
     /// Frame counter
     frame_count: u32,
 
+    /// Smoothed GPU load ratio (EMA): actual_frame_time / cpu_render_time.
+    /// When > 1.0, GPU execution takes longer than CPU encoding — shaders are
+    /// GPU-bound and render_cost_us underestimates true cost by this factor.
+    gpu_load_ratio: f32,
+
+    /// Smoothed GPU utilization % (0–100): sum of per-deck GPU render costs
+    /// divided by frame budget. Uses GPU timestamp data when available,
+    /// falls back to CPU-measured render cost × gpu_load_ratio.
+    gpu_utilization: f32,
+
     /// Shader-based composite pipeline for blending channels (all blend modes via uniform)
     composite_pipeline: CompositeBlitPipeline,
 
@@ -69,6 +118,28 @@ pub struct Mixer {
     /// Cached sub-mix textures for multi-channel surface assignments.
     /// Key: sorted channel indices, Value: (texture, view).
     sub_mix_cache: std::collections::HashMap<Vec<usize>, (wgpu::Texture, wgpu::TextureView)>,
+
+    /// GPU performance profiling: when > 0, insert device.poll(Wait) between
+    /// GPU work stages to measure actual GPU drain time per category.
+    /// Auto-decrements each frame until 0 (self-disabling).
+    pub perf_profile_frames: u32,
+
+    /// GPU timestamp query set (128 queries = 64 deck measurements)
+    pub(crate) query_set: Option<wgpu::QuerySet>,
+    /// Buffer for resolving query results (QUERY_RESOLVE | COPY_SRC)
+    resolve_buffer: Option<wgpu::Buffer>,
+    /// Double-buffered staging buffers for readback (COPY_DST | MAP_READ)
+    staging_buffers: Option<[wgpu::Buffer; 2]>,
+    /// Which staging buffer to use this frame (alternates 0/1)
+    staging_index: usize,
+    /// Nanoseconds per timestamp tick (from queue.get_timestamp_period())
+    timestamp_period: f32,
+    /// Per-deck GPU times from the previous frame: (ch_idx, deck_idx) -> microseconds
+    pub(crate) last_frame_gpu_times: std::collections::HashMap<(usize, usize), f32>,
+    /// Timing allocations from the frame whose results are in the readable staging buffer
+    prev_timing_allocations: Vec<(usize, usize, u32, u32)>,
+    /// Set by the map_async callback when the staging buffer is ready to read.
+    staging_mapped: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Mixer {
@@ -109,11 +180,60 @@ impl Mixer {
             effect_ping_view,
             master_effects: Vec::new(),
             frame_count: 0,
+            gpu_load_ratio: 1.0,
+            gpu_utilization: 0.0,
             composite_pipeline,
             blit_pipeline,
             active_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),
+            perf_profile_frames: 0,
+            query_set: if context.timestamp_supported {
+                Some(context.device.create_query_set(&wgpu::QuerySetDescriptor {
+                    label: Some("GPU Timing QuerySet"),
+                    ty: wgpu::QueryType::Timestamp,
+                    count: 128,
+                }))
+            } else {
+                None
+            },
+            resolve_buffer: if context.timestamp_supported {
+                Some(context.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("GPU Timing Resolve"),
+                    size: 128 * 8, // 128 queries * 8 bytes each
+                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }))
+            } else {
+                None
+            },
+            staging_buffers: if context.timestamp_supported {
+                Some([
+                    context.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("GPU Timing Staging 0"),
+                        size: 128 * 8,
+                        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                        mapped_at_creation: false,
+                    }),
+                    context.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("GPU Timing Staging 1"),
+                        size: 128 * 8,
+                        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                        mapped_at_creation: false,
+                    }),
+                ])
+            } else {
+                None
+            },
+            staging_index: 0,
+            timestamp_period: if context.timestamp_supported {
+                context.queue.get_timestamp_period()
+            } else {
+                0.0
+            },
+            last_frame_gpu_times: std::collections::HashMap::new(),
+            prev_timing_allocations: Vec::new(),
+            staging_mapped: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -137,6 +257,17 @@ impl Mixer {
     /// Clear the sub-mix texture cache (e.g. after resolution change).
     pub fn clear_sub_mix_cache(&mut self) {
         self.sub_mix_cache.clear();
+    }
+
+    /// Start GPU performance profiling for the next N frames.
+    /// Inserts device.poll(Wait) between GPU stages to measure actual GPU
+    /// execution time per category. Logs every frame (not every 120).
+    pub fn start_perf_profile(&mut self, frames: u32) {
+        self.perf_profile_frames = frames;
+        log::info!(
+            "[PERF_PROFILE] Starting GPU profiling for {} frames",
+            frames
+        );
     }
 
     /// Add a master effect
@@ -252,6 +383,12 @@ impl Mixer {
     /// The composited output texture view (post-crossfade, post-master-effects).
     pub fn composite_view(&self) -> &wgpu::TextureView {
         &self.composite_view
+    }
+
+    /// GPU utilization % (0–100), smoothed. Based on GPU timestamp data
+    /// (sum of per-deck GPU costs / frame budget).
+    pub fn gpu_utilization(&self) -> f32 {
+        self.gpu_utilization
     }
 
     // ── UUID lookup helpers ────────────────────────────────────────────

@@ -330,13 +330,13 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                             }
                         }
                         "video" => {
-                            let pb = slot.deck.playback_state();
+                            let pb = slot.deck.playback_snapshot();
                             SourceConfig::Video {
                                 path: slot.deck.source_path().unwrap_or_default().to_string(),
-                                loop_mode: pb.map(|p| p.loop_mode).unwrap_or_default(),
-                                speed: pb.map(|p| p.speed).unwrap_or(1.0),
-                                in_point: pb.map(|p| p.in_point).unwrap_or(0.0),
-                                out_point: pb.map(|p| p.out_point).unwrap_or(0.0),
+                                loop_mode: pb.as_ref().map(|p| p.loop_mode).unwrap_or_default(),
+                                speed: pb.as_ref().map(|p| p.speed).unwrap_or(1.0),
+                                in_point: pb.as_ref().map(|p| p.in_point).unwrap_or(0.0),
+                                out_point: pb.as_ref().map(|p| p.out_point).unwrap_or(0.0),
                             }
                         }
                         "image" => SourceConfig::Image {
@@ -455,6 +455,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                         mute: slot.mute,
                         solo: slot.solo,
                         z_index: slot.z_index,
+                        render_fps: slot.render_fps,
                         auto_transition,
                         modulation: vec![],
                     })
@@ -811,6 +812,7 @@ pub fn restore_scene(
                     slot.mute = deck_config.mute;
                     slot.solo = deck_config.solo;
                     slot.z_index = deck_config.z_index;
+                    slot.render_fps = deck_config.render_fps;
 
                     // Restore auto-transition config
                     if let Some(at_config) = &deck_config.auto_transition {
@@ -1014,13 +1016,11 @@ pub(crate) fn restore_deck(
             in_point,
             out_point,
         } => {
-            let mut deck = Deck::new_from_video(context, path, render_width, render_height)?;
-            if let Some(pb) = deck.playback_state_mut() {
-                pb.loop_mode = *loop_mode;
-                pb.speed = *speed;
-                pb.in_point = *in_point;
-                pb.out_point = *out_point;
-            }
+            let deck = Deck::new_from_video(context, path, render_width, render_height)?;
+            deck.video_set_loop_mode(*loop_mode);
+            deck.video_set_speed(*speed);
+            deck.video_set_in_point(*in_point);
+            deck.video_set_out_point(*out_point);
             deck
         }
         SourceConfig::Image { path } => {

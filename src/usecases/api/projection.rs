@@ -30,6 +30,7 @@ pub enum StateReadError {
 pub struct PerformanceResponse {
     pub fps: f32,
     pub frame_count: u64,
+    pub target_fps: u32,
 }
 
 // ── NDI / Syphon projections ────────────────────────────────────────
@@ -172,6 +173,10 @@ pub(crate) mod tests {
                         effects: vec![],
                         video_playback: None,
                         auto_transition: None,
+                        render_fps: DeckRenderFps::Auto,
+                        effective_render_fps: 0.0,
+                        render_cost_us: 0.0,
+                        gpu_render_cost_us: 0.0,
                         fps: 60.0,
                         running_analyzers: vec![],
                     }],
@@ -261,6 +266,7 @@ pub(crate) mod tests {
             },
             fps: 60.0,
             frame_count: 100,
+            target_fps: 60,
             ndi_sources: vec!["OBS".into()],
             ndi_available: true,
             syphon_sources: vec![],

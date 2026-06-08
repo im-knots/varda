@@ -139,8 +139,12 @@ pub struct UIRunner {
     // ── HTTP API server (background thread) ──────────────────────────
     api_handle: Option<crate::usecases::api::runner::ApiServerHandle>,
 
-    // ── Headless render timing ──────────────────────────────────────
-    last_headless_frame: Option<std::time::Instant>,
+    // ── Adaptive frame pacing (windowed + headless) ────────────────
+    /// The ideal start time for the next frame. Advances by `frame_budget`
+    /// each frame to maintain a steady cadence. When a frame overshoots its
+    /// budget, the anchor snaps forward to `now + budget` to avoid catch-up
+    /// bursts.
+    cadence_anchor: Option<std::time::Instant>,
 
     // ── Signal-driven shutdown (SIGINT/SIGTERM) ─────────────────────
     shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -154,6 +158,7 @@ pub struct UIRunner {
     egui_start_time: std::time::Instant,
     cached_screen_size: winit::dpi::PhysicalSize<u32>,
     cached_scale_factor: f32,
+    frame_loop_counter: u32,
 }
 
 impl UIRunner {
@@ -193,11 +198,12 @@ impl UIRunner {
             history: HistoryManager::new(),
             publish_counter: 0,
             api_handle: None,
-            last_headless_frame: None,
+            cadence_anchor: None,
             shutdown_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             egui_start_time: std::time::Instant::now(),
             cached_screen_size: winit::dpi::PhysicalSize::new(0, 0),
             cached_scale_factor: 1.0,
+            frame_loop_counter: 0,
         }
     }
 
@@ -389,9 +395,8 @@ impl ApplicationHandler for UIRunner {
                 }
                 WindowEvent::RedrawRequested => {
                     self.render(event_loop);
-                    if let Some(w) = self.window {
-                        w.request_redraw();
-                    }
+                    // Frame pacing: don't request_redraw() here.
+                    // about_to_wait() schedules the next frame via WaitUntil.
                 }
                 _ => {}
             }
@@ -411,26 +416,89 @@ impl ApplicationHandler for UIRunner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.config.headless {
-            return;
-        }
+        // Read target_fps from engine state (runtime-mutable via UI/API).
+        let target_fps = self
+            .varda
+            .as_ref()
+            .map(|v| v.target_fps())
+            .unwrap_or(self.config.target_fps);
 
-        // Headless FPS throttle: sleep to maintain target FPS
-        let frame_budget = std::time::Duration::from_secs_f64(1.0 / self.config.target_fps as f64);
-        if let Some(last) = self.last_headless_frame {
-            let elapsed = last.elapsed();
-            if elapsed < frame_budget {
-                std::thread::sleep(frame_budget - elapsed);
+        if self.config.headless {
+            // Headless: adaptive sleep-based pacing
+            if target_fps > 0 {
+                if let Some(deadline) = self.cadence_anchor {
+                    let now = std::time::Instant::now();
+                    if deadline > now {
+                        std::thread::sleep(deadline - now);
+                    }
+                }
+            }
+            self.render_headless(event_loop);
+            self.advance_cadence_anchor(target_fps);
+        } else {
+            // Windowed: adaptive cadence pacing.
+            // Only request_redraw when the cadence anchor says it's time.
+            // Between frames, let WaitUntil handle OS-level sleeping so we
+            // don't burn CPU or produce burst-pause patterns.
+            if target_fps > 0 {
+                let now = std::time::Instant::now();
+                let deadline = self.cadence_anchor.unwrap_or(now);
+
+                if deadline > now {
+                    // Not time yet — let the OS sleep until the deadline.
+                    // Do NOT request_redraw; winit will call about_to_wait
+                    // again when the timer fires.
+                    event_loop
+                        .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline));
+                } else {
+                    // At or past deadline — render now.
+                    event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(now));
+                    if let Some(w) = self.window {
+                        w.request_redraw();
+                    }
+                }
+            } else {
+                // Uncapped: poll continuously
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+                if let Some(w) = self.window {
+                    w.request_redraw();
+                }
             }
         }
-        self.last_headless_frame = Some(std::time::Instant::now());
-
-        // Drive the engine (same as windowed render but without UI/egui)
-        self.render_headless(event_loop);
     }
 }
 
 impl UIRunner {
+    /// Advance the cadence anchor after a frame completes (render or headless).
+    ///
+    /// The anchor represents the ideal start time for the next frame. Each call
+    /// advances it by one frame budget to maintain a steady cadence. If the
+    /// frame overshot its budget (anchor is already in the past), the anchor
+    /// snaps forward to `now + budget` instead of trying to catch up — this
+    /// prevents the burst-pause pattern where multiple short frames fire in
+    /// rapid succession after one long frame.
+    fn advance_cadence_anchor(&mut self, target_fps: u32) {
+        if target_fps == 0 {
+            self.cadence_anchor = None;
+            return;
+        }
+        let budget = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
+        let now = std::time::Instant::now();
+        self.cadence_anchor = Some(match self.cadence_anchor {
+            Some(anchor) => {
+                let ideal_next = anchor + budget;
+                if ideal_next > now {
+                    // Frame finished before deadline — cadence maintained
+                    ideal_next
+                } else {
+                    // Frame overshot — restart cadence from now
+                    now + budget
+                }
+            }
+            None => now + budget,
+        });
+    }
+
     /// Register GPU textures with egui for deck/channel/output previews and main output.
     fn register_preview_textures(&mut self) {
         let Some(varda) = &self.varda else { return };
@@ -836,6 +904,7 @@ impl UIRunner {
         ui_data.camera_detect_contours = self.camera_detect_contours.clone();
 
         // 5. Run egui frame
+        let t_egui = std::time::Instant::now();
         // Bypass take_egui_input() to avoid an XGetGeometry round-trip every frame.
         // winit 0.30's Window::inner_size() on X11 is a synchronous xcb request;
         // take_egui_input() calls it unconditionally. We replicate what it does
@@ -1139,6 +1208,7 @@ impl UIRunner {
             // Recording/SRT now handled per-output in apply_output_actions()
             varda.apply_clock_actions(&ui_actions);
             let resolution_changed = varda.apply_resolution_change(&ui_actions);
+            varda.apply_target_fps_change(&ui_actions);
             varda.update_controller_leds();
 
             // After resolution change, all GPU textures were recreated —
@@ -1264,21 +1334,37 @@ impl UIRunner {
             }
         }
 
-        // 7. GPU: render mixer + blit + egui overlay + present
+        let egui_us = t_egui.elapsed().as_micros();
+
+        // 7. GPU sync: drain the previous frame's GPU work BEFORE submitting new work.
+        // This prevents GPU queue buildup that causes get_current_texture()/present()
+        // to block for multiple frames worth of GPU time.
+        let t_poll = std::time::Instant::now();
+        {
+            let Some(varda) = self.varda.as_ref() else {
+                return;
+            };
+            let _ = varda.gpu_context().device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_millis(100)),
+            });
+        }
+        let poll_us = t_poll.elapsed().as_micros();
+
+        // 8. GPU: render mixer compositing (offscreen — no surface involved)
+        let t_mixer = std::time::Instant::now();
         {
             let Some(varda) = self.varda.as_mut() else {
                 return;
             };
             varda.render_mixer_frame();
         }
-        self.submit_frame(
-            window,
-            full_output.shapes,
-            full_output.pixels_per_point,
-            full_output.textures_delta,
-        );
+        let mixer_us = t_mixer.elapsed().as_micros();
 
-        // 8. Render output windows + publish state
+        // 9. Output windows FIRST — projectors/displays are latency-critical.
+        // Present outputs before the UI so they aren't gated behind the UI
+        // surface's get_current_texture()/present() cycle.
+        let t_outputs = std::time::Instant::now();
         {
             let Some(varda) = self.varda.as_mut() else {
                 return;
@@ -1301,6 +1387,42 @@ impl UIRunner {
             if self.publish_counter % 10 == 0 {
                 varda.publish_state();
             }
+        }
+        let outputs_us = t_outputs.elapsed().as_micros();
+
+        // 10. UI surface last — operator control surface, latency-tolerant.
+        // The UI blit + egui overlay + present can safely happen after outputs.
+        let t_submit = std::time::Instant::now();
+        self.submit_frame(
+            window,
+            full_output.shapes,
+            full_output.pixels_per_point,
+            full_output.textures_delta,
+        );
+        let submit_us = t_submit.elapsed().as_micros();
+
+        // Advance the cadence anchor for adaptive frame pacing.
+        let target_fps = self
+            .varda
+            .as_ref()
+            .map(|v| v.target_fps())
+            .unwrap_or(self.config.target_fps);
+        self.advance_cadence_anchor(target_fps);
+
+        // Frame loop timing (log every 120 frames)
+        self.frame_loop_counter += 1;
+        if self.frame_loop_counter % 120 == 0 {
+            let total_us = mixer_us + submit_us + outputs_us + poll_us;
+            log::debug!(
+                "[PERF] frame_loop | egui={}us mixer={}us outputs={}us submit_ui={}us poll={}us | total={}us ({:.1}ms)",
+                egui_us,
+                mixer_us,
+                outputs_us,
+                submit_us,
+                poll_us,
+                total_us,
+                total_us as f64 / 1000.0,
+            );
         }
     }
 

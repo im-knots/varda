@@ -79,6 +79,7 @@ pub async fn performance(State(state): State<SharedState>) -> impl IntoResponse 
         Ok(s) => Json(projection::PerformanceResponse {
             fps: s.fps,
             frame_count: s.frame_count,
+            target_fps: s.target_fps,
         })
         .into_response(),
         Err((status, msg)) => (status, msg).into_response(),

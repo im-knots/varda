@@ -86,97 +86,43 @@ fn accumulate_phase_times(
 }
 
 impl Deck {
-    /// Update video frame (call before render if using video source).
-    /// Handles both ffmpeg RGBA uploads and HAP BCn compressed uploads.
-    pub fn update_video_frame(&mut self, context: &GpuContext) -> Result<()> {
+    /// Update video frame using double-buffered staging uploads.
+    /// Takes the latest decoded frame from the background decode thread
+    /// and uploads it to the GPU texture via a pre-allocated mapped buffer.
+    pub fn update_video_frame(&mut self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
         match &mut self.source {
             DeckSource::Video {
-                ref mut player,
+                ref handle,
                 ref texture,
+                ref mut staging,
                 ..
             } => {
-                if player.is_playing() {
-                    let width = player.width();
-                    let height = player.height();
-                    if let Some(frame_data) = player.next_frame()? {
-                        context.queue.write_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            frame_data,
-                            wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(width * 4),
-                                rows_per_image: Some(height),
-                            },
-                            wgpu::Extent3d {
-                                width,
-                                height,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                    }
+                if let Some(frame) = handle.take_frame() {
+                    let width = handle.width;
+                    let height = handle.height;
+                    staging.upload(&frame.color_data, texture, width, height, encoder);
                 }
             }
             DeckSource::HapVideo {
-                ref mut player,
+                ref handle,
                 ref texture,
                 ref alpha_texture,
+                ref mut staging,
+                ref mut alpha_staging,
                 ..
             } => {
-                if player.is_playing() {
-                    let width = player.width();
-                    let height = player.height();
-                    if let Some(frame) = player.next_frame()? {
-                        let blocks_x = (width + 3) / 4;
-                        let blocks_y = (height + 3) / 4;
-                        let color_bpr = blocks_x * frame.color_format.block_bytes();
-                        context.queue.write_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            frame.color_data,
-                            wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(color_bpr),
-                                rows_per_image: Some(blocks_y),
-                            },
-                            wgpu::Extent3d {
-                                width,
-                                height,
-                                depth_or_array_layers: 1,
-                            },
-                        );
+                if let Some(frame) = handle.take_frame() {
+                    let width = handle.width;
+                    let height = handle.height;
+                    staging.upload(&frame.color_data, texture, width, height, encoder);
 
-                        if let (Some(alpha_data), Some(alpha_fmt), Some(alpha_tex)) =
-                            (frame.alpha_data, frame.alpha_format, alpha_texture.as_ref())
-                        {
-                            let alpha_bpr = blocks_x * alpha_fmt.block_bytes();
-                            context.queue.write_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: alpha_tex,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                alpha_data,
-                                wgpu::TexelCopyBufferLayout {
-                                    offset: 0,
-                                    bytes_per_row: Some(alpha_bpr),
-                                    rows_per_image: Some(blocks_y),
-                                },
-                                wgpu::Extent3d {
-                                    width,
-                                    height,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
+                    if let (Some(alpha_data), Some(_alpha_fmt), Some(alpha_tex)) = (
+                        frame.alpha_data.as_ref(),
+                        frame.alpha_format,
+                        alpha_texture.as_ref(),
+                    ) {
+                        if let Some(ref mut a_staging) = alpha_staging {
+                            a_staging.upload(alpha_data, alpha_tex, width, height, encoder);
                         }
                     }
                 }
@@ -184,6 +130,26 @@ impl Deck {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Request re-mapping of staging buffers after queue.submit().
+    pub fn request_video_remap(&mut self) {
+        match &mut self.source {
+            DeckSource::Video {
+                ref mut staging, ..
+            } => staging.request_remap(),
+            DeckSource::HapVideo {
+                ref mut staging,
+                ref mut alpha_staging,
+                ..
+            } => {
+                staging.request_remap();
+                if let Some(ref mut a) = alpha_staging {
+                    a.request_remap();
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Render the deck to its texture (source + effect chain)
@@ -196,7 +162,7 @@ impl Deck {
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
         let prefix = format!("deck{}", deck_idx);
-        self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers)
+        self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers, None)
     }
 
     /// Ensure analyzers are running for all preprocessor slots that need them.
@@ -256,6 +222,7 @@ impl Deck {
         modulation: &ModulationEngine,
         param_prefix: &str,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+        gpu_timing: Option<(&wgpu::QuerySet, u32, u32)>,
     ) -> Result<()> {
         // Update preprocessor textures from analyzer snapshots before rendering
         if self.analyzers.has_active_instances() {
@@ -268,19 +235,35 @@ impl Deck {
             );
         }
 
-        let now = Instant::now();
-        let time = (now - self.start_time).as_secs_f32();
-        let time_delta = (now - self.last_frame_time).as_secs_f32();
-        self.last_frame_time = now;
+        // Write begin GPU timestamp if timing is enabled
+        if let Some((query_set, begin_idx, _)) = gpu_timing {
+            let mut enc = context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("GPU Timing Begin"),
+                });
+            enc.write_timestamp(query_set, begin_idx);
+            cmd_buffers.push(enc.finish());
+        }
+
+        // Advance render_time by a fixed dt so skipped frames don't cause
+        // animation jumps. The shader sees smooth, consistent time steps
+        // regardless of how many frames were skipped.
+        let time_delta = self.render_dt;
+        self.render_time += time_delta;
+        let time = self.render_time;
         self.frame_count += 1;
 
-        // Derive per-deck FPS from render-to-render interval (EMA, α = 0.1)
-        if time_delta > 0.0 && time_delta < 1.0 {
-            let instant_fps = 1.0 / time_delta;
+        // Derive per-deck FPS from wall-clock render interval (for UI display only)
+        let now = Instant::now();
+        let wall_dt = (now - self.last_frame_time).as_secs_f32();
+        self.last_frame_time = now;
+        if wall_dt > 0.0 && wall_dt < 1.0 {
+            let instant_fps = 1.0 / wall_dt;
             self.fps_smoothed = 0.1 * instant_fps + 0.9 * self.fps_smoothed;
         }
 
-        // Accumulate generator phase times
+        // Accumulate generator phase times using the fixed dt
         accumulate_phase_times(
             &mut self.phase_accumulators,
             time_delta,
@@ -362,8 +345,19 @@ impl Deck {
             DeckSource::Video {
                 ref texture_view,
                 ref blit_pipeline,
+                source_width,
+                source_height,
+                scaling_mode,
                 ..
             } => {
+                let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
+                    *source_width,
+                    *source_height,
+                    self.texture.width(),
+                    self.texture.height(),
+                );
+                blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
+
                 let bind_group = blit_pipeline.create_bind_group(&context.device, texture_view);
                 let mut encoder =
                     context
@@ -398,12 +392,28 @@ impl Deck {
                 ref dummy_alpha_view,
                 ref convert_pipeline,
                 ref hap_format,
-                ref player,
+                ref handle,
+                source_width,
+                source_height,
+                scaling_mode,
                 ..
             } => {
                 let needs_ycocg = hap_format.needs_ycocg_convert();
-                let has_alpha = player.is_dual_plane && alpha_texture_view.is_some();
-                convert_pipeline.set_params(&context.queue, 1.0, needs_ycocg, has_alpha);
+                let has_alpha = handle.is_dual_plane && alpha_texture_view.is_some();
+                let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
+                    *source_width,
+                    *source_height,
+                    self.texture.width(),
+                    self.texture.height(),
+                );
+                convert_pipeline.set_params_with_uv(
+                    &context.queue,
+                    1.0,
+                    needs_ycocg,
+                    has_alpha,
+                    uv_scale,
+                    uv_offset,
+                );
 
                 let alpha_view = if let Some(ref av) = alpha_texture_view {
                     av
@@ -587,6 +597,17 @@ impl Deck {
         // Capture frame for analyzer pipeline (non-blocking, one-frame latency)
         if let Some(readback_cmd) = self.analyzers.capture_frame(&context.device, &self.texture) {
             cmd_buffers.push(readback_cmd);
+        }
+
+        // Write end GPU timestamp if timing is enabled
+        if let Some((query_set, _, end_idx)) = gpu_timing {
+            let mut enc = context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("GPU Timing End"),
+                });
+            enc.write_timestamp(query_set, end_idx);
+            cmd_buffers.push(enc.finish());
         }
 
         Ok(())

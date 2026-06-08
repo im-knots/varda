@@ -20,6 +20,7 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub texture_format: wgpu::TextureFormat,
+    pub timestamp_supported: bool,
 }
 
 /// Window surface for presentation — surface, swapchain config, and size.
@@ -73,6 +74,19 @@ impl GpuContext {
             log::info!("GPU supports BC texture compression (HAP video enabled)");
         } else {
             log::warn!("GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode");
+        }
+
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            required_features |= wgpu::Features::TIMESTAMP_QUERY;
+            if adapter
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
+            {
+                required_features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+                log::info!("GPU supports timestamp queries inside encoders (GPU timing enabled)");
+            } else {
+                log::warn!("GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled");
+            }
         }
 
         let (device, queue) = adapter
@@ -133,12 +147,17 @@ impl GpuContext {
 
         surface.configure(&device, &surface_config);
 
+        let timestamp_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY)
+            && adapter
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
         let gpu = GpuContext {
             instance,
             adapter,
             device,
             queue,
             texture_format: surface_format,
+            timestamp_supported,
         };
         let win_surface = WindowSurface {
             surface,
@@ -186,6 +205,7 @@ impl GpuContext {
             device,
             queue,
             texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            timestamp_supported: false,
         })
     }
 

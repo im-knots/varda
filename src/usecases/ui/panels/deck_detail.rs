@@ -10,6 +10,7 @@ use super::utils::{
     channel_color, format_time, render_collapsed_column, render_effect_drag_ghost,
     render_effect_drag_handle, render_effect_drop_zone,
 };
+use crate::channel::DeckRenderFps;
 use crate::params::ParamValue;
 use crate::{BlendMode, ScalingMode};
 
@@ -542,6 +543,45 @@ pub(super) fn render_selected_deck_detail(
                                         actions.scaling_mode_updates.push((ch_idx, deck_idx, new_scaling));
                                     }
                                 }
+
+                                // Render FPS
+                                ui.horizontal(|ui| {
+                                    ui.label("Render:");
+                                    let options = ["Auto", "60", "30", "15"];
+                                    let current_idx = match deck.render_fps {
+                                        DeckRenderFps::Auto => 0,
+                                        DeckRenderFps::Fixed(60) => 1,
+                                        DeckRenderFps::Fixed(30) => 2,
+                                        DeckRenderFps::Fixed(15) => 3,
+                                        DeckRenderFps::Fixed(_) => 0, // fallback
+                                    };
+                                    let mut selected = current_idx;
+                                    egui::ComboBox::from_id_salt("sel_deck_render_fps")
+                                        .selected_text(options[selected])
+                                        .width(50.0)
+                                        .show_ui(ui, |ui| {
+                                            for (i, opt) in options.iter().enumerate() {
+                                                ui.selectable_value(&mut selected, i, *opt);
+                                            }
+                                        });
+                                    if selected != current_idx {
+                                        let new_fps = match selected {
+                                            1 => DeckRenderFps::Fixed(60),
+                                            2 => DeckRenderFps::Fixed(30),
+                                            3 => DeckRenderFps::Fixed(15),
+                                            _ => DeckRenderFps::Auto,
+                                        };
+                                        actions.render_fps_updates.push((ch_idx, deck_idx, new_fps));
+                                    }
+                                    // Show render cost
+                                    if deck.gpu_render_cost_us > 0.0 {
+                                        let ms = deck.gpu_render_cost_us / 1000.0;
+                                        ui.label(egui::RichText::new(format!("⚡{:.1}ms GPU", ms)).small().weak());
+                                    } else if deck.render_cost_us > 0.0 {
+                                        let ms = deck.render_cost_us / 1000.0;
+                                        ui.label(egui::RichText::new(format!("⚡{:.1}ms", ms)).small().weak());
+                                    }
+                                });
 
                                 // Generator parameters
                                 let gen_params = &deck.generator;

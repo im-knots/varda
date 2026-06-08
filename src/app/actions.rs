@@ -140,6 +140,15 @@ impl VardaApp {
             });
         }
 
+        // Render FPS updates — route through execute_command
+        for &(ch_idx, deck_idx, render_fps) in &ui_actions.render_fps_updates {
+            self.execute_command(EngineCommand::SetDeckRenderFps {
+                channel_idx: ch_idx,
+                deck_idx,
+                render_fps,
+            });
+        }
+
         // Complex mutations — VardaApp methods
         self.apply_video_actions(ui_actions);
         self.apply_auto_transition_actions(ui_actions);
@@ -271,6 +280,13 @@ impl VardaApp {
             }
         }
         false
+    }
+
+    /// Apply target FPS change from UI.
+    pub fn apply_target_fps_change(&mut self, ui_actions: &ui::UIActions) {
+        if let Some(fps) = ui_actions.target_fps_change {
+            self.execute_command(EngineCommand::SetTargetFps { fps });
+        }
     }
 
     /// Apply clock preference changes from UI.

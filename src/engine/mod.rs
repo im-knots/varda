@@ -114,6 +114,11 @@ pub enum EngineCommand {
         deck_idx: usize,
         mute: bool,
     },
+    SetDeckRenderFps {
+        channel_idx: usize,
+        deck_idx: usize,
+        render_fps: DeckRenderFps,
+    },
     SetDeckScalingMode {
         channel_idx: usize,
         deck_idx: usize,
@@ -787,6 +792,19 @@ pub enum EngineCommand {
     SetRenderResolution {
         width: u32,
         height: u32,
+    },
+
+    // ── Frame pacing ─────────────────────────────────────────
+    SetTargetFps {
+        fps: u32,
+    },
+
+    // ── Performance profiling ──────────────────────────────────
+    /// Start GPU performance profiling for the next N frames.
+    /// Inserts device.poll(Wait) between GPU stages to measure actual
+    /// GPU execution time per category. Logs every frame.
+    StartPerfProfile {
+        frames: u32,
     },
 
     // ── Persistence ────────────────────────────────────────────
