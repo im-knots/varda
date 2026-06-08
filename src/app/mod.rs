@@ -1808,6 +1808,11 @@ impl VardaApp {
                 CommandResult::Ok
             }
 
+            EngineCommand::StartPerfProfile { frames } => {
+                self.mixer.start_perf_profile(frames);
+                CommandResult::Ok
+            }
+
             // ── Persistence ───────────────────────────────────────
             EngineCommand::SaveWorkspace => {
                 let layout = crate::usecases::ui::UILayoutState::default();

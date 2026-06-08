@@ -107,6 +107,29 @@ pub async fn set_target_fps(
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct PerfProfileBody {
+    /// Number of frames to profile (default 60).
+    #[serde(default = "default_perf_frames")]
+    pub frames: u32,
+}
+fn default_perf_frames() -> u32 {
+    60
+}
+#[utoipa::path(post, path = "/api/perf-profile", request_body = PerfProfileBody, responses((status = 200, body = CommandResult)), tag = "System")]
+pub async fn start_perf_profile(
+    State(state): State<SharedState>,
+    Json(b): Json<PerfProfileBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::StartPerfProfile { frames: b.frames })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct ClockPreferenceBody {
     /// Clock source preference.
     pub preference: crate::clock::ClockPreference,

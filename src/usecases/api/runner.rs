@@ -22,7 +22,7 @@ use utoipa_swagger_ui::SwaggerUi;
         // System
         routes::system::health, routes::system::get_state,
         routes::system::shutdown, routes::system::undo, routes::system::redo,
-        routes::system::set_resolution, routes::system::set_target_fps,
+        routes::system::set_resolution, routes::system::set_target_fps, routes::system::start_perf_profile,
         routes::system::set_clock_preference,
         routes::system::set_manual_bpm, routes::system::save_workspace,
         routes::system::load_workspace,
@@ -786,6 +786,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/target-fps",
             axum::routing::put(routes::system::set_target_fps),
+        )
+        .route(
+            "/api/perf-profile",
+            axum::routing::post(routes::system::start_perf_profile),
         )
         .route(
             "/api/clock/preference",

@@ -74,6 +74,11 @@ pub struct Mixer {
     /// Cached sub-mix textures for multi-channel surface assignments.
     /// Key: sorted channel indices, Value: (texture, view).
     sub_mix_cache: std::collections::HashMap<Vec<usize>, (wgpu::Texture, wgpu::TextureView)>,
+
+    /// GPU performance profiling: when > 0, insert device.poll(Wait) between
+    /// GPU work stages to measure actual GPU drain time per category.
+    /// Auto-decrements each frame until 0 (self-disabling).
+    pub perf_profile_frames: u32,
 }
 
 impl Mixer {
@@ -120,6 +125,7 @@ impl Mixer {
             active_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),
+            perf_profile_frames: 0,
         })
     }
 
@@ -143,6 +149,17 @@ impl Mixer {
     /// Clear the sub-mix texture cache (e.g. after resolution change).
     pub fn clear_sub_mix_cache(&mut self) {
         self.sub_mix_cache.clear();
+    }
+
+    /// Start GPU performance profiling for the next N frames.
+    /// Inserts device.poll(Wait) between GPU stages to measure actual GPU
+    /// execution time per category. Logs every frame (not every 120).
+    pub fn start_perf_profile(&mut self, frames: u32) {
+        self.perf_profile_frames = frames;
+        log::info!(
+            "[PERF_PROFILE] Starting GPU profiling for {} frames",
+            frames
+        );
     }
 
     /// Add a master effect

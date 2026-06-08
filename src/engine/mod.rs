@@ -799,6 +799,14 @@ pub enum EngineCommand {
         fps: u32,
     },
 
+    // ── Performance profiling ──────────────────────────────────
+    /// Start GPU performance profiling for the next N frames.
+    /// Inserts device.poll(Wait) between GPU stages to measure actual
+    /// GPU execution time per category. Logs every frame.
+    StartPerfProfile {
+        frames: u32,
+    },
+
     // ── Persistence ────────────────────────────────────────────
     SaveWorkspace,
     LoadWorkspace,

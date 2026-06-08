@@ -151,8 +151,10 @@ impl Mixer {
         // This is updated at the end of the frame based on actual vs CPU-measured time.
         let gpu_load_ratio = self.gpu_load_ratio;
 
+        let profiling = self.perf_profile_frames > 0;
         let t_channels = std::time::Instant::now();
         let mut rendered_channels: u32 = 0;
+        let mut per_ch_gpu_us: Vec<(String, u128)> = Vec::new();
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
             if effective_opacities.get(ch_idx).copied().unwrap_or(0.0) < 0.001 {
                 // Reset stats so culled channels don't show stale render metrics
@@ -176,6 +178,16 @@ impl Mixer {
                 continue;
             }
             rendered_channels += 1;
+
+            // Per-channel GPU drain when profiling
+            if profiling {
+                let t = std::time::Instant::now();
+                let _ = context.device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_millis(200)),
+                });
+                per_ch_gpu_us.push((channel.name.clone(), t.elapsed().as_micros()));
+            }
         }
         let channels_us = t_channels.elapsed().as_micros();
 
@@ -192,6 +204,19 @@ impl Mixer {
             channel.request_video_remap();
         }
 
+        // GPU profiling: drain remaining channel GPU work (per-channel drains
+        // already happened inside the loop above when profiling)
+        let gpu_channels_us = if profiling {
+            let t = std::time::Instant::now();
+            let _ = context.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_millis(200)),
+            });
+            t.elapsed().as_micros()
+        } else {
+            0
+        };
+
         self.sync_transition_progress();
         let t_mixer_composite = std::time::Instant::now();
         let composite_cmds = self.composite_channels(context)?;
@@ -200,6 +225,18 @@ impl Mixer {
         let t_master_fx = std::time::Instant::now();
         self.apply_master_effects(context, audio_data, time, composite_cmds)?;
         let master_fx_us = t_master_fx.elapsed().as_micros();
+
+        // GPU profiling: drain composite + master FX GPU work
+        let gpu_composite_us = if profiling {
+            let t = std::time::Instant::now();
+            let _ = context.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_millis(200)),
+            });
+            t.elapsed().as_micros()
+        } else {
+            0
+        };
 
         self.frame_count += 1;
 
@@ -216,6 +253,37 @@ impl Mixer {
             let clamped = raw_ratio.clamp(1.0, 200.0);
             // EMA smoothing (α = 0.15) — responsive but not jittery
             self.gpu_load_ratio = 0.15 * clamped + 0.85 * self.gpu_load_ratio;
+        }
+
+        // GPU profiling: detailed per-frame log
+        if profiling {
+            self.perf_profile_frames -= 1;
+            // Per-channel GPU drain breakdown
+            let ch_gpu_str: String = per_ch_gpu_us
+                .iter()
+                .map(|(name, us)| format!("{}={}us", name, us))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let total_per_ch_gpu: u128 = per_ch_gpu_us.iter().map(|(_, us)| us).sum();
+            log::info!(
+                "[PERF_PROFILE] frame={} | \
+                 cpu_encode: channels={}us composite={}us master_fx={}us video={}us | \
+                 gpu_drain: per_ch=[{}] ch_total={}us residual={}us composite={}us | \
+                 channels_rendered={} total_decks={} | \
+                 remaining={}",
+                self.frame_count,
+                channels_us,
+                mixer_composite_us,
+                master_fx_us,
+                video_tick_us,
+                ch_gpu_str,
+                total_per_ch_gpu,
+                gpu_channels_us,
+                gpu_composite_us,
+                rendered_channels,
+                total_active_decks,
+                self.perf_profile_frames,
+            );
         }
 
         // Log mixer-level timing every 120 frames
