@@ -106,3 +106,7 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+[profile.bench]
+debug = true
+strip = "none"

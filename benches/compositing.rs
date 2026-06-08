@@ -18,7 +18,11 @@ use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use varda::{
-    audio::AudioData, deck::Deck, isf::ISFShader, mixer::Mixer, modulation::AudioValues,
+    audio::AudioData,
+    deck::Deck,
+    isf::ISFShader,
+    mixer::Mixer,
+    modulation::{AnalyzerValues, AudioValues},
     renderer::context::GpuContext,
 };
 
@@ -72,14 +76,19 @@ fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
     let audio_values = AudioValues {
         sources: Default::default(),
     };
+    let analyzer_values = AnalyzerValues::default();
     for _ in 0..3 {
-        mixer.render(ctx, &audio, &audio_values).expect("warmup");
+        mixer
+            .render(ctx, &audio, &audio_values, &analyzer_values)
+            .expect("warmup");
         poll(ctx);
     }
     let mut times = Vec::with_capacity(samples);
     for _ in 0..samples {
         let t0 = Instant::now();
-        mixer.render(ctx, &audio, &audio_values).expect("render");
+        mixer
+            .render(ctx, &audio, &audio_values, &analyzer_values)
+            .expect("render");
         poll(ctx);
         times.push(t0.elapsed().as_micros());
     }
@@ -115,6 +124,7 @@ fn bench_channel_composite_solid(c: &mut Criterion) {
     let audio_values = AudioValues {
         sources: Default::default(),
     };
+    let analyzer_values = AnalyzerValues::default();
 
     let mut group = c.benchmark_group("channel_composite_solid");
     group.sample_size(50);
@@ -123,7 +133,9 @@ fn bench_channel_composite_solid(c: &mut Criterion) {
         let mut mixer = setup_mixer_solid(&ctx, n_decks);
         group.bench_with_input(BenchmarkId::new("decks", n_decks), &n_decks, |b, _| {
             b.iter(|| {
-                mixer.render(&ctx, &audio, &audio_values).expect("render");
+                mixer
+                    .render(&ctx, &audio, &audio_values, &analyzer_values)
+                    .expect("render");
                 poll(&ctx);
             });
         });
@@ -142,6 +154,7 @@ fn bench_channel_composite_shader(c: &mut Criterion) {
     let audio_values = AudioValues {
         sources: Default::default(),
     };
+    let analyzer_values = AnalyzerValues::default();
 
     let mut group = c.benchmark_group("channel_composite_shader");
     group.sample_size(50);
@@ -150,7 +163,9 @@ fn bench_channel_composite_shader(c: &mut Criterion) {
         let mut mixer = setup_mixer_shader(&ctx, n_decks);
         group.bench_with_input(BenchmarkId::new("decks", n_decks), &n_decks, |b, _| {
             b.iter(|| {
-                mixer.render(&ctx, &audio, &audio_values).expect("render");
+                mixer
+                    .render(&ctx, &audio, &audio_values, &analyzer_values)
+                    .expect("render");
                 poll(&ctx);
             });
         });
@@ -169,6 +184,7 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
     let audio_values = AudioValues {
         sources: Default::default(),
     };
+    let analyzer_values = AnalyzerValues::default();
 
     let mut mixer = setup_mixer_solid(&ctx, 1);
     let deck =
@@ -180,7 +196,9 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
     group.sample_size(50);
     group.bench_function("2ch_50pct", |b| {
         b.iter(|| {
-            mixer.render(&ctx, &audio, &audio_values).expect("render");
+            mixer
+                .render(&ctx, &audio, &audio_values, &analyzer_values)
+                .expect("render");
             poll(&ctx);
         });
     });

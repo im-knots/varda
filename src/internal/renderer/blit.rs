@@ -1,7 +1,12 @@
 use super::edge_blend::SurfaceOverlapZones;
 /// Simple blit pipeline for copying textures to the screen
 use anyhow::Result;
+use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
+
+/// Maximum number of per-draw parameter slots in the ring buffer.
+/// Supports batching up to 16 composites in a single queue.submit().
+const MAX_DRAW_SLOTS: u64 = 16;
 
 /// Uniform buffer for blit parameters - 32 bytes (8 x f32)
 #[repr(C)]
@@ -21,6 +26,10 @@ pub struct BlitPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
+    /// Pre-allocated ring buffer for per-draw params (avoids per-frame allocation).
+    ring_buffer: wgpu::Buffer,
+    /// Byte stride between slots (aligned to device minimum).
+    ring_stride: u64,
 }
 
 impl BlitPipeline {
@@ -64,7 +73,7 @@ impl BlitPipeline {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: None,
+                        min_binding_size: NonZeroU64::new(std::mem::size_of::<BlitParams>() as u64),
                     },
                     count: None,
                 },
@@ -153,20 +162,34 @@ impl BlitPipeline {
             ..Default::default()
         });
 
+        // Pre-allocate ring buffer for batched per-draw params.
+        let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let param_size = std::mem::size_of::<BlitParams>() as u64;
+        let ring_stride = ((param_size + align - 1) / align) * align;
+        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Blit Params Ring Buffer"),
+            size: MAX_DRAW_SLOTS * ring_stride,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Ok(Self {
             pipeline,
             bind_group_layout,
             sampler,
             params_buffer,
+            ring_buffer,
+            ring_stride,
         })
     }
 
-    /// Create a bind group for a texture view
+    /// Create a bind group for a texture view using the static params_buffer.
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,
         texture_view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
+        let param_size = std::mem::size_of::<BlitParams>() as u64;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blit Bind Group"),
             layout: &self.bind_group_layout,
@@ -181,7 +204,11 @@ impl BlitPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.params_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.params_buffer,
+                        offset: 0,
+                        size: Some(NonZeroU64::new(param_size).unwrap()),
+                    }),
                 },
             ],
         })
@@ -238,7 +265,7 @@ impl BlitPipeline {
         );
     }
 
-    /// Render a texture to a render pass
+    /// Render a texture to a render pass.
     pub fn render<'a>(
         &'a self,
         render_pass: &mut wgpu::RenderPass<'a>,
@@ -261,30 +288,41 @@ impl BlitPipeline {
         self.render(render_pass, bind_group);
     }
 
-    /// Create a bind group with its own params buffer baked in.
-    /// Use this when you need multiple surfaces with different UV transforms in one render pass.
-    pub fn create_bind_group_with_params(
+    /// Write blit params into a slot of the pre-allocated ring buffer.
+    /// Call once per draw before `create_bind_group_for_slot`.
+    pub fn write_params_slot(
         &self,
-        device: &wgpu::Device,
-        texture_view: &wgpu::TextureView,
+        queue: &wgpu::Queue,
+        slot: usize,
         opacity: f32,
         uv_scale: [f32; 2],
         uv_offset: [f32; 2],
-    ) -> wgpu::BindGroup {
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Blit Params Buffer (per-surface)"),
-            contents: bytemuck::cast_slice(&[BlitParams {
+    ) {
+        queue.write_buffer(
+            &self.ring_buffer,
+            slot as u64 * self.ring_stride,
+            bytemuck::cast_slice(&[BlitParams {
                 opacity,
                 rotation: 0,
                 uv_scale,
                 uv_offset,
                 _pad2: [0.0, 0.0],
             }]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        );
+    }
 
+    /// Create a bind group for a specific ring buffer slot.
+    /// The slot offset is baked into the bind group — no dynamic offset overhead.
+    pub fn create_ring_bind_group(
+        &self,
+        device: &wgpu::Device,
+        texture_view: &wgpu::TextureView,
+        slot: usize,
+    ) -> wgpu::BindGroup {
+        let param_size = std::mem::size_of::<BlitParams>() as u64;
+        let offset = slot as u64 * self.ring_stride;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Blit Bind Group (per-surface)"),
+            label: Some("Blit Bind Group (ring)"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -297,10 +335,26 @@ impl BlitPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: params_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.ring_buffer,
+                        offset,
+                        size: Some(NonZeroU64::new(param_size).unwrap()),
+                    }),
                 },
             ],
         })
+    }
+
+    /// Render using a ring buffer slot's bind group.
+    /// The bind group must have been created with `create_ring_bind_group`.
+    pub fn render_at_slot<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+    ) {
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
     }
 }
 
@@ -326,6 +380,10 @@ pub struct CompositeBlitPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
+    /// Pre-allocated ring buffer for per-draw params (avoids per-frame allocation).
+    ring_buffer: wgpu::Buffer,
+    /// Byte stride between slots (aligned to device minimum).
+    ring_stride: u64,
 }
 
 impl CompositeBlitPipeline {
@@ -370,7 +428,9 @@ impl CompositeBlitPipeline {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: None,
+                        min_binding_size: NonZeroU64::new(
+                            std::mem::size_of::<CompositeParams>() as u64
+                        ),
                     },
                     count: None,
                 },
@@ -454,11 +514,24 @@ impl CompositeBlitPipeline {
             ..Default::default()
         });
 
+        // Pre-allocate ring buffer for batched per-draw params.
+        let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let param_size = std::mem::size_of::<CompositeParams>() as u64;
+        let ring_stride = ((param_size + align - 1) / align) * align;
+        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Composite Params Ring Buffer"),
+            size: MAX_DRAW_SLOTS * ring_stride,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Ok(Self {
             pipeline,
             bind_group_layout,
             sampler,
             params_buffer,
+            ring_buffer,
+            ring_stride,
         })
     }
 
@@ -491,6 +564,7 @@ impl CompositeBlitPipeline {
         source_view: &wgpu::TextureView,
         dest_view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
+        let param_size = std::mem::size_of::<CompositeParams>() as u64;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Composite Bind Group"),
             layout: &self.bind_group_layout,
@@ -509,7 +583,11 @@ impl CompositeBlitPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: self.params_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.params_buffer,
+                        offset: 0,
+                        size: Some(NonZeroU64::new(param_size).unwrap()),
+                    }),
                 },
             ],
         })
@@ -517,6 +595,81 @@ impl CompositeBlitPipeline {
 
     /// Render: draw fullscreen quad with composite shader.
     pub fn render<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+    ) {
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
+    }
+
+    /// Write composite params into a slot of the pre-allocated ring buffer.
+    /// Call once per draw before `create_bind_group_for_slot`.
+    pub fn write_params_slot(
+        &self,
+        queue: &wgpu::Queue,
+        slot: usize,
+        opacity: f32,
+        blend_mode: u32,
+        uv_scale: [f32; 2],
+        uv_offset: [f32; 2],
+    ) {
+        queue.write_buffer(
+            &self.ring_buffer,
+            slot as u64 * self.ring_stride,
+            bytemuck::cast_slice(&[CompositeParams {
+                opacity,
+                blend_mode,
+                uv_scale,
+                uv_offset,
+                _pad: [0.0, 0.0],
+            }]),
+        );
+    }
+
+    /// Create a bind group for a specific ring buffer slot.
+    /// The slot offset is baked into the bind group — no dynamic offset overhead.
+    pub fn create_ring_bind_group(
+        &self,
+        device: &wgpu::Device,
+        source_view: &wgpu::TextureView,
+        dest_view: &wgpu::TextureView,
+        slot: usize,
+    ) -> wgpu::BindGroup {
+        let param_size = std::mem::size_of::<CompositeParams>() as u64;
+        let offset = slot as u64 * self.ring_stride;
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Composite Bind Group (ring)"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(dest_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.ring_buffer,
+                        offset,
+                        size: Some(NonZeroU64::new(param_size).unwrap()),
+                    }),
+                },
+            ],
+        })
+    }
+
+    /// Render using a ring buffer slot's bind group.
+    /// The bind group must have been created with `create_ring_bind_group`.
+    pub fn render_at_slot<'a>(
         &'a self,
         render_pass: &mut wgpu::RenderPass<'a>,
         bind_group: &'a wgpu::BindGroup,
