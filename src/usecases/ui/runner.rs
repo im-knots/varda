@@ -231,9 +231,12 @@ impl ApplicationHandler for UIRunner {
             return;
         }
 
+        let startup_t0 = std::time::Instant::now();
+        log::info!("[STARTUP] resumed() entered — beginning initialization");
+
         let gpu = if self.config.headless {
             // Headless: no main window, no egui — GPU without window surface
-            log::info!("Headless mode: skipping main window creation");
+            log::info!("[STARTUP] Headless mode: skipping main window creation");
             match GpuContext::new_headless() {
                 Ok(gpu) => gpu,
                 Err(e) => {
@@ -264,7 +267,7 @@ impl ApplicationHandler for UIRunner {
 
             let window_static: &'static Window = match event_loop.create_window(window_attrs) {
                 Ok(w) => {
-                    log::info!("Window created");
+                    log::info!("[STARTUP] Window created ({:.0?})", startup_t0.elapsed());
                     Box::leak(Box::new(w))
                 }
                 Err(e) => {
@@ -276,9 +279,13 @@ impl ApplicationHandler for UIRunner {
             self.main_window_id = Some(window_static.id());
             self.window = Some(window_static);
 
+            log::info!("[STARTUP] Requesting GPU adapter + device...");
             let (gpu, win_surface) =
                 match pollster::block_on(GpuContext::new_for_window(window_static)) {
-                    Ok(pair) => pair,
+                    Ok(pair) => {
+                        log::info!("[STARTUP] GPU context ready ({:.0?})", startup_t0.elapsed());
+                        pair
+                    }
                     Err(e) => {
                         log::error!("Failed to create render context: {}", e);
                         event_loop.exit();
@@ -326,6 +333,7 @@ impl ApplicationHandler for UIRunner {
         };
 
         // Create engine now that GPU is ready
+        log::info!("[STARTUP] Creating engine (audio, MIDI, shaders, mixer)...");
         let mut varda = match VardaApp::new(gpu, &self.config) {
             Ok(v) => v,
             Err(e) => {
@@ -334,13 +342,19 @@ impl ApplicationHandler for UIRunner {
                 return;
             }
         };
-        log::info!("Varda initialized: {} shaders", varda.shader_count());
+        log::info!(
+            "[STARTUP] Engine ready: {} shaders ({:.0?})",
+            varda.shader_count(),
+            startup_t0.elapsed()
+        );
 
         // Load workspace (may replace default mixer with saved scene)
+        log::info!("[STARTUP] Loading workspace...");
         if let Some(loaded_layout) = varda.load_workspace() {
             self.layout = loaded_layout;
         }
         self.history.clear();
+        log::info!("[STARTUP] Workspace loaded ({:.0?})", startup_t0.elapsed());
 
         // Start HTTP API server on background thread
         if self.api_handle.is_none() {
@@ -357,6 +371,10 @@ impl ApplicationHandler for UIRunner {
         if !self.config.headless {
             self.register_preview_textures();
         }
+        log::info!(
+            "[STARTUP] Initialization complete ({:.0?})",
+            startup_t0.elapsed()
+        );
     }
 
     fn window_event(
