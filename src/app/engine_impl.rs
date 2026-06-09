@@ -44,12 +44,23 @@ impl MixerCommands for VardaApp {
             .iter()
             .find(|s| s.name() == shader_name)
             .context("Shader not found")?;
-        let mut deck = Deck::new(
-            &self.context,
-            (*shader).clone(),
-            self.render_width,
-            self.render_height,
-        )?;
+        let shader_clone = (*shader).clone();
+        let is_compute = shader_clone.metadata.is_compute();
+        let mut deck = if is_compute {
+            Deck::new_from_compute_shader(
+                &self.context,
+                shader_clone,
+                self.render_width,
+                self.render_height,
+            )?
+        } else {
+            Deck::new(
+                &self.context,
+                shader_clone,
+                self.render_width,
+                self.render_height,
+            )?
+        };
         deck.ensure_preprocessor_analyzers(&self.analyzer_registry);
         let ch = self
             .mixer

@@ -1002,7 +1002,11 @@ pub(crate) fn restore_deck(
         SourceConfig::Shader { path, params } => {
             let shader = ISFShader::from_file(path)
                 .with_context(|| format!("Failed to load shader: {}", path))?;
-            let mut deck = Deck::new(context, shader, render_width, render_height)?;
+            let mut deck = if shader.metadata.is_compute() {
+                Deck::new_from_compute_shader(context, shader, render_width, render_height)?
+            } else {
+                Deck::new(context, shader, render_width, render_height)?
+            };
             // Restore parameter values
             for (name, value) in params {
                 deck.generator_params.set(name, *value);

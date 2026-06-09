@@ -3,9 +3,11 @@
 use super::{
     Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, ScalingMode, VideoStagingBuffers,
 };
-use crate::isf::{compile_glsl_to_spirv, ISFMetadata, ISFShader};
+use crate::isf::{compile_glsl_compute_to_spirv, compile_glsl_to_spirv, ISFMetadata, ISFShader};
 use crate::params::ShaderParams;
-use crate::renderer::{BlitPipeline, GpuContext, HapConvertPipeline, UnifiedPipeline};
+use crate::renderer::{
+    BlitPipeline, ComputePipeline, DispatchMode, GpuContext, HapConvertPipeline, UnifiedPipeline,
+};
 use crate::video::{hap::HapPlayer, HapTextureFormat, VideoDecodeHandle, VideoPlayer};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -1007,6 +1009,125 @@ impl Deck {
             width,
             height,
         )
+    }
+
+    /// Create a new deck from a GLSL compute shader (.comp file)
+    pub fn new_from_compute_shader(
+        context: &GpuContext,
+        shader: ISFShader,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let compute_config = shader
+            .metadata
+            .compute
+            .as_ref()
+            .context("Compute shader missing COMPUTE configuration")?;
+
+        // Compile GLSL compute to SPIR-V
+        let spirv = compile_glsl_compute_to_spirv(&shader.fragment_source, &shader.name())
+            .context("Failed to compile compute shader to SPIR-V")?;
+
+        let workgroup_size = compute_config.workgroup_size;
+        let dispatch_mode = match compute_config.dispatch.as_str() {
+            "custom" => {
+                log::warn!("Custom dispatch mode not yet implemented, using resolution");
+                DispatchMode::Resolution
+            }
+            _ => DispatchMode::Resolution,
+        };
+
+        let pipeline = ComputePipeline::new(
+            &context.device,
+            &spirv,
+            width,
+            height,
+            &shader.metadata.buffers,
+            workgroup_size,
+            dispatch_mode,
+        )
+        .context("Failed to create compute pipeline")?;
+
+        let source_name = shader.name();
+        let source_path = shader.file_path.clone();
+
+        let inputs = shader
+            .metadata
+            .inputs
+            .as_ref()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let generator_params = ShaderParams::from_inputs(inputs);
+        let generator_phase_inputs = shader.metadata.phase_inputs.clone();
+
+        let source = DeckSource::ComputeShader { shader, pipeline };
+
+        // Create render target textures
+        let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Deck Texture (Compute)"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let texture_b = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Deck Texture B (Compute)"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let texture_b_view = texture_b.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let now = Instant::now();
+        let uuid = super::generate_short_uuid();
+        let param_prefix = format!("deck_{}", uuid);
+
+        Ok(Self {
+            uuid,
+            param_prefix,
+            source_name,
+            source_path,
+            source,
+            generator_params,
+            texture,
+            texture_view,
+            texture_b,
+            texture_b_view,
+            effects: Vec::new(),
+            opacity: 1.0,
+            render_time: 0.0,
+            render_dt: 1.0 / 60.0,
+            frame_count: 0,
+            last_frame_time: now,
+            external_source_view: None,
+            fps_smoothed: 0.0,
+            phase_accumulators: [0.0; 4],
+            generator_phase_inputs,
+            analyzers: crate::analyzer::DeckAnalyzers::new(),
+        })
     }
 }
 

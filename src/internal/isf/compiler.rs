@@ -37,6 +37,39 @@ pub fn compile_glsl_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec
     Ok(binary_result.as_binary().to_vec())
 }
 
+/// Compile GLSL compute shader to SPIR-V
+pub fn compile_glsl_compute_to_spirv(glsl_source: &str, shader_name: &str) -> Result<Vec<u32>> {
+    let compiler = Compiler::new().context("Failed to create shaderc compiler")?;
+
+    let mut options = shaderc::CompileOptions::new().context("Failed to create compile options")?;
+
+    options.set_source_language(shaderc::SourceLanguage::GLSL);
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
+
+    let binary_result = compiler
+        .compile_into_spirv(
+            glsl_source,
+            ShaderKind::Compute,
+            shader_name,
+            "main",
+            Some(&options),
+        )
+        .with_context(|| format!("Failed to compile compute shader '{}'", shader_name))?;
+
+    if binary_result.get_num_warnings() > 0 {
+        log::warn!(
+            "Compute shader '{}' compiled with warnings:\n{}",
+            shader_name,
+            binary_result.get_warning_messages()
+        );
+    }
+
+    Ok(binary_result.as_binary().to_vec())
+}
+
 /// Inject ISF automatic uniforms into GLSL source
 /// ISF provides these built-in variables:
 /// - TIME: float (elapsed time in seconds)
@@ -243,5 +276,85 @@ void main() {
             panic!("WGSL output failed: {:?}", e);
         }
         println!("WGSL output length: {}", wgsl.unwrap().len());
+    }
+
+    #[test]
+    fn test_compile_simple_compute_shader() {
+        let glsl = r#"
+#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba8) writeonly uniform image2D output_image;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    imageStore(output_image, gid, vec4(1.0, 0.0, 0.0, 1.0));
+}
+"#;
+
+        let spirv = compile_glsl_compute_to_spirv(glsl, "test_compute");
+        if let Err(ref e) = spirv {
+            eprintln!("Compute compilation error: {}", e);
+        }
+        assert!(spirv.is_ok());
+        let spirv_data = spirv.unwrap();
+        assert!(!spirv_data.is_empty());
+        assert_eq!(spirv_data[0], 0x07230203);
+    }
+
+    #[test]
+    fn test_compile_black_hole_sim_full_pipeline() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let shader_path = manifest_dir.join("shaders/black_hole_sim.comp");
+        let source = match std::fs::read_to_string(&shader_path) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Skipping: black_hole_sim.comp not found");
+                return;
+            }
+        };
+
+        // Parse ISF metadata
+        let json_end = source.find("}*/").expect("ISF JSON header not found");
+        let json_str = &source[2..json_end + 1]; // skip /*
+        let meta: super::super::ISFMetadata =
+            serde_json::from_str(json_str).expect("ISF metadata should parse");
+        assert!(meta.is_compute(), "should be a compute shader");
+        assert_eq!(meta.buffers.len(), 1, "should have 1 storage buffer");
+
+        // Extract GLSL (everything after }*/)
+        let glsl = source[json_end + 3..].trim();
+
+        // Step 1: shaderc GLSL → SPIR-V
+        let spirv = compile_glsl_compute_to_spirv(glsl, "black_hole_sim.comp");
+        if let Err(ref e) = spirv {
+            panic!("shaderc compilation failed: {}", e);
+        }
+        let spirv_data = spirv.unwrap();
+        assert_eq!(spirv_data[0], 0x07230203, "SPIR-V magic number");
+
+        // Step 2: naga SPIR-V parse + validation
+        let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let module =
+            naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
+                .expect("naga SPIR-V parse should succeed");
+
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("naga validation should succeed");
+
+        // Step 3: naga → WGSL output
+        let wgsl =
+            naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
+                .expect("WGSL output should succeed");
+
+        assert!(!wgsl.is_empty(), "WGSL output should not be empty");
+        println!(
+            "black_hole_sim.comp: SPIR-V {} words → WGSL {} chars",
+            spirv_data.len(),
+            wgsl.len()
+        );
     }
 }

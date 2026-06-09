@@ -26,6 +26,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 Experimental:
 - **Dome projection**: fisheye to equirectangular (360°) and cubemap (3D) rendering with configurable lens correction and chromatic aberration.
 - **Surface overlap zones**: manual and auto-detect modes for precise edge blending.
+- **Compute shader support**: ISF compute shaders for particle simulations, fluid dynamics, ect
 
 ## Install
 

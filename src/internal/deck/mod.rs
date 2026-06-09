@@ -6,7 +6,7 @@ pub use render::get_current_date;
 
 use crate::isf::{ISFPass, ISFShader};
 use crate::params::ShaderParams;
-use crate::renderer::{BlitPipeline, HapConvertPipeline, UnifiedPipeline};
+use crate::renderer::{BlitPipeline, ComputePipeline, HapConvertPipeline, UnifiedPipeline};
 use crate::video::{HapTextureFormat, PlaybackSnapshot, VideoCommand, VideoDecodeHandle};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -289,6 +289,11 @@ pub enum DeckSource {
         source_height: u32,
         scaling_mode: ScalingMode,
     },
+    /// GLSL compute shader generator
+    ComputeShader {
+        shader: ISFShader,
+        pipeline: ComputePipeline,
+    },
 }
 
 /// Discriminant for external source types sharing the same DeckSource layout.
@@ -495,6 +500,7 @@ impl Deck {
             DeckSource::Image { .. } => "image",
             DeckSource::SolidColor { .. } => "solid_color",
             DeckSource::ExternalSource { kind, .. } => kind.source_type(),
+            DeckSource::ComputeShader { .. } => "compute_shader",
         }
     }
 
@@ -682,10 +688,12 @@ impl Deck {
         }
     }
 
-    /// Get the shader (if source is a shader)
+    /// Get the shader (if source is a shader or compute shader)
     pub fn shader(&self) -> Option<&ISFShader> {
         match &self.source {
-            DeckSource::Shader { shader, .. } => Some(shader),
+            DeckSource::Shader { shader, .. } | DeckSource::ComputeShader { shader, .. } => {
+                Some(shader)
+            }
             _ => None,
         }
     }

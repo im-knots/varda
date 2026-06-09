@@ -43,6 +43,58 @@ pub struct ISFMetadata {
     /// Preprocessor declarations (analyzers whose outputs are bound as textures/uniforms)
     #[serde(rename = "PREPROCESSORS", default)]
     pub preprocessors: Vec<ISFPreprocessor>,
+
+    /// Shader type: None for fragment shaders, Some("compute") for compute shaders
+    #[serde(rename = "TYPE")]
+    pub shader_type: Option<String>,
+
+    /// Compute shader configuration (only present for TYPE="compute")
+    #[serde(rename = "COMPUTE")]
+    pub compute: Option<ComputeConfig>,
+
+    /// Storage buffer declarations (only for compute shaders)
+    #[serde(rename = "BUFFERS", default)]
+    pub buffers: Vec<StorageBufferDecl>,
+}
+
+/// Compute shader dispatch configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComputeConfig {
+    /// Workgroup size [x, y, z]
+    #[serde(rename = "WORKGROUP_SIZE")]
+    pub workgroup_size: [u32; 3],
+
+    /// Dispatch mode: "resolution" or "custom"
+    #[serde(rename = "DISPATCH")]
+    pub dispatch: String,
+}
+
+/// Storage buffer declaration in compute shader metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageBufferDecl {
+    /// Binding name in GLSL source
+    #[serde(rename = "NAME")]
+    pub name: String,
+
+    /// Buffer type: "storage" (read-write) or "read-only-storage"
+    #[serde(rename = "TYPE")]
+    pub buffer_type: String,
+
+    /// Struct name in GLSL source (informational)
+    #[serde(rename = "STRUCT")]
+    pub struct_name: Option<String>,
+
+    /// Number of elements
+    #[serde(rename = "COUNT")]
+    pub count: u32,
+
+    /// Byte size per element
+    #[serde(rename = "STRIDE")]
+    pub stride: u32,
+
+    /// Whether buffer persists across frames
+    #[serde(rename = "PERSISTENT", default)]
+    pub persistent: bool,
 }
 
 /// Declares a preprocessor dependency — an analyzer whose texture/uniform outputs
@@ -191,6 +243,11 @@ impl ISFMetadata {
         }
     }
 
+    /// Check if this shader is a compute shader
+    pub fn is_compute(&self) -> bool {
+        self.shader_type.as_deref() == Some("compute")
+    }
+
     /// Get all categories as a single string
     pub fn categories_string(&self) -> String {
         self.categories
@@ -268,6 +325,62 @@ mod tests {
         let json = r#"{"DESCRIPTION": "test", "INPUTS": []}"#;
         let meta: ISFMetadata = serde_json::from_str(json).unwrap();
         assert!(meta.preprocessors.is_empty());
+    }
+
+    #[test]
+    fn parse_compute_metadata() {
+        let json = r#"{
+            "DESCRIPTION": "Test compute shader",
+            "TYPE": "compute",
+            "COMPUTE": {
+                "WORKGROUP_SIZE": [16, 16, 1],
+                "DISPATCH": "resolution"
+            },
+            "INPUTS": [
+                {"NAME": "speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 10.0}
+            ],
+            "BUFFERS": [
+                {
+                    "NAME": "particles",
+                    "TYPE": "storage",
+                    "STRUCT": "Particle",
+                    "COUNT": 65536,
+                    "STRIDE": 32,
+                    "PERSISTENT": true
+                }
+            ]
+        }"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.is_compute());
+        let compute = meta.compute.unwrap();
+        assert_eq!(compute.workgroup_size, [16, 16, 1]);
+        assert_eq!(compute.dispatch, "resolution");
+        assert_eq!(meta.buffers.len(), 1);
+        assert_eq!(meta.buffers[0].name, "particles");
+        assert_eq!(meta.buffers[0].count, 65536);
+        assert_eq!(meta.buffers[0].stride, 32);
+        assert!(meta.buffers[0].persistent);
+    }
+
+    #[test]
+    fn parse_fragment_shader_no_compute() {
+        let json = r#"{"DESCRIPTION": "Fragment shader", "INPUTS": []}"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        assert!(!meta.is_compute());
+        assert!(meta.compute.is_none());
+        assert!(meta.buffers.is_empty());
+    }
+
+    #[test]
+    fn parse_compute_no_buffers() {
+        let json = r#"{
+            "TYPE": "compute",
+            "COMPUTE": {"WORKGROUP_SIZE": [8, 8, 1], "DISPATCH": "resolution"},
+            "INPUTS": []
+        }"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.is_compute());
+        assert!(meta.buffers.is_empty());
     }
 
     #[test]

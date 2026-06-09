@@ -79,8 +79,9 @@ impl ShaderRegistry {
             {
                 let path = entry.path();
 
-                // Only process .fs files
-                if path.extension().and_then(|s| s.to_str()) != Some("fs") {
+                // Only process .fs and .comp files
+                let ext = path.extension().and_then(|s| s.to_str());
+                if ext != Some("fs") && ext != Some("comp") {
                     continue;
                 }
 
@@ -170,8 +171,9 @@ impl ShaderRegistry {
 
         for (kind, paths) in pending_events {
             for path in paths {
-                // Only process .fs files
-                if path.extension().and_then(|s| s.to_str()) != Some("fs") {
+                // Only process .fs and .comp files
+                let ext = path.extension().and_then(|s| s.to_str());
+                if ext != Some("fs") && ext != Some("comp") {
                     continue;
                 }
 

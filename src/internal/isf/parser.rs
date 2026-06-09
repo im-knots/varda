@@ -65,6 +65,11 @@ impl ISFShader {
             .unwrap_or_else(|| "No description".to_string())
     }
 
+    /// Get the shader source (GLSL for both fragment and compute shaders)
+    pub fn source(&self) -> &str {
+        &self.fragment_source
+    }
+
     /// Get shader author/credit
     pub fn credit(&self) -> String {
         self.metadata
