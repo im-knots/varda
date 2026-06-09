@@ -120,7 +120,7 @@ vec2 mandelboxDE(vec3 pos) {
     // Fudge factor (Fragmentarium-style) to avoid overstepping thin features
     dist *= 0.7;
     // Clamp DE to pixel footprint — sub-pixel detail is aliasing noise
-    if (pf > 0.0) dist = max(dist, pf * 0.5);
+    if (pf > 0.0) dist = max(dist, pf * 0.25);
     return vec2(dist, trap.w);
 }
 
@@ -135,7 +135,7 @@ float boundingSphere(vec3 ro, vec3 rd, float r) {
 }
 
 vec3 calcNormal(vec3 p, float pixSize) {
-    float e = max(pixSize * 0.5, 2e-5);
+    float e = max(pixSize * 0.25, 2e-5);
     vec2 h = vec2(e, -e);
     vec3 n = h.xyy * de(p + h.xyy) +
              h.yyx * de(p + h.yyx) +
@@ -159,15 +159,13 @@ float softShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
         t += clamp(h, 0.005, 0.2);
         if (res < 0.001 || t > tmax) break;
     }
-    return clamp(res, 0.0, 1.0);
+    res = clamp(res, 0.0, 1.0);
+    return res * res * (3.0 - 2.0 * res); // smoothstep for clean penumbra
 }
 
-void main() {
-    float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
-    if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
-
-    vec2 p = (uv - 0.5) * 2.0;
+// Render a single sample at subpixel offset (for AA)
+vec3 renderSample(vec2 fragUV) {
+    vec2 p = (fragUV - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
     mat3 camRot = rotY(rot_y) * rotX(rot_x);
@@ -191,8 +189,7 @@ void main() {
     float bHit = boundingSphere(ro, rd, 4.0);
     if (dot(ro, ro) > 16.0) {
         if (bHit < 0.0) {
-            fragColor = vec4(sqrt(clamp(bg_color.rgb, 0.0, 1.0)), 1.0);
-            return;
+            return bg_color.rgb;
         }
         dist = max(bHit - 0.1, 0.0);
     }
@@ -212,7 +209,7 @@ void main() {
         float d = hitInfo.x;
         float ad = abs(d);
         if (ad < minD) { minD = ad; minDdist = dist; }
-        float thresh = max(pixelSize * dist * 0.25, 5e-7);
+        float thresh = max(pixelSize * dist * 0.15, 5e-7);
         if (ad < thresh && dist > minStep * 4.0) { hit = true; steps = i; break; }
         dist += max(d, minStep);
         steps = i;
@@ -228,7 +225,7 @@ void main() {
         for (int j = 0; j < 8; j++) {
             float mid = (lo + hi) * 0.5;
             float d = mandelboxDE(ro + rd * mid).x;
-            float thresh = max(pixelSize * mid * 0.25, 5e-7);
+            float thresh = max(pixelSize * mid * 0.15, 5e-7);
             if (d < thresh) { hi = mid; } else { lo = mid; }
         }
         dist = hi;
@@ -252,10 +249,13 @@ void main() {
     if (hit) {
         vec3 hp = ro + rd * dist;
         float pix = pixelSize * dist;
+        // Save orbit trap before normal/shadow DE calls corrupt it
+        vec4 savedTrap = g_trap;
         vec3 n = calcNormal(hp, pix);
 
         // Flip normal to face camera (essential in concavities)
         if (dot(n, rd) > 0.0) n = -n;
+        g_trap = savedTrap; // restore clean orbit trap
 
         // Step-count AO: rays that used many steps are in deep crevices
         float stepAO = 1.0 - float(steps) / float(maxS);
@@ -286,9 +286,9 @@ void main() {
         // Sun diffuse
         float dif1 = clamp(dot(sunDir, n), 0.0, 1.0);
 
-        // Shadows
+        // Adaptive shadow: skip shadow march for distant surfaces
         float shad = 1.0;
-        if (shadow_strength > 0.01) {
+        if (shadow_strength > 0.01 && pix < 0.02) {
             shad = mix(1.0, softShadow(hp + n * 0.01, sunDir, 0.01, 5.0, 8.0), shadow_strength);
         }
         dif1 *= shad;
@@ -322,6 +322,20 @@ void main() {
         float glow = exp(-minD * 200.0) * 0.15;
         col = mix(col, mix(color1.rgb, color2.rgb, 0.5), glow);
     }
+
+    return col;
+}
+
+void main() {
+    float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
+    if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
+
+    // 2-sample rotated-grid AA: two samples at diagonal subpixel offsets
+    vec2 px = 1.0 / RENDERSIZE;
+    vec3 col = renderSample(uv + vec2( 0.33, -0.33) * px)
+             + renderSample(uv + vec2(-0.33,  0.33) * px);
+    col *= 0.5;
 
     // Gamma
     col = sqrt(clamp(col, 0.0, 1.0));

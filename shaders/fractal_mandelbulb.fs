@@ -142,9 +142,9 @@ vec2 mandelbulbDE(vec3 pos) {
     // Clamp DE to prevent overstepping at far distances (fractalforums fix)
     dist = min(abs(dist), 1.0);
     // Fudge factor: DE is an approximation, multiply by < 1 to avoid overstepping thin features
-    dist *= 0.5;
+    dist *= 0.65;
     // Clamp DE to pixel footprint — sub-pixel detail is aliasing noise
-    if (pf > 0.0) dist = max(dist, pf * 0.5);
+    if (pf > 0.0) dist = max(dist, pf * 0.25);
     return vec2(dist, trap.x);
 }
 
@@ -158,13 +158,18 @@ float boundingSphere(vec3 ro, vec3 rd, float r) {
     return -b - sqrt(h);
 }
 
+float g_hitDE = 0.0; // cached DE at hit point — reused for cheaper normals
+
 vec3 calcNormal(vec3 p, float pixSize) {
-    float e = max(pixSize * 0.5, 2e-5);
-    vec2 h = vec2(e, -e);
-    vec3 n = h.xyy * de(p + h.xyy) +
-             h.yyx * de(p + h.yyx) +
-             h.yxy * de(p + h.yxy) +
-             h.xxx * de(p + h.xxx);
+    // Use cached hit DE for central value — saves 1 of 4 DE evaluations
+    // For mandelbulb where each DE has expensive pow(), this matters
+    float e = max(pixSize * 0.25, 2e-5);
+    float d0 = g_hitDE; // cached from march
+    vec3 n = vec3(
+        de(p + vec3(e, 0, 0)) - d0,
+        de(p + vec3(0, e, 0)) - d0,
+        de(p + vec3(0, 0, e)) - d0
+    );
     float len = length(n);
     return (len > 1e-20) ? n / len : vec3(0.0, 1.0, 0.0);
 }
@@ -182,15 +187,13 @@ float softShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
         t += clamp(h, 0.005, 0.2);
         if (res < 0.001 || t > tmax) break;
     }
-    return clamp(res, 0.0, 1.0);
+    res = clamp(res, 0.0, 1.0);
+    return res * res * (3.0 - 2.0 * res); // smoothstep for clean penumbra
 }
 
-void main() {
-    float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
-    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
-    if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
-
-    vec2 p = (uv - 0.5) * 2.0;
+// Render a single sample at subpixel offset (for AA)
+vec3 renderSample(vec2 fragUV) {
+    vec2 p = (fragUV - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
 
     mat3 camRot = rotY(rot_y) * rotX(rot_x);
@@ -229,7 +232,7 @@ void main() {
             float d = hitInfo.x;
             float ad = abs(d);
             if (ad < minD) { minD = ad; minDdist = dist; }
-            float thresh = max(pixelSize * dist * 0.25, 5e-7);
+            float thresh = max(pixelSize * dist * 0.15, 5e-7);
             if (d < thresh && dist > minStep * 4.0) { hit = true; steps = i; break; }
             dist += max(d, minStep);
             steps = i;
@@ -245,7 +248,7 @@ void main() {
             for (int j = 0; j < 8; j++) {
                 float mid = (lo + hi) * 0.5;
                 float d = mandelbulbDE(ro + rd * mid).x;
-                float thresh = max(pixelSize * mid * 0.25, 5e-7);
+                float thresh = max(pixelSize * mid * 0.15, 5e-7);
                 if (d < thresh) { hi = mid; } else { lo = mid; }
             }
             dist = hi;
@@ -263,8 +266,12 @@ void main() {
         if (hit) {
             vec3 hp = ro + rd * dist;
             float pxAtHit = pixelSize * dist;
+            // Save orbit trap before normal/shadow DE calls corrupt it
+            vec4 savedTrap = g_trap;
+            g_hitDE = de(hp); // cache for normal calc
             vec3 n = calcNormal(hp, pxAtHit);
             if (dot(n, rd) > 0.0) n = -n;
+            g_trap = savedTrap; // restore clean orbit trap
 
             // Orbit-trap AO
             float occ = clamp(0.05 * log(g_trap.x), 0.0, 1.0);
@@ -291,8 +298,10 @@ void main() {
             float spe = pow(clamp(dot(n, hal), 0.0, 1.0), 32.0) * dif1
                       * (0.04 + 0.96 * pow(clamp(1.0 - dot(hal, sunDir), 0.0, 1.0), 5.0));
 
+            // Adaptive shadow: skip shadow march for distant surfaces where shadows
+            // are sub-pixel detail. Saves 24 DE evaluations for far fragments.
             float shad = 1.0;
-            if (shadow_strength > 0.01) {
+            if (shadow_strength > 0.01 && pxAtHit < 0.02) {
                 shad = mix(1.0, softShadow(hp + n * 0.01, sunDir, 0.01, 5.0, 8.0), shadow_strength);
             }
             dif1 *= shad;
@@ -318,6 +327,21 @@ void main() {
             col = mix(col, mix(color1.rgb, color2.rgb, 0.5), glow);
         }
     }
+
+    return col;
+}
+
+void main() {
+    float audioSum = audio_level + audio_bass + audio_mid + audio_treble + audio_bpm + audio_beat_phase;
+    float timeSum = TIMEDELTA + float(FRAMEINDEX) + float(PASSINDEX) + DATE.x + DATE.y + DATE.z + DATE.w + PHASE_TIME_0 + PHASE_TIME_1 + PHASE_TIME_2 + PHASE_TIME_3;
+    if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
+
+    // 2-sample rotated-grid AA: two samples at diagonal subpixel offsets
+    // Eliminates jagged edges on fractal silhouettes with only 2x cost
+    vec2 px = 1.0 / RENDERSIZE;
+    vec3 col = renderSample(uv + vec2( 0.33, -0.33) * px)
+             + renderSample(uv + vec2(-0.33,  0.33) * px);
+    col *= 0.5;
 
     col = sqrt(clamp(col, 0.0, 1.0)); // gamma correction
     fragColor = vec4(col, 1.0);

@@ -1,4 +1,5 @@
 pub mod blit;
+pub mod compute_pipeline;
 pub mod context;
 pub mod dome;
 pub mod dome_preview;
@@ -12,6 +13,7 @@ pub mod transition;
 pub mod warp;
 
 pub use blit::*;
+pub use compute_pipeline::*;
 pub use context::*;
 pub use dome::*;
 pub use dome_preview::*;

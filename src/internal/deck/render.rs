@@ -548,6 +548,88 @@ impl Deck {
                     );
                 }
             }
+            DeckSource::ComputeShader { pipeline, .. } => {
+                let uniforms = ISFUniforms {
+                    time,
+                    time_delta,
+                    frame_index: self.frame_count,
+                    pass_index: 0,
+                    render_size: [self.texture.width() as f32, self.texture.height() as f32],
+                    audio_level: audio_data.level,
+                    audio_bass: audio_data.bass(),
+                    audio_mid: audio_data.mid(),
+                    audio_treble: audio_data.treble(),
+                    audio_bpm: audio_data.bpm.unwrap_or(0.0),
+                    audio_beat_phase: audio_data.beat_phase(),
+                    date: get_current_date(),
+                    phase_times: generator_phase_times,
+                };
+
+                pipeline.update_uniforms(&context.queue, &uniforms);
+
+                self.generator_params.ensure_buffer(&context.device);
+                self.generator_params.update_buffer_with_modulation(
+                    &context.queue,
+                    modulation,
+                    Some(&param_prefix),
+                );
+
+                let user_params_buffer = self
+                    .generator_params
+                    .buffer()
+                    .expect("Buffer should exist after ensure_buffer");
+                let bind_group =
+                    pipeline.create_bind_group(&context.device, Some(user_params_buffer));
+
+                let (dispatch_x, dispatch_y, dispatch_z) =
+                    pipeline.dispatch_counts(self.texture.width(), self.texture.height());
+
+                let mut encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Compute Shader Dispatch Encoder"),
+                        });
+
+                {
+                    let mut compute_pass =
+                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Compute Shader Pass"),
+                            timestamp_writes: None,
+                        });
+                    compute_pass.set_pipeline(&pipeline.compute_pipeline);
+                    compute_pass.set_bind_group(0, &bind_group, &[]);
+                    compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, dispatch_z);
+                }
+
+                // Copy compute output to the generator target texture
+                let dest_texture = if source_to_b {
+                    &self.texture_b
+                } else {
+                    &self.texture
+                };
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &pipeline.output_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: dest_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: self.texture.width(),
+                        height: self.texture.height(),
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                cmd_buffers.push(encoder.finish());
+            }
         }
 
         // Apply effect chain (ping-pong between textures)
@@ -1010,6 +1092,11 @@ impl Deck {
     pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
         let width = width.max(1);
         let height = height.max(1);
+        // Include COPY_DST so compute shader decks survive resize
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST;
         self.texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Deck Texture (Linear)"),
             size: wgpu::Extent3d {
@@ -1021,9 +1108,7 @@ impl Deck {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+            usage,
             view_formats: &[],
         });
         self.texture_view = self
@@ -1040,9 +1125,7 @@ impl Deck {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+            usage,
             view_formats: &[],
         });
         self.texture_b_view = self

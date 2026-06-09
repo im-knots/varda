@@ -115,7 +115,11 @@ impl VardaApp {
             std::thread::spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let name = shader.name();
-                    let deck = Deck::new(&ctx, shader, w, h);
+                    let deck = if shader.metadata.is_compute() {
+                        Deck::new_from_compute_shader(&ctx, shader, w, h)
+                    } else {
+                        Deck::new(&ctx, shader, w, h)
+                    };
                     (name, deck)
                 }));
                 let (name, deck) = match result {

@@ -196,6 +196,27 @@ else
   echo "==> NDI SDK not found, skipping bundle (install with: brew install --cask libndi)"
 fi
 
+# Bundle ONNX Runtime dylib (arm64-only; used by ort load-dynamic for face detection)
+ORT_VERSION="1.24.1"
+ORT_URL="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-arm64-${ORT_VERSION}.tgz"
+ORT_TMP="/tmp/ort-bundle"
+echo "==> Downloading ONNX Runtime v${ORT_VERSION} (arm64)..."
+rm -rf "$ORT_TMP"
+mkdir -p "$ORT_TMP"
+if curl -fsSL "$ORT_URL" | tar xz -C "$ORT_TMP" 2>/dev/null; then
+  ORT_DYLIB=$(find "$ORT_TMP" -name "libonnxruntime.*.dylib" -type f | head -1)
+  if [ -n "$ORT_DYLIB" ]; then
+    cp "$ORT_DYLIB" "$FRAMEWORKS/libonnxruntime.dylib"
+    install_name_tool -id "@rpath/libonnxruntime.dylib" "$FRAMEWORKS/libonnxruntime.dylib" 2>/dev/null || true
+    echo "==> Bundled ONNX Runtime from $ORT_DYLIB"
+  else
+    echo "==> WARN: ONNX Runtime dylib not found in download"
+  fi
+  rm -rf "$ORT_TMP"
+else
+  echo "==> WARN: Failed to download ONNX Runtime; face detection will be unavailable"
+fi
+
 # Bundle licenses
 cp LICENSE Varda.app/Contents/Resources/licenses/ 2>/dev/null || echo "MIT License" > Varda.app/Contents/Resources/licenses/LICENSE
 echo "FFmpeg is licensed under the LGPL v2.1+. See https://ffmpeg.org/legal.html" > Varda.app/Contents/Resources/licenses/FFMPEG-LICENSE

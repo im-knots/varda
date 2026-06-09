@@ -1,0 +1,268 @@
+/*{
+    "DESCRIPTION": "N-body black hole accretion disk — Schwarzschild geodesic physics with 65536 persistent particles",
+    "CREDIT": "Varda VJ",
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator", "Generative", "3D", "Simulation"],
+    "TYPE": "compute",
+    "COMPUTE": {
+        "WORKGROUP_SIZE": [256, 1, 1],
+        "DISPATCH": "resolution"
+    },
+    "INPUTS": [
+        {"NAME": "black_hole_mass",  "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.1,   "MAX": 10.0,   "LABEL": "Black Hole Mass"},
+        {"NAME": "particle_spread",  "TYPE": "float", "DEFAULT": 8.0,   "MIN": 2.0,   "MAX": 30.0,   "LABEL": "Disk Radius"},
+        {"NAME": "disk_thickness",   "TYPE": "float", "DEFAULT": 0.3,   "MIN": 0.01,  "MAX": 2.0,    "LABEL": "Disk Thickness"},
+        {"NAME": "cam_distance",     "TYPE": "float", "DEFAULT": 25.0,  "MIN": 5.0,   "MAX": 100.0,  "LABEL": "Camera Distance"},
+        {"NAME": "cam_tilt",         "TYPE": "float", "DEFAULT": 0.5,   "MIN": 0.0,   "MAX": 1.57,   "LABEL": "Camera Tilt"},
+        {"NAME": "cam_speed",        "TYPE": "float", "DEFAULT": 0.15,  "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Camera Orbit Speed"},
+        {"NAME": "brightness",       "TYPE": "float", "DEFAULT": 2.5,   "MIN": 0.1,   "MAX": 10.0,   "LABEL": "Brightness"},
+        {"NAME": "glow_size",        "TYPE": "float", "DEFAULT": 2.0,   "MIN": 0.0,   "MAX": 6.0,    "LABEL": "Glow Size"},
+        {"NAME": "color_temp_low",   "TYPE": "color", "DEFAULT": [1.0, 0.2, 0.05, 1.0], "LABEL": "Cool Color"},
+        {"NAME": "color_temp_high",  "TYPE": "color", "DEFAULT": [0.7, 0.85, 1.0, 1.0], "LABEL": "Hot Color"},
+        {"NAME": "time_scale",       "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.0,   "MAX": 5.0,    "LABEL": "Time Scale"},
+        {"NAME": "soften",           "TYPE": "float", "DEFAULT": 0.5,   "MIN": 0.01,  "MAX": 2.0,    "LABEL": "Gravity Softening"},
+        {"NAME": "reset",            "TYPE": "float", "DEFAULT": 0.0,   "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Reset Particles"}
+    ],
+    "PHASE_INPUTS": [
+        {"PARAM": "cam_speed", "INDEX": 0, "SCALE": 1.0}
+    ],
+    "BUFFERS": [
+        {
+            "NAME": "particles",
+            "TYPE": "storage",
+            "STRUCT": "Particle",
+            "COUNT": 65536,
+            "STRIDE": 32,
+            "PERSISTENT": true
+        }
+    ]
+}*/
+
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform ISFUniforms {
+    float TIME; float TIMEDELTA; uint FRAMEINDEX; int PASSINDEX;
+    vec2 RENDERSIZE;
+    float audio_level; float audio_bass; float audio_mid; float audio_treble;
+    float audio_bpm; float audio_beat_phase;
+    vec4 DATE;
+    float PHASE_TIME_0; float PHASE_TIME_1; float PHASE_TIME_2; float PHASE_TIME_3;
+};
+
+layout(set = 0, binding = 1) uniform UserParams {
+    float black_hole_mass; float particle_spread; float disk_thickness;
+    float cam_distance; float cam_tilt; float cam_speed;
+    float brightness; float glow_size;
+    vec4 color_temp_low; vec4 color_temp_high;
+    float time_scale; float soften; float reset;
+};
+
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+
+// Particle data stored as two vec4s per particle in a flat buffer:
+//   [2*idx + 0] = pos_mass (xyz = position, w = mass)
+//   [2*idx + 1] = vel_temp (xyz = velocity, w = temperature)
+layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
+    vec4 particle_data[];
+};
+
+const float PI  = 3.14159265359;
+const float TAU = 6.28318530718;
+const uint  NUM_PARTICLES = 65536u;
+#define RS   (2.0 * black_hole_mass)
+#define ISCO (3.0 * RS)
+
+float hash(uint n) {
+    n = (n << 13u) ^ n;
+    n = n * (n * n * 15731u + 789221u) + 1376312589u;
+    return float(n & 0x7FFFFFFFu) / float(0x7FFFFFFF);
+}
+vec3 hash3(uint n) { return vec3(hash(n), hash(n+17u), hash(n+31u)); }
+
+// ── Particle initialization (writes directly to buffer) ──────────────
+void initParticle(uint idx) {
+    vec3 h  = hash3(idx * 37u + 7u);
+    vec3 h2 = hash3(idx * 73u + 13u);
+    float r   = ISCO + particle_spread * pow(h.x, 0.6);
+    float phi = h.y * TAU;
+    float z   = (h.z - 0.5) * 2.0 * disk_thickness;
+    vec3 pos  = vec3(r * cos(phi), z, r * sin(phi));
+
+    float v_circ = sqrt(black_hole_mass / max(r - RS, 0.1));
+    vec3 tangent = normalize(vec3(-sin(phi), 0.0, cos(phi)));
+    float ecc = 0.05 + 0.1 * h2.x;
+    vec3 radial = normalize(vec3(cos(phi), 0.0, sin(phi)));
+    vec3 vel = tangent * v_circ * (1.0 - ecc)
+             + radial * v_circ * ecc * (h2.y - 0.5) * 2.0
+             + vec3(0, 1, 0) * v_circ * 0.02 * (h2.z - 0.5);
+
+    float t_norm = pow(ISCO / r, 0.75);
+    particle_data[2u * idx]      = vec4(pos, 0.8 + 0.4 * h2.x);
+    particle_data[2u * idx + 1u] = vec4(vel, t_norm);
+}
+
+// ── Schwarzschild gravitational acceleration ─────────────────────────
+// Effective potential: V_eff = -M/r + L²/(2r²) - ML²/r³
+// The GR correction (-ML²/r³) causes orbital precession and captures
+// particles inside ISCO — this is the key physics fragment shaders can't do
+// because each particle remembers its state across frames.
+vec3 schwarzschildAccel(vec3 pos, vec3 vel) {
+    float r2 = dot(pos, pos) + soften * soften;
+    float r_soft = sqrt(r2);
+    vec3 r_hat = pos / r_soft;
+    float L2 = dot(cross(pos, vel), cross(pos, vel));
+    float M  = black_hole_mass;
+
+    float a_newton  = -M / r2;                   // Newtonian gravity
+    float a_barrier = L2 / (r2 * r_soft);         // centrifugal barrier
+    float a_gr      = -3.0 * M * L2 / (r2 * r2); // GR precession term
+
+    vec3 accel = (a_newton + a_barrier + a_gr) * r_hat;
+
+    // Viscous drag — alpha-disk angular momentum transport
+    float drag = 0.001 * smoothstep(ISCO * 3.0, ISCO, r_soft);
+    accel -= vel * drag;
+    return accel;
+}
+
+// ── Leapfrog (Verlet) integration ────────────────────────────────────
+// Operates on pos/vel directly, writes back to buffer at the end.
+void integrateAndStore(uint idx, float dt) {
+    vec4 pm = particle_data[2u * idx];
+    vec4 vt = particle_data[2u * idx + 1u];
+    vec3 pos = pm.xyz;
+    vec3 vel = vt.xyz;
+
+    // Two half-steps for stability near the black hole
+    for (int step = 0; step < 2; step++) {
+        float half_dt = dt * 0.5;
+        vec3 a1       = schwarzschildAccel(pos, vel);
+        vec3 vel_half = vel + a1 * half_dt * 0.5;
+        vec3 new_pos  = pos + vel_half * half_dt;
+        vec3 a2       = schwarzschildAccel(new_pos, vel_half);
+        vel = vel_half + a2 * half_dt * 0.5;
+        pos = new_pos;
+    }
+
+    float r = length(pos);
+
+    // Crossed event horizon — respawn at outer edge
+    if (r < RS * 0.8) {
+        vec3 h = hash3(idx * 131u + FRAMEINDEX * 17u);
+        float sr = ISCO + particle_spread * (0.7 + 0.3 * h.x);
+        float phi = h.y * TAU;
+        pos = vec3(sr * cos(phi), (h.z-0.5)*disk_thickness*0.5, sr * sin(phi));
+        float vc = sqrt(black_hole_mass / max(sr - RS, 0.1));
+        vel = normalize(vec3(-sin(phi), 0.0, cos(phi))) * vc * 0.98;
+        r = length(pos);
+    }
+    // Escaped too far — reinitialize directly
+    if (r > particle_spread * 4.0 + ISCO) {
+        uint seed = idx + FRAMEINDEX * 3u;
+        vec3 h  = hash3(seed * 37u + 7u);
+        vec3 h2 = hash3(seed * 73u + 13u);
+        float ri   = ISCO + particle_spread * pow(h.x, 0.6);
+        float phi = h.y * TAU;
+        pos = vec3(ri * cos(phi), (h.z - 0.5) * 2.0 * disk_thickness, ri * sin(phi));
+        float vc = sqrt(black_hole_mass / max(ri - RS, 0.1));
+        vec3 tang = normalize(vec3(-sin(phi), 0.0, cos(phi)));
+        float ecc = 0.05 + 0.1 * h2.x;
+        vec3 rad = normalize(vec3(cos(phi), 0.0, sin(phi)));
+        vel = tang * vc * (1.0 - ecc) + rad * vc * ecc * (h2.y - 0.5) * 2.0;
+        r = length(pos);
+    }
+
+    // Temperature: T ∝ r^(-3/4) (Shakura-Sunyaev) + viscous heating
+    float t_norm = clamp(pow(ISCO / max(r, ISCO*0.5), 0.75), 0.0, 1.0);
+    float v_ratio = length(vel) / max(sqrt(black_hole_mass / max(r, ISCO)), 0.01);
+    t_norm = clamp(t_norm + 0.2 * max(v_ratio - 1.0, 0.0), 0.0, 1.0);
+
+    particle_data[2u * idx]      = vec4(pos, pm.w);
+    particle_data[2u * idx + 1u] = vec4(vel, t_norm);
+}
+
+// ── Projection ───────────────────────────────────────────────────────
+vec2 projectToScreen(vec3 wp, vec3 cp, mat3 rot) {
+    vec3 v = rot * (wp - cp);
+    if (v.z <= 0.01) return vec2(-9999.0);
+    vec2 ndc = v.xy / (v.z * 1.8);
+    return vec2((ndc.x * RENDERSIZE.y / RENDERSIZE.x + 0.5) * RENDERSIZE.x,
+                (ndc.y + 0.5) * RENDERSIZE.y);
+}
+
+// ── Main ─────────────────────────────────────────────────────────────
+void main() {
+    // Flat thread index: dispatch is (ceil(W/256), H, 1) with workgroup (256,1,1)
+    // so GlobalInvocationID.x ∈ [0, ceil(W/256)*256) and .y ∈ [0, H)
+    uint row_width = gl_NumWorkGroups.x * 256u;
+    uint idx = gl_GlobalInvocationID.y * row_width + gl_GlobalInvocationID.x;
+
+    // Phase 1: Clear output image (each thread clears a stripe)
+    uint total_px = uint(RENDERSIZE.x) * uint(RENDERSIZE.y);
+    uint total_threads = row_width * gl_NumWorkGroups.y;
+    uint per_thread = (total_px + total_threads - 1u) / total_threads;
+    uint px0 = min(idx * per_thread, total_px);
+    uint px1 = min(px0 + per_thread, total_px);
+    uint w = uint(RENDERSIZE.x);
+    for (uint px = px0; px < px1; px++) {
+        imageStore(outputImage, ivec2(px % w, px / w), vec4(0,0,0,1));
+    }
+
+    if (idx >= NUM_PARTICLES) return;
+
+    // Phase 2: Init or reset
+    if (FRAMEINDEX == 0u || reset > 0.5) {
+        initParticle(idx);
+    }
+
+    // Phase 3: Physics integration
+    float dt = clamp(TIMEDELTA, 0.0001, 0.05) * time_scale;
+    integrateAndStore(idx, dt);
+
+    // Phase 4: Render — project & splat
+    vec4 pm = particle_data[2u * idx];
+    vec4 vt = particle_data[2u * idx + 1u];
+
+    float cam_angle = PHASE_TIME_0 * TAU;
+    vec3 cam_pos = vec3(cos(cam_angle)*cam_distance,
+                        sin(cam_tilt)*cam_distance,
+                        sin(cam_angle)*cam_distance);
+    vec3 fwd = normalize(-cam_pos);
+    vec3 rt  = normalize(cross(fwd, vec3(0,1,0)));
+    vec3 up  = cross(rt, fwd);
+    mat3 rot = mat3(rt, up, fwd);
+
+    vec2 sp = projectToScreen(pm.xyz, cam_pos, rot);
+    ivec2 pixel = ivec2(sp);
+    if (pixel.x < 0 || pixel.y < 0 ||
+        pixel.x >= int(RENDERSIZE.x) || pixel.y >= int(RENDERSIZE.y)) return;
+
+    // Color from temperature
+    float t = vt.w;
+    vec3 col = mix(color_temp_low.rgb, color_temp_high.rgb, t);
+
+    float r = length(pm.xyz);
+    float depth = length(pm.xyz - cam_pos);
+    float depth_fade = 1.0 / (1.0 + depth*depth*0.003);
+    float isco_boost = 1.0 + 3.0 * smoothstep(ISCO*2.0, ISCO, r);
+    float audio_boost = 1.0 + audio_bass*0.5 + audio_beat_phase*0.3;
+    float lum = brightness * depth_fade * isco_boost * audio_boost * 0.15;
+
+    imageStore(outputImage, pixel, vec4(col * lum, 1.0));
+
+    // Glow kernel
+    int gs = int(glow_size);
+    for (int dy = -gs; dy <= gs; dy++) {
+        for (int dx = -gs; dx <= gs; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            ivec2 gp = pixel + ivec2(dx, dy);
+            if (gp.x < 0 || gp.y < 0 ||
+                gp.x >= int(RENDERSIZE.x) || gp.y >= int(RENDERSIZE.y)) continue;
+            float d = length(vec2(dx, dy));
+            float fall = exp(-d*d / max(glow_size*0.5, 0.1));
+            imageStore(outputImage, gp, vec4(col * lum * fall * 0.4, 1.0));
+        }
+    }
+}
