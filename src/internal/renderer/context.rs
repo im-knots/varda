@@ -39,8 +39,22 @@ impl GpuContext {
     /// The adapter is selected for compatibility with the window's surface.
     /// Returns both the GPU context (for the engine) and the window surface (for the UI).
     pub async fn new_for_window(window: &'static Window) -> Result<(Self, WindowSurface)> {
-        let size = window.inner_size();
+        let (instance, surface, size) = Self::create_surface_for_window(window)?;
+        Self::new_with_surface(instance, surface, size).await
+    }
 
+    /// Create the wgpu instance and surface on the current (main) thread.
+    /// On macOS, `create_surface` accesses `NSView`/`CAMetalLayer` which must
+    /// happen on the main thread.  The returned objects are `Send` and can be
+    /// passed to a background thread for adapter/device creation.
+    pub fn create_surface_for_window(
+        window: &'static Window,
+    ) -> Result<(
+        wgpu::Instance,
+        wgpu::Surface<'static>,
+        winit::dpi::PhysicalSize<u32>,
+    )> {
+        let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             flags: wgpu::InstanceFlags::default(),
@@ -48,11 +62,20 @@ impl GpuContext {
             display: Default::default(),
             memory_budget_thresholds: Default::default(),
         });
-
         let surface = instance
             .create_surface(window)
             .context("Failed to create surface")?;
+        Ok((instance, surface, size))
+    }
 
+    /// Complete GPU initialization given a pre-created instance and surface.
+    /// Safe to call from a background thread — all Metal dispatch work is
+    /// resolved through the pre-created surface.
+    pub async fn new_with_surface(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        size: winit::dpi::PhysicalSize<u32>,
+    ) -> Result<(Self, WindowSurface)> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

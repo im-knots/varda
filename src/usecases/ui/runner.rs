@@ -130,6 +130,10 @@ pub struct UIRunner {
     // ── Engine (created after GPU init in resumed()) ─────────────────
     varda: Option<VardaApp>,
 
+    // ── Deferred GPU init (avoids Metal dispatch-queue deadlock on Rosetta/Intel) ──
+    gpu_init_handle: Option<std::thread::JoinHandle<anyhow::Result<(GpuContext, WindowSurface)>>>,
+    startup_t0: Option<std::time::Instant>,
+
     // ── Undo/redo history ─────────────────────────────────────────────
     history: HistoryManager,
 
@@ -195,6 +199,8 @@ impl UIRunner {
             deck_load_rx,
             pending_deck_loads: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             varda: None,
+            gpu_init_handle: None,
+            startup_t0: None,
             history: HistoryManager::new(),
             publish_counter: 0,
             api_handle: None,
@@ -234,19 +240,26 @@ impl ApplicationHandler for UIRunner {
         let startup_t0 = std::time::Instant::now();
         log::info!("[STARTUP] resumed() entered — beginning initialization");
 
-        let gpu = if self.config.headless {
+        if self.config.headless {
             // Headless: no main window, no egui — GPU without window surface
             log::info!("[STARTUP] Headless mode: skipping main window creation");
-            match GpuContext::new_headless() {
+            let gpu = match GpuContext::new_headless() {
                 Ok(gpu) => gpu,
                 Err(e) => {
                     log::error!("Failed to create headless GPU context: {}", e);
                     event_loop.exit();
                     return;
                 }
-            }
+            };
+            self.finish_init(gpu, None, startup_t0, event_loop);
         } else {
-            // Windowed: create main UI window + egui
+            // Windowed: create main UI window, then spawn GPU init on a background
+            // thread so we return from resumed() immediately.  On macOS (especially
+            // under Rosetta / Intel), blocking the main thread during Metal device
+            // creation causes a GCD dispatch-queue deadlock because Metal needs to
+            // dispatch work back to the main queue.  By returning to the event loop
+            // we keep that queue alive; about_to_wait() polls the thread handle and
+            // finishes initialization once the GPU is ready.
             let window_icon = {
                 static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
                 image::load_from_memory(ICON_BYTES)
@@ -279,102 +292,34 @@ impl ApplicationHandler for UIRunner {
             self.main_window_id = Some(window_static.id());
             self.window = Some(window_static);
 
-            log::info!("[STARTUP] Requesting GPU adapter + device...");
-            let (gpu, win_surface) =
-                match pollster::block_on(GpuContext::new_for_window(window_static)) {
-                    Ok(pair) => {
-                        log::info!("[STARTUP] GPU context ready ({:.0?})", startup_t0.elapsed());
-                        pair
-                    }
+            // Kick a redraw so macOS marks the window as "live" — required for
+            // Metal/CALayer to function correctly (see wgpu#5722).
+            window_static.request_redraw();
+
+            // Create wgpu instance + surface on the main thread (macOS requires
+            // NSView/CAMetalLayer access from the main thread), then hand off
+            // adapter/device creation to a background thread.
+            log::info!("[STARTUP] Creating surface on main thread...");
+            let (instance, surface, size) =
+                match GpuContext::create_surface_for_window(window_static) {
+                    Ok(triple) => triple,
                     Err(e) => {
-                        log::error!("Failed to create render context: {}", e);
+                        log::error!("Failed to create surface: {}", e);
                         event_loop.exit();
                         return;
                     }
                 };
 
-            self.cached_screen_size = window_static.inner_size();
-            self.cached_scale_factor = window_static.scale_factor() as f32;
-            self.egui_start_time = std::time::Instant::now(); // reset to window-creation epoch
-            self.blit_pipeline =
-                BlitPipeline::new(&gpu.device, win_surface.surface_config.format).ok();
-            self.egui_state = Some(egui_winit::State::new(
-                self.egui_ctx.clone(),
-                egui::ViewportId::ROOT,
-                window_static,
-                Some(window_static.scale_factor() as f32),
-                None,
-                Some(2 * 1024),
-            ));
-            self.egui_renderer = Some(egui_wgpu::Renderer::new(
-                &gpu.device,
-                win_surface.surface_config.format,
-                egui_wgpu::RendererOptions::default(),
-            ));
+            log::info!("[STARTUP] Spawning GPU adapter/device init on background thread...");
+            self.startup_t0 = Some(startup_t0);
+            self.gpu_init_handle = Some(std::thread::spawn(move || {
+                pollster::block_on(GpuContext::new_with_surface(instance, surface, size))
+            }));
 
-            // Set the application icon on egui's viewport (controls dock/taskbar icon)
-            {
-                static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
-                if let Ok(img) = image::load_from_memory(ICON_BYTES) {
-                    let rgba = img.into_rgba8();
-                    let icon_data = egui::IconData {
-                        rgba: rgba.as_raw().to_vec(),
-                        width: rgba.width(),
-                        height: rgba.height(),
-                    };
-                    self.egui_ctx
-                        .send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(
-                            icon_data,
-                        ))));
-                }
-            }
-            self.window_surface = Some(win_surface);
-            gpu
-        };
-
-        // Create engine now that GPU is ready
-        log::info!("[STARTUP] Creating engine (audio, MIDI, shaders, mixer)...");
-        let mut varda = match VardaApp::new(gpu, &self.config) {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("Failed to initialize engine: {}", e);
-                event_loop.exit();
-                return;
-            }
-        };
-        log::info!(
-            "[STARTUP] Engine ready: {} shaders ({:.0?})",
-            varda.shader_count(),
-            startup_t0.elapsed()
-        );
-
-        // Load workspace (may replace default mixer with saved scene)
-        log::info!("[STARTUP] Loading workspace...");
-        if let Some(loaded_layout) = varda.load_workspace() {
-            self.layout = loaded_layout;
+            // Return immediately — about_to_wait() will complete initialization.
+            // Keep polling so the event loop stays responsive.
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
         }
-        self.history.clear();
-        log::info!("[STARTUP] Workspace loaded ({:.0?})", startup_t0.elapsed());
-
-        // Start HTTP API server on background thread
-        if self.api_handle.is_none() {
-            self.api_handle = crate::usecases::api::runner::start(
-                self.config.api_port,
-                varda.command_sender(),
-                varda.state_reader(),
-            );
-        }
-
-        self.varda = Some(varda);
-
-        // Register GPU textures with egui for previews (windowed only)
-        if !self.config.headless {
-            self.register_preview_textures();
-        }
-        log::info!(
-            "[STARTUP] Initialization complete ({:.0?})",
-            startup_t0.elapsed()
-        );
     }
 
     fn window_event(
@@ -434,6 +379,29 @@ impl ApplicationHandler for UIRunner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // ── Phase 2 of deferred GPU init: poll the background thread ────
+        if let Some(handle) = self.gpu_init_handle.as_ref() {
+            if handle.is_finished() {
+                let handle = self.gpu_init_handle.take().unwrap();
+                let startup_t0 = self.startup_t0.take().unwrap();
+                match handle.join().expect("GPU init thread panicked") {
+                    Ok((gpu, win_surface)) => {
+                        log::info!("[STARTUP] GPU context ready ({:.0?})", startup_t0.elapsed());
+                        self.finish_init(gpu, Some(win_surface), startup_t0, event_loop);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create render context: {}", e);
+                        event_loop.exit();
+                        return;
+                    }
+                }
+            } else {
+                // GPU init still in progress — keep the event loop alive.
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+                return;
+            }
+        }
+
         // Read target_fps from engine state (runtime-mutable via UI/API).
         let target_fps = self
             .varda
@@ -487,6 +455,101 @@ impl ApplicationHandler for UIRunner {
 }
 
 impl UIRunner {
+    /// Complete initialization once GPU context is available.
+    /// Called from `resumed()` for headless or from `about_to_wait()` for windowed.
+    fn finish_init(
+        &mut self,
+        gpu: GpuContext,
+        win_surface: Option<WindowSurface>,
+        startup_t0: std::time::Instant,
+        event_loop: &ActiveEventLoop,
+    ) {
+        // Set up egui + blit pipeline for windowed mode
+        if let (Some(window_static), Some(ws)) = (self.window, &win_surface) {
+            self.cached_screen_size = window_static.inner_size();
+            self.cached_scale_factor = window_static.scale_factor() as f32;
+            self.egui_start_time = std::time::Instant::now();
+            self.blit_pipeline = BlitPipeline::new(&gpu.device, ws.surface_config.format).ok();
+            self.egui_state = Some(egui_winit::State::new(
+                self.egui_ctx.clone(),
+                egui::ViewportId::ROOT,
+                window_static,
+                Some(window_static.scale_factor() as f32),
+                None,
+                Some(2 * 1024),
+            ));
+            self.egui_renderer = Some(egui_wgpu::Renderer::new(
+                &gpu.device,
+                ws.surface_config.format,
+                egui_wgpu::RendererOptions::default(),
+            ));
+
+            // Set the application icon on egui's viewport (controls dock/taskbar icon)
+            {
+                static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
+                if let Ok(img) = image::load_from_memory(ICON_BYTES) {
+                    let rgba = img.into_rgba8();
+                    let icon_data = egui::IconData {
+                        rgba: rgba.as_raw().to_vec(),
+                        width: rgba.width(),
+                        height: rgba.height(),
+                    };
+                    self.egui_ctx
+                        .send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(
+                            icon_data,
+                        ))));
+                }
+            }
+        }
+        if let Some(ws) = win_surface {
+            self.window_surface = Some(ws);
+        }
+
+        // Create engine now that GPU is ready
+        log::info!("[STARTUP] Creating engine (audio, MIDI, shaders, mixer)...");
+        let mut varda = match VardaApp::new(gpu, &self.config) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("Failed to initialize engine: {}", e);
+                event_loop.exit();
+                return;
+            }
+        };
+        log::info!(
+            "[STARTUP] Engine ready: {} shaders ({:.0?})",
+            varda.shader_count(),
+            startup_t0.elapsed()
+        );
+
+        // Load workspace (may replace default mixer with saved scene)
+        log::info!("[STARTUP] Loading workspace...");
+        if let Some(loaded_layout) = varda.load_workspace() {
+            self.layout = loaded_layout;
+        }
+        self.history.clear();
+        log::info!("[STARTUP] Workspace loaded ({:.0?})", startup_t0.elapsed());
+
+        // Start HTTP API server on background thread
+        if self.api_handle.is_none() {
+            self.api_handle = crate::usecases::api::runner::start(
+                self.config.api_port,
+                varda.command_sender(),
+                varda.state_reader(),
+            );
+        }
+
+        self.varda = Some(varda);
+
+        // Register GPU textures with egui for previews (windowed only)
+        if !self.config.headless {
+            self.register_preview_textures();
+        }
+        log::info!(
+            "[STARTUP] Initialization complete ({:.0?})",
+            startup_t0.elapsed()
+        );
+    }
+
     /// Advance the cadence anchor after a frame completes (render or headless).
     ///
     /// The anchor represents the ideal start time for the next frame. Each call
