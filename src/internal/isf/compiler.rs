@@ -319,7 +319,11 @@ void main() {
         let meta: super::super::ISFMetadata =
             serde_json::from_str(json_str).expect("ISF metadata should parse");
         assert!(meta.is_compute(), "should be a compute shader");
-        assert_eq!(meta.buffers.len(), 1, "should have 1 storage buffer");
+        assert_eq!(
+            meta.buffers.len(),
+            2,
+            "should have 2 storage buffers (particles + grid)"
+        );
 
         // Extract GLSL (everything after }*/)
         let glsl = source[json_end + 3..].trim();

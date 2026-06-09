@@ -37,6 +37,7 @@ pub struct ComputePipeline {
     pub user_params_binding: u32,
     pub workgroup_size: [u32; 3],
     pub dispatch_mode: DispatchMode,
+    pub num_passes: u32,
 }
 
 impl ComputePipeline {
@@ -49,6 +50,7 @@ impl ComputePipeline {
         buffer_decls: &[StorageBufferDecl],
         workgroup_size: [u32; 3],
         dispatch_mode: DispatchMode,
+        num_passes: u32,
     ) -> Result<Self> {
         // Convert SPIR-V to WGSL using naga
         let spirv_bytes: Vec<u8> = spirv.iter().flat_map(|word| word.to_le_bytes()).collect();
@@ -221,6 +223,7 @@ impl ComputePipeline {
             user_params_binding,
             workgroup_size,
             dispatch_mode,
+            num_passes,
         })
     }
 
@@ -282,6 +285,16 @@ impl ComputePipeline {
             DispatchMode::Custom { .. } => {
                 // TODO: resolve custom dispatch parameters from user params
                 (1, 1, 1)
+            }
+        }
+    }
+
+    /// Zero-fill all non-persistent storage buffers.
+    /// Called before pass 0 each frame so shaders can accumulate into clean buffers.
+    pub fn clear_non_persistent_buffers(&self, encoder: &mut wgpu::CommandEncoder) {
+        for sb in &self.storage_buffers {
+            if !sb.persistent {
+                encoder.clear_buffer(&sb.buffer, 0, None);
             }
         }
     }

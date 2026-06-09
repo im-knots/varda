@@ -549,24 +549,6 @@ impl Deck {
                 }
             }
             DeckSource::ComputeShader { pipeline, .. } => {
-                let uniforms = ISFUniforms {
-                    time,
-                    time_delta,
-                    frame_index: self.frame_count,
-                    pass_index: 0,
-                    render_size: [self.texture.width() as f32, self.texture.height() as f32],
-                    audio_level: audio_data.level,
-                    audio_bass: audio_data.bass(),
-                    audio_mid: audio_data.mid(),
-                    audio_treble: audio_data.treble(),
-                    audio_bpm: audio_data.bpm.unwrap_or(0.0),
-                    audio_beat_phase: audio_data.beat_phase(),
-                    date: get_current_date(),
-                    phase_times: generator_phase_times,
-                };
-
-                pipeline.update_uniforms(&context.queue, &uniforms);
-
                 self.generator_params.ensure_buffer(&context.device);
                 self.generator_params.update_buffer_with_modulation(
                     &context.queue,
@@ -578,37 +560,76 @@ impl Deck {
                     .generator_params
                     .buffer()
                     .expect("Buffer should exist after ensure_buffer");
-                let bind_group =
-                    pipeline.create_bind_group(&context.device, Some(user_params_buffer));
 
                 let (dispatch_x, dispatch_y, dispatch_z) =
                     pipeline.dispatch_counts(self.texture.width(), self.texture.height());
 
-                let mut encoder =
-                    context
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Compute Shader Dispatch Encoder"),
-                        });
+                let num_passes = pipeline.num_passes;
 
-                {
-                    let mut compute_pass =
-                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("Compute Shader Pass"),
-                            timestamp_writes: None,
-                        });
-                    compute_pass.set_pipeline(&pipeline.compute_pipeline);
-                    compute_pass.set_bind_group(0, &bind_group, &[]);
-                    compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, dispatch_z);
+                // Multi-pass compute dispatch loop.
+                // Each pass is submitted separately so the GPU completes it before
+                // the next pass begins (implicit barrier between queue submits).
+                for pass_idx in 0..num_passes {
+                    let uniforms = ISFUniforms {
+                        time,
+                        time_delta,
+                        frame_index: self.frame_count,
+                        pass_index: pass_idx as i32,
+                        render_size: [self.texture.width() as f32, self.texture.height() as f32],
+                        audio_level: audio_data.level,
+                        audio_bass: audio_data.bass(),
+                        audio_mid: audio_data.mid(),
+                        audio_treble: audio_data.treble(),
+                        audio_bpm: audio_data.bpm.unwrap_or(0.0),
+                        audio_beat_phase: audio_data.beat_phase(),
+                        date: get_current_date(),
+                        phase_times: generator_phase_times,
+                    };
+                    pipeline.update_uniforms(&context.queue, &uniforms);
+
+                    let bind_group =
+                        pipeline.create_bind_group(&context.device, Some(user_params_buffer));
+
+                    let mut encoder =
+                        context
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("Compute Shader Dispatch Encoder"),
+                            });
+
+                    // Clear non-persistent storage buffers before the first pass
+                    if pass_idx == 0 {
+                        pipeline.clear_non_persistent_buffers(&mut encoder);
+                    }
+
+                    {
+                        let mut compute_pass =
+                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("Compute Shader Pass"),
+                                timestamp_writes: None,
+                            });
+                        compute_pass.set_pipeline(&pipeline.compute_pipeline);
+                        compute_pass.set_bind_group(0, &bind_group, &[]);
+                        compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, dispatch_z);
+                    }
+
+                    // Submit each pass individually for implicit GPU synchronization
+                    context.queue.submit(std::iter::once(encoder.finish()));
                 }
 
-                // Copy compute output to the generator target texture
+                // Copy final compute output to the generator target texture
                 let dest_texture = if source_to_b {
                     &self.texture_b
                 } else {
                     &self.texture
                 };
-                encoder.copy_texture_to_texture(
+                let mut copy_encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Compute Output Copy Encoder"),
+                        });
+                copy_encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &pipeline.output_texture,
                         mip_level: 0,
@@ -628,7 +649,7 @@ impl Deck {
                     },
                 );
 
-                cmd_buffers.push(encoder.finish());
+                cmd_buffers.push(copy_encoder.finish());
             }
         }
 
