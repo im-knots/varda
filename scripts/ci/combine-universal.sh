@@ -35,8 +35,16 @@ for arm64_dylib in "$ARM64_APP/Contents/Frameworks/"*.dylib; do
   x86_dylib="$X86_APP/Contents/Frameworks/$basename"
 
   if [ -f "$x86_dylib" ]; then
-    echo "    lipo: $basename"
-    lipo -create "$arm64_dylib" "$x86_dylib" -output "Varda.app/Contents/Frameworks/$basename"
+    # Check that the two dylibs actually have different architectures before
+    # lipo — if both are arm64-only (e.g. libonnxruntime.dylib) lipo will fail.
+    arm64_archs=$(lipo -info "$arm64_dylib" 2>/dev/null | sed 's/.*: //')
+    x86_archs=$(lipo -info "$x86_dylib" 2>/dev/null | sed 's/.*: //')
+    if [ "$arm64_archs" = "$x86_archs" ]; then
+      echo "    WARN: $basename has same arch in both builds ($arm64_archs), keeping arm64 copy"
+    else
+      echo "    lipo: $basename"
+      lipo -create "$arm64_dylib" "$x86_dylib" -output "Varda.app/Contents/Frameworks/$basename"
+    fi
   else
     # Try to find matching lib by prefix (version numbers may differ)
     lib_prefix=$(echo "$basename" | sed 's/\.[0-9].*/.dylib/')
