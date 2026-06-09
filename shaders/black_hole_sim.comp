@@ -1,24 +1,36 @@
 /*{
-    "DESCRIPTION": "N-body black hole accretion disk — Schwarzschild geodesic physics with 65536 persistent particles",
+    "DESCRIPTION": "N-body black hole with 65536 persistent shell particles in 3D orbits, Schwarzschild geodesic lensing, analytical accretion disk streaks, Hawking glow. Screen-space particle rendering with gravitational ray tracing.",
     "CREDIT": "Varda VJ",
     "ISFVSN": "2.0",
     "CATEGORIES": ["Generator", "Generative", "3D", "Simulation"],
     "TYPE": "compute",
     "COMPUTE": {
         "WORKGROUP_SIZE": [256, 1, 1],
-        "DISPATCH": "resolution"
+        "DISPATCH": "resolution",
+        "NUM_PASSES": 2
     },
     "INPUTS": [
-        {"NAME": "black_hole_mass",  "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.1,   "MAX": 10.0,   "LABEL": "Black Hole Mass"},
+        {"NAME": "black_hole_mass",  "TYPE": "float", "DEFAULT": 2.0,   "MIN": 0.1,   "MAX": 10.0,   "LABEL": "Black Hole Mass"},
         {"NAME": "particle_spread",  "TYPE": "float", "DEFAULT": 8.0,   "MIN": 2.0,   "MAX": 30.0,   "LABEL": "Disk Radius"},
         {"NAME": "disk_thickness",   "TYPE": "float", "DEFAULT": 0.3,   "MIN": 0.01,  "MAX": 2.0,    "LABEL": "Disk Thickness"},
-        {"NAME": "cam_distance",     "TYPE": "float", "DEFAULT": 25.0,  "MIN": 5.0,   "MAX": 100.0,  "LABEL": "Camera Distance"},
-        {"NAME": "cam_tilt",         "TYPE": "float", "DEFAULT": 0.5,   "MIN": 0.0,   "MAX": 1.57,   "LABEL": "Camera Tilt"},
+        {"NAME": "cam_distance",     "TYPE": "float", "DEFAULT": 35.0,  "MIN": 5.0,   "MAX": 100.0,  "LABEL": "Camera Distance"},
+        {"NAME": "cam_tilt",         "TYPE": "float", "DEFAULT": 0.15,  "MIN": 0.0,   "MAX": 1.57,   "LABEL": "Camera Tilt"},
         {"NAME": "cam_speed",        "TYPE": "float", "DEFAULT": 0.15,  "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Camera Orbit Speed"},
         {"NAME": "brightness",       "TYPE": "float", "DEFAULT": 2.5,   "MIN": 0.1,   "MAX": 10.0,   "LABEL": "Brightness"},
         {"NAME": "glow_size",        "TYPE": "float", "DEFAULT": 2.0,   "MIN": 0.0,   "MAX": 6.0,    "LABEL": "Glow Size"},
-        {"NAME": "color_temp_low",   "TYPE": "color", "DEFAULT": [1.0, 0.2, 0.05, 1.0], "LABEL": "Cool Color"},
-        {"NAME": "color_temp_high",  "TYPE": "color", "DEFAULT": [0.7, 0.85, 1.0, 1.0], "LABEL": "Hot Color"},
+        {"NAME": "equator_bias",     "TYPE": "float", "DEFAULT": 0.8,   "MIN": 0.0,   "MAX": 3.0,    "LABEL": "Equator Bias"},
+        {"NAME": "streak_density",   "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.0,   "MAX": 3.0,    "LABEL": "Streak Density"},
+        {"NAME": "streak_thin",      "TYPE": "float", "DEFAULT": 0.7,   "MIN": 0.1,   "MAX": 1.0,    "LABEL": "Streak Thinness"},
+        {"NAME": "lensing_steps",    "TYPE": "float", "DEFAULT": 80.0,  "MIN": 16.0,  "MAX": 200.0,  "LABEL": "Lensing Quality"},
+        {"NAME": "hawking_glow",     "TYPE": "float", "DEFAULT": 0.3,   "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Hawking Glow"},
+        {"NAME": "bloom",            "TYPE": "float", "DEFAULT": 0.2,   "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Bloom"},
+        {"NAME": "contrast",         "TYPE": "float", "DEFAULT": 1.3,   "MIN": 0.5,   "MAX": 3.0,    "LABEL": "Contrast"},
+        {"NAME": "invert",           "TYPE": "float", "DEFAULT": 0.0,   "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Invert"},
+        {"NAME": "color_mode",       "TYPE": "float", "DEFAULT": 0.0,   "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Color Mode"},
+        {"NAME": "hue_shift",        "TYPE": "float", "DEFAULT": 0.0,   "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Hue Shift"},
+        {"NAME": "shell_radius",     "TYPE": "float", "DEFAULT": 3.0,   "MIN": 0.5,   "MAX": 6.0,    "LABEL": "Shell Radius"},
+        {"NAME": "shell_density",    "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.0,   "MAX": 3.0,    "LABEL": "Shell Density"},
+        {"NAME": "streak_length_bias","TYPE": "float", "DEFAULT": 0.8,   "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Streak Length Bias"},
         {"NAME": "time_scale",       "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.0,   "MAX": 5.0,    "LABEL": "Time Scale"},
         {"NAME": "soften",           "TYPE": "float", "DEFAULT": 0.5,   "MIN": 0.01,  "MAX": 2.0,    "LABEL": "Gravity Softening"},
         {"NAME": "reset",            "TYPE": "float", "DEFAULT": 0.0,   "MIN": 0.0,   "MAX": 1.0,    "LABEL": "Reset Particles"}
@@ -34,6 +46,14 @@
             "COUNT": 65536,
             "STRIDE": 32,
             "PERSISTENT": true
+        },
+        {
+            "NAME": "grid",
+            "TYPE": "storage",
+            "STRUCT": "GridCell",
+            "COUNT": 32640,
+            "STRIDE": 260,
+            "PERSISTENT": false
         }
     ]
 }*/
@@ -55,17 +75,27 @@ layout(set = 0, binding = 1) uniform UserParams {
     float black_hole_mass; float particle_spread; float disk_thickness;
     float cam_distance; float cam_tilt; float cam_speed;
     float brightness; float glow_size;
-    vec4 color_temp_low; vec4 color_temp_high;
+    float equator_bias; float streak_density; float streak_thin;
+    float lensing_steps; float hawking_glow;
+    float bloom; float contrast; float invert;
+    float color_mode; float hue_shift;
+    float shell_radius; float shell_density; float streak_length_bias;
     float time_scale; float soften; float reset;
 };
 
 layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
 
-// Particle data stored as two vec4s per particle in a flat buffer:
-//   [2*idx + 0] = pos_mass (xyz = position, w = mass)
-//   [2*idx + 1] = vel_temp (xyz = velocity, w = temperature)
 layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
     vec4 particle_data[];
+};
+
+// Screen-space spatial binning grid (cleared each frame).
+const uint CELL_SIZE    = 8u;
+const uint MAX_PER_CELL = 32u;
+const uint CELL_STRIDE  = 129u;  // 1 + 32*4
+
+layout(std430, set = 0, binding = 4) buffer GridBuffer {
+    uint grid_data[];
 };
 
 const float PI  = 3.14159265359;
@@ -74,6 +104,12 @@ const uint  NUM_PARTICLES = 65536u;
 #define RS   (2.0 * black_hole_mass)
 #define ISCO (3.0 * RS)
 
+// ── Screen-space grid helpers ────────────────────────────────────────
+uint gridCols() { return (uint(RENDERSIZE.x) + CELL_SIZE - 1u) / CELL_SIZE; }
+uint gridRows() { return (uint(RENDERSIZE.y) + CELL_SIZE - 1u) / CELL_SIZE; }
+uint gridIndex(uint cx, uint cy) { return cy * gridCols() + cx; }
+
+// ── Hash ─────────────────────────────────────────────────────────────
 float hash(uint n) {
     n = (n << 13u) ^ n;
     n = n * (n * n * 15731u + 789221u) + 1376312589u;
@@ -81,33 +117,77 @@ float hash(uint n) {
 }
 vec3 hash3(uint n) { return vec3(hash(n), hash(n+17u), hash(n+31u)); }
 
-// ── Particle initialization (writes directly to buffer) ──────────────
+// Float hash for streak system
+float hashf(float n) { return fract(sin(n) * 43758.5453); }
+vec2 hash2f(float n) { return vec2(hashf(n), hashf(n + 71.37)); }
+
+// ── HSV to RGB ───────────────────────────────────────────────────────
+vec3 hsv2rgb(vec3 c) {
+    vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0);
+    return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+
+// ── Particle initialization (all 64K orbit in 3D shell) ─────────────
+// Keplerian orbits: v = sqrt(GM / (r - RS)), each in a random orbital
+// plane biased toward the equator by equator_bias.
 void initParticle(uint idx) {
-    vec3 h  = hash3(idx * 37u + 7u);
-    vec3 h2 = hash3(idx * 73u + 13u);
-    float r   = ISCO + particle_spread * pow(h.x, 0.6);
-    float phi = h.y * TAU;
-    float z   = (h.z - 0.5) * 2.0 * disk_thickness;
-    vec3 pos  = vec3(r * cos(phi), z, r * sin(phi));
+    vec3 h  = hash3(idx * 41u + 11u);
+    vec3 h2 = hash3(idx * 79u + 19u);
+    vec3 h3 = hash3(idx * 113u + 29u);
 
+    // Radius: from ISCO out to shell_radius * particle_spread
+    float r = ISCO + particle_spread * (0.5 + shell_radius * pow(h.x, 0.4));
+    // Spherical placement with equator bias
+    float cosTheta = 2.0 * h.y - 1.0;
+    cosTheta = sign(cosTheta) * pow(abs(cosTheta), max(0.3, 1.0 - equator_bias * 0.3));
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+    float phi = h.z * TAU;
+    vec3 pos = vec3(r * sinTheta * cos(phi), r * cosTheta, r * sinTheta * sin(phi));
+
+    // Keplerian circular orbital speed: v = sqrt(M / (r - RS))
     float v_circ = sqrt(black_hole_mass / max(r - RS, 0.1));
-    vec3 tangent = normalize(vec3(-sin(phi), 0.0, cos(phi)));
-    float ecc = 0.05 + 0.1 * h2.x;
-    vec3 radial = normalize(vec3(cos(phi), 0.0, sin(phi)));
-    vec3 vel = tangent * v_circ * (1.0 - ecc)
-             + radial * v_circ * ecc * (h2.y - 0.5) * 2.0
-             + vec3(0, 1, 0) * v_circ * 0.02 * (h2.z - 0.5);
 
-    float t_norm = pow(ISCO / r, 0.75);
-    particle_data[2u * idx]      = vec4(pos, 0.8 + 0.4 * h2.x);
+    // Define angular momentum direction (orbital plane normal).
+    // Distribution: most particles equatorial, but a significant fraction
+    // on tilted/polar orbits for visual variety.
+    vec3 r_hat = normalize(pos);
+    // Use pow to create a distribution — low h2.z = equatorial, high = tilted
+    float tilt_rand = pow(h2.z, 1.5 + equator_bias);  // bias toward low tilt
+    float y_weight = mix(3.0, 0.2, tilt_rand);  // equatorial has strong y, tilted has weak y
+    vec3 L_dir = normalize(vec3(
+        (h2.x - 0.5) * 2.0,
+        y_weight * sign(0.5 - h3.x),  // random sign for prograde/retrograde variety
+        (h2.y - 0.5) * 2.0
+    ));
+    // Orbital velocity = L × r̂ (perpendicular to radius, in orbital plane)
+    vec3 vel_dir = cross(L_dir, r_hat);
+    float vd_len = length(vel_dir);
+    if (vd_len < 0.01) {
+        vel_dir = normalize(cross(vec3(1.0, 0.0, 0.0), r_hat));
+    } else {
+        vel_dir /= vd_len;
+    }
+
+    // Eccentricity — more eccentric orbits for tilted particles
+    float ecc = 0.02 + 0.1 * h3.x + 0.05 * tilt_rand;
+    vec3 vel = vel_dir * v_circ * (1.0 - ecc)
+             + r_hat * v_circ * 0.02 * (h3.y - 0.5);
+
+    float t_norm = clamp(pow(ISCO / r, 0.75), 0.0, 1.0);
+    // ~4K of 65K particles are arc streaks (hash threshold ≈ 0.062)
+    // Arc fraction: 0.0 = dot, >0 = arc (fraction of full orbit, up to 1.0 = 360°)
+    // streak_length_bias controls the distribution:
+    //   0.0 = uniform random lengths, 1.0 = almost all are long (>100°)
+    float arc_frac = 0.0;
+    if (hash(idx * 197u + 53u) < 0.062) {
+        float bias_exp = mix(1.0, 0.1, streak_length_bias); // 0.1 = heavily long
+        arc_frac = mix(0.15, 1.0, pow(h3.z, bias_exp));
+    }
+    particle_data[2u * idx]      = vec4(pos, arc_frac);
     particle_data[2u * idx + 1u] = vec4(vel, t_norm);
 }
 
 // ── Schwarzschild gravitational acceleration ─────────────────────────
-// Effective potential: V_eff = -M/r + L²/(2r²) - ML²/r³
-// The GR correction (-ML²/r³) causes orbital precession and captures
-// particles inside ISCO — this is the key physics fragment shaders can't do
-// because each particle remembers its state across frames.
 vec3 schwarzschildAccel(vec3 pos, vec3 vel) {
     float r2 = dot(pos, pos) + soften * soften;
     float r_soft = sqrt(r2);
@@ -115,27 +195,23 @@ vec3 schwarzschildAccel(vec3 pos, vec3 vel) {
     float L2 = dot(cross(pos, vel), cross(pos, vel));
     float M  = black_hole_mass;
 
-    float a_newton  = -M / r2;                   // Newtonian gravity
-    float a_barrier = L2 / (r2 * r_soft);         // centrifugal barrier
-    float a_gr      = -3.0 * M * L2 / (r2 * r2); // GR precession term
-
+    float a_newton  = -M / r2;
+    float a_barrier = L2 / (r2 * r_soft);
+    float a_gr      = -3.0 * M * L2 / (r2 * r2);
     vec3 accel = (a_newton + a_barrier + a_gr) * r_hat;
 
-    // Viscous drag — alpha-disk angular momentum transport
     float drag = 0.001 * smoothstep(ISCO * 3.0, ISCO, r_soft);
     accel -= vel * drag;
     return accel;
 }
 
-// ── Leapfrog (Verlet) integration ────────────────────────────────────
-// Operates on pos/vel directly, writes back to buffer at the end.
+// ── Leapfrog integration ─────────────────────────────────────────────
 void integrateAndStore(uint idx, float dt) {
     vec4 pm = particle_data[2u * idx];
     vec4 vt = particle_data[2u * idx + 1u];
     vec3 pos = pm.xyz;
     vec3 vel = vt.xyz;
 
-    // Two half-steps for stability near the black hole
     for (int step = 0; step < 2; step++) {
         float half_dt = dt * 0.5;
         vec3 a1       = schwarzschildAccel(pos, vel);
@@ -147,34 +223,14 @@ void integrateAndStore(uint idx, float dt) {
     }
 
     float r = length(pos);
+    float maxR = particle_spread * (1.0 + shell_radius) * 3.0 + ISCO;
 
-    // Crossed event horizon — respawn at outer edge
-    if (r < RS * 0.8) {
-        vec3 h = hash3(idx * 131u + FRAMEINDEX * 17u);
-        float sr = ISCO + particle_spread * (0.7 + 0.3 * h.x);
-        float phi = h.y * TAU;
-        pos = vec3(sr * cos(phi), (h.z-0.5)*disk_thickness*0.5, sr * sin(phi));
-        float vc = sqrt(black_hole_mass / max(sr - RS, 0.1));
-        vel = normalize(vec3(-sin(phi), 0.0, cos(phi))) * vc * 0.98;
-        r = length(pos);
-    }
-    // Escaped too far — reinitialize directly
-    if (r > particle_spread * 4.0 + ISCO) {
-        uint seed = idx + FRAMEINDEX * 3u;
-        vec3 h  = hash3(seed * 37u + 7u);
-        vec3 h2 = hash3(seed * 73u + 13u);
-        float ri   = ISCO + particle_spread * pow(h.x, 0.6);
-        float phi = h.y * TAU;
-        pos = vec3(ri * cos(phi), (h.z - 0.5) * 2.0 * disk_thickness, ri * sin(phi));
-        float vc = sqrt(black_hole_mass / max(ri - RS, 0.1));
-        vec3 tang = normalize(vec3(-sin(phi), 0.0, cos(phi)));
-        float ecc = 0.05 + 0.1 * h2.x;
-        vec3 rad = normalize(vec3(cos(phi), 0.0, sin(phi)));
-        vel = tang * vc * (1.0 - ecc) + rad * vc * ecc * (h2.y - 0.5) * 2.0;
-        r = length(pos);
+    // Respawn if swallowed or escaped
+    if (r < RS * 0.8 || r > maxR) {
+        initParticle(idx);
+        return;
     }
 
-    // Temperature: T ∝ r^(-3/4) (Shakura-Sunyaev) + viscous heating
     float t_norm = clamp(pow(ISCO / max(r, ISCO*0.5), 0.75), 0.0, 1.0);
     float v_ratio = length(vel) / max(sqrt(black_hole_mass / max(r, ISCO)), 0.01);
     t_norm = clamp(t_norm + 0.2 * max(v_ratio - 1.0, 0.0), 0.0, 1.0);
@@ -192,77 +248,535 @@ vec2 projectToScreen(vec3 wp, vec3 cp, mat3 rot) {
                 (ndc.y + 0.5) * RENDERSIZE.y);
 }
 
-// ── Main ─────────────────────────────────────────────────────────────
-void main() {
-    // Flat thread index: dispatch is (ceil(W/256), H, 1) with workgroup (256,1,1)
-    // so GlobalInvocationID.x ∈ [0, ceil(W/256)*256) and .y ∈ [0, H)
+// ── Camera setup ─────────────────────────────────────────────────────
+// Camera orbits in the xz (disk) plane. cam_tilt tilts the view angle
+// above/below the disk plane without moving the orbital path.
+void getCameraMatrices(out vec3 cam_pos, out mat3 rot) {
+    float cam_angle = PHASE_TIME_0 * TAU;
+    // Orbit in the disk plane (xz), at a height determined by tilt
+    float cosTilt = cos(cam_tilt);
+    float sinTilt = sin(cam_tilt);
+    cam_pos = vec3(cos(cam_angle) * cam_distance * cosTilt,
+                   sinTilt * cam_distance,
+                   sin(cam_angle) * cam_distance * cosTilt);
+    // Look at origin
+    vec3 fwd = normalize(-cam_pos);
+    // Use world up for right vector, then recompute up from fwd×rt
+    vec3 rt  = normalize(cross(fwd, vec3(0,1,0)));
+    // Guard for when looking straight down/up (tilt near 90°)
+    if (length(cross(fwd, vec3(0,1,0))) < 0.001) {
+        rt = vec3(1, 0, 0);
+    }
+    vec3 up  = cross(rt, fwd);
+    rot = mat3(rt, up, fwd);
+}
+
+// =====================================================================
+// PASS 0: Simulate all particles + bin into screen-space grid
+// =====================================================================
+void pass_simulate_and_bin() {
     uint row_width = gl_NumWorkGroups.x * 256u;
     uint idx = gl_GlobalInvocationID.y * row_width + gl_GlobalInvocationID.x;
-
-    // Phase 1: Clear output image (each thread clears a stripe)
-    uint total_px = uint(RENDERSIZE.x) * uint(RENDERSIZE.y);
-    uint total_threads = row_width * gl_NumWorkGroups.y;
-    uint per_thread = (total_px + total_threads - 1u) / total_threads;
-    uint px0 = min(idx * per_thread, total_px);
-    uint px1 = min(px0 + per_thread, total_px);
-    uint w = uint(RENDERSIZE.x);
-    for (uint px = px0; px < px1; px++) {
-        imageStore(outputImage, ivec2(px % w, px / w), vec4(0,0,0,1));
-    }
-
     if (idx >= NUM_PARTICLES) return;
 
-    // Phase 2: Init or reset
-    if (FRAMEINDEX == 0u || reset > 0.5) {
+    // Init or reset.
+    // Detect equator_bias / streak_length_bias changes via sentinel particle
+    // (NUM_PARTICLES-1). The sentinel is never rendered — it just stores
+    // the previous uniform values in its pos.w and vel.w slots.
+    uint sentinel = NUM_PARTICLES - 1u;
+    float prev_eq  = particle_data[2u * sentinel].w;
+    float prev_slb = particle_data[2u * sentinel + 1u].w;
+    bool params_changed = (abs(prev_eq - equator_bias) > 0.001 ||
+                           abs(prev_slb - streak_length_bias) > 0.001);
+    bool needs_init = (FRAMEINDEX == 0u || reset > 0.5 || params_changed);
+    // Thread 0 writes sentinel with current values
+    if (idx == 0u) {
+        particle_data[2u * sentinel].w = equator_bias;
+        particle_data[2u * sentinel + 1u].w = streak_length_bias;
+    }
+    // Skip sentinel particle (used for storage, not rendering)
+    if (idx == sentinel) return;
+    if (needs_init) {
         initParticle(idx);
     }
 
-    // Phase 3: Physics integration
+    // Schwarzschild gravity simulation
     float dt = clamp(TIMEDELTA, 0.0001, 0.05) * time_scale;
     integrateAndStore(idx, dt);
 
-    // Phase 4: Render — project & splat
+    // Project to screen
+    vec3 cam_pos; mat3 rot;
+    getCameraMatrices(cam_pos, rot);
+
     vec4 pm = particle_data[2u * idx];
     vec4 vt = particle_data[2u * idx + 1u];
+    float arc_frac = pm.w;
 
-    float cam_angle = PHASE_TIME_0 * TAU;
-    vec3 cam_pos = vec3(cos(cam_angle)*cam_distance,
-                        sin(cam_tilt)*cam_distance,
-                        sin(cam_angle)*cam_distance);
-    vec3 fwd = normalize(-cam_pos);
-    vec3 rt  = normalize(cross(fwd, vec3(0,1,0)));
-    vec3 up  = cross(rt, fwd);
-    mat3 rot = mat3(rt, up, fwd);
-
-    vec2 sp = projectToScreen(pm.xyz, cam_pos, rot);
-    ivec2 pixel = ivec2(sp);
-    if (pixel.x < 0 || pixel.y < 0 ||
-        pixel.x >= int(RENDERSIZE.x) || pixel.y >= int(RENDERSIZE.y)) return;
-
-    // Color from temperature
-    float t = vt.w;
-    vec3 col = mix(color_temp_low.rgb, color_temp_high.rgb, t);
-
+    // Compute lighting (shared by dots and arcs)
     float r = length(pm.xyz);
     float depth = length(pm.xyz - cam_pos);
     float depth_fade = 1.0 / (1.0 + depth*depth*0.003);
     float isco_boost = 1.0 + 3.0 * smoothstep(ISCO*2.0, ISCO, r);
     float audio_boost = 1.0 + audio_bass*0.5 + audio_beat_phase*0.3;
-    float lum = brightness * depth_fade * isco_boost * audio_boost * 0.15;
+    float base_lum = brightness * depth_fade * isco_boost * audio_boost * 0.15;
+    base_lum *= shell_density;
+    float temp_lum = 0.6 + 0.4 * vt.w;
+    float final_lum = base_lum * temp_lum;
 
-    imageStore(outputImage, pixel, vec4(col * lum, 1.0));
+    if (arc_frac < 0.01) {
+        // ── Dot particle: single grid entry ─────────────────────────
+        vec2 sp = projectToScreen(pm.xyz, cam_pos, rot);
+        if (sp.x < 0.0 || sp.y < 0.0 ||
+            sp.x >= RENDERSIZE.x || sp.y >= RENDERSIZE.y) return;
 
-    // Glow kernel
-    int gs = int(glow_size);
-    for (int dy = -gs; dy <= gs; dy++) {
-        for (int dx = -gs; dx <= gs; dx++) {
-            if (dx == 0 && dy == 0) continue;
-            ivec2 gp = pixel + ivec2(dx, dy);
-            if (gp.x < 0 || gp.y < 0 ||
-                gp.x >= int(RENDERSIZE.x) || gp.y >= int(RENDERSIZE.y)) continue;
-            float d = length(vec2(dx, dy));
-            float fall = exp(-d*d / max(glow_size*0.5, 0.1));
-            imageStore(outputImage, gp, vec4(col * lum * fall * 0.4, 1.0));
+        uint cx = uint(sp.x) / CELL_SIZE;
+        uint cy = uint(sp.y) / CELL_SIZE;
+        uint cell_base = gridIndex(cx, cy) * CELL_STRIDE;
+        uint slot = atomicAdd(grid_data[cell_base], 1u);
+        if (slot >= MAX_PER_CELL) return;
+
+        // Dots are dimmer than arcs — they are background scatter
+        float dot_lum = final_lum * 0.4;
+        uint packed_color = (uint(clamp(dot_lum, 0.0, 1.0) * 255.0) & 0xFFu)
+                          | ((uint(clamp(dot_lum, 0.0, 1.0) * 255.0) & 0xFFu) << 8u)
+                          | ((uint(clamp(dot_lum, 0.0, 1.0) * 255.0) & 0xFFu) << 16u)
+                          | ((uint(clamp(dot_lum * 0.3, 0.0, 1.0) * 255.0) & 0xFFu) << 24u);
+        uint eb = cell_base + 1u + slot * 4u;
+        grid_data[eb]      = packHalf2x16(sp);
+        grid_data[eb + 1u] = packed_color;
+        grid_data[eb + 2u] = packHalf2x16(vec2(1.0, 0.0));
+        grid_data[eb + 3u] = floatBitsToUint(0.5);  // half-pixel = dot
+    } else {
+        // ── Arc particle: subdivide orbit into segments ──────────────
+        // Use Rodrigues rotation to trace the curved orbital path.
+        // Each segment is binned into EVERY cell it crosses so the
+        // render pass can always find it within its search radius.
+        vec3 pos = pm.xyz;
+        vec3 vel = vt.xyz;
+        vec3 L_hat = normalize(cross(pos, vel));
+        float arc_angle = arc_frac * TAU;  // arc_frac 1.0 = full 360°
+
+        // Finer subdivision: ~5° per segment for smooth curves
+        int num_segs = clamp(int(arc_angle / 0.09) + 1, 1, 72);
+        float seg_angle = arc_angle / float(num_segs);
+
+        // Hair-thin lines: very low luminance so overlapping arcs don't blow out
+        float arc_lum = final_lum * 0.08;
+        uint seg_color = (uint(clamp(arc_lum, 0.0, 1.0) * 255.0) & 0xFFu)
+                       | ((uint(clamp(arc_lum, 0.0, 1.0) * 255.0) & 0xFFu) << 8u)
+                       | ((uint(clamp(arc_lum, 0.0, 1.0) * 255.0) & 0xFFu) << 16u)
+                       | ((uint(clamp(arc_lum * 0.5, 0.0, 1.0) * 255.0) & 0xFFu) << 24u);
+
+        // Precompute Rodrigues components
+        float dot_Lp = dot(L_hat, pos);
+        vec3 cross_Lp = cross(L_hat, pos);
+
+        // Walk along the arc
+        float theta_start = -float(num_segs) * 0.5 * seg_angle;
+        float c_prev = cos(theta_start);
+        float s_prev = sin(theta_start);
+        vec3 p_prev = pos * c_prev + cross_Lp * s_prev + L_hat * dot_Lp * (1.0 - c_prev);
+        vec2 sp_prev = projectToScreen(p_prev, cam_pos, rot);
+
+        for (int seg = 0; seg < 72; seg++) {
+            if (seg >= num_segs) break;
+
+            float theta1 = theta_start + float(seg + 1) * seg_angle;
+            float c1 = cos(theta1), s1 = sin(theta1);
+            vec3 p1 = pos * c1 + cross_Lp * s1 + L_hat * dot_Lp * (1.0 - c1);
+            vec2 sp1 = projectToScreen(p1, cam_pos, rot);
+
+            vec2 sdelta = sp1 - sp_prev;
+            float slen = length(sdelta);
+            if (slen > 0.5) {
+                vec2 sdir = sdelta / slen;
+                // Add 1px overlap at each end so segments connect seamlessly
+                float shalf = slen * 0.5 + 1.0;
+
+                // Bin into every cell this segment crosses
+                float min_x = min(sp_prev.x, sp1.x) - 1.0;
+                float max_x = max(sp_prev.x, sp1.x) + 1.0;
+                float min_y = min(sp_prev.y, sp1.y) - 1.0;
+                float max_y = max(sp_prev.y, sp1.y) + 1.0;
+                // Clamp to screen
+                int cx0 = max(int(min_x) / int(CELL_SIZE), 0);
+                int cy0 = max(int(min_y) / int(CELL_SIZE), 0);
+                int cx1 = min(int(max_x) / int(CELL_SIZE), int(gridCols()) - 1);
+                int cy1 = min(int(max_y) / int(CELL_SIZE), int(gridRows()) - 1);
+
+                vec2 sp_mid = (sp_prev + sp1) * 0.5;
+
+                for (int gy = cy0; gy <= cy1; gy++) {
+                    for (int gx = cx0; gx <= cx1; gx++) {
+                        uint cell_base = gridIndex(uint(gx), uint(gy)) * CELL_STRIDE;
+                        uint slot = atomicAdd(grid_data[cell_base], 1u);
+                        if (slot < MAX_PER_CELL) {
+                            uint eb = cell_base + 1u + slot * 4u;
+                            grid_data[eb]      = packHalf2x16(sp_mid);
+                            grid_data[eb + 1u] = seg_color;
+                            grid_data[eb + 2u] = packHalf2x16(sdir);
+                            grid_data[eb + 3u] = floatBitsToUint(shalf);
+                        }
+                    }
+                }
+            }
+
+            sp_prev = sp1;
         }
+    }
+}
+
+// =====================================================================
+// PASS 1: Screen-space particles + geodesic black hole + shell streaks
+// =====================================================================
+
+// ── Accretion disk continuous thermal emission ──────────────────────
+// Standard thin-disk profile: peaks near ISCO, falls as ~1/r³.
+float diskEmission(float r) {
+    float rs = RS;
+    float isco = ISCO;
+    float outerR = particle_spread + isco;
+    // Inner edge at ISCO, outer fade
+    float inner = smoothstep(rs * 0.8, isco, r);
+    float outer = smoothstep(outerR * 1.5, isco, r);
+    float profile = inner * outer * pow(isco / max(r, isco * 0.5), 2.5);
+    // Bright inner ring near ISCO
+    float ring = exp(-pow((r - isco) / (isco * 0.3), 2.0)) * 0.6;
+    return (profile + ring) * streak_density;
+}
+
+// ── Analytical streaks on disk plane ─────────────────────────────────
+float streaksOnPlane(vec2 q, float t, float outerR) {
+    float r = length(q);
+    float rs = RS;
+    float rEnv = smoothstep(rs - 0.02, rs + 0.15, r) * smoothstep(outerR, ISCO * 0.5, r);
+    if (rEnv < 0.001) return 0.0;
+
+    float angle = atan(q.y, q.x);
+    float angSpeed = 1.8 / (sqrt(r) + 0.15);
+    float rotAngle = angle - t * angSpeed;
+    float nStreaks = 60.0;
+    float slotW = TAU / nStreaks;
+    float lineW = mix(0.018, 0.005, streak_thin);
+    float acc = 0.0;
+
+    for (int si = 0; si < 4; si++) {
+        float slot = floor(rotAngle / slotW) + float(si) - 1.0;
+        float sid = slot;
+        vec2 h = hash2f(sid * 7.13);
+        float h3 = hashf(sid * 23.71);
+        float h4 = hashf(sid * 41.03);
+        float streakR = rs + 0.1 + h.x * (outerR - rs - 0.1);
+        float brt = 0.3 + 0.7 * h.y;
+        float dr = abs(r - streakR);
+        float line = exp(-dr * dr / (lineW * lineW));
+        float arcTotal = (0.6 + 0.4 * pow(h3, 0.3)) * TAU;
+        float arcCenter = (slot + 0.5) * slotW + h4 * TAU;
+        float angDist = abs(mod(rotAngle - arcCenter + PI, TAU) - PI);
+        float arcHalf = arcTotal * 0.5;
+        float arcFade = smoothstep(arcHalf, arcHalf - 0.15, angDist);
+        acc += line * brt * rEnv * arcFade;
+    }
+
+    float innerBand = smoothstep(rs + 0.6, rs + 0.1, r) * 0.4;
+    acc += innerBand * rEnv;
+
+    return acc * streak_density;
+}
+
+// ── Shell streaks on tilted orbital planes (evaluated via ray-plane) ─
+float shellStreaks(vec3 ro, vec3 rd, float t, float tEH) {
+    if (shell_density < 0.01) return 0.0;
+    float acc = 0.0;
+    float outerR = particle_spread * (1.0 + shell_radius);
+    const int NUM_PLANES = 12;
+
+    for (int i = 0; i < NUM_PLANES; i++) {
+        float fi = float(i);
+        // Inclination: spread from equator toward poles
+        float rawT = fi / float(NUM_PLANES);
+        float normT = rawT * 2.0 - 1.0;
+        float inc = normT * abs(normT) * 1.3;
+        inc = mix(normT * 1.3, inc, clamp(equator_bias, 0.0, 1.0));
+        float azim = fi * 2.39996323 + hashf(fi * 3.17) * 0.3;
+
+        // Build plane normal via axis-angle rotation
+        float ca = cos(azim), sa = sin(azim);
+        vec3 tiltAxis = vec3(ca, 0.0, sa);
+        float ci = cos(inc), si = sin(inc);
+        float ti = 1.0 - ci;
+        // rotAxis inline (avoid mat3 function overhead)
+        vec3 normal = vec3(
+            ti*tiltAxis.x*tiltAxis.z + si*tiltAxis.y,
+            ti*tiltAxis.x*tiltAxis.y*0.0 + ci, // simplified for (0,1,0) input
+            ti*tiltAxis.z*tiltAxis.z + ci
+        );
+        // Proper rotation of (0,1,0) by angle inc around tiltAxis
+        normal = vec3(
+            si * sa,
+            ci,
+            -si * ca
+        );
+
+        float denom = dot(rd, normal);
+        if (abs(denom) < 1e-5) continue;
+        float tHit = -dot(ro, normal) / denom;
+        if (tHit < 0.0) continue;
+
+        vec3 hitP = ro + rd * tHit;
+        float hr = length(hitP);
+        if (hr < RS * 0.8 || hr > outerR * 2.2) continue;
+        if (tEH > 0.0 && tHit > tEH) continue;  // behind event horizon
+
+        // Project to plane-local 2D
+        // Compute local axes of the tilted plane
+        vec3 localX = normalize(cross(normal, vec3(0.0, 0.0, 1.0)));
+        if (length(cross(normal, vec3(0.0, 0.0, 1.0))) < 0.01)
+            localX = normalize(cross(normal, vec3(1.0, 0.0, 0.0)));
+        vec3 localZ = cross(localX, normal);
+        vec2 q = vec2(dot(hitP, localX), dot(hitP, localZ));
+
+        float weight = 1.0 - abs(inc) / 1.4;
+        weight = max(weight, 0.1);
+        float nStr = 40.0 * (0.5 + 0.5 * weight);
+        if (nStr < 3.0) continue;
+
+        // Reuse streaksOnPlane with shell outer radius
+        float planeT = t + hashf(fi * 19.7) * TAU;
+        float s = streaksOnPlane(q, planeT, outerR);
+        acc += s * shell_density * weight * 0.25;
+    }
+    return acc;
+}
+
+// ── Ray-sphere intersection ──────────────────────────────────────────
+float raySphere(vec3 ro, vec3 rd, float radius) {
+    float b = dot(ro, rd);
+    float c = dot(ro, ro) - radius * radius;
+    float disc = b * b - c;
+    if (disc < 0.0) return -1.0;
+    return -b - sqrt(disc);
+}
+
+void pass_render() {
+    uint px = gl_GlobalInvocationID.x;
+    uint py = gl_GlobalInvocationID.y;
+    if (px >= uint(RENDERSIZE.x) || py >= uint(RENDERSIZE.y)) return;
+
+    // Camera
+    vec3 cam_pos; mat3 cam_rot;
+    getCameraMatrices(cam_pos, cam_rot);
+
+    // ── Screen-space streak rendering ──────────────────────────────────
+    uint cx = px / CELL_SIZE;
+    uint cy = py / CELL_SIZE;
+    uint cols = gridCols();
+    uint rows = gridRows();
+    vec2 pixel_center = vec2(float(px) + 0.5, float(py) + 0.5);
+
+    vec3 particle_accum = vec3(0.0);
+    int glow_radius = int(glow_size);
+    // Search only the current cell — segments are binned into every
+    // cell they cross, so no neighbor search needed for arcs.
+    // Only search neighbors for glow on dots.
+    {
+        uint cell_base = gridIndex(cx, cy) * CELL_STRIDE;
+        uint count = min(grid_data[cell_base], MAX_PER_CELL);
+        for (uint s = 0u; s < count; s++) {
+            uint entry_base = cell_base + 1u + s * 4u;
+            vec2 sp    = unpackHalf2x16(grid_data[entry_base]);
+            uint pc    = grid_data[entry_base + 1u];
+            vec2 sdir  = unpackHalf2x16(grid_data[entry_base + 2u]);
+            float shalf = uintBitsToFloat(grid_data[entry_base + 3u]);
+
+            vec3 col = vec3(float(pc & 0xFFu),
+                            float((pc >> 8u) & 0xFFu),
+                            float((pc >> 16u) & 0xFFu)) / 255.0;
+
+            vec2 delta = pixel_center - sp;
+            float along = clamp(dot(delta, sdir), -shalf, shalf);
+            vec2 closest = sp + sdir * along - pixel_center;
+            float d2 = dot(closest, closest);
+
+            if (shalf <= 1.0) {
+                // Dot: sharp core + glow
+                if (d2 < 1.5) {
+                    particle_accum += col;
+                } else if (glow_radius > 0) {
+                    float sigma = max(glow_size * 0.5, 0.5);
+                    particle_accum += col * exp(-d2 / (2.0 * sigma * sigma)) * 0.3;
+                }
+            } else {
+                // Arc segment: hair-thin line, 0.7px core
+                if (d2 < 0.49) {
+                    float alpha = 1.0 - d2 / 0.49;
+                    particle_accum += col * alpha;
+                }
+            }
+        }
+    }
+
+    // Neighbor search for dot glow only (small radius)
+    if (glow_radius > 0) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                int ncx = int(cx) + dx;
+                int ncy = int(cy) + dy;
+                if (ncx < 0 || ncy < 0 || ncx >= int(cols) || ncy >= int(rows)) continue;
+
+                uint nb = gridIndex(uint(ncx), uint(ncy)) * CELL_STRIDE;
+                uint count = min(grid_data[nb], MAX_PER_CELL);
+                for (uint s = 0u; s < count; s++) {
+                    uint eb = nb + 1u + s * 4u;
+                    float shalf = uintBitsToFloat(grid_data[eb + 3u]);
+                    if (shalf > 1.0) continue;  // skip arcs in neighbor search
+
+                    vec2 sp = unpackHalf2x16(grid_data[eb]);
+                    uint pc = grid_data[eb + 1u];
+                    vec3 col = vec3(float(pc & 0xFFu),
+                                    float((pc >> 8u) & 0xFFu),
+                                    float((pc >> 16u) & 0xFFu)) / 255.0;
+
+                    float d2 = dot(pixel_center - sp, pixel_center - sp);
+                    float sigma = max(glow_size * 0.5, 0.5);
+                    particle_accum += col * exp(-d2 / (2.0 * sigma * sigma)) * 0.3;
+                }
+            }
+        }
+    }
+
+    // ── Geodesic ray trace for black hole + lensed streaks ───────────
+    vec2 uv = vec2(float(px) + 0.5, float(py) + 0.5) / RENDERSIZE;
+    vec2 ndc = (uv - 0.5) * 2.0;
+    ndc.x *= RENDERSIZE.x / RENDERSIZE.y;
+    vec3 rd = normalize(transpose(cam_rot) * normalize(vec3(ndc, 1.8)));
+
+    float rs = RS;
+    vec3 ray_pos = cam_pos;
+    vec3 ray_vel = rd;
+    vec3 L_vec = cross(ray_pos, ray_vel);
+    float L2 = dot(L_vec, L_vec);
+
+    int max_steps = int(lensing_steps);
+    float bh_lum = 0.0;
+    float bloomAcc = 0.0;
+    float min_r = length(ray_pos);
+    bool absorbed = false;
+    float escape_r = (particle_spread * 4.0 + ISCO) * 2.0;
+    float diskOuterR = particle_spread + ISCO;
+
+    for (int i = 0; i < 200; i++) {
+        if (i >= max_steps) break;
+
+        float r = length(ray_pos);
+        min_r = min(min_r, r);
+
+        if (r < rs * 0.5) { absorbed = true; break; }
+        if (r > escape_r && i > 4) break;
+
+        float h = 0.16 * clamp(r - 0.4 * rs, 0.06, 3.5);
+
+        float r5 = r * r * r * r * r;
+        vec3 accel = -1.5 * rs * L2 / max(r5, 0.001) * ray_pos;
+
+        vec3 new_pos = ray_pos + ray_vel * h + 0.5 * accel * h * h;
+        float new_r = length(new_pos);
+        float new_r5 = new_r * new_r * new_r * new_r * new_r;
+        vec3 L_new = cross(new_pos, ray_vel + accel * h);
+        float L2_new = dot(L_new, L_new);
+        vec3 new_accel = -1.5 * rs * L2_new / max(new_r5, 0.001) * new_pos;
+        vec3 new_vel = ray_vel + 0.5 * (accel + new_accel) * h;
+        new_vel = normalize(new_vel);
+
+        // Accretion disk at gravitationally lensed disk-plane crossings
+        if (ray_pos.y * new_pos.y < 0.0) {
+            float t_cross = ray_pos.y / (ray_pos.y - new_pos.y);
+            vec3 cross_pos = mix(ray_pos, new_pos, t_cross);
+            float cross_r = length(cross_pos);
+
+            if (cross_r > rs && cross_r < escape_r) {
+                // Continuous thermal disk emission
+                float disk = diskEmission(cross_r);
+                // Analytical streak texture on top
+                float streaks = streaksOnPlane(cross_pos.xz, TIME * 0.5, diskOuterR);
+                // Keplerian Doppler beaming
+                float phi_d = atan(cross_pos.z, cross_pos.x);
+                float vOrb = 0.35 / sqrt(max(cross_r, 1.0));
+                float doppler = 1.0 + vOrb * cos(phi_d - TIME * 0.3);
+                doppler = doppler * doppler * doppler;
+                float diskTotal = (disk * 0.8 + streaks * 0.5) * doppler;
+                bh_lum += diskTotal;
+                bloomAcc += diskTotal * 0.4;
+            }
+        }
+
+        L_vec = cross(new_pos, new_vel);
+        L2 = dot(L_vec, L_vec);
+        ray_pos = new_pos;
+        ray_vel = new_vel;
+    }
+
+    // Hawking glow near event horizon
+    if (!absorbed && hawking_glow > 0.0) {
+        float glow = exp(-(min_r - rs) * (min_r - rs) / (rs * rs * 0.1));
+        bh_lum += glow * hawking_glow;
+        bloomAcc += glow * hawking_glow * 0.5;
+    }
+
+    // Shell streaks (tilted orbital planes, not lensed but occluded by EH)
+    float tEH = raySphere(cam_pos, rd, rs);
+    float shell_lum = shellStreaks(cam_pos, rd, TIME * 0.5, tEH);
+    if (!absorbed) {
+        bh_lum += shell_lum;
+        bloomAcc += shell_lum * 0.2;
+    }
+
+    // ── Combine particles + black hole effects ───────────────────────
+    float particle_lum = (particle_accum.r + particle_accum.g + particle_accum.b) / 3.0;
+
+    // Event horizon masks everything
+    if (absorbed) {
+        particle_lum = 0.0;
+        particle_accum = vec3(0.0);
+        bh_lum = 0.0;
+        bloomAcc = 0.0;
+    }
+
+    float lum = particle_lum + bh_lum;
+
+    // Audio reactivity
+    lum *= 1.0 + audio_bass * 0.5;
+    bloomAcc *= 1.0 + audio_beat_phase * 0.4;
+
+    // Bloom
+    lum += bloomAcc * bloom;
+
+    // Contrast curve
+    lum = pow(clamp(lum, 0.0, 1.0), 1.0 / max(contrast, 0.1));
+
+    // Invert
+    lum = mix(lum, 1.0 - lum, invert);
+
+    // Color output
+    vec3 rgb;
+    if (color_mode < 0.01) {
+        rgb = vec3(lum);
+    } else {
+        float hue = mix(hue_shift + 0.08, hue_shift + 0.55,
+                        clamp((min_r - rs) / (particle_spread * 0.5), 0.0, 1.0));
+        float sat = color_mode * (0.5 + 0.5 * lum);
+        rgb = hsv2rgb(vec3(fract(hue), sat, lum));
+    }
+
+    imageStore(outputImage, ivec2(px, py), vec4(rgb, 1.0));
+}
+
+// ── Main ─────────────────────────────────────────────────────────────
+void main() {
+    if (PASSINDEX == 0) {
+        pass_simulate_and_bin();
+    } else {
+        pass_render();
     }
 }

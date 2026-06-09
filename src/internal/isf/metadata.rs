@@ -67,6 +67,16 @@ pub struct ComputeConfig {
     /// Dispatch mode: "resolution" or "custom"
     #[serde(rename = "DISPATCH")]
     pub dispatch: String,
+
+    /// Number of compute passes per frame (default 1).
+    /// Each pass dispatches with a different PASSINDEX value (0, 1, ..., num_passes-1).
+    /// Non-persistent storage buffers are cleared before pass 0.
+    #[serde(rename = "NUM_PASSES", default = "default_num_passes")]
+    pub num_passes: u32,
+}
+
+fn default_num_passes() -> u32 {
+    1
 }
 
 /// Storage buffer declaration in compute shader metadata

@@ -1037,6 +1037,8 @@ impl Deck {
             _ => DispatchMode::Resolution,
         };
 
+        let num_passes = compute_config.num_passes;
+
         let pipeline = ComputePipeline::new(
             &context.device,
             &spirv,
@@ -1045,6 +1047,7 @@ impl Deck {
             &shader.metadata.buffers,
             workgroup_size,
             dispatch_mode,
+            num_passes,
         )
         .context("Failed to create compute pipeline")?;
 
