@@ -16,8 +16,9 @@ wgpu = "29.0"
 winit = "0.30"
 bytemuck = { version = "1.25", features = ["derive"] }
 
-# Shader compilation
-shaderc = "0.10"
+# Shader compilation (build-from-source ensures static linking — avoids
+# libshaderc_shared.dylib runtime errors when users have Homebrew shaderc)
+shaderc = { version = "0.10", features = ["build-from-source"] }
 naga = { version = "29.0", features = ["spv-in", "wgsl-out"] }
 
 # ISF metadata parsing

@@ -234,8 +234,10 @@ impl VardaApp {
     /// without a GPU. A default two-channel mixer is always created.
     /// `config` provides session settings from CLI flags + workspace defaults.
     pub fn new(gpu: GpuContext, config: &AppConfig) -> anyhow::Result<Self> {
+        log::info!("[STARTUP]   Audio init...");
         let audio_manager = AudioManager::new();
 
+        log::info!("[STARTUP]   Workspace init...");
         let workspace = Workspace::new(config.effective_workspace_root());
 
         // Build shader registry with all library paths (order = priority for hot-reload):
@@ -300,6 +302,7 @@ impl VardaApp {
             }
         }
 
+        log::info!("[STARTUP]   OSC init...");
         let osc_receiver = if osc_config.enabled {
             match OscReceiver::new(osc_config.in_port) {
                 Ok(osc) => {
@@ -335,6 +338,7 @@ impl VardaApp {
             }
         };
 
+        log::info!("[STARTUP]   MIDI init...");
         let mut controller_led_mgr = midi::ControllerLedManager::new();
         let mut auto_map_engine = midi::AutoMapEngine::new();
         let midi_devices = match midi::MidiDeviceManager::new() {
@@ -358,6 +362,7 @@ impl VardaApp {
         let state_tx = std::sync::Arc::new(std::sync::RwLock::new(None));
 
         // Always create GPU-dependent resources up front
+        log::info!("[STARTUP]   GPU resources (textures, mixer)...");
         let audio_textures = crate::audio::AudioTextures::new(&gpu.device);
         let calibration_textures =
             crate::renderer::context::create_calibration_textures(&gpu.device, &gpu.queue, 8);
