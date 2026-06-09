@@ -130,7 +130,7 @@ pub struct Mixer {
     resolve_buffer: Option<wgpu::Buffer>,
     /// Double-buffered staging buffers for readback (COPY_DST | MAP_READ)
     staging_buffers: Option<[wgpu::Buffer; 2]>,
-    /// Which staging buffer to use this frame (alternates 0/1)
+    /// Which staging buffer to write next (alternates 0/1)
     staging_index: usize,
     /// Nanoseconds per timestamp tick (from queue.get_timestamp_period())
     timestamp_period: f32,
@@ -138,8 +138,9 @@ pub struct Mixer {
     pub(crate) last_frame_gpu_times: std::collections::HashMap<(usize, usize), f32>,
     /// Timing allocations from the frame whose results are in the readable staging buffer
     prev_timing_allocations: Vec<(usize, usize, u32, u32)>,
-    /// Set by the map_async callback when the staging buffer is ready to read.
-    staging_mapped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Index of the staging buffer whose map_async has completed (ready to read).
+    /// `usize::MAX` means no buffer is pending/ready. Set by the map_async callback.
+    staging_mapped_idx: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Mixer {
@@ -233,7 +234,9 @@ impl Mixer {
             },
             last_frame_gpu_times: std::collections::HashMap::new(),
             prev_timing_allocations: Vec::new(),
-            staging_mapped: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            staging_mapped_idx: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
+                usize::MAX,
+            )),
         })
     }
 

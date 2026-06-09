@@ -105,7 +105,12 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
-panic = "abort"
+# NOTE: panic = "unwind" is required — multiple subsystems use catch_unwind
+# to isolate panics from corrupted media files, third-party imageproc code,
+# and background threads (see src/app/render.rs, src/usecases/api/runner.rs,
+# src/internal/surface/import.rs). Using "abort" makes all of those dead
+# code and any panic on any thread kills the process during a live show.
+panic = "unwind"
 
 [profile.bench]
 debug = true

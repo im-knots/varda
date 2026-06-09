@@ -105,13 +105,13 @@ impl Mixer {
 
         // ── GPU Timestamp: read previous frame results ──────────────────
         // Only read if the map_async callback has fired (buffer is actually mapped).
-        if self
-            .staging_mapped
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
+        // staging_mapped_idx holds the index of the ready buffer, or usize::MAX if none.
+        let ready_idx = self
+            .staging_mapped_idx
+            .load(std::sync::atomic::Ordering::Acquire);
+        if ready_idx != usize::MAX {
             if let Some(ref staging) = self.staging_buffers {
-                let read_idx = 1 - self.staging_index;
-                let buf = &staging[read_idx];
+                let buf = &staging[ready_idx];
                 {
                     let slice = buf.slice(..);
                     let mapped = slice.get_mapped_range();
@@ -131,8 +131,8 @@ impl Mixer {
                     drop(mapped);
                 }
                 buf.unmap();
-                self.staging_mapped
-                    .store(false, std::sync::atomic::Ordering::Release);
+                self.staging_mapped_idx
+                    .store(usize::MAX, std::sync::atomic::Ordering::Release);
             }
         }
 
@@ -296,45 +296,56 @@ impl Mixer {
         };
 
         // ── GPU Timestamp: resolve + readback ───────────────────────────
-        if let (Some(ref qs), Some(ref resolve_buf), Some(ref staging)) =
-            (&self.query_set, &self.resolve_buffer, &self.staging_buffers)
-        {
-            if let Some(ref timing) = timing_frame {
-                let query_count = timing.query_count();
-                if query_count > 0 {
-                    let mut enc =
-                        context
-                            .device
-                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        // Only issue a new resolve/copy/map when no map is in flight.
+        // If the previous map_async hasn't been consumed yet, skip timing
+        // this frame — dropping an occasional measurement is harmless;
+        // reusing a still-mapped buffer is fatal.
+        let map_in_flight = self
+            .staging_mapped_idx
+            .load(std::sync::atomic::Ordering::Acquire)
+            != usize::MAX;
+        if !map_in_flight {
+            if let (Some(ref qs), Some(ref resolve_buf), Some(ref staging)) =
+                (&self.query_set, &self.resolve_buffer, &self.staging_buffers)
+            {
+                if let Some(ref timing) = timing_frame {
+                    let query_count = timing.query_count();
+                    if query_count > 0 {
+                        let mut enc = context.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor {
                                 label: Some("GPU Timing Resolve"),
-                            });
-                    enc.resolve_query_set(qs, 0..query_count, resolve_buf, 0);
-                    let byte_count = (query_count as u64) * 8;
-                    enc.copy_buffer_to_buffer(
-                        resolve_buf,
-                        0,
-                        &staging[self.staging_index],
-                        0,
-                        byte_count,
-                    );
-                    context.queue.submit(std::iter::once(enc.finish()));
+                            },
+                        );
+                        enc.resolve_query_set(qs, 0..query_count, resolve_buf, 0);
+                        let byte_count = (query_count as u64) * 8;
+                        let write_idx = self.staging_index;
+                        enc.copy_buffer_to_buffer(
+                            resolve_buf,
+                            0,
+                            &staging[write_idx],
+                            0,
+                            byte_count,
+                        );
+                        context.queue.submit(std::iter::once(enc.finish()));
 
-                    // Map the staging buffer for reading next frame.
-                    // The callback sets staging_mapped so we only read once
-                    // the GPU has actually finished the copy.
-                    let mapped_flag = self.staging_mapped.clone();
-                    staging[self.staging_index].slice(..).map_async(
-                        wgpu::MapMode::Read,
-                        move |result| {
-                            if result.is_ok() {
-                                mapped_flag.store(true, std::sync::atomic::Ordering::Release);
-                            }
-                        },
-                    );
+                        // Map the staging buffer for reading next frame.
+                        // The callback stores the buffer index so the read
+                        // path knows exactly which buffer to unmap.
+                        let mapped_flag = self.staging_mapped_idx.clone();
+                        staging[write_idx].slice(..).map_async(
+                            wgpu::MapMode::Read,
+                            move |result| {
+                                if result.is_ok() {
+                                    mapped_flag
+                                        .store(write_idx, std::sync::atomic::Ordering::Release);
+                                }
+                            },
+                        );
 
-                    // Save allocations for readback next frame
-                    self.prev_timing_allocations = timing.allocations.clone();
-                    self.staging_index = 1 - self.staging_index;
+                        // Save allocations for readback next frame
+                        self.prev_timing_allocations = timing.allocations.clone();
+                        self.staging_index = 1 - self.staging_index;
+                    }
                 }
             }
         }
