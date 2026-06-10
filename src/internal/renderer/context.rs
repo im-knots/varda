@@ -744,14 +744,16 @@ impl OutputWindow {
                 label: Some(&format!("Output '{}' Encoder", self.name)),
             });
 
-        // Pass 1: Render surfaces into the surface render target
-        let prepared: Vec<_> = surfaces
+        // Pass 1: Render surfaces into the surface render target.
+        // Triangulate on the CPU, then prepare draws from the pipeline's
+        // persistent param/vertex pools (no per-frame GPU buffer allocation).
+        let draws: Vec<super::blit::PolygonDrawDesc<'_>> = surfaces
             .iter()
             .map(|surf| {
                 let bb = surf.bounding_box;
 
                 // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
-                let (homography, vb, num_tris) = match &surf.warp_mode {
+                let (homography, vertices) = match &surf.warp_mode {
                     Some(super::warp::WarpMode::CornerPin { corners }) => {
                         let src_corners = [
                             [bb[0], bb[1]],
@@ -760,50 +762,45 @@ impl OutputWindow {
                             [bb[0], bb[1] + bb[3]],
                         ];
                         let h = super::warp::compute_forward_homography(&src_corners, corners);
-                        let (vb, nt) = PolygonBlitPipeline::triangulate(
-                            &context.device,
+                        let verts = PolygonBlitPipeline::triangulate_verts(
                             surf.vertices,
                             bb[0],
                             bb[1],
                             bb[2],
                             bb[3],
                         );
-                        (Some(h), vb, nt)
+                        (Some(h), verts)
                     }
                     Some(super::warp::WarpMode::Mesh(mesh)) => {
                         // Mesh mode: warp baked into vertices, identity homography
-                        let (vb, nt) = PolygonBlitPipeline::triangulate_with_mesh(
-                            &context.device,
-                            surf.vertices,
-                            bb,
-                            mesh,
-                        );
-                        (None, vb, nt)
+                        (None, PolygonBlitPipeline::mesh_verts(mesh))
                     }
                     None => {
-                        let (vb, nt) = PolygonBlitPipeline::triangulate(
-                            &context.device,
+                        let verts = PolygonBlitPipeline::triangulate_verts(
                             surf.vertices,
                             bb[0],
                             bb[1],
                             bb[2],
                             bb[3],
                         );
-                        (None, vb, nt)
+                        (None, verts)
                     }
                 };
 
-                let bind_group = self.polygon_pipeline.create_bind_group(
-                    &context.device,
-                    surf.content_view,
-                    surf.uv_scale,
-                    surf.uv_offset,
-                    homography.as_ref(),
-                    &surf.overlap_zones,
-                );
-                (bind_group, vb, num_tris)
+                super::blit::PolygonDrawDesc {
+                    content_view: surf.content_view,
+                    uv_scale: surf.uv_scale,
+                    uv_offset: surf.uv_offset,
+                    homography,
+                    overlap_zones: &surf.overlap_zones,
+                    vertices,
+                }
             })
             .collect();
+
+        let (prepared, vertex_pool) =
+            self.polygon_pipeline
+                .prepare(&context.device, &context.queue, &draws);
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -823,17 +820,8 @@ impl OutputWindow {
                 multiview_mask: None,
             });
 
-            for (bind_group, vb, num_tris) in &prepared {
-                if *num_tris > 0 {
-                    self.polygon_pipeline.render_polygon(
-                        &context.device,
-                        &mut render_pass,
-                        bind_group,
-                        vb,
-                        *num_tris,
-                    );
-                }
-            }
+            self.polygon_pipeline
+                .draw(&mut render_pass, &prepared, &vertex_pool);
         }
 
         // Pass 2 (edge blend only): surface_texture → edge blend → preview_texture

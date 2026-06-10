@@ -101,6 +101,7 @@ impl Deck {
                     let width = handle.width;
                     let height = handle.height;
                     staging.upload(&frame.color_data, texture, width, height, encoder);
+                    handle.recycle(frame);
                 }
             }
             DeckSource::HapVideo {
@@ -125,6 +126,7 @@ impl Deck {
                             a_staging.upload(alpha_data, alpha_tex, width, height, encoder);
                         }
                     }
+                    handle.recycle(frame);
                 }
             }
             _ => {}

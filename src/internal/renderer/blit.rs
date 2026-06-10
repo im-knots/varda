@@ -1,6 +1,7 @@
 use super::edge_blend::SurfaceOverlapZones;
 /// Simple blit pipeline for copying textures to the screen
 use anyhow::Result;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
@@ -720,6 +721,57 @@ impl PolygonParams {
             [0.0, 0.0, 1.0, 0.0],
         ]
     }
+
+    /// Build params from a surface's UV transform, optional homography warp,
+    /// and overlap zones. `homography` is a 3×3 matrix packed as 12 floats
+    /// (3 rows × 4, w padding); `None` uses identity.
+    fn build(
+        uv_scale: [f32; 2],
+        uv_offset: [f32; 2],
+        homography: Option<&[f32; 12]>,
+        overlap_zones: &SurfaceOverlapZones,
+    ) -> Self {
+        let h = homography.copied().unwrap_or_else(|| {
+            let id = Self::identity_homography();
+            [
+                id[0][0], id[0][1], id[0][2], id[0][3], id[1][0], id[1][1], id[1][2], id[1][3],
+                id[2][0], id[2][1], id[2][2], id[2][3],
+            ]
+        });
+
+        let z = |i: usize| -> ([f32; 4], [f32; 4]) {
+            if let Some(zone) = overlap_zones.zones.get(i) {
+                (zone.uv_rect, [zone.gamma, zone.ramp_x, zone.ramp_y, 0.0])
+            } else {
+                ([0.0; 4], [0.0; 4])
+            }
+        };
+        let (z0r, z0c) = z(0);
+        let (z1r, z1c) = z(1);
+        let (z2r, z2c) = z(2);
+        let (z3r, z3c) = z(3);
+
+        Self {
+            opacity: 1.0,
+            _pad: 0.0,
+            uv_scale,
+            uv_offset,
+            _pad2: [0.0, 0.0],
+            h_row0: [h[0], h[1], h[2], h[3]],
+            h_row1: [h[4], h[5], h[6], h[7]],
+            h_row2: [h[8], h[9], h[10], h[11]],
+            zone_count: overlap_zones.zones.len().min(4) as f32,
+            _zone_pad: [0.0; 3],
+            zone0_rect: z0r,
+            zone0_cfg: z0c,
+            zone1_rect: z1r,
+            zone1_cfg: z1c,
+            zone2_rect: z2r,
+            zone2_cfg: z2c,
+            zone3_rect: z3r,
+            zone3_cfg: z3c,
+        }
+    }
 }
 
 /// Vertex for polygon rendering — position + UV
@@ -749,11 +801,61 @@ impl PolygonVertex {
     };
 }
 
+/// Initial vertex-pool capacity in bytes (≈1024 polygon vertices).
+const POLYGON_INITIAL_VERTEX_BYTES: u64 = 1024 * std::mem::size_of::<PolygonVertex>() as u64;
+
+/// A surface ready to be drawn from the pipeline's shared pools.
+/// Produced by [`PolygonBlitPipeline::prepare`], consumed by
+/// [`PolygonBlitPipeline::draw`].
+pub struct PreparedPolygon {
+    bind_group: wgpu::BindGroup,
+    /// Byte offset of this surface's vertices within the shared vertex pool.
+    vertex_offset: u64,
+    /// Byte length of this surface's vertices.
+    vertex_bytes: u64,
+    num_triangles: u32,
+}
+
+/// Per-surface draw description fed to [`PolygonBlitPipeline::prepare`].
+/// `vertices` are CPU-side triangulated vertices from [`PolygonBlitPipeline::triangulate_verts`]
+/// or [`PolygonBlitPipeline::mesh_verts`] — no GPU buffer is allocated per surface.
+pub struct PolygonDrawDesc<'a> {
+    pub content_view: &'a wgpu::TextureView,
+    pub uv_scale: [f32; 2],
+    pub uv_offset: [f32; 2],
+    pub homography: Option<[f32; 12]>,
+    pub overlap_zones: &'a SurfaceOverlapZones,
+    pub vertices: Vec<PolygonVertex>,
+}
+
 /// Pipeline for rendering textured polygon surfaces using vertex buffers.
+///
+/// Per-surface uniform params and triangulated vertices are written into
+/// persistent, growable pools (`ring_buffer` / `vertex_buffer`) rather than
+/// freshly allocated each frame. This eliminates the unbounded per-frame GPU
+/// buffer churn that caused resource exhaustion on low-VRAM Metal devices
+/// (issue #42). Mirrors the ring-buffer pattern in [`BlitPipeline`] and
+/// [`CompositeBlitPipeline`].
 pub struct PolygonBlitPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// Persistent uniform params ring buffer; grows to fit the surface count.
+    ring_buffer: RefCell<wgpu::Buffer>,
+    /// Byte stride between ring slots (aligned to device minimum).
+    ring_stride: u64,
+    /// Number of slots currently allocated in `ring_buffer`.
+    ring_slots: Cell<usize>,
+    /// Persistent vertex pool; grows to fit a frame's total vertices.
+    vertex_buffer: RefCell<wgpu::Buffer>,
+    /// Capacity of `vertex_buffer` in bytes.
+    vertex_capacity: Cell<u64>,
+    /// Reusable CPU staging for a frame's packed params — coalesces all slot
+    /// writes into a single `queue.write_buffer` (avoids per-frame allocation).
+    scratch_params: RefCell<Vec<u8>>,
+    /// Reusable CPU staging for a frame's concatenated vertices — coalesces all
+    /// surface uploads into a single `queue.write_buffer`.
+    scratch_verts: RefCell<Vec<PolygonVertex>>,
 }
 
 impl PolygonBlitPipeline {
@@ -845,131 +947,215 @@ impl PolygonBlitPipeline {
             ..Default::default()
         });
 
+        // Pre-allocate persistent pools (grow on demand). Mirrors the
+        // ring-buffer pattern used by BlitPipeline / CompositeBlitPipeline.
+        let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let param_size = std::mem::size_of::<PolygonParams>() as u64;
+        let ring_stride = param_size.div_ceil(align) * align;
+        let ring_slots = MAX_DRAW_SLOTS as usize;
+        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Polygon Params Ring Buffer"),
+            size: ring_slots as u64 * ring_stride,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Polygon Vertex Pool"),
+            size: POLYGON_INITIAL_VERTEX_BYTES,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Ok(Self {
             pipeline,
             bind_group_layout,
             sampler,
+            ring_buffer: RefCell::new(ring_buffer),
+            ring_stride,
+            ring_slots: Cell::new(ring_slots),
+            vertex_buffer: RefCell::new(vertex_buffer),
+            vertex_capacity: Cell::new(POLYGON_INITIAL_VERTEX_BYTES),
+            scratch_params: RefCell::new(Vec::new()),
+            scratch_verts: RefCell::new(Vec::new()),
         })
     }
 
-    /// Create a bind group for a texture with UV transform, homography warp, and overlap zones.
-    /// `homography` is a 3×3 matrix packed as 12 floats (3 rows × 4, with w padding).
-    /// Pass `None` for identity (no warp).
-    pub fn create_bind_group(
+    /// Grow the params ring buffer so it holds at least `needed` slots.
+    fn ensure_ring_slots(&self, device: &wgpu::Device, needed: usize) {
+        if needed <= self.ring_slots.get() {
+            return;
+        }
+        let new_slots = needed.next_power_of_two().max(MAX_DRAW_SLOTS as usize);
+        *self.ring_buffer.borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Polygon Params Ring Buffer"),
+            size: new_slots as u64 * self.ring_stride,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.ring_slots.set(new_slots);
+    }
+
+    /// Grow the vertex pool so it holds at least `needed_bytes`.
+    fn ensure_vertex_capacity(&self, device: &wgpu::Device, needed_bytes: u64) {
+        if needed_bytes <= self.vertex_capacity.get() {
+            return;
+        }
+        let new_cap = needed_bytes
+            .next_power_of_two()
+            .max(POLYGON_INITIAL_VERTEX_BYTES);
+        *self.vertex_buffer.borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Polygon Vertex Pool"),
+            size: new_cap,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.vertex_capacity.set(new_cap);
+    }
+
+    /// Prepare a batch of surfaces for drawing this frame.
+    ///
+    /// Writes each surface's params into the persistent ring buffer and its
+    /// vertices into the persistent vertex pool (growing both once up front if
+    /// needed), then builds per-surface bind groups bound to their ring slot.
+    /// No per-surface GPU buffer is allocated in steady state.
+    ///
+    /// Returns the prepared surfaces plus a handle to the vertex pool to bind;
+    /// the caller holds the handle across the render pass and passes it to
+    /// [`Self::draw`].
+    pub fn prepare(
         &self,
         device: &wgpu::Device,
-        texture_view: &wgpu::TextureView,
-        uv_scale: [f32; 2],
-        uv_offset: [f32; 2],
-        homography: Option<&[f32; 12]>,
-        overlap_zones: &SurfaceOverlapZones,
-    ) -> wgpu::BindGroup {
-        let h = homography.copied().unwrap_or_else(|| {
-            let id = PolygonParams::identity_homography();
-            [
-                id[0][0], id[0][1], id[0][2], id[0][3], id[1][0], id[1][1], id[1][2], id[1][3],
-                id[2][0], id[2][1], id[2][2], id[2][3],
-            ]
-        });
+        queue: &wgpu::Queue,
+        draws: &[PolygonDrawDesc<'_>],
+    ) -> (Vec<PreparedPolygon>, wgpu::Buffer) {
+        let n = draws.len();
+        self.ensure_ring_slots(device, n);
+        let vertex_size = std::mem::size_of::<PolygonVertex>();
+        let total_verts: usize = draws.iter().map(|d| d.vertices.len()).sum();
+        self.ensure_vertex_capacity(device, (total_verts * vertex_size) as u64);
 
-        let z = |i: usize| -> ([f32; 4], [f32; 4]) {
-            if let Some(zone) = overlap_zones.zones.get(i) {
-                (zone.uv_rect, [zone.gamma, zone.ramp_x, zone.ramp_y, 0.0])
-            } else {
-                ([0.0; 4], [0.0; 4])
-            }
-        };
-        let (z0r, z0c) = z(0);
-        let (z1r, z1c) = z(1);
-        let (z2r, z2c) = z(2);
-        let (z3r, z3c) = z(3);
+        let param_size = std::mem::size_of::<PolygonParams>();
+        let stride = self.ring_stride as usize;
 
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Polygon Params Buffer"),
-            contents: bytemuck::cast_slice(&[PolygonParams {
-                opacity: 1.0,
-                _pad: 0.0,
-                uv_scale,
-                uv_offset,
-                _pad2: [0.0, 0.0],
-                h_row0: [h[0], h[1], h[2], h[3]],
-                h_row1: [h[4], h[5], h[6], h[7]],
-                h_row2: [h[8], h[9], h[10], h[11]],
-                zone_count: overlap_zones.zones.len().min(4) as f32,
-                _zone_pad: [0.0; 3],
-                zone0_rect: z0r,
-                zone0_cfg: z0c,
-                zone1_rect: z1r,
-                zone1_cfg: z1c,
-                zone2_rect: z2r,
-                zone2_cfg: z2c,
-                zone3_rect: z3r,
-                zone3_cfg: z3c,
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        // Pack all slot params into one reusable staging blob, and concatenate
+        // all surface vertices into another, so the whole frame uploads with a
+        // single write_buffer each instead of two per surface. write_buffer
+        // staging overhead dominated the per-surface path at high surface counts.
+        let mut params_blob = self.scratch_params.borrow_mut();
+        let mut verts_blob = self.scratch_verts.borrow_mut();
+        params_blob.clear();
+        params_blob.resize(n * stride, 0);
+        verts_blob.clear();
+        verts_blob.reserve(total_verts);
 
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Polygon Blit Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        })
+        let mut meta: Vec<(u64, u64, u32)> = Vec::with_capacity(n);
+        let mut vertex_offset = 0u64;
+        for (slot, d) in draws.iter().enumerate() {
+            let params = PolygonParams::build(
+                d.uv_scale,
+                d.uv_offset,
+                d.homography.as_ref(),
+                d.overlap_zones,
+            );
+            let off = slot * stride;
+            params_blob[off..off + param_size].copy_from_slice(bytemuck::bytes_of(&params));
+
+            let vertex_bytes = (d.vertices.len() * vertex_size) as u64;
+            verts_blob.extend_from_slice(&d.vertices);
+            meta.push((vertex_offset, vertex_bytes, (d.vertices.len() / 3) as u32));
+            vertex_offset += vertex_bytes;
+        }
+
+        let ring = self.ring_buffer.borrow();
+        let vpool = self.vertex_buffer.borrow();
+        if n > 0 {
+            queue.write_buffer(&ring, 0, &params_blob);
+        }
+        if !verts_blob.is_empty() {
+            queue.write_buffer(&vpool, 0, bytemuck::cast_slice(&verts_blob));
+        }
+
+        let param_size = param_size as u64;
+        let mut prepared = Vec::with_capacity(n);
+        for (slot, (d, &(v_off, v_bytes, num_tris))) in draws.iter().zip(meta.iter()).enumerate() {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Polygon Blit Bind Group (ring)"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(d.content_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &ring,
+                            offset: slot as u64 * self.ring_stride,
+                            size: Some(NonZeroU64::new(param_size).unwrap()),
+                        }),
+                    },
+                ],
+            });
+
+            prepared.push(PreparedPolygon {
+                bind_group,
+                vertex_offset: v_off,
+                vertex_bytes: v_bytes,
+                num_triangles: num_tris,
+            });
+        }
+
+        let vbuf = vpool.clone();
+        (prepared, vbuf)
     }
 
-    /// Fan-triangulate polygon vertices and render.
-    /// `vertices` are in normalized canvas coords [0..1], UVs computed from bounding box.
-    pub fn render_polygon<'a>(
+    /// Draw a prepared surface batch into `render_pass`.
+    ///
+    /// `vertex_buffer` must be the pool handle returned by [`Self::prepare`];
+    /// hold it across the render pass so its slices stay valid.
+    pub fn draw<'a>(
         &'a self,
-        _device: &wgpu::Device,
         render_pass: &mut wgpu::RenderPass<'a>,
-        bind_group: &'a wgpu::BindGroup,
+        prepared: &'a [PreparedPolygon],
         vertex_buffer: &'a wgpu::Buffer,
-        num_triangles: u32,
     ) {
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, bind_group, &[]);
-        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        render_pass.draw(0..num_triangles * 3, 0..1);
+        for p in prepared {
+            if p.num_triangles == 0 {
+                continue;
+            }
+            render_pass.set_bind_group(0, &p.bind_group, &[]);
+            render_pass.set_vertex_buffer(
+                0,
+                vertex_buffer.slice(p.vertex_offset..p.vertex_offset + p.vertex_bytes),
+            );
+            render_pass.draw(0..p.num_triangles * 3, 0..1);
+        }
     }
 
-    /// Build an ear-clipping triangulated vertex buffer from polygon vertices.
-    /// Handles concave polygons correctly (fan triangulation only works for convex).
-    /// Returns (buffer, num_triangles).
-    /// UVs are set so that the bounding box maps to [0..1] (for Fill mode,
-    /// the blit shader's uv_scale/uv_offset handle the rest).
-    pub fn triangulate(
-        device: &wgpu::Device,
+    /// Ear-clip triangulate polygon vertices into CPU-side vertices.
+    ///
+    /// Handles concave polygons correctly (fan triangulation only works for
+    /// convex). UVs map the bounding box to [0..1] (for Fill mode, the shader's
+    /// uv_scale/uv_offset handle the rest). Returns an empty vec for degenerate
+    /// input (< 3 vertices). The vertices are written into the pipeline's shared
+    /// pool by [`Self::prepare`] — no GPU buffer is allocated here.
+    pub fn triangulate_verts(
         canvas_verts: &[[f32; 2]],
         bb_x: f32,
         bb_y: f32,
         bb_w: f32,
         bb_h: f32,
-    ) -> (wgpu::Buffer, u32) {
-        let n = canvas_verts.len();
-        if n < 3 {
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Polygon Vertex Buffer (empty)"),
-                contents: &[],
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            return (buffer, 0);
+    ) -> Vec<PolygonVertex> {
+        if canvas_verts.len() < 3 {
+            return Vec::new();
         }
 
         let indices = ear_clip_triangulate(canvas_verts);
-        let num_tris = (indices.len() / 3) as u32;
 
         let to_vert = |v: &[f32; 2]| -> PolygonVertex {
             let u = if bb_w > 0.0 {
@@ -988,33 +1174,21 @@ impl PolygonBlitPipeline {
             }
         };
 
-        let mut gpu_verts: Vec<PolygonVertex> = Vec::with_capacity(indices.len());
+        let mut verts: Vec<PolygonVertex> = Vec::with_capacity(indices.len());
         for &idx in &indices {
-            gpu_verts.push(to_vert(&canvas_verts[idx as usize]));
+            verts.push(to_vert(&canvas_verts[idx as usize]));
         }
-
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Polygon Vertex Buffer"),
-            contents: bytemuck::cast_slice(&gpu_verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        (buffer, num_tris)
+        verts
     }
-    /// Build a vertex buffer from a UV warp mesh grid.
+
+    /// Build CPU-side vertices from a UV warp mesh grid.
     ///
     /// Each cell in the mesh grid (cols-1 × rows-1) becomes 2 triangles.
     /// Vertex positions come from `mesh.points[].position` (output space),
     /// UVs come from `mesh.points[].uv` (source texture space).
     /// The homography should be set to identity when using mesh warp.
-    ///
-    /// Returns (buffer, num_triangles).
-    pub fn triangulate_with_mesh(
-        device: &wgpu::Device,
-        _canvas_verts: &[[f32; 2]],
-        _bb: [f32; 4],
-        mesh: &super::warp::WarpMesh,
-    ) -> (wgpu::Buffer, u32) {
+    /// Returns an empty vec for an invalid mesh.
+    pub fn mesh_verts(mesh: &super::warp::WarpMesh) -> Vec<PolygonVertex> {
         let cols = mesh.cols as usize;
         let rows = mesh.rows as usize;
         if cols < 2 || rows < 2 || mesh.points.len() != cols * rows {
@@ -1022,17 +1196,11 @@ impl PolygonBlitPipeline {
                 "Invalid mesh: cols={cols}, rows={rows}, points={} (expected {}). Returning empty mesh.",
                 mesh.points.len(), cols * rows
             );
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Mesh Warp Vertex Buffer (empty)"),
-                contents: &[],
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            return (buffer, 0);
+            return Vec::new();
         }
 
         let num_cells = (cols - 1) * (rows - 1);
-        let num_tris = (num_cells * 2) as u32;
-        let mut gpu_verts: Vec<PolygonVertex> = Vec::with_capacity(num_cells * 6);
+        let mut verts: Vec<PolygonVertex> = Vec::with_capacity(num_cells * 6);
 
         for r in 0..(rows - 1) {
             for c in 0..(cols - 1) {
@@ -1050,24 +1218,17 @@ impl PolygonBlitPipeline {
                 };
 
                 // Triangle 1: TL, TR, BL
-                gpu_verts.push(to_ndc(tl));
-                gpu_verts.push(to_ndc(tr));
-                gpu_verts.push(to_ndc(bl));
+                verts.push(to_ndc(tl));
+                verts.push(to_ndc(tr));
+                verts.push(to_ndc(bl));
 
                 // Triangle 2: TR, BR, BL
-                gpu_verts.push(to_ndc(tr));
-                gpu_verts.push(to_ndc(br));
-                gpu_verts.push(to_ndc(bl));
+                verts.push(to_ndc(tr));
+                verts.push(to_ndc(br));
+                verts.push(to_ndc(bl));
             }
         }
-
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Mesh Warp Vertex Buffer"),
-            contents: bytemuck::cast_slice(&gpu_verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        (buffer, num_tris)
+        verts
     }
 }
 
@@ -1161,4 +1322,82 @@ fn ear_clip_point_in_tri(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> 
     let has_neg = (d0 < 0.0) || (d1 < 0.0) || (d2 < 0.0);
     let has_pos = (d0 > 0.0) || (d1 > 0.0) || (d2 > 0.0);
     !(has_neg && has_pos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::context::GpuContext;
+
+    const QUAD: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+
+    #[test]
+    fn triangulate_verts_quad_yields_two_triangles() {
+        let verts = PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0);
+        // A quad triangulates to 2 triangles = 6 vertices.
+        assert_eq!(verts.len(), 6);
+    }
+
+    #[test]
+    fn triangulate_verts_degenerate_is_empty() {
+        let verts =
+            PolygonBlitPipeline::triangulate_verts(&[[0.0, 0.0], [1.0, 0.0]], 0.0, 0.0, 1.0, 1.0);
+        assert!(verts.is_empty());
+    }
+
+    #[test]
+    fn mesh_verts_invalid_is_empty() {
+        let mesh = super::super::warp::WarpMesh {
+            cols: 1,
+            rows: 1,
+            points: vec![],
+        };
+        assert!(PolygonBlitPipeline::mesh_verts(&mesh).is_empty());
+    }
+
+    /// prepare must reuse persistent pools and grow them when the surface count
+    /// exceeds the initial ring capacity, without allocating per surface. The
+    /// returned offsets must be contiguous and non-overlapping.
+    #[test]
+    fn prepare_grows_pools_and_packs_vertices() {
+        let Some(ctx) = GpuContext::new_headless().ok() else {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        };
+        let content = ctx.create_render_texture(64, 64);
+        let view = content.create_view(&wgpu::TextureViewDescriptor::default());
+        let pipeline = PolygonBlitPipeline::new(&ctx.device, ctx.texture_format).expect("pipeline");
+        let zones = SurfaceOverlapZones::default();
+
+        let make_draws = |n: usize| -> Vec<PolygonDrawDesc<'_>> {
+            (0..n)
+                .map(|_| PolygonDrawDesc {
+                    content_view: &view,
+                    uv_scale: [1.0, 1.0],
+                    uv_offset: [0.0, 0.0],
+                    homography: None,
+                    overlap_zones: &zones,
+                    vertices: PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0),
+                })
+                .collect()
+        };
+
+        // Small batch fits the initial ring.
+        let (prepared, _pool) = pipeline.prepare(&ctx.device, &ctx.queue, &make_draws(2));
+        assert_eq!(prepared.len(), 2);
+        let stride = std::mem::size_of::<PolygonVertex>() as u64 * 6;
+        assert_eq!(prepared[0].vertex_offset, 0);
+        assert_eq!(prepared[1].vertex_offset, stride);
+        assert_eq!(prepared[0].num_triangles, 2);
+
+        // Large batch (> MAX_DRAW_SLOTS) must grow both pools and stay packed.
+        let big = MAX_DRAW_SLOTS as usize * 4;
+        let (prepared, _pool) = pipeline.prepare(&ctx.device, &ctx.queue, &make_draws(big));
+        assert_eq!(prepared.len(), big);
+        for (i, p) in prepared.iter().enumerate() {
+            assert_eq!(p.vertex_offset, i as u64 * stride);
+            assert_eq!(p.num_triangles, 2);
+        }
+        assert!(pipeline.ring_slots.get() >= big);
+    }
 }

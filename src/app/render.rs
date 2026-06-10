@@ -531,15 +531,20 @@ impl VardaApp {
 
             if !h.surface_assignments.is_empty() {
                 // Surface-routed rendering: render assigned surfaces with warp
-                let prepared: Vec<_> = h.surface_assignments.iter()
+                // Triangulate on the CPU, then prepare draws from the pipeline's
+                // persistent param/vertex pools (no per-frame GPU buffer alloc).
+                let draws: Vec<crate::renderer::blit::PolygonDrawDesc<'_>> = h
+                    .surface_assignments
+                    .iter()
                     .filter(|a| a.enabled)
                     .filter_map(|assignment| {
-                        let (_, surface) = surface_manager.find_by_uuid(&assignment.surface_uuid)?;
+                        let (_, surface) =
+                            surface_manager.find_by_uuid(&assignment.surface_uuid)?;
                         let bb = surface.bounding_box();
-                        let content_view = Self::resolve_source(mixer, &surface.source, domemaster_view)?;
+                        let content_view =
+                            Self::resolve_source(mixer, &surface.source, domemaster_view)?;
                         let (uv_scale, uv_offset) = Self::compute_uv(surface.content_mapping, &bb);
-                        let bb_arr = [bb.x, bb.y, bb.width, bb.height];
-                        let (homography, vb, num_tris) = match &assignment.warp_mode {
+                        let (homography, vertices) = match &assignment.warp_mode {
                             crate::renderer::warp::WarpMode::CornerPin { corners } => {
                                 let src_corners = [
                                     [bb.x, bb.y],
@@ -547,28 +552,39 @@ impl VardaApp {
                                     [bb.x + bb.width, bb.y + bb.height],
                                     [bb.x, bb.y + bb.height],
                                 ];
-                                let h = crate::renderer::warp::compute_forward_homography(&src_corners, corners);
-                                let (vb, nt) = crate::renderer::blit::PolygonBlitPipeline::triangulate(
-                                    &context.device, &surface.vertices,
-                                    bb.x, bb.y, bb.width, bb.height,
+                                let homography = crate::renderer::warp::compute_forward_homography(
+                                    &src_corners,
+                                    corners,
                                 );
-                                (Some(h), vb, nt)
+                                let verts =
+                                    crate::renderer::blit::PolygonBlitPipeline::triangulate_verts(
+                                        &surface.vertices,
+                                        bb.x,
+                                        bb.y,
+                                        bb.width,
+                                        bb.height,
+                                    );
+                                (Some(homography), verts)
                             }
-                            crate::renderer::warp::WarpMode::Mesh(mesh) => {
-                                let (vb, nt) = crate::renderer::blit::PolygonBlitPipeline::triangulate_with_mesh(
-                                    &context.device, &surface.vertices, bb_arr, mesh,
-                                );
-                                (None, vb, nt)
-                            }
+                            crate::renderer::warp::WarpMode::Mesh(mesh) => (
+                                None,
+                                crate::renderer::blit::PolygonBlitPipeline::mesh_verts(mesh),
+                            ),
                         };
-                        let bind_group = h.polygon_pipeline.create_bind_group(
-                            &context.device, content_view,
-                            uv_scale, uv_offset, homography.as_ref(),
-                            &assignment.overlap_zones,
-                        );
-                        Some((bind_group, vb, num_tris))
+                        Some(crate::renderer::blit::PolygonDrawDesc {
+                            content_view,
+                            uv_scale,
+                            uv_offset,
+                            homography,
+                            overlap_zones: &assignment.overlap_zones,
+                            vertices,
+                        })
                     })
                     .collect();
+
+                let (prepared, vertex_pool) =
+                    h.polygon_pipeline
+                        .prepare(&context.device, &context.queue, &draws);
 
                 {
                     let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -587,17 +603,7 @@ impl VardaApp {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    for (bind_group, vb, num_tris) in &prepared {
-                        if *num_tris > 0 {
-                            h.polygon_pipeline.render_polygon(
-                                &context.device,
-                                &mut rp,
-                                bind_group,
-                                vb,
-                                *num_tris,
-                            );
-                        }
-                    }
+                    h.polygon_pipeline.draw(&mut rp, &prepared, &vertex_pool);
                 }
             } else {
                 // Fallback: simple blit from source
