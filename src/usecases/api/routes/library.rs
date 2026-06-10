@@ -83,7 +83,7 @@ pub async fn cameras(State(state): State<SharedState>) -> impl IntoResponse {
                 .iter()
                 .map(|(name, id)| CameraEntry {
                     name: name.clone(),
-                    id: id.clone(),
+                    id: *id,
                 })
                 .collect::<Vec<_>>(),
         )

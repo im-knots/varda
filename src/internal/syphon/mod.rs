@@ -38,6 +38,12 @@ struct SyphonClient {
     height: u32,
 }
 
+impl Default for SyphonManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SyphonManager {
     pub fn new() -> Self {
         let available = Self::check_framework();

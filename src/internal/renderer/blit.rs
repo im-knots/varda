@@ -165,7 +165,7 @@ impl BlitPipeline {
         // Pre-allocate ring buffer for batched per-draw params.
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let param_size = std::mem::size_of::<BlitParams>() as u64;
-        let ring_stride = ((param_size + align - 1) / align) * align;
+        let ring_stride = param_size.div_ceil(align) * align;
         let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Blit Params Ring Buffer"),
             size: MAX_DRAW_SLOTS * ring_stride,
@@ -517,7 +517,7 @@ impl CompositeBlitPipeline {
         // Pre-allocate ring buffer for batched per-draw params.
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let param_size = std::mem::size_of::<CompositeParams>() as u64;
-        let ring_stride = ((param_size + align - 1) / align) * align;
+        let ring_stride = param_size.div_ceil(align) * align;
         let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Composite Params Ring Buffer"),
             size: MAX_DRAW_SLOTS * ring_stride,
@@ -1139,10 +1139,8 @@ fn ear_clip_is_ear(
         if cross <= 0.0 {
             return false;
         }
-    } else {
-        if cross >= 0.0 {
-            return false;
-        }
+    } else if cross >= 0.0 {
+        return false;
     }
 
     for &vi in idx {

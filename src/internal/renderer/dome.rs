@@ -9,11 +9,12 @@ use anyhow::Result;
 use wgpu::util::DeviceExt;
 
 /// Domemaster resolution presets.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub enum DomemasterResolution {
     /// 1024×1024
     R1K,
     /// 2048×2048
+    #[default]
     R2K,
     /// 4096×4096
     R4K,
@@ -26,12 +27,6 @@ impl DomemasterResolution {
             Self::R2K => 2048,
             Self::R4K => 4096,
         }
-    }
-}
-
-impl Default for DomemasterResolution {
-    fn default() -> Self {
-        Self::R2K
     }
 }
 

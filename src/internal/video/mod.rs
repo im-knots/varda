@@ -226,8 +226,8 @@ impl HapTextureFormat {
 
     /// Calculate the byte size of a full frame in this compressed format.
     pub fn frame_byte_size(self, width: u32, height: u32) -> usize {
-        let blocks_x = (width + 3) / 4;
-        let blocks_y = (height + 3) / 4;
+        let blocks_x = width.div_ceil(4);
+        let blocks_y = height.div_ceil(4);
         (blocks_x * blocks_y * self.block_bytes()) as usize
     }
 }

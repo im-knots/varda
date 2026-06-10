@@ -143,10 +143,11 @@ fn modulation_values_change_over_frames() {
         .get(uuid)
         .copied()
         .unwrap_or(0.0);
-    // At 10 Hz over 30 frames (~0.5 s at 60fps), the value should have changed.
+    // At 10 Hz over 30 frames (~0.5 s at 60fps), the LFO advances through
+    // multiple cycles. The current value must stay a finite, unipolar value.
     assert!(
-        (v1 - v0).abs() > 1e-6 || true,
-        "LFO value may start at same phase; just verify no crash"
+        v1.is_finite() && (0.0..=1.0).contains(&v1),
+        "LFO value out of range: v0={v0}, v1={v1}"
     );
 }
 
@@ -403,7 +404,7 @@ fn publish_state_reflects_mutations() {
     app.publish_state();
     let guard = reader.read().unwrap();
     let state = guard.as_ref().expect("state published");
-    assert!(state.mixer.channels[0].decks.len() >= 1);
+    assert!(!state.mixer.channels[0].decks.is_empty());
 }
 
 #[test]

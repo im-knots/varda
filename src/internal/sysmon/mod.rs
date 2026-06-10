@@ -25,6 +25,12 @@ pub struct SystemMonitor {
     ram_used: u64,
 }
 
+impl Default for SystemMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SystemMonitor {
     pub fn new() -> Self {
         let mut sys = System::new();

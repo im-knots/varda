@@ -19,33 +19,23 @@ pub struct DetectedContour {
 }
 
 /// Method used to produce the binary image for contour detection.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema, Default)]
 pub enum DetectionMethod {
     /// Canny edge detector (good for line-art and SVG-like inputs).
     Canny,
     /// Simple threshold (industry standard for camera feeds with controlled lighting).
+    #[default]
     Threshold,
 }
 
-impl Default for DetectionMethod {
-    fn default() -> Self {
-        Self::Threshold
-    }
-}
-
 /// Post-processing hull mode applied after simplification.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema, Default)]
 pub enum HullMode {
     /// Keep the simplified polygon as-is.
+    #[default]
     None,
     /// Replace with convex hull (removes concavities).
     ConvexHull,
-}
-
-impl Default for HullMode {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Parameters controlling the contour detection pipeline.
@@ -413,6 +403,8 @@ fn follow_borders(binary: &image::GrayImage) -> Vec<Vec<(u32, u32)>> {
 }
 
 /// Trace a single border starting at (sx, sy) using Moore neighbor tracing.
+// Tight tracing loop; args are scalar cursor/state values passed by value for speed.
+#[allow(clippy::too_many_arguments)]
 fn trace_single_border(
     binary: &image::GrayImage,
     sx: u32,

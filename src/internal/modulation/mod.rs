@@ -15,8 +15,9 @@ use crate::deck::generate_short_uuid;
 use serde::{Deserialize, Serialize};
 
 /// LFO waveform types
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum LFOWaveform {
+    #[default]
     Sine,
     Square,
     Triangle,
@@ -24,16 +25,11 @@ pub enum LFOWaveform {
     Random,
 }
 
-impl Default for LFOWaveform {
-    fn default() -> Self {
-        LFOWaveform::Sine
-    }
-}
-
 /// How audio energy drives the modulation value.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum AudioReactMode {
     /// Direct: output = audio energy (standard envelope follower)
+    #[default]
     Direct,
     /// Increase: audio energy sweeps the value upward (accumulates)
     Increase,
@@ -41,16 +37,11 @@ pub enum AudioReactMode {
     Decrease,
 }
 
-impl Default for AudioReactMode {
-    fn default() -> Self {
-        AudioReactMode::Direct
-    }
-}
-
 /// Audio frequency band presets (convenience for UI quick-select).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum AudioBandPreset {
-    Low,  // 20–250 Hz
+    #[default]
+    Low, // 20–250 Hz
     Mid,  // 250–2000 Hz
     High, // 2000–20000 Hz
     Full, // 20–20000 Hz (overall level)
@@ -68,15 +59,10 @@ impl AudioBandPreset {
     }
 }
 
-impl Default for AudioBandPreset {
-    fn default() -> Self {
-        AudioBandPreset::Low
-    }
-}
-
 /// ADSR envelope stage
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum ADSRStage {
+    #[default]
     Idle,
     Attack,
     Decay,
@@ -84,27 +70,16 @@ pub enum ADSRStage {
     Release,
 }
 
-impl Default for ADSRStage {
-    fn default() -> Self {
-        ADSRStage::Idle
-    }
-}
-
 /// Step sequencer interpolation mode
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum StepInterpolation {
     /// Hard steps, no interpolation
+    #[default]
     None,
     /// Linear interpolation between steps
     Linear,
     /// Smooth cubic interpolation
     Smooth,
-}
-
-impl Default for StepInterpolation {
-    fn default() -> Self {
-        StepInterpolation::None
-    }
 }
 
 /// Modulation assignment linking a source to a parameter
@@ -160,7 +135,7 @@ mod tests {
             let t = i as f32 / 100.0;
             let val = lfo.calculate(t, 0.01, &audio, &empty_analyzers(), 0.0);
             assert!(
-                val >= 0.0 && val <= 1.0,
+                (0.0..=1.0).contains(&val),
                 "Sine unipolar out of range: {val} at t={t}"
             );
         }
@@ -180,7 +155,7 @@ mod tests {
             let t = i as f32 / 100.0;
             let val = lfo.calculate(t, 0.01, &audio, &empty_analyzers(), 0.0);
             assert!(
-                val >= -1.0 && val <= 1.0,
+                (-1.0..=1.0).contains(&val),
                 "Sine bipolar out of range: {val}"
             );
         }
@@ -250,7 +225,7 @@ mod tests {
         for i in 0..100 {
             let t = i as f32 / 100.0;
             let val = lfo.calculate(t, 0.01, &audio, &empty_analyzers(), 0.0);
-            assert!(val >= -0.5 && val <= 0.5, "Amplitude scaling off: {val}");
+            assert!((-0.5..=0.5).contains(&val), "Amplitude scaling off: {val}");
         }
     }
 
@@ -619,10 +594,14 @@ mod tests {
         engine.assign("color", &uuid, 1.0, Some(0));
         engine.assign("color", &uuid, 0.5, Some(1));
         let r_mod = engine.get_modulation_for_component("color", Some(0));
-        let _g_mod = engine.get_modulation_for_component("color", Some(1));
+        let g_mod = engine.get_modulation_for_component("color", Some(1));
         let no_mod = engine.get_modulation_for_component("color", Some(2));
+        // Unassigned component contributes nothing.
         assert_eq!(no_mod, 0.0);
-        assert!(r_mod != 0.0 || true);
+        // Both assigned components are driven by the same source; the r
+        // component (amount 1.0) must be twice the g component (amount 0.5).
+        assert!(r_mod > 0.0, "r component should be modulated: {r_mod}");
+        assert!((r_mod - 2.0 * g_mod).abs() < 1e-6, "r={r_mod}, g={g_mod}");
     }
 
     // ── AudioBandPreset tests ────────────────────────────────────────

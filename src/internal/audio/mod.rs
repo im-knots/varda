@@ -189,6 +189,12 @@ pub struct AudioManager {
     active: HashMap<AudioSourceId, ActiveAudioSource>,
 }
 
+impl Default for AudioManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioManager {
     pub fn new() -> Self {
         let mut mgr = Self {
@@ -213,15 +219,15 @@ impl AudioManager {
             .input_devices()
             .map(|devs| {
                 devs.enumerate()
-                    .filter_map(|(i, d)| {
+                    .map(|(i, d)| {
                         let name = d
                             .description()
                             .map(|desc| desc.name().to_string())
                             .unwrap_or_else(|_| format!("Audio Input {}", i));
-                        Some(AudioDeviceInfo {
+                        AudioDeviceInfo {
                             id: i as AudioSourceId,
                             name,
-                        })
+                        }
                     })
                     .collect()
             })

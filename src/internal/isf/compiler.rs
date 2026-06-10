@@ -113,10 +113,10 @@ in vec2 isf_FragNormCoord;
             // image, audio, audioFFT are handled as samplers elsewhere
             _ => continue,
         };
-        isf_uniforms.push_str("\n");
+        isf_uniforms.push('\n');
         isf_uniforms.push_str(&uniform_decl);
     }
-    isf_uniforms.push_str("\n");
+    isf_uniforms.push('\n');
 
     // Insert uniforms after the version directive (if present) or at the beginning
     if let Some(version_end) = glsl_source.find('\n') {

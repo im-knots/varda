@@ -951,10 +951,8 @@ impl VardaApp {
                 deck_idx,
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        if ch.decks[deck_idx].deck.video_toggle_play() {
-                            return CommandResult::Ok;
-                        }
+                    if deck_idx < ch.decks.len() && ch.decks[deck_idx].deck.video_toggle_play() {
+                        return CommandResult::Ok;
                     }
                 }
                 CommandResult::Err {
@@ -968,10 +966,10 @@ impl VardaApp {
                 position_secs,
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        if ch.decks[deck_idx].deck.video_seek(position_secs) {
-                            return CommandResult::Ok;
-                        }
+                    if deck_idx < ch.decks.len()
+                        && ch.decks[deck_idx].deck.video_seek(position_secs)
+                    {
+                        return CommandResult::Ok;
                     }
                 }
                 CommandResult::Err {
@@ -985,10 +983,8 @@ impl VardaApp {
                 speed,
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        if ch.decks[deck_idx].deck.video_set_speed(speed) {
-                            return CommandResult::Ok;
-                        }
+                    if deck_idx < ch.decks.len() && ch.decks[deck_idx].deck.video_set_speed(speed) {
+                        return CommandResult::Ok;
                     }
                 }
                 CommandResult::Err {
@@ -1002,10 +998,10 @@ impl VardaApp {
                 mode,
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        if ch.decks[deck_idx].deck.video_set_loop_mode(mode) {
-                            return CommandResult::Ok;
-                        }
+                    if deck_idx < ch.decks.len()
+                        && ch.decks[deck_idx].deck.video_set_loop_mode(mode)
+                    {
+                        return CommandResult::Ok;
                     }
                 }
                 CommandResult::Err {
@@ -1019,10 +1015,9 @@ impl VardaApp {
                 secs,
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        if ch.decks[deck_idx].deck.video_set_in_point(secs) {
-                            return CommandResult::Ok;
-                        }
+                    if deck_idx < ch.decks.len() && ch.decks[deck_idx].deck.video_set_in_point(secs)
+                    {
+                        return CommandResult::Ok;
                     }
                 }
                 CommandResult::Err {
@@ -1036,10 +1031,10 @@ impl VardaApp {
                 secs,
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        if ch.decks[deck_idx].deck.video_set_out_point(secs) {
-                            return CommandResult::Ok;
-                        }
+                    if deck_idx < ch.decks.len()
+                        && ch.decks[deck_idx].deck.video_set_out_point(secs)
+                    {
+                        return CommandResult::Ok;
                     }
                 }
                 CommandResult::Err {
@@ -1052,10 +1047,10 @@ impl VardaApp {
                 deck_idx,
             } => {
                 if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        if ch.decks[deck_idx].deck.video_clear_in_out_points() {
-                            return CommandResult::Ok;
-                        }
+                    if deck_idx < ch.decks.len()
+                        && ch.decks[deck_idx].deck.video_clear_in_out_points()
+                    {
+                        return CommandResult::Ok;
                     }
                 }
                 CommandResult::Err {
@@ -1521,7 +1516,7 @@ impl VardaApp {
                 })
             }
             EngineCommand::SetStepSeqCount { uuid, count } => {
-                let count = count.max(2).min(64);
+                let count = count.clamp(2, 64);
                 self.exec_modulation_update(&uuid, |s| {
                     if let ModulationSource::StepSequencer { steps, .. } = s {
                         steps.resize(count, 0.0);

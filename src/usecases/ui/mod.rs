@@ -1474,6 +1474,12 @@ pub enum SequenceAction {
     },
 }
 
+impl Default for UIActions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UIActions {
     pub fn new() -> Self {
         Self {

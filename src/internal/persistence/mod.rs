@@ -320,7 +320,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
             let decks = ch
                 .decks
                 .iter()
-                .map(|slot| {
+                .filter_map(|slot| {
                     let source = match slot.deck.source_type() {
                         "shader" => {
                             let path = slot.deck.source_path().unwrap_or_default().to_string();
@@ -460,7 +460,6 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                         modulation: vec![],
                     })
                 })
-                .flatten()
                 .collect();
 
             let effects = ch
@@ -661,6 +660,8 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
 }
 
 /// Build a StagePrefs snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
+// Aggregates many independent live-state sources into one snapshot; no shared invariant to bundle.
+#[allow(clippy::too_many_arguments)]
 pub fn snapshot_stage(
     surface_manager: &crate::surface::SurfaceManager,
     outputs_list: &[UnifiedOutput],
@@ -765,6 +766,8 @@ pub struct RestoreResult {
 }
 
 /// Reconstruct live state from a SceneConfig.
+// Writes back into many independent live-state targets; no shared invariant to bundle.
+#[allow(clippy::too_many_arguments)]
 pub fn restore_scene(
     config: &SceneConfig,
     context: &GpuContext,
@@ -988,6 +991,8 @@ pub fn restore_scene(
 }
 
 /// Restore a single deck from config.
+// Needs many independent GPU/context inputs to rebuild a deck; no shared invariant to bundle.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn restore_deck(
     config: &DeckConfig,
     context: &GpuContext,
@@ -1374,8 +1379,10 @@ mod tests {
 
     #[test]
     fn validate_stage_prefs_grid_size_invalid() {
-        let mut prefs = StagePrefs::default();
-        prefs.grid_size = 0.0;
+        let mut prefs = StagePrefs {
+            grid_size: 0.0,
+            ..Default::default()
+        };
         assert!(prefs.validate().iter().any(|e| e.contains("grid_size")));
         prefs.grid_size = f32::NAN;
         assert!(prefs.validate().iter().any(|e| e.contains("grid_size")));

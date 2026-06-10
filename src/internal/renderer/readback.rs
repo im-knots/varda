@@ -29,7 +29,7 @@ impl ReadbackBuffer {
         let unpadded_bytes_per_row = width * 4; // RGBA8
                                                 // wgpu requires COPY_BYTES_PER_ROW_ALIGNMENT (256) alignment
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bytes_per_row = (unpadded_bytes_per_row + align - 1) / align * align;
+        let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
         let buffer_size = (padded_bytes_per_row * height) as u64;
 
         let buffers = [

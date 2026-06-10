@@ -17,9 +17,9 @@ fn snapshot_harness(data: UIData) -> Harness<'static, UIActions> {
     let data = Rc::new(data);
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1280.0, 720.0))
-        .build_state(
-            move |ctx, actions: &mut UIActions| {
-                *actions = render_ui(ctx, &data);
+        .build_ui_state(
+            move |ui, actions: &mut UIActions| {
+                *actions = render_ui(ui, &data);
             },
             UIActions::new(),
         );

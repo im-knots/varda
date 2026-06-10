@@ -77,7 +77,7 @@ fn save_load_with_decks() {
     let _ = app2.load_workspace();
     let state = app2.build_engine_state();
     assert!(
-        state.mixer.channels[0].decks.len() >= 1,
+        !state.mixer.channels[0].decks.is_empty(),
         "deck should survive roundtrip"
     );
 }

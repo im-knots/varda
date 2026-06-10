@@ -9,6 +9,19 @@ use crate::renderer::slicer::DomePreset;
 use crate::surface::detect::{DetectionMethod, HullMode};
 use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
 
+/// Drag state for edge dragging:
+/// (surface_uuid, contour_idx, edge_start_idx, original_v0, original_v1, grab_point_on_edge)
+type DraggingEdge = (String, usize, usize, [f32; 2], [f32; 2], [f32; 2]);
+
+/// Hit-test result for a vertex: (surface_uuid, contour_idx, vertex_idx)
+type HitVertex = (String, usize, usize);
+/// Hit-test result for an edge: (surface_uuid, contour_idx, edge_start_idx, projected_point)
+type HitEdge = (String, usize, usize, [f32; 2]);
+/// Hit-test result for a surface body: (surface_uuid, nx, ny)
+type HitSurface = (String, f32, f32);
+/// Combined hit-test result: (vertex, edge, surface)
+type HitTestResult = (Option<HitVertex>, Option<HitEdge>, Option<HitSurface>);
+
 /// Stage editor mode: 2D polygon editing or 3D dome mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 enum StageEditorMode {
@@ -171,7 +184,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             painter.text(
                 egui::pos2(v0.x + 4.0, v0.y + 4.0),
                 egui::Align2::LEFT_TOP,
-                &format!("{}{}", mapping_label, type_label),
+                format!("{}{}", mapping_label, type_label),
                 egui::FontId::proportional(9.0),
                 egui::Color32::WHITE,
             );
@@ -543,7 +556,7 @@ struct StageEditorState {
     dragging_radius: Option<String>, // surface_uuid
     /// Drag state for edge dragging: (surface_uuid, contour_idx, edge_start_idx,
     /// original_v0, original_v1, grab_point_on_edge)
-    dragging_edge: Option<(String, usize, usize, [f32; 2], [f32; 2], [f32; 2])>,
+    dragging_edge: Option<DraggingEdge>,
 }
 
 /// Full-screen stage editor — replaces the deck view
@@ -735,18 +748,17 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         .push(SurfaceAction::FlipVertical { uuid: uuid.clone() });
                 }
             }
-            if state.selected_surfaces.len() >= 2 {
-                if ui
+            if state.selected_surfaces.len() >= 2
+                && ui
                     .button("🔗 Combine")
                     .on_hover_text("Combine selected surfaces (G)")
                     .clicked()
-                {
-                    let uuids: Vec<String> = state.selected_surfaces.iter().cloned().collect();
-                    actions
-                        .surface_actions
-                        .push(SurfaceAction::Combine { uuids });
-                    state.selected_surfaces.clear();
-                }
+            {
+                let uuids: Vec<String> = state.selected_surfaces.iter().cloned().collect();
+                actions
+                    .surface_actions
+                    .push(SurfaceAction::Combine { uuids });
+                state.selected_surfaces.clear();
             }
         });
 
@@ -1350,10 +1362,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         let proj_x = ax + t * (bx - ax);
                         let proj_y = ay + t * (by - ay);
                         let d = pixel_dist(nx, ny, proj_x, proj_y);
-                        if d < threshold {
-                            if best.as_ref().map_or(true, |b| d < b.3) {
-                                best = Some((ci, ei, [proj_x, proj_y], d));
-                            }
+                        if d < threshold && best.as_ref().is_none_or(|b| d < b.3) {
+                            best = Some((ci, ei, [proj_x, proj_y], d));
                         }
                     }
                 }
@@ -1364,13 +1374,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // vertex: (surface_uuid, contour_idx, vertex_idx)
             // edge: (surface_uuid, contour_idx, edge_start_idx, projected_point)
             // surface: (surface_uuid, nx, ny)
-            let hit_test = |nx: f32,
-                            ny: f32|
-             -> (
-                Option<(String, usize, usize)>,
-                Option<(String, usize, usize, [f32; 2])>,
-                Option<(String, f32, f32)>,
-            ) {
+            let hit_test = |nx: f32, ny: f32| -> HitTestResult {
                 let vertex_threshold_px = 14.0;
                 let edge_threshold_px = 10.0;
                 // Wider threshold for edges when cursor is inside the surface.
@@ -1542,7 +1546,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                 .surfaces
                                 .iter()
                                 .find(|s| s.uuid == uuid)
-                                .map_or(false, |s| s.circle_hint.is_some())
+                                .is_some_and(|s| s.circle_hint.is_some())
                             {
                                 actions
                                     .surface_actions
@@ -2379,12 +2383,10 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
                     .camera_detect_actions
                     .push(CameraDetectAction::SelectAll(false));
             }
-        } else {
-            if ui.button("Select All").clicked() {
-                actions
-                    .camera_detect_actions
-                    .push(CameraDetectAction::SelectAll(true));
-            }
+        } else if ui.button("Select All").clicked() {
+            actions
+                .camera_detect_actions
+                .push(CameraDetectAction::SelectAll(true));
         }
     });
 

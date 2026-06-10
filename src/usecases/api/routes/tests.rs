@@ -2,6 +2,7 @@
 //! Uses a real axum router with populated engine state.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -1977,7 +1978,7 @@ mod tests {
             .await
             .unwrap();
         let status = resp.status().as_u16();
-        assert!(status >= 400 && status < 500, "Expected 4xx, got {status}");
+        assert!((400..500).contains(&status), "Expected 4xx, got {status}");
     }
 
     #[tokio::test]
@@ -1995,7 +1996,7 @@ mod tests {
             .await
             .unwrap();
         let status = resp.status().as_u16();
-        assert!(status >= 400 && status < 500, "Expected 4xx, got {status}");
+        assert!((400..500).contains(&status), "Expected 4xx, got {status}");
     }
 
     // ── Wrong HTTP method → 405 ─────────────────────────────────
@@ -2311,6 +2312,6 @@ mod tests {
             .await
             .unwrap();
         let status = resp.status().as_u16();
-        assert!(status >= 400 && status < 500, "Expected 4xx, got {status}");
+        assert!((400..500).contains(&status), "Expected 4xx, got {status}");
     }
 }

@@ -57,6 +57,12 @@ struct NdiSender {
     uyvy_buf: Vec<u8>,
 }
 
+impl Default for NdiManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NdiManager {
     pub fn new() -> Self {
         let sdk = sdk::NdiSdk::load();

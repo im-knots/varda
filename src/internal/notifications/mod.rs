@@ -200,7 +200,7 @@ mod tests {
             duration: Duration::from_secs(10),
         };
         let p = n.progress();
-        assert!(p >= 0.0 && p <= 1.0);
+        assert!((0.0..=1.0).contains(&p));
         assert!(p < 0.1);
     }
 

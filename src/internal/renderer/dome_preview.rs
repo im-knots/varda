@@ -943,10 +943,10 @@ mod tests {
     #[test]
     fn identity_matrix_is_identity() {
         let m = identity_matrix();
-        for i in 0..4 {
-            for j in 0..4 {
+        for (i, row) in m.iter().enumerate() {
+            for (j, &val) in row.iter().enumerate() {
                 let expected = if i == j { 1.0 } else { 0.0 };
-                assert!((m[i][j] - expected).abs() < 1e-6);
+                assert!((val - expected).abs() < 1e-6);
             }
         }
     }

@@ -27,7 +27,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                 .enumerate()
                 .map(|(deck_idx, slot)| {
                     let gen_params =
-                        build_shader_params(&slot.deck.source_name(), &slot.deck.generator_params);
+                        build_shader_params(slot.deck.source_name(), &slot.deck.generator_params);
                     let effects = slot
                         .deck
                         .effects

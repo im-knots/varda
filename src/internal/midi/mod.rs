@@ -319,7 +319,7 @@ impl MidiDeviceManager {
         let mut matched_outputs: Vec<bool> = vec![false; output_port_names.len()];
 
         // For each input: assign DeviceId, check matching output, connect
-        for (_i, in_name) in input_port_names.iter().enumerate() {
+        for in_name in input_port_names.iter() {
             let device_id = self.next_device_id;
             self.next_device_id += 1;
 
@@ -333,7 +333,6 @@ impl MidiDeviceManager {
                 .position(|(j, out_name)| {
                     !matched_outputs[j] && out_name.to_lowercase() == in_name.to_lowercase()
                 })
-                .map(|j| j)
                 .or_else(|| {
                     let in_stem = strip_port_suffix(in_name);
                     output_port_names
@@ -569,6 +568,12 @@ pub struct MidiMappingStore {
     pub learn_mode: bool,
     /// The parameter path waiting for the next MIDI input (learn target)
     pub learn_target: Option<String>,
+}
+
+impl Default for MidiMappingStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MidiMappingStore {

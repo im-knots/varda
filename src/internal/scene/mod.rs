@@ -369,7 +369,9 @@ fn default_true() -> bool {
 /// Serializable output target configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum OutputTargetConfig {
+    #[default]
     Windowed,
     Display {
         name: String,
@@ -406,12 +408,6 @@ pub enum OutputTargetConfig {
     SyphonServer {
         server_name: String,
     },
-}
-
-impl Default for OutputTargetConfig {
-    fn default() -> Self {
-        Self::Windowed
-    }
 }
 
 /// Serializable output configuration (unified model).

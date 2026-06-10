@@ -978,7 +978,7 @@ pub fn start(
                 log::info!("API server stopped");
             });
         }));
-        if let Err(_) = result {
+        if result.is_err() {
             log::error!("API server thread panicked");
         }
     });
@@ -1041,7 +1041,7 @@ mod tests {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 panic!("simulated API server panic");
             }));
-            if let Err(_) = result {
+            if result.is_err() {
                 log::error!("API server thread panicked");
             }
         });

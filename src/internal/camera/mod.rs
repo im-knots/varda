@@ -59,6 +59,12 @@ pub struct CameraManager {
     initialized: bool,
 }
 
+impl Default for CameraManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CameraManager {
     pub fn new() -> Self {
         let mut mgr = Self {
@@ -321,7 +327,7 @@ impl CameraManager {
 
                 // Swap decoded frame into shared slot (fast — just pointer swap)
                 if let Ok(mut lock) = frame_data.lock() {
-                    let new_buf = std::mem::replace(&mut rgba_buf, Vec::new());
+                    let new_buf = std::mem::take(&mut rgba_buf);
                     let old = lock.replace(new_buf);
                     // Reclaim the old buffer for reuse (avoids allocation)
                     rgba_buf = old.unwrap_or_else(|| vec![0u8; expected_rgba]);
@@ -331,7 +337,7 @@ impl CameraManager {
                 }
 
                 frame_count += 1;
-                if frame_count % 300 == 0 {
+                if frame_count.is_multiple_of(300) {
                     let elapsed = start.elapsed().as_secs_f64();
                     let fps = frame_count as f64 / elapsed;
                     log::debug!(

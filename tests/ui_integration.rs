@@ -123,7 +123,12 @@ impl AccActions {
             }
         }
         for sa in &a.surface_actions {
-            if matches!(sa, SurfaceAction::Add { .. }) {
+            if matches!(
+                sa,
+                SurfaceAction::Add { .. }
+                    | SurfaceAction::AddPolygon { .. }
+                    | SurfaceAction::AddCircle { .. }
+            ) {
                 self.surface_add = true;
             }
         }
@@ -179,6 +184,38 @@ fn make_harness(data: UIData) -> Harness<'static, AccActions> {
     // Reset accumulated state from layout passes
     *harness.state_mut() = AccActions::default();
     harness
+}
+
+/// Simulate a primary-button drag from `start` to `end` in window coordinates.
+///
+/// The intermediate nudge lets egui register a drag (and capture the press
+/// origin) before the pointer travels to the release point, so handlers that
+/// read `interact_pointer_pos()` on `drag_started`/`drag_stopped` see the
+/// correct start and end positions.
+fn drag(harness: &mut Harness<'static, AccActions>, start: egui::Pos2, end: egui::Pos2) {
+    use egui::{Event, Modifiers, PointerButton};
+    harness.event(Event::PointerMoved(start));
+    harness.event(Event::PointerButton {
+        pos: start,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::default(),
+    });
+    harness.run();
+    // Move toward `end` in increments. The first increment is well beyond egui's
+    // click-vs-drag threshold, so `drag_started` fires early (capturing a position
+    // near `start`) rather than on a single large jump (which would capture `end`).
+    for t in [0.25_f32, 0.5, 0.75, 1.0] {
+        harness.event(Event::PointerMoved(start + (end - start) * t));
+        harness.run();
+    }
+    harness.event(Event::PointerButton {
+        pos: end,
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::default(),
+    });
+    harness.run();
 }
 
 // ── Add Channel ─────────────────────────────────────────────────────
@@ -292,8 +329,9 @@ fn click_save_button_sets_save_requested() {
 fn click_auto_transition_1s() {
     let mut harness = make_harness(UIData::test_fixture());
 
-    // With crossfader at 0.5 (fixture default), label is "→Ch A 1s"
-    harness.get_by_label("→Ch A 1s").click();
+    // Seconds mode (no BPM in fixture): the direction label "→Ch A" is separate
+    // and the duration buttons are bare numbers ("1", "2", "4", ...).
+    harness.get_by_label("1").click();
     harness.run();
 
     assert!(
@@ -306,7 +344,7 @@ fn click_auto_transition_1s() {
 fn click_auto_transition_2s() {
     let mut harness = make_harness(UIData::test_fixture());
 
-    harness.get_by_label("2s").click();
+    harness.get_by_label("2").click();
     harness.run();
 
     assert!(
@@ -319,7 +357,7 @@ fn click_auto_transition_2s() {
 fn click_auto_transition_4s() {
     let mut harness = make_harness(UIData::test_fixture());
 
-    harness.get_by_label("4s").click();
+    harness.get_by_label("4").click();
     harness.run();
 
     assert!(
@@ -454,19 +492,29 @@ fn click_open_stage_editor() {
 
 #[test]
 fn click_add_surface() {
+    // Surfaces are added by drawing on the editor canvas, not via a button.
     let mut data = UIData::test_fixture();
-    data.stage_editor_open = false;
+    data.surfaces = vec![];
+    data.stage_editor_open = true; // render the full editor (toolbar + canvas)
     let mut harness = make_harness(data);
 
-    // Expand "🗺 Stage Layout" collapsing header
-    harness.get_by_label("🗺 Stage Layout").click();
+    // Select the rectangle drawing tool (persists in egui memory).
+    harness.get_by_label("▭ Rectangle").click();
     harness.run();
     *harness.state_mut() = AccActions::default();
 
-    harness.get_by_label("+ Add Surface").click();
-    harness.run();
+    // Drag a rectangle across the canvas (window coords inside the central panel,
+    // below the toolbar). This emits SurfaceAction::AddPolygon.
+    drag(
+        &mut harness,
+        egui::pos2(450.0, 180.0),
+        egui::pos2(850.0, 430.0),
+    );
 
-    assert!(harness.state().surface_add, "Expected SurfaceAction::Add");
+    assert!(
+        harness.state().surface_add,
+        "Expected a surface to be added after a rectangle drag"
+    );
 }
 
 // ── MIDI ────────────────────────────────────────────────────────────

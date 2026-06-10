@@ -152,12 +152,7 @@ impl Effect {
         }
 
         // Initialize parameters from shader inputs
-        let inputs = shader
-            .metadata
-            .inputs
-            .as_ref()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
         let params = ShaderParams::from_inputs(inputs);
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
 

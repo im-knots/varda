@@ -231,10 +231,12 @@ impl VardaApp {
                                 log::debug!("Unknown action path: {}", path);
                             }
                         }
-                    } else {
-                        if crate::param_router::apply_param_by_path(&mut self.mixer, &path, value) {
-                            changed_params.push((path.clone(), value));
-                        }
+                    } else if crate::param_router::apply_param_by_path(
+                        &mut self.mixer,
+                        &path,
+                        value,
+                    ) {
+                        changed_params.push((path.clone(), value));
                     }
                 } else if !self.input.midi_mappings.learn_mode {
                     log::debug!("Unmapped MIDI: {} value={:.2}", key, value);

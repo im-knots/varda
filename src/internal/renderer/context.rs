@@ -1010,7 +1010,7 @@ pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) ->
                     // 8×8 grid
                     let gx_frac = (gx_norm * 8.0).fract();
                     let gy_frac = (gy_norm * 8.0).fract();
-                    if gx_frac < 0.02 || gx_frac > 0.98 || gy_frac < 0.02 || gy_frac > 0.98 {
+                    if !(0.02..=0.98).contains(&gx_frac) || !(0.02..=0.98).contains(&gy_frac) {
                         color = grid_color;
                     }
 
@@ -1162,18 +1162,15 @@ impl std::fmt::Display for RecordingCodec {
 }
 
 /// Streaming codec for SRT output.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
+)]
 pub enum SrtCodec {
     /// H.264 ultrafast + zerolatency
+    #[default]
     H264,
     /// H.265 / HEVC ultrafast + zerolatency
     H265,
-}
-
-impl Default for SrtCodec {
-    fn default() -> Self {
-        Self::H264
-    }
 }
 
 impl std::fmt::Display for SrtCodec {
@@ -1186,20 +1183,17 @@ impl std::fmt::Display for SrtCodec {
 }
 
 /// Streaming codec for HLS/DASH output.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
+)]
 pub enum StreamingCodec {
     /// H.264 ultrafast preset
+    #[default]
     H264,
     /// H.265 / HEVC ultrafast preset
     H265,
     /// AV1 via SVT-AV1
     AV1,
-}
-
-impl Default for StreamingCodec {
-    fn default() -> Self {
-        Self::H264
-    }
 }
 
 impl std::fmt::Display for StreamingCodec {

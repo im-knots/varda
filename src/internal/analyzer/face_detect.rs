@@ -1393,7 +1393,7 @@ mod tests {
             landmarks: vec![(0.5, 0.5)],
         };
         let dossier = Dossier::from_seed(42);
-        let tex = analyzer.encode_face_data_texture(&[det], &[dossier.clone()]);
+        let tex = analyzer.encode_face_data_texture(&[det], std::slice::from_ref(&dossier));
 
         assert_eq!(tex.width, FACE_DATA_W as u32);
         assert_eq!(tex.height, MAX_FACES as u32);
@@ -1433,13 +1433,13 @@ mod tests {
         // Verify line break sentinel exists somewhere
         let row_data = &tex.data[0..DOSSIER_TEX_W * 4];
         assert!(
-            row_data.iter().any(|&b| b == LINE_BREAK_SENTINEL),
+            row_data.contains(&LINE_BREAK_SENTINEL),
             "Expected line break sentinel in dossier text"
         );
 
         // Verify end sentinel exists
         assert!(
-            row_data.iter().any(|&b| b == END_SENTINEL),
+            row_data.contains(&END_SENTINEL),
             "Expected end sentinel in dossier text"
         );
     }

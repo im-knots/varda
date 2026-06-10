@@ -237,9 +237,9 @@ impl ISFMetadata {
 
     /// Check if this shader is a transition (has "Transition" category)
     pub fn is_transition(&self) -> bool {
-        self.categories.as_ref().map_or(false, |cats| {
-            cats.iter().any(|c| c.eq_ignore_ascii_case("transition"))
-        })
+        self.categories
+            .as_ref()
+            .is_some_and(|cats| cats.iter().any(|c| c.eq_ignore_ascii_case("transition")))
     }
 
     /// Check if this shader is audio reactive

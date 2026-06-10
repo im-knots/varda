@@ -94,7 +94,7 @@ fn bench_shader_params_buffer(c: &mut Criterion) {
 
     for n_floats in [2usize, 6, 14] {
         let total = n_floats + 2;
-        let lfo_key = format!("deck0:p0");
+        let lfo_key = "deck0:p0".to_string();
         let eng_empty = ModulationEngine::new();
         let eng_lfo = engine_with_lfo(&lfo_key);
 

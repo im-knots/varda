@@ -63,7 +63,7 @@ fn spawn_detect_thread(
                         // Rate-limit error logging: log first, then every 60th
                         if !matches!(e, crate::surface::import::ImportError::NoContours) {
                             consecutive_errors += 1;
-                            if consecutive_errors == 1 || consecutive_errors % 60 == 0 {
+                            if consecutive_errors == 1 || consecutive_errors.is_multiple_of(60) {
                                 log::warn!("Detection error (count={}): {}", consecutive_errors, e);
                             }
                         }
@@ -262,14 +262,11 @@ impl ApplicationHandler for UIRunner {
             // finishes initialization once the GPU is ready.
             let window_icon = {
                 static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
-                image::load_from_memory(ICON_BYTES)
-                    .ok()
-                    .map(|img| {
-                        let rgba = img.into_rgba8();
-                        let (w, h) = (rgba.width(), rgba.height());
-                        winit::window::Icon::from_rgba(rgba.into_raw(), w, h).ok()
-                    })
-                    .flatten()
+                image::load_from_memory(ICON_BYTES).ok().and_then(|img| {
+                    let rgba = img.into_rgba8();
+                    let (w, h) = (rgba.width(), rgba.height());
+                    winit::window::Icon::from_rgba(rgba.into_raw(), w, h).ok()
+                })
             };
             let mut window_attrs = Window::default_attributes()
                 .with_title("Varda VJ Software")
@@ -608,7 +605,7 @@ impl UIRunner {
         }
         self.main_output_texture = Some(egui_renderer.register_native_texture(
             &context.device,
-            &mixer.composite_view(),
+            mixer.composite_view(),
             wgpu::FilterMode::Linear,
         ));
         // Output preview textures — resolve source view for live preview
@@ -693,42 +690,44 @@ impl UIRunner {
         if self.main_output_texture.is_none() {
             self.main_output_texture = Some(egui_renderer.register_native_texture(
                 &context.device,
-                &mixer.composite_view(),
+                mixer.composite_view(),
                 wgpu::FilterMode::Linear,
             ));
         }
         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
             for (deck_idx, slot) in ch.decks.iter().enumerate() {
                 let key = (ch_idx, deck_idx);
-                if !self.deck_preview_textures.contains_key(&key) {
-                    let tid = egui_renderer.register_native_texture(
+                self.deck_preview_textures.entry(key).or_insert_with(|| {
+                    egui_renderer.register_native_texture(
                         &context.device,
                         &slot.deck.texture_view,
                         wgpu::FilterMode::Linear,
-                    );
-                    self.deck_preview_textures.insert(key, tid);
-                }
+                    )
+                });
             }
-            if !self.channel_preview_textures.contains_key(&ch_idx) {
-                let tid = egui_renderer.register_native_texture(
-                    &context.device,
-                    &ch.composite_view,
-                    wgpu::FilterMode::Linear,
-                );
-                self.channel_preview_textures.insert(ch_idx, tid);
-            }
+            self.channel_preview_textures
+                .entry(ch_idx)
+                .or_insert_with(|| {
+                    egui_renderer.register_native_texture(
+                        &context.device,
+                        &ch.composite_view,
+                        wgpu::FilterMode::Linear,
+                    )
+                });
         }
         // Register any new output preview textures
         for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
-            if !self.output_preview_textures.contains_key(&out_idx) {
-                let view = Self::output_preview_view(output, mixer);
-                let tid = egui_renderer.register_native_texture(
-                    &context.device,
-                    view,
-                    wgpu::FilterMode::Linear,
-                );
-                self.output_preview_textures.insert(out_idx, tid);
-            }
+            self.output_preview_textures
+                .entry(out_idx)
+                .or_insert_with(|| {
+                    let view = Self::output_preview_view(output, mixer);
+
+                    egui_renderer.register_native_texture(
+                        &context.device,
+                        view,
+                        wgpu::FilterMode::Linear,
+                    )
+                });
         }
     }
 
@@ -782,7 +781,7 @@ impl UIRunner {
         // Render output windows + publish state
         varda.render_outputs();
         self.publish_counter += 1;
-        if self.publish_counter % 10 == 0 {
+        if self.publish_counter.is_multiple_of(10) {
             varda.publish_state();
         }
     }
@@ -1262,7 +1261,7 @@ impl UIRunner {
                         if let Some(main_id) = self.main_output_texture {
                             egui_renderer.update_egui_texture_from_wgpu_texture(
                                 &context.device,
-                                &varda.mixer_ref().composite_view(),
+                                varda.mixer_ref().composite_view(),
                                 wgpu::FilterMode::Linear,
                                 main_id,
                             );
@@ -1321,7 +1320,7 @@ impl UIRunner {
                 if let Some(main_id) = self.main_output_texture {
                     egui_renderer.update_egui_texture_from_wgpu_texture(
                         &context.device,
-                        &mixer.composite_view(),
+                        mixer.composite_view(),
                         wgpu::FilterMode::Linear,
                         main_id,
                     );
@@ -1465,7 +1464,7 @@ impl UIRunner {
             varda.set_domemaster_content_rotation(c_az, c_el, c_roll);
             varda.render_outputs();
             self.publish_counter += 1;
-            if self.publish_counter % 10 == 0 {
+            if self.publish_counter.is_multiple_of(10) {
                 varda.publish_state();
             }
         }
@@ -1492,7 +1491,7 @@ impl UIRunner {
 
         // Frame loop timing (log every 120 frames)
         self.frame_loop_counter += 1;
-        if self.frame_loop_counter % 120 == 0 {
+        if self.frame_loop_counter.is_multiple_of(120) {
             let total_us = mixer_us + submit_us + outputs_us + poll_us;
             log::debug!(
                 "[PERF] frame_loop | egui={}us mixer={}us outputs={}us submit_ui={}us poll={}us | total={}us ({:.1}ms)",
@@ -1573,7 +1572,7 @@ impl UIRunner {
 
         let bind_group = if let Some(blit) = &self.blit_pipeline {
             let mixer = varda.mixer_ref();
-            Some(blit.create_bind_group(&context.device, &mixer.composite_view()))
+            Some(blit.create_bind_group(&context.device, mixer.composite_view()))
         } else {
             None
         };

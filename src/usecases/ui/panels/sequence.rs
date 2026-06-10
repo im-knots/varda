@@ -102,14 +102,14 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
                             {
                                 actions.sequence_actions.push(SequenceAction::Stop(seq_idx));
                             }
-                        } else if seq.enabled && !seq.steps.is_empty() {
-                            if ui
+                        } else if seq.enabled
+                            && !seq.steps.is_empty()
+                            && ui
                                 .small_button("Play")
                                 .on_hover_text("Start playback")
                                 .clicked()
-                            {
-                                actions.sequence_actions.push(SequenceAction::Play(seq_idx));
-                            }
+                        {
+                            actions.sequence_actions.push(SequenceAction::Play(seq_idx));
                         }
 
                         if ui
@@ -199,11 +199,7 @@ pub(super) fn render_timeline_strip(
 
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(available_width, strip_height),
-        if interactive {
-            egui::Sense::click()
-        } else {
-            egui::Sense::click()
-        },
+        egui::Sense::click(),
     );
 
     let painter = ui.painter_at(rect);

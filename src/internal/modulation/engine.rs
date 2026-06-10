@@ -325,8 +325,8 @@ impl ModulationEngine {
                 break;
             }
         }
-        for i in 0..n {
-            if !evaluated[i] {
+        for (i, done) in evaluated.iter().enumerate().take(n) {
+            if !done {
                 self.cached_order.push(i);
             }
         }
@@ -450,7 +450,7 @@ impl ModulationEngine {
     pub fn has_modulation(&self, param_name: &str) -> bool {
         self.assignments
             .get(param_name)
-            .map_or(false, |v| !v.is_empty())
+            .is_some_and(|v| !v.is_empty())
     }
 
     /// Get number of sources

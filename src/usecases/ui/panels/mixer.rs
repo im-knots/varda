@@ -20,7 +20,7 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
     let panel_height = ui.available_height();
     let has_sequences = !data.sequences.is_empty();
     let num_channels = data.channels.len();
-    let left_count = (num_channels + 1) / 2; // ceil(N/2)
+    let left_count = num_channels.div_ceil(2); // ceil(N/2)
     let right_count = num_channels / 2; // floor(N/2)
 
     // Fixed widths — channels and mixer never scale with window resize
@@ -226,20 +226,18 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                     .size(11.0),
                             );
                             // Show remove button only if more than 2 channels
-                            if num_channels > 2 {
-                                if ui
+                            if num_channels > 2
+                                && ui
                                     .small_button("x")
                                     .on_hover_text(format!("Remove channel {}", ch.name))
                                     .clicked()
-                                {
-                                    actions.remove_channel = Some(ch_idx);
-                                }
+                            {
+                                actions.remove_channel = Some(ch_idx);
                             }
                         });
                         // Render slider — disabled in learn mode
-                        let slider_rect;
                         let any_learn = data.midi_learn_active || data.keyboard_learn_active;
-                        if any_learn {
+                        let slider_rect = if any_learn {
                             let inner = ui.scope(|ui| {
                                 ui.disable();
                                 let slider = egui::Slider::new(&mut opacities[ch_idx], 0.0..=1.0)
@@ -247,14 +245,14 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                     .show_value(false);
                                 ui.add_sized([18.0, fader_height], slider)
                             });
-                            slider_rect = inner.inner.rect;
+                            inner.inner.rect
                         } else {
                             let slider = egui::Slider::new(&mut opacities[ch_idx], 0.0..=1.0)
                                 .vertical()
                                 .show_value(false);
                             let resp = ui.add_sized([18.0, fader_height], slider);
-                            slider_rect = resp.rect;
-                        }
+                            resp.rect
+                        };
                         // MIDI learn: glow + click overlay
                         if data.midi_learn_active {
                             let path = format!("ch/{}/opacity", ch.uuid);
@@ -712,7 +710,7 @@ pub(super) fn render_channel_column(
                             if fx_resp.clicked() {
                                 actions.select_channel = Some(ch_idx);
                             }
-                            for (_i, (_uuid, name, enabled, _)) in ch.effects.iter().enumerate() {
+                            for (_uuid, name, enabled, _) in ch.effects.iter() {
                                 ui.horizontal(|ui| {
                                     let label = if *enabled {
                                         egui::RichText::new(name).small()
@@ -760,11 +758,9 @@ fn render_new_channel_drop_zone(
     let hint_height = ui.available_height().max(60.0);
     let zone_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(max_width, hint_height));
     let is_hovering = relevant_drag
-        && ui.ctx().input(|i| {
-            i.pointer
-                .hover_pos()
-                .map_or(false, |p| zone_rect.contains(p))
-        });
+        && ui
+            .ctx()
+            .input(|i| i.pointer.hover_pos().is_some_and(|p| zone_rect.contains(p)));
 
     let accent = egui::Color32::from_rgb(100, 200, 255);
     let (stroke, fill, label_text, label_color) = if is_hovering {
@@ -1036,9 +1032,8 @@ pub(super) fn render_deck_thumbnail(
 
         // Vertical opacity slider — use a child ui placed at the slider rect
         let mut slider_ui = ui.new_child(egui::UiBuilder::new().max_rect(slider_rect));
-        let op_slider_rect;
         let any_learn = data.midi_learn_active || data.keyboard_learn_active;
-        if any_learn {
+        let op_slider_rect = if any_learn {
             let inner = slider_ui.scope(|ui| {
                 ui.disable();
                 let slider = egui::Slider::new(&mut opacity, 0.0..=1.0)
@@ -1046,14 +1041,14 @@ pub(super) fn render_deck_thumbnail(
                     .show_value(false);
                 ui.add_sized([slider_width, preview_height], slider)
             });
-            op_slider_rect = inner.inner.rect;
+            inner.inner.rect
         } else {
             let slider = egui::Slider::new(&mut opacity, 0.0..=1.0)
                 .vertical()
                 .show_value(false);
             let resp = slider_ui.add_sized([slider_width, preview_height], slider);
-            op_slider_rect = resp.rect;
-        }
+            resp.rect
+        };
         if data.midi_learn_active {
             let opacity_path = format!("deck/{}/opacity", deck.uuid);
             let is_target = data.midi_learn_target.as_deref() == Some(opacity_path.as_str());
@@ -1186,10 +1181,8 @@ pub(super) fn render_deck_thumbnail(
             } else if solo_resp.clicked() {
                 solo = !solo;
             }
-            if !any_learn {
-                if ui.small_button(egui::RichText::new("x").small()).clicked() {
-                    actions.deck_to_remove = Some((ch_idx, idx));
-                }
+            if !any_learn && ui.small_button(egui::RichText::new("x").small()).clicked() {
+                actions.deck_to_remove = Some((ch_idx, idx));
             }
         });
 

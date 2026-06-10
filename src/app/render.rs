@@ -34,6 +34,9 @@ impl VardaApp {
     /// Each thread creates a full Deck (CPU decode + GPU upload) and sends
     /// the result via the channel. The render loop polls for completed decks.
     /// `pending` is incremented per-spawn and decremented when each thread completes.
+    // Args map directly to the independent inputs a deck load needs; bundling them
+    // would only add an ephemeral struct with no shared invariant.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_deck_loads(
         sender: &std::sync::mpsc::Sender<DeckLoadResult>,
         context: &crate::renderer::context::GpuContext,
