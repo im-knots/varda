@@ -1935,15 +1935,14 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                 .push(SurfaceAction::FlipVertical { uuid: uuid.clone() });
                         }
                     }
-                    KeyTarget::Action(ActionId::CombineSurfaces) => {
-                        if state.selected_surfaces.len() >= 2 {
-                            let uuids: Vec<String> =
-                                state.selected_surfaces.iter().cloned().collect();
-                            actions
-                                .surface_actions
-                                .push(SurfaceAction::Combine { uuids });
-                            state.selected_surfaces.clear();
-                        }
+                    KeyTarget::Action(ActionId::CombineSurfaces)
+                        if state.selected_surfaces.len() >= 2 =>
+                    {
+                        let uuids: Vec<String> = state.selected_surfaces.iter().cloned().collect();
+                        actions
+                            .surface_actions
+                            .push(SurfaceAction::Combine { uuids });
+                        state.selected_surfaces.clear();
                     }
                     _ => {}
                 }

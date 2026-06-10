@@ -1061,7 +1061,7 @@ fn render_sequence_detail(
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let from = 0.min(data.channel_count.saturating_sub(1));
+                let from = 0;
                 let to = 1.min(data.channel_count.saturating_sub(1));
                 if ui.small_button("+Fade").clicked() {
                     actions.sequence_actions.push(SequenceAction::AddFade {

@@ -30,7 +30,7 @@ fn try_install() -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        return install_linux(&exe);
+        install_linux(&exe)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {

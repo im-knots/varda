@@ -642,32 +642,30 @@ fn render_stream_config(
                 });
             }
         }
-        OutputTarget::NdiSend { ref sender_name } => {
-            if !output.is_active {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Name:").small());
-                    let name_id = egui::Id::new(format!("ndi_name_{}", idx));
-                    let mut current_name: String = ui
-                        .data(|d| d.get_temp(name_id))
-                        .unwrap_or_else(|| sender_name.clone());
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut current_name)
-                            .desired_width(140.0)
-                            .font(egui::TextStyle::Small),
-                    );
-                    if response.lost_focus() || response.changed() {
-                        ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
-                        if response.lost_focus() {
-                            actions.output_actions.push(OutputAction::SetTarget {
-                                idx,
-                                target: OutputTarget::NdiSend {
-                                    sender_name: current_name,
-                                },
-                            });
-                        }
+        OutputTarget::NdiSend { ref sender_name } if !output.is_active => {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Name:").small());
+                let name_id = egui::Id::new(format!("ndi_name_{}", idx));
+                let mut current_name: String = ui
+                    .data(|d| d.get_temp(name_id))
+                    .unwrap_or_else(|| sender_name.clone());
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut current_name)
+                        .desired_width(140.0)
+                        .font(egui::TextStyle::Small),
+                );
+                if response.lost_focus() || response.changed() {
+                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
+                    if response.lost_focus() {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: OutputTarget::NdiSend {
+                                sender_name: current_name,
+                            },
+                        });
                     }
-                });
-            }
+                }
+            });
         }
         _ => {}
     }

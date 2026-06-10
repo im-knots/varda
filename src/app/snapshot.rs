@@ -294,7 +294,7 @@ pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
         .enumerate()
         .map(|(i, s)| (s.name(), i))
         .collect();
-    generators.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    generators.sort_by_key(|a| a.0.to_lowercase());
     let mut filters: Vec<(String, usize)> = app
         .registry
         .filters()
@@ -302,7 +302,7 @@ pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
         .enumerate()
         .map(|(i, s)| (s.name(), i))
         .collect();
-    filters.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    filters.sort_by_key(|a| a.0.to_lowercase());
     RegistrySnapshot {
         generators,
         filters,
