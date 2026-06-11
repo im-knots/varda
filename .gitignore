@@ -9,3 +9,13 @@ notes/
 # UI snapshot test diffs/new images (reference .png files are tracked)
 **/tests/snapshots/**/*.diff.png
 **/tests/snapshots/**/*.new.png
+
+# Local-only media fixtures (large; no git-lfs). Benches/tests skip if absent.
+tests/media/
+
+# macOS build outputs (produced by scripts/ci/build-macos.sh + combine-universal.sh)
+/Varda.app/
+/Varda-macOS-universal.dmg
+/varda-universal
+/arm64-app/
+/x86-app/

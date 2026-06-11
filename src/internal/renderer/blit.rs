@@ -804,6 +804,14 @@ impl PolygonVertex {
 /// Initial vertex-pool capacity in bytes (≈1024 polygon vertices).
 const POLYGON_INITIAL_VERTEX_BYTES: u64 = 1024 * std::mem::size_of::<PolygonVertex>() as u64;
 
+/// Number of frames the persistent pools rotate through. The renderer runs the
+/// CPU ahead of the GPU, so rewriting one pool at offset 0 every frame creates a
+/// write-after-read stall (frame N+1's upload waits on frame N's draw still
+/// reading the same bytes). Rotating through N independent pools lets the next
+/// frame write while the GPU reads the previous one — restoring CPU/GPU overlap
+/// while keeping the per-frame allocation elimination from issue #42.
+const POLYGON_FRAMES_IN_FLIGHT: usize = 3;
+
 /// A surface ready to be drawn from the pipeline's shared pools.
 /// Produced by [`PolygonBlitPipeline::prepare`], consumed by
 /// [`PolygonBlitPipeline::draw`].
@@ -831,25 +839,32 @@ pub struct PolygonDrawDesc<'a> {
 /// Pipeline for rendering textured polygon surfaces using vertex buffers.
 ///
 /// Per-surface uniform params and triangulated vertices are written into
-/// persistent, growable pools (`ring_buffer` / `vertex_buffer`) rather than
-/// freshly allocated each frame. This eliminates the unbounded per-frame GPU
-/// buffer churn that caused resource exhaustion on low-VRAM Metal devices
-/// (issue #42). Mirrors the ring-buffer pattern in [`BlitPipeline`] and
-/// [`CompositeBlitPipeline`].
+/// persistent, growable pools rather than freshly allocated each frame. This
+/// eliminates the unbounded per-frame GPU buffer churn that caused resource
+/// exhaustion on low-VRAM Metal devices (issue #42).
+///
+/// The pools are triple-buffered ([`POLYGON_FRAMES_IN_FLIGHT`]): each `prepare`
+/// rotates to the next set so the CPU writes the upcoming frame while the GPU
+/// still reads the previous one, avoiding the cross-frame write-after-read stall
+/// that a single rewritten-at-offset-0 pool would impose on pipelined frames.
 pub struct PolygonBlitPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// Persistent uniform params ring buffer; grows to fit the surface count.
-    ring_buffer: RefCell<wgpu::Buffer>,
+    /// Persistent uniform params ring buffers (one per frame in flight); each
+    /// grows independently to fit the surface count.
+    ring_buffers: [RefCell<wgpu::Buffer>; POLYGON_FRAMES_IN_FLIGHT],
     /// Byte stride between ring slots (aligned to device minimum).
     ring_stride: u64,
-    /// Number of slots currently allocated in `ring_buffer`.
-    ring_slots: Cell<usize>,
-    /// Persistent vertex pool; grows to fit a frame's total vertices.
-    vertex_buffer: RefCell<wgpu::Buffer>,
-    /// Capacity of `vertex_buffer` in bytes.
-    vertex_capacity: Cell<u64>,
+    /// Slots currently allocated in each `ring_buffers` entry.
+    ring_slots: [Cell<usize>; POLYGON_FRAMES_IN_FLIGHT],
+    /// Persistent vertex pools (one per frame in flight); each grows to fit a
+    /// frame's total vertices.
+    vertex_buffers: [RefCell<wgpu::Buffer>; POLYGON_FRAMES_IN_FLIGHT],
+    /// Capacity in bytes of each `vertex_buffers` entry.
+    vertex_capacity: [Cell<u64>; POLYGON_FRAMES_IN_FLIGHT],
+    /// Index of the pool set the next `prepare` will write, advanced each frame.
+    frame_cursor: Cell<usize>,
     /// Reusable CPU staging for a frame's packed params — coalesces all slot
     /// writes into a single `queue.write_buffer` (avoids per-frame allocation).
     scratch_params: RefCell<Vec<u8>>,
@@ -947,69 +962,75 @@ impl PolygonBlitPipeline {
             ..Default::default()
         });
 
-        // Pre-allocate persistent pools (grow on demand). Mirrors the
-        // ring-buffer pattern used by BlitPipeline / CompositeBlitPipeline.
+        // Pre-allocate triple-buffered persistent pools (grow on demand). Each
+        // frame in flight gets its own ring + vertex pool so consecutive frames
+        // never write the buffer the GPU is still reading.
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let param_size = std::mem::size_of::<PolygonParams>() as u64;
         let ring_stride = param_size.div_ceil(align) * align;
-        let ring_slots = MAX_DRAW_SLOTS as usize;
-        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Polygon Params Ring Buffer"),
-            size: ring_slots as u64 * ring_stride,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let initial_slots = MAX_DRAW_SLOTS as usize;
+        let ring_buffers = std::array::from_fn(|i| {
+            RefCell::new(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("Polygon Params Ring Buffer {i}")),
+                size: initial_slots as u64 * ring_stride,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }))
         });
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Polygon Vertex Pool"),
-            size: POLYGON_INITIAL_VERTEX_BYTES,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let vertex_buffers = std::array::from_fn(|i| {
+            RefCell::new(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("Polygon Vertex Pool {i}")),
+                size: POLYGON_INITIAL_VERTEX_BYTES,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }))
         });
 
         Ok(Self {
             pipeline,
             bind_group_layout,
             sampler,
-            ring_buffer: RefCell::new(ring_buffer),
+            ring_buffers,
             ring_stride,
-            ring_slots: Cell::new(ring_slots),
-            vertex_buffer: RefCell::new(vertex_buffer),
-            vertex_capacity: Cell::new(POLYGON_INITIAL_VERTEX_BYTES),
+            ring_slots: std::array::from_fn(|_| Cell::new(initial_slots)),
+            vertex_buffers,
+            vertex_capacity: std::array::from_fn(|_| Cell::new(POLYGON_INITIAL_VERTEX_BYTES)),
+            frame_cursor: Cell::new(0),
             scratch_params: RefCell::new(Vec::new()),
             scratch_verts: RefCell::new(Vec::new()),
         })
     }
 
-    /// Grow the params ring buffer so it holds at least `needed` slots.
-    fn ensure_ring_slots(&self, device: &wgpu::Device, needed: usize) {
-        if needed <= self.ring_slots.get() {
+    /// Grow frame `idx`'s params ring buffer so it holds at least `needed` slots.
+    fn ensure_ring_slots(&self, device: &wgpu::Device, idx: usize, needed: usize) {
+        if needed <= self.ring_slots[idx].get() {
             return;
         }
         let new_slots = needed.next_power_of_two().max(MAX_DRAW_SLOTS as usize);
-        *self.ring_buffer.borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Polygon Params Ring Buffer"),
+        *self.ring_buffers[idx].borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("Polygon Params Ring Buffer {idx}")),
             size: new_slots as u64 * self.ring_stride,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.ring_slots.set(new_slots);
+        self.ring_slots[idx].set(new_slots);
     }
 
-    /// Grow the vertex pool so it holds at least `needed_bytes`.
-    fn ensure_vertex_capacity(&self, device: &wgpu::Device, needed_bytes: u64) {
-        if needed_bytes <= self.vertex_capacity.get() {
+    /// Grow frame `idx`'s vertex pool so it holds at least `needed_bytes`.
+    fn ensure_vertex_capacity(&self, device: &wgpu::Device, idx: usize, needed_bytes: u64) {
+        if needed_bytes <= self.vertex_capacity[idx].get() {
             return;
         }
         let new_cap = needed_bytes
             .next_power_of_two()
             .max(POLYGON_INITIAL_VERTEX_BYTES);
-        *self.vertex_buffer.borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Polygon Vertex Pool"),
+        *self.vertex_buffers[idx].borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("Polygon Vertex Pool {idx}")),
             size: new_cap,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.vertex_capacity.set(new_cap);
+        self.vertex_capacity[idx].set(new_cap);
     }
 
     /// Prepare a batch of surfaces for drawing this frame.
@@ -1029,10 +1050,14 @@ impl PolygonBlitPipeline {
         draws: &[PolygonDrawDesc<'_>],
     ) -> (Vec<PreparedPolygon>, wgpu::Buffer) {
         let n = draws.len();
-        self.ensure_ring_slots(device, n);
+        // Rotate to the next pool set so this frame writes buffers the GPU is no
+        // longer reading from a previous in-flight frame.
+        let idx = self.frame_cursor.get();
+        self.frame_cursor.set((idx + 1) % POLYGON_FRAMES_IN_FLIGHT);
+        self.ensure_ring_slots(device, idx, n);
         let vertex_size = std::mem::size_of::<PolygonVertex>();
         let total_verts: usize = draws.iter().map(|d| d.vertices.len()).sum();
-        self.ensure_vertex_capacity(device, (total_verts * vertex_size) as u64);
+        self.ensure_vertex_capacity(device, idx, (total_verts * vertex_size) as u64);
 
         let param_size = std::mem::size_of::<PolygonParams>();
         let stride = self.ring_stride as usize;
@@ -1066,8 +1091,8 @@ impl PolygonBlitPipeline {
             vertex_offset += vertex_bytes;
         }
 
-        let ring = self.ring_buffer.borrow();
-        let vpool = self.vertex_buffer.borrow();
+        let ring = self.ring_buffers[idx].borrow();
+        let vpool = self.vertex_buffers[idx].borrow();
         if n > 0 {
             queue.write_buffer(&ring, 0, &params_blob);
         }
@@ -1398,6 +1423,40 @@ mod tests {
             assert_eq!(p.vertex_offset, i as u64 * stride);
             assert_eq!(p.num_triangles, 2);
         }
-        assert!(pipeline.ring_slots.get() >= big);
+        assert!(pipeline.ring_slots.iter().any(|s| s.get() >= big));
+    }
+
+    /// Each prepare must advance to the next pool set and wrap after
+    /// POLYGON_FRAMES_IN_FLIGHT frames, so consecutive frames never reuse the
+    /// buffer the GPU may still be reading (the cross-frame WAR hazard).
+    #[test]
+    fn prepare_rotates_frame_pools() {
+        let Some(ctx) = GpuContext::new_headless().ok() else {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        };
+        let content = ctx.create_render_texture(64, 64);
+        let view = content.create_view(&wgpu::TextureViewDescriptor::default());
+        let pipeline = PolygonBlitPipeline::new(&ctx.device, ctx.texture_format).expect("pipeline");
+        let zones = SurfaceOverlapZones::default();
+        let draw = || PolygonDrawDesc {
+            content_view: &view,
+            uv_scale: [1.0, 1.0],
+            uv_offset: [0.0, 0.0],
+            homography: None,
+            overlap_zones: &zones,
+            vertices: PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0),
+        };
+
+        assert_eq!(pipeline.frame_cursor.get(), 0);
+        for expected in 1..=POLYGON_FRAMES_IN_FLIGHT {
+            let _ = pipeline.prepare(&ctx.device, &ctx.queue, &[draw()]);
+            assert_eq!(
+                pipeline.frame_cursor.get(),
+                expected % POLYGON_FRAMES_IN_FLIGHT
+            );
+        }
+        // Cursor wrapped back to the first pool set after a full rotation.
+        assert_eq!(pipeline.frame_cursor.get(), 0);
     }
 }

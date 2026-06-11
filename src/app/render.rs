@@ -181,6 +181,37 @@ impl VardaApp {
     /// Render the mixer frame: update cameras, NDI, Syphon, collect audio, render mixer.
     /// This performs all GPU work that doesn't need the surface texture.
     pub fn render_mixer_frame(&mut self) {
+        // Surface a one-time notice for any deck whose ping-pong RAM cache was
+        // truncated (hit the memory cap). The supported path for full-length
+        // reverse on heavy/long/high-res clips is to pre-transcode to HAP.
+        let truncated: Vec<(String, String)> = self
+            .mixer
+            .channels()
+            .iter()
+            .flat_map(|ch| ch.decks.iter())
+            .filter_map(|slot| {
+                slot.deck
+                    .playback_snapshot()
+                    .filter(|s| s.pingpong_cache_truncated)
+                    .map(|_| {
+                        (
+                            slot.deck.uuid().to_string(),
+                            slot.deck.source_name().to_string(),
+                        )
+                    })
+            })
+            .collect();
+        for (uuid, name) in truncated {
+            self.session.notifications.notify_once(
+                format!("pingpong_truncated:{uuid}"),
+                crate::notifications::NotificationLevel::Warning,
+                format!(
+                    "Deck '{name}': reverse playback truncated (cache full). \
+                     Transcode to HAP for full-length reverse."
+                ),
+            );
+        }
+
         // Compute effective channel opacities to determine which cameras are needed
         let channel_count = self.mixer.channel_count();
         let crossfader = self.mixer.crossfader();

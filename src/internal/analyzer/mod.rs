@@ -3,6 +3,7 @@
 //! See `/spec/plugin-architecture.md` for the full design.
 
 pub(crate) mod brightness;
+#[cfg(feature = "face-detection")]
 pub(crate) mod face_detect;
 pub(crate) mod traits;
 
@@ -13,7 +14,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
-use crossbeam_channel::{Receiver, Sender, TrySendError};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 
 use traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot};
 
@@ -72,7 +73,15 @@ struct AnalyzerInstance {
     latest: Arc<ArcSwap<AnalyzerSnapshot>>,
     stop: Arc<AtomicBool>,
     frame_tx: Sender<AnalyzerInput>,
+    /// Disconnects when the worker thread exits (the matching sender is owned by
+    /// the thread). Used for a bounded, non-blocking stop on shutdown.
+    done_rx: Receiver<()>,
 }
+
+/// Grace period to wait for an analyzer worker to exit before detaching it, so a
+/// thread wedged in a blocking FFI call (e.g. ONNX Runtime) can never freeze
+/// application shutdown.
+const STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// Manages running analyzer instances for a single deck.
 pub(crate) struct DeckAnalyzers {
@@ -105,26 +114,38 @@ impl DeckAnalyzers {
             return Some(Arc::clone(&inst.latest));
         }
 
-        let mut analyzer = registry.create(analyzer_type)?;
-        if let Err(e) = analyzer.init(options) {
-            log::error!("Failed to init analyzer '{analyzer_type}': {e}");
-            return None;
-        }
+        let analyzer = registry.create(analyzer_type)?;
 
+        // Schema is static and does not require init(), so we can build the
+        // initial default snapshot before the worker thread runs.
         let schema = analyzer.output_schema();
         let initial = AnalyzerSnapshot::from_defaults(&schema);
         let latest = Arc::new(ArcSwap::from_pointee(initial));
         let stop = Arc::new(AtomicBool::new(false));
         let (frame_tx, frame_rx) = crossbeam_channel::bounded(2);
+        let (done_tx, done_rx) = crossbeam_channel::bounded::<()>(0);
 
         let thread_latest = Arc::clone(&latest);
         let thread_stop = Arc::clone(&stop);
         let type_name = analyzer_type.to_owned();
+        // init() can be expensive (e.g. loading + optimizing ONNX models), so it
+        // runs inside the worker thread to keep the UI/render thread responsive.
+        let options = options.clone();
 
         let thread = std::thread::Builder::new()
             .name(format!("analyzer-{type_name}"))
             .spawn(move || {
-                analyzer_thread(analyzer, frame_rx, thread_latest, thread_stop, &type_name);
+                // Dropped when the thread exits (normally or via panic),
+                // disconnecting `done_rx` so stoppers can wait with a timeout.
+                let _done = done_tx;
+                analyzer_thread(
+                    analyzer,
+                    &options,
+                    frame_rx,
+                    thread_latest,
+                    thread_stop,
+                    &type_name,
+                );
             })
             .ok()?;
 
@@ -138,6 +159,7 @@ impl DeckAnalyzers {
                 latest,
                 stop,
                 frame_tx,
+                done_rx,
             },
         );
         Some(handle)
@@ -153,13 +175,8 @@ impl DeckAnalyzers {
         };
 
         if should_remove {
-            if let Some(mut inst) = self.instances.remove(analyzer_type) {
-                inst.stop.store(true, Ordering::Relaxed);
-                drop(inst.frame_tx);
-                if let Some(thread) = inst.thread.take() {
-                    let _ = thread.join();
-                }
-                log::info!("Stopped analyzer '{analyzer_type}'");
+            if let Some(inst) = self.instances.remove(analyzer_type) {
+                stop_instance(inst, analyzer_type, "");
             }
         }
     }
@@ -196,6 +213,30 @@ impl DeckAnalyzers {
         }
     }
 
+    /// Remove instances whose worker thread has exited (e.g. `init()` failed
+    /// because a dependency like ONNX Runtime is unavailable). Without this a
+    /// dead instance lingers in the map, causing the render loop to perform a
+    /// per-frame GPU readback and spam "channel disconnected" warnings on the
+    /// hot path. Pruning is cheap: a non-blocking `try_recv` on the rendezvous
+    /// channel that disconnects when the worker drops its sender.
+    fn prune_dead(&mut self) {
+        let dead: Vec<String> = self
+            .instances
+            .iter()
+            .filter(|(_, inst)| matches!(inst.done_rx.try_recv(), Err(TryRecvError::Disconnected)))
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for name in dead {
+            if let Some(mut inst) = self.instances.remove(&name) {
+                if let Some(thread) = inst.thread.take() {
+                    let _ = thread.join();
+                }
+                log::warn!("Analyzer '{name}' worker exited; removing instance");
+            }
+        }
+    }
+
     /// Capture the current deck texture for analysis and deliver previous frame's data to analyzers.
     /// Call this from the render loop after effects are applied.
     /// Returns a command buffer with the readback copy command, or None if no analyzers are active.
@@ -204,6 +245,7 @@ impl DeckAnalyzers {
         device: &wgpu::Device,
         source_texture: &wgpu::Texture,
     ) -> Option<wgpu::CommandBuffer> {
+        self.prune_dead();
         if self.instances.is_empty() {
             return None;
         }
@@ -255,13 +297,8 @@ impl DeckAnalyzers {
     pub(crate) fn shutdown(&mut self) {
         let types: Vec<String> = self.instances.keys().cloned().collect();
         for t in types {
-            if let Some(mut inst) = self.instances.remove(&t) {
-                inst.stop.store(true, Ordering::Relaxed);
-                drop(inst.frame_tx);
-                if let Some(thread) = inst.thread.take() {
-                    let _ = thread.join();
-                }
-                log::info!("Stopped analyzer '{t}' (deck shutdown)");
+            if let Some(inst) = self.instances.remove(&t) {
+                stop_instance(inst, &t, " (deck shutdown)");
             }
         }
     }
@@ -277,11 +314,18 @@ impl Drop for DeckAnalyzers {
 
 fn analyzer_thread(
     mut analyzer: Box<dyn Analyzer>,
+    options: &serde_json::Value,
     frame_rx: Receiver<AnalyzerInput>,
     latest: Arc<ArcSwap<AnalyzerSnapshot>>,
     stop: Arc<AtomicBool>,
     type_name: &str,
 ) {
+    // Run potentially-expensive initialization off the caller's thread. On
+    // failure the thread exits and the deck keeps the default snapshot.
+    if let Err(e) = analyzer.init(options) {
+        log::error!("Failed to init analyzer '{type_name}': {e}");
+        return;
+    }
     log::info!("Analyzer thread '{type_name}' started");
     while !stop.load(Ordering::Relaxed) {
         match frame_rx.recv_timeout(Duration::from_millis(100)) {
@@ -301,17 +345,46 @@ fn analyzer_thread(
     log::info!("Analyzer thread '{type_name}' stopped");
 }
 
+/// Stop a single analyzer instance with a bounded wait. Signals the worker to
+/// stop and waits up to [`STOP_GRACE`] for it to exit; if it does, the handle is
+/// joined (reaped). If it does not — e.g. the thread is wedged in a blocking FFI
+/// call — the handle is detached so application shutdown is never frozen.
+fn stop_instance(mut inst: AnalyzerInstance, type_name: &str, suffix: &str) {
+    inst.stop.store(true, Ordering::Relaxed);
+    drop(inst.frame_tx);
+
+    let exited = !matches!(
+        inst.done_rx.recv_timeout(STOP_GRACE),
+        Err(crossbeam_channel::RecvTimeoutError::Timeout)
+    );
+
+    if exited {
+        if let Some(thread) = inst.thread.take() {
+            let _ = thread.join();
+        }
+        log::info!("Stopped analyzer '{type_name}'{suffix}");
+    } else {
+        // Detach the wedged thread; the OS reclaims it on process exit.
+        let _ = inst.thread.take();
+        log::warn!("Analyzer '{type_name}'{suffix} did not stop within {STOP_GRACE:?}; detaching");
+    }
+}
+
 // ── Default Registry ────────────────────────────────────────────────────────
 
 /// Build the default analyzer registry with all built-in analyzers.
 pub(crate) fn default_registry() -> AnalyzerRegistry {
-    AnalyzerRegistry::new()
-        .register("brightness", || {
-            Box::new(brightness::BrightnessAnalyzer::new())
-        })
-        .register("face_detect", || {
+    #[allow(unused_mut)]
+    let mut registry = AnalyzerRegistry::new().register("brightness", || {
+        Box::new(brightness::BrightnessAnalyzer::new())
+    });
+    #[cfg(feature = "face-detection")]
+    {
+        registry = registry.register("face_detect", || {
             Box::new(face_detect::FaceDetectAnalyzer::new())
-        })
+        });
+    }
+    registry
 }
 
 #[cfg(test)]
@@ -385,5 +458,39 @@ mod tests {
             "expected brightness ~1.0, got {brightness}"
         );
         deck.shutdown();
+    }
+
+    #[cfg(feature = "face-detection")]
+    #[test]
+    fn dead_worker_is_pruned() {
+        // Force face_detect's init() to fail by pointing it at a missing model
+        // file. The worker thread then exits; the instance must be pruned so the
+        // render loop stops per-frame GPU readback and "channel disconnected"
+        // log spam. Shutdown must also stay fast (the worker already exited).
+        let registry = default_registry();
+        let mut deck = DeckAnalyzers::new();
+        let opts = serde_json::json!({
+            "model_path": "/nonexistent/__varda_missing_model__.onnx"
+        });
+        let _handle = deck
+            .request("face_detect", &registry, &opts)
+            .expect("should spawn worker");
+
+        // Give the worker time to run init() (which fails) and exit.
+        std::thread::sleep(Duration::from_millis(300));
+
+        deck.prune_dead();
+        assert!(
+            !deck.has_active_instances(),
+            "dead worker instance should be pruned"
+        );
+
+        let start = Instant::now();
+        deck.shutdown();
+        assert!(
+            start.elapsed() < STOP_GRACE,
+            "shutdown must be fast when the worker already exited, took {:?}",
+            start.elapsed()
+        );
     }
 }

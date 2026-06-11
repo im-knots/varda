@@ -279,10 +279,14 @@ pub struct PlaybackSnapshot {
     pub reverse: bool,
     pub reached_end: bool,
     pub frame_rate: f64,
+    /// Whether the ping-pong RAM cache was truncated (hit the memory cap).
+    /// Always false for HAP sources (they reverse via seek, no cache).
+    pub pingpong_cache_truncated: bool,
 }
 
 impl PlaybackSnapshot {
-    /// Create a snapshot from a PlaybackState.
+    /// Create a snapshot from a PlaybackState. The `pingpong_cache_truncated`
+    /// flag defaults to false here and is set by the ffmpeg decode thread.
     pub fn from_state(ps: &PlaybackState) -> Self {
         Self {
             playing: ps.playing,
@@ -295,6 +299,7 @@ impl PlaybackSnapshot {
             reverse: ps.reverse,
             reached_end: ps.reached_end,
             frame_rate: ps.frame_rate,
+            pingpong_cache_truncated: false,
         }
     }
 }
@@ -433,6 +438,7 @@ impl VideoDecodeHandle {
                 reverse: false,
                 reached_end: false,
                 frame_rate: 30.0,
+                pingpong_cache_truncated: false,
             })
     }
 }
@@ -555,7 +561,9 @@ fn video_decode_thread(
 
         // Publish snapshot
         if let Ok(mut ss) = snapshot.lock() {
-            *ss = PlaybackSnapshot::from_state(&player.playback);
+            let mut snap = PlaybackSnapshot::from_state(&player.playback);
+            snap.pingpong_cache_truncated = player.pingpong_cache_truncated();
+            *ss = snap;
         }
 
         // Sleep until next frame or wake on command
@@ -673,29 +681,43 @@ fn hap_decode_thread(
 /// Returns the HAP texture format if it is HAP, or None for standard codecs.
 pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureFormat>> {
     ffmpeg::init().context("Failed to initialize FFmpeg")?;
-    let ictx = input(&path).context("Failed to open video file for codec detection")?;
+    let mut ictx = input(&path).context("Failed to open video file for codec detection")?;
 
-    let video_stream = ictx
-        .streams()
-        .best(Type::Video)
-        .context("No video stream found")?;
+    // ffmpeg maps every HAP variant to one codec id, so confirm it's HAP here
+    // and then read the real texture format from the first frame's section header.
+    let (video_stream_index, is_hap) = {
+        let video_stream = ictx
+            .streams()
+            .best(Type::Video)
+            .context("No video stream found")?;
+        let codec_ctx =
+            ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())?;
+        (video_stream.index(), codec_ctx.id().name() == "hap")
+    };
 
-    // Get the codec tag (FourCC) from stream parameters
-    let params = video_stream.parameters();
-    let codec_ctx = ffmpeg::codec::context::Context::from_parameters(params)?;
-    let codec_id = codec_ctx.id();
-
-    // Check if codec is HAP by examining the codec ID
-    // ffmpeg maps HAP variants to AV_CODEC_ID_HAP
-    let codec_name = codec_id.name();
-    if codec_name == "hap" {
-        // Determine the specific HAP variant from the codec tag
-        // We need to probe the first frame to determine the exact texture format
-        // since ffmpeg groups all HAP variants under one codec ID.
-        // We'll determine the format when we parse the first frame in HapPlayer.
-        return Ok(Some(HapTextureFormat::Bc7)); // default; HapPlayer refines this
+    if !is_hap {
+        return Ok(None);
     }
 
+    // Probe the first video packet for the exact variant (BC1/BC3/BC7/YCoCg).
+    // The texture and staging buffers are sized from this, so a wrong format
+    // overruns the staging copy (issue: Hap1/BC1 misdetected as Bc7).
+    for (stream, packet) in ictx.packets() {
+        if stream.index() != video_stream_index {
+            continue;
+        }
+        if let Some(data) = packet.data() {
+            return match hap::detect_hap_format(data) {
+                Ok(fmt) => Ok(Some(fmt)),
+                Err(e) => {
+                    log::warn!("HAP format detection failed ({e}) — using CPU decode fallback");
+                    Ok(None)
+                }
+            };
+        }
+    }
+
+    log::warn!("HAP stream has no readable packets — using CPU decode fallback");
     Ok(None)
 }
 
@@ -732,7 +754,9 @@ pub struct VideoPlayer {
     caching_enabled: bool,
     /// Set when cache overflows this pass — reset each new forward pass.
     cache_overflowed: bool,
-    /// Permanent flag: suppresses repeated log warnings after the first overflow.
+    /// Permanent latch set on the first cache overflow. Suppresses repeated log
+    /// warnings and drives the one-time "transcode to HAP" UI notice (exposed
+    /// via [`VideoPlayer::pingpong_cache_truncated`]).
     cache_overflow_warned: bool,
     /// Bytes per frame for cache budget calculation.
     frame_byte_size: usize,
@@ -988,6 +1012,13 @@ impl VideoPlayer {
         self.seek(time_secs)
     }
 
+    /// Whether this player's ping-pong RAM cache has ever been truncated (hit
+    /// the memory cap). Permanent latch — once true, stays true for the
+    /// player's lifetime. Drives the one-time "transcode to HAP" UI notice.
+    pub fn pingpong_cache_truncated(&self) -> bool {
+        self.cache_overflow_warned
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -1021,6 +1052,24 @@ impl VideoPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: the birds HAP fixture is Hap1/BC1, not Bc7. detect_hap_codec
+    /// must report the real format so the deck sizes its texture/staging
+    /// correctly (a wrong format overran the staging copy and panicked).
+    /// Skips when the local-only fixture is absent (tests/media/ is gitignored).
+    #[test]
+    fn detect_hap_codec_birds_fixture_is_bc1() {
+        let path = "tests/media/birds_combined_hap.mov";
+        if !std::path::Path::new(path).exists() {
+            eprintln!("skipping: {path} not present (local-only fixture)");
+            return;
+        }
+        assert_eq!(
+            detect_hap_codec(path).unwrap(),
+            Some(HapTextureFormat::Bc1),
+            "Hap1 fixture must be detected as BC1, not the old hardcoded Bc7"
+        );
+    }
 
     #[test]
     fn frame_pool_reuses_and_bounds_buffers() {

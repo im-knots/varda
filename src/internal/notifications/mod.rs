@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 /// Severity levels for notifications
@@ -48,6 +49,8 @@ pub struct NotificationSystem {
     history: Vec<Notification>,
     /// Maximum number of visible notifications
     max_visible: usize,
+    /// Keys for which a one-shot notification has already been emitted.
+    once_keys: HashSet<String>,
 }
 
 impl NotificationSystem {
@@ -56,6 +59,7 @@ impl NotificationSystem {
             active: Vec::new(),
             history: Vec::new(),
             max_visible: 5,
+            once_keys: HashSet::new(),
         }
     }
 
@@ -101,6 +105,23 @@ impl NotificationSystem {
 
     pub fn error(&mut self, message: impl Into<String>) {
         self.notify(NotificationLevel::Error, message);
+    }
+
+    /// Emit a notification at most once per unique `key` for the lifetime of the
+    /// system. Returns true if the notification was emitted (first time for the
+    /// key), false if it was deduplicated.
+    pub fn notify_once(
+        &mut self,
+        key: impl Into<String>,
+        level: NotificationLevel,
+        message: impl Into<String>,
+    ) -> bool {
+        if self.once_keys.insert(key.into()) {
+            self.notify(level, message);
+            true
+        } else {
+            false
+        }
     }
 
     /// Remove expired notifications
@@ -153,6 +174,19 @@ mod tests {
         ns.warn("Warning");
         ns.error("Error");
         assert_eq!(ns.visible().len(), 3);
+    }
+
+    #[test]
+    fn notify_once_dedups_by_key() {
+        let mut ns = NotificationSystem::new();
+        assert!(ns.notify_once("k1", NotificationLevel::Warning, "first"));
+        assert!(!ns.notify_once("k1", NotificationLevel::Warning, "second"));
+        // Only the first emission is recorded.
+        assert_eq!(ns.visible().len(), 1);
+        assert_eq!(ns.visible()[0].message, "first");
+        // A different key still emits.
+        assert!(ns.notify_once("k2", NotificationLevel::Warning, "other"));
+        assert_eq!(ns.visible().len(), 2);
     }
 
     #[test]

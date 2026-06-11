@@ -88,29 +88,7 @@ impl GpuContext {
         log::info!("Using GPU: {}", adapter.get_info().name);
         log::info!("Backend: {:?}", adapter.get_info().backend);
 
-        let mut required_features = wgpu::Features::empty();
-        if adapter
-            .features()
-            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
-        {
-            required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
-            log::info!("GPU supports BC texture compression (HAP video enabled)");
-        } else {
-            log::warn!("GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode");
-        }
-
-        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-            required_features |= wgpu::Features::TIMESTAMP_QUERY;
-            if adapter
-                .features()
-                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
-            {
-                required_features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-                log::info!("GPU supports timestamp queries inside encoders (GPU timing enabled)");
-            } else {
-                log::warn!("GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled");
-            }
-        }
+        let (required_features, timestamp_supported) = Self::select_optional_features(&adapter);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -170,10 +148,6 @@ impl GpuContext {
 
         surface.configure(&device, &surface_config);
 
-        let timestamp_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY)
-            && adapter
-                .features()
-                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
         let gpu = GpuContext {
             instance,
             adapter,
@@ -191,11 +165,48 @@ impl GpuContext {
         Ok((gpu, win_surface))
     }
 
+    /// Select the optional device features to request from an adapter.
+    ///
+    /// Shared by the windowed and headless paths so HAP (BC texture
+    /// compression) and GPU timing behave identically regardless of whether a
+    /// window surface exists. Returns the feature set to request and whether
+    /// timestamp queries are usable for GPU timing.
+    fn select_optional_features(adapter: &wgpu::Adapter) -> (wgpu::Features, bool) {
+        let mut required_features = wgpu::Features::empty();
+        if adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+        {
+            required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
+            log::info!("GPU supports BC texture compression (HAP video enabled)");
+        } else {
+            log::warn!("GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode");
+        }
+
+        let mut timestamp_supported = false;
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            required_features |= wgpu::Features::TIMESTAMP_QUERY;
+            if adapter
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
+            {
+                required_features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+                timestamp_supported = true;
+                log::info!("GPU supports timestamp queries inside encoders (GPU timing enabled)");
+            } else {
+                log::warn!("GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled");
+            }
+        }
+
+        (required_features, timestamp_supported)
+    }
+
     /// Create a headless GPU context (no window surface).
     ///
-    /// Uses the default backend and requests a device without any surface
-    /// compatibility requirements. Falls back to software adapter if no
-    /// hardware GPU is available. Used for headless mode and tests.
+    /// Requests the same optional features as the windowed path (notably
+    /// `TEXTURE_COMPRESSION_BC`) so HAP video uses the GPU-native BCn path in
+    /// headless installations. Falls back to software adapter if no hardware
+    /// GPU is available. Used for headless mode and tests.
     pub fn new_headless() -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -206,16 +217,24 @@ impl GpuContext {
         });
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
+            power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
         }))
         .context("Failed to find GPU adapter for headless context")?;
 
+        log::info!("Using GPU: {}", adapter.get_info().name);
+        log::info!("Backend: {:?}", adapter.get_info().backend);
+
+        let (required_features, timestamp_supported) = Self::select_optional_features(&adapter);
+
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Varda Headless Device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
+            required_features,
+            required_limits: wgpu::Limits {
+                max_texture_dimension_2d: 16384,
+                ..wgpu::Limits::default()
+            },
             memory_hints: Default::default(),
             experimental_features: Default::default(),
             trace: Default::default(),
@@ -228,7 +247,7 @@ impl GpuContext {
             device,
             queue,
             texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            timestamp_supported: false,
+            timestamp_supported,
         })
     }
 
@@ -1599,5 +1618,27 @@ mod tests {
         // Missing field should deserialize as Deg0
         let config: OutputRotation = serde_json::from_str("\"Deg0\"").unwrap();
         assert_eq!(config, OutputRotation::Deg0);
+    }
+
+    #[test]
+    fn headless_context_enables_bc_when_adapter_supports() {
+        // Headless installations must take the HAP GPU path, so the headless
+        // device has to request TEXTURE_COMPRESSION_BC whenever the adapter
+        // exposes it. Skips gracefully when no GPU adapter is available.
+        let Ok(gpu) = super::GpuContext::new_headless() else {
+            return;
+        };
+        let adapter_bc = gpu
+            .adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let device_bc = gpu
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        assert_eq!(
+            adapter_bc, device_bc,
+            "headless device should request BC iff the adapter supports it"
+        );
     }
 }
