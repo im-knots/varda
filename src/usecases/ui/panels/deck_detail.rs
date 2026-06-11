@@ -257,12 +257,11 @@ pub(super) fn render_selected_deck_detail(
                                     actions.video_actions.push((ch_idx, deck_idx,
                                         VideoAction::SetOutPoint(vp.position)));
                                 }
-                                if has_range {
-                                    if ui.small_button("x Clear").on_hover_text("Reset to full clip").clicked() {
+                                if has_range
+                                    && ui.small_button("x Clear").on_hover_text("Reset to full clip").clicked() {
                                         actions.video_actions.push((ch_idx, deck_idx,
                                             VideoAction::ClearInOutPoints));
                                     }
-                                }
                             });
 
                             if has_range {
@@ -310,7 +309,7 @@ pub(super) fn render_selected_deck_detail(
                                 ui.separator();
                                 // Enable toggle
                                 ui.horizontal(|ui| {
-                                    let enabled = deck.auto_transition.as_ref().map_or(false, |at| at.enabled);
+                                    let enabled = deck.auto_transition.as_ref().is_some_and(|at| at.enabled);
                                     let mut en = enabled;
                                     ui.checkbox(&mut en, "Enabled");
                                     if en != enabled {
@@ -340,15 +339,14 @@ pub(super) fn render_selected_deck_detail(
                                             let mut val = at.play_duration_value as f32;
                                             let max = if at.play_duration_is_beats { 128.0 } else { 300.0 };
                                             let play_path = format!("deck/{}/at/play_duration", deck.uuid);
-                                            let slider_rect;
-                                            if any_learn {
+                                            let slider_rect = if any_learn {
                                                 let inner = ui.scope(|ui| {
                                                     ui.disable();
                                                     ui.add(egui::Slider::new(&mut val, 0.5..=max)
                                                         .logarithmic(true)
                                                         .suffix(if at.play_duration_is_beats { " beats" } else { " sec" }))
                                                 });
-                                                slider_rect = inner.inner.rect;
+                                                inner.inner.rect
                                             } else {
                                                 let resp = ui.add(egui::Slider::new(&mut val, 0.5..=max)
                                                     .logarithmic(true)
@@ -357,8 +355,8 @@ pub(super) fn render_selected_deck_detail(
                                                     actions.auto_transition_actions.push((ch_idx, deck_idx,
                                                         AutoTransitionAction::SetPlayDuration(val as f64)));
                                                 }
-                                                slider_rect = resp.rect;
-                                            }
+                                                resp.rect
+                                            };
                                             if data.midi_learn_active {
                                                 let is_target = data.midi_learn_target.as_deref() == Some(play_path.as_str());
                                                 if is_target { widgets::draw_midi_learn_selected(ui, slider_rect); }
@@ -377,29 +375,27 @@ pub(super) fn render_selected_deck_detail(
                                                     actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(play_path));
                                                 }
                                             }
-                                            if !any_learn {
-                                                if ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
+                                            if !any_learn
+                                                && ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
                                                     .on_hover_text("Toggle beats/seconds").clicked()
                                                 {
                                                     actions.auto_transition_actions.push((ch_idx, deck_idx,
                                                         AutoTransitionAction::TogglePlayDurationUnit));
                                                 }
-                                            }
                                         });
                                         ui.horizontal(|ui| {
                                             ui.label("Trans:");
                                             let mut val = at.transition_duration_value as f32;
                                             let max = if at.transition_duration_is_beats { 32.0 } else { 30.0 };
                                             let trans_path = format!("deck/{}/at/trans_duration", deck.uuid);
-                                            let slider_rect;
-                                            if any_learn {
+                                            let slider_rect = if any_learn {
                                                 let inner = ui.scope(|ui| {
                                                     ui.disable();
                                                     ui.add(egui::Slider::new(&mut val, 0.1..=max)
                                                         .logarithmic(true)
                                                         .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" }))
                                                 });
-                                                slider_rect = inner.inner.rect;
+                                                inner.inner.rect
                                             } else {
                                                 let resp = ui.add(egui::Slider::new(&mut val, 0.1..=max)
                                                     .logarithmic(true)
@@ -408,8 +404,8 @@ pub(super) fn render_selected_deck_detail(
                                                     actions.auto_transition_actions.push((ch_idx, deck_idx,
                                                         AutoTransitionAction::SetTransitionDuration(val as f64)));
                                                 }
-                                                slider_rect = resp.rect;
-                                            }
+                                                resp.rect
+                                            };
                                             if data.midi_learn_active {
                                                 let is_target = data.midi_learn_target.as_deref() == Some(trans_path.as_str());
                                                 if is_target { widgets::draw_midi_learn_selected(ui, slider_rect); }
@@ -428,14 +424,13 @@ pub(super) fn render_selected_deck_detail(
                                                     actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(trans_path));
                                                 }
                                             }
-                                            if !any_learn {
-                                                if ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
+                                            if !any_learn
+                                                && ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
                                                     .on_hover_text("Toggle beats/seconds").clicked()
                                                 {
                                                     actions.auto_transition_actions.push((ch_idx, deck_idx,
                                                         AutoTransitionAction::ToggleTransitionDurationUnit));
                                                 }
-                                            }
                                         });
                                         ui.horizontal(|ui| {
                                             ui.label("Shader:");
@@ -809,14 +804,14 @@ fn render_sequence_detail(
             if ui.button("⏹ Stop").on_hover_text("Stop playback").clicked() {
                 actions.sequence_actions.push(SequenceAction::Stop(seq_idx));
             }
-        } else if seq.enabled && !seq.steps.is_empty() {
-            if ui
+        } else if seq.enabled
+            && !seq.steps.is_empty()
+            && ui
                 .button("▶ Play")
                 .on_hover_text("Start playback")
                 .clicked()
-            {
-                actions.sequence_actions.push(SequenceAction::Play(seq_idx));
-            }
+        {
+            actions.sequence_actions.push(SequenceAction::Play(seq_idx));
         }
 
         if ui
@@ -888,28 +883,28 @@ fn render_sequence_detail(
                     let step_count = seq.steps.len();
                     let list_top = ui.cursor().top();
 
-                    let drop_target: Option<usize> = if is_dragging && dragged_idx.is_some() {
-                        if let Some(pos) = ui.ctx().input(|inp| inp.pointer.hover_pos()) {
-                            let src = dragged_idx.unwrap();
-                            // Compute pointer offset from list top, in terms of
-                            // the *logical* list (source item removed).
-                            let rel_y = pos.y - list_top;
-                            if rel_y >= 0.0 {
-                                // Visible items = all except the dragged one
-                                let visible_count = step_count - 1;
-                                // Which slot the pointer is over (0-based)
-                                let slot = ((rel_y / row_height) as usize).min(visible_count);
-                                // Map slot back to original index, re-inserting the gap for the source
-                                let target = if slot < src { slot } else { slot + 1 };
-                                Some(target.min(step_count))
+                    let drop_target: Option<usize> = match (is_dragging, dragged_idx) {
+                        (true, Some(src)) => {
+                            if let Some(pos) = ui.ctx().input(|inp| inp.pointer.hover_pos()) {
+                                // Compute pointer offset from list top, in terms of
+                                // the *logical* list (source item removed).
+                                let rel_y = pos.y - list_top;
+                                if rel_y >= 0.0 {
+                                    // Visible items = all except the dragged one
+                                    let visible_count = step_count - 1;
+                                    // Which slot the pointer is over (0-based)
+                                    let slot = ((rel_y / row_height) as usize).min(visible_count);
+                                    // Map slot back to original index, re-inserting the gap for the source
+                                    let target = if slot < src { slot } else { slot + 1 };
+                                    Some(target.min(step_count))
+                                } else {
+                                    Some(0)
+                                }
                             } else {
-                                Some(0)
+                                None
                             }
-                        } else {
-                            None
                         }
-                    } else {
-                        None
+                        _ => None,
                     };
 
                     // Store the computed target in memory for the deferred handler
@@ -1066,7 +1061,7 @@ fn render_sequence_detail(
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let from = 0.min(data.channel_count.saturating_sub(1));
+                let from = 0;
                 let to = 1.min(data.channel_count.saturating_sub(1));
                 if ui.small_button("+Fade").clicked() {
                     actions.sequence_actions.push(SequenceAction::AddFade {

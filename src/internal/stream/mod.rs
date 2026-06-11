@@ -92,6 +92,12 @@ pub struct StreamManager {
     textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
 }
 
+impl Default for StreamManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamManager {
     pub fn new() -> Self {
         // Init ffmpeg once on the main thread before any receiver threads spawn.

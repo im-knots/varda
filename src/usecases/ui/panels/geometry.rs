@@ -21,9 +21,8 @@ pub(super) fn polygon_shape(
         return egui::Shape::convex_polygon(verts.to_vec(), fill, stroke);
     }
 
-    // Build mesh for the filled area
+    // Build mesh for the filled area (default texture_id targets the font atlas)
     let mut mesh = egui::Mesh::default();
-    mesh.texture_id = egui::TextureId::default();
     for &p in verts {
         mesh.vertices.push(egui::epaint::Vertex {
             pos: p,
@@ -119,10 +118,8 @@ pub(super) fn is_ear(
         if cross <= 0.0 {
             return false;
         }
-    } else {
-        if cross >= 0.0 {
-            return false;
-        }
+    } else if cross >= 0.0 {
+        return false;
     }
 
     // Check no other vertex is inside this triangle

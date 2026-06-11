@@ -37,9 +37,12 @@ pub enum ClockSource {
 }
 
 /// User preference for which clock source to use.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
+)]
 pub enum ClockPreference {
     /// Auto-detect: use priority resolution (MIDI > OSC > Audio).
+    #[default]
     Auto,
     /// Force a specific MIDI device's clock.
     ForceMidi { device_id: DeviceId },
@@ -49,12 +52,6 @@ pub enum ClockPreference {
     ForceAudio,
     /// Force a manually set BPM (user beatmatches by ear).
     ForceManual { bpm: f32 },
-}
-
-impl Default for ClockPreference {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// A MIDI device that has been detected as sending clock ticks.
@@ -123,6 +120,12 @@ pub struct ClockManager {
 
     // ── Resolved state ──────────────────────────────────────────
     state: ClockState,
+}
+
+impl Default for ClockManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClockManager {
@@ -289,9 +292,8 @@ impl ClockManager {
 
     /// Whether OSC clock is currently active (not stale).
     pub fn osc_active(&self) -> bool {
-        self.osc_last_message.map_or(false, |t| {
-            Instant::now().duration_since(t).as_secs_f32() < STALE_TIMEOUT_SECS
-        })
+        self.osc_last_message
+            .is_some_and(|t| Instant::now().duration_since(t).as_secs_f32() < STALE_TIMEOUT_SECS)
     }
 
     /// Get the current OSC BPM (if active).
@@ -321,11 +323,9 @@ impl ClockManager {
                     source: ClockSource::Manual,
                     active: true,
                 };
-                return;
             }
             ClockPreference::ForceAudio => {
                 self.resolve_audio();
-                return;
             }
             ClockPreference::ForceOsc => {
                 if self.resolve_osc(now) {
@@ -333,7 +333,6 @@ impl ClockManager {
                 }
                 // OSC not available, fall back to audio
                 self.resolve_audio();
-                return;
             }
             ClockPreference::ForceMidi { device_id } => {
                 let dev_id = *device_id;
@@ -342,7 +341,6 @@ impl ClockManager {
                 }
                 // Forced device not available, fall back to audio
                 self.resolve_audio();
-                return;
             }
             ClockPreference::Auto => {
                 // Priority resolution: MIDI > OSC > Audio
@@ -404,9 +402,9 @@ impl ClockManager {
     }
 
     fn resolve_osc(&mut self, now: Instant) -> bool {
-        let osc_fresh = self.osc_last_message.map_or(false, |t| {
-            now.duration_since(t).as_secs_f32() < STALE_TIMEOUT_SECS
-        });
+        let osc_fresh = self
+            .osc_last_message
+            .is_some_and(|t| now.duration_since(t).as_secs_f32() < STALE_TIMEOUT_SECS);
         if osc_fresh {
             if let Some(osc_bpm) = self.osc_bpm {
                 self.state = ClockState {

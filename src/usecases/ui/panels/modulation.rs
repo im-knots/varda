@@ -441,6 +441,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
 }
 
 /// Render step sequencer controls: rate, interpolation, bipolar, step count, and painted bar grid.
+// UI render fn taking many independent egui state/handle args; no shared invariant to bundle.
+#[allow(clippy::too_many_arguments)]
 fn render_step_sequencer_controls(
     ui: &mut egui::Ui,
     idx: usize,
@@ -566,7 +568,7 @@ fn render_step_sequencer_controls(
     });
 
     // Painted step grid
-    let grid_width = ui.available_width().min(260.0).max(120.0);
+    let grid_width = ui.available_width().clamp(120.0, 260.0);
     let grid_height = 80.0_f32;
     let (response, painter) = ui.allocate_painter(
         egui::vec2(grid_width, grid_height),
@@ -659,22 +661,21 @@ fn render_step_sequencer_controls(
 
     // Click/drag to set step values
     let any_learn = data.midi_learn_active || data.keyboard_learn_active;
-    if !any_learn {
-        if (response.clicked() || response.dragged()) && hover_step.is_some() {
-            if let Some(pos) = response
+    if !any_learn && (response.clicked() || response.dragged()) {
+        if let (Some(pos), Some(step_idx)) = (
+            response
                 .hover_pos()
-                .or_else(|| response.interact_pointer_pos())
-            {
-                let step_idx = hover_step.unwrap();
-                let val = 1.0 - ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
-                actions
-                    .modulation_actions
-                    .push(ModulationAction::UpdateStepValue {
-                        source_id: sid.to_string(),
-                        step_idx,
-                        value: val,
-                    });
-            }
+                .or_else(|| response.interact_pointer_pos()),
+            hover_step,
+        ) {
+            let val = 1.0 - ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+            actions
+                .modulation_actions
+                .push(ModulationAction::UpdateStepValue {
+                    source_id: sid.to_string(),
+                    step_idx,
+                    value: val,
+                });
         }
     }
 
@@ -768,13 +769,11 @@ pub(super) fn render_mod_learn_slider(
                     Some(crate::keymap::KeyTarget::ParamPath(midi_path.to_string()));
             }
         }
-    } else {
-        if ui
-            .add(slider_opts(egui::Slider::new(value, range)))
-            .changed()
-        {
-            changed = true;
-        }
+    } else if ui
+        .add(slider_opts(egui::Slider::new(value, range)))
+        .changed()
+    {
+        changed = true;
     }
     changed
 }
@@ -794,8 +793,8 @@ pub(super) fn render_mod_on_mod_dropdown(
     let has_assignment = data
         .modulation_assignments
         .get(&key)
-        .map_or(false, |v| !v.is_empty());
-    let btn_text = if has_assignment { "〰" } else { "〰" };
+        .is_some_and(|v| !v.is_empty());
+    let btn_text = "〰";
     let btn_color = if has_assignment {
         let source_id = data
             .modulation_assignments

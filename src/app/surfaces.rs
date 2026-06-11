@@ -189,7 +189,7 @@ impl VardaApp {
         for (i, mesh) in meshes.iter().enumerate() {
             let name = format!("Dome P{}", i + 1);
             // Compute the convex hull of the warp mesh UVs as the 2D surface polygon
-            let vertices = convex_hull_of_uvs(&mesh);
+            let vertices = convex_hull_of_uvs(mesh);
             let uuid = self.output.surface_manager.add_polygon_surface(
                 name.clone(),
                 vertices,

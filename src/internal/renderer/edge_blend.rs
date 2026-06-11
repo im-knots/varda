@@ -5,19 +5,22 @@ use wgpu::util::DeviceExt;
 
 /// Controls whether edge blend config is user-set or auto-computed from surface topology.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+    Default,
 )]
 pub enum EdgeBlendMode {
     /// User sets each edge manually (default — preserves existing behavior).
+    #[default]
     Manual,
     /// Blend config is auto-derived from overlapping surfaces across outputs.
     Auto,
-}
-
-impl Default for EdgeBlendMode {
-    fn default() -> Self {
-        Self::Manual
-    }
 }
 
 /// Per-edge blend configuration.
@@ -41,23 +44,14 @@ impl Default for EdgeBlendEdge {
 }
 
 /// Edge blending configuration for an output — four independent edges.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, utoipa::ToSchema, Default,
+)]
 pub struct EdgeBlendConfig {
     pub left: EdgeBlendEdge,
     pub right: EdgeBlendEdge,
     pub top: EdgeBlendEdge,
     pub bottom: EdgeBlendEdge,
-}
-
-impl Default for EdgeBlendConfig {
-    fn default() -> Self {
-        Self {
-            left: EdgeBlendEdge::default(),
-            right: EdgeBlendEdge::default(),
-            top: EdgeBlendEdge::default(),
-            bottom: EdgeBlendEdge::default(),
-        }
-    }
 }
 
 impl EdgeBlendConfig {
@@ -764,10 +758,7 @@ mod tests {
         }
     }
 
-    fn find_zones<'a>(
-        results: &'a [AutoBlendResult],
-        output_idx: usize,
-    ) -> &'a SurfaceOverlapZones {
+    fn find_zones(results: &[AutoBlendResult], output_idx: usize) -> &SurfaceOverlapZones {
         &results
             .iter()
             .find(|r| r.output_idx == output_idx)

@@ -226,8 +226,8 @@ impl HapTextureFormat {
 
     /// Calculate the byte size of a full frame in this compressed format.
     pub fn frame_byte_size(self, width: u32, height: u32) -> usize {
-        let blocks_x = (width + 3) / 4;
-        let blocks_y = (height + 3) / 4;
+        let blocks_x = width.div_ceil(4);
+        let blocks_y = height.div_ceil(4);
         (blocks_x * blocks_y * self.block_bytes()) as usize
     }
 }
@@ -279,10 +279,14 @@ pub struct PlaybackSnapshot {
     pub reverse: bool,
     pub reached_end: bool,
     pub frame_rate: f64,
+    /// Whether the ping-pong RAM cache was truncated (hit the memory cap).
+    /// Always false for HAP sources (they reverse via seek, no cache).
+    pub pingpong_cache_truncated: bool,
 }
 
 impl PlaybackSnapshot {
-    /// Create a snapshot from a PlaybackState.
+    /// Create a snapshot from a PlaybackState. The `pingpong_cache_truncated`
+    /// flag defaults to false here and is set by the ffmpeg decode thread.
     pub fn from_state(ps: &PlaybackState) -> Self {
         Self {
             playing: ps.playing,
@@ -295,6 +299,7 @@ impl PlaybackSnapshot {
             reverse: ps.reverse,
             reached_end: ps.reached_end,
             frame_rate: ps.frame_rate,
+            pingpong_cache_truncated: false,
         }
     }
 }
@@ -305,6 +310,10 @@ pub struct VideoDecodeHandle {
     frame_data: Arc<Mutex<Option<DecodedFrame>>>,
     snapshot: Arc<Mutex<PlaybackSnapshot>>,
     stop_flag: Arc<AtomicBool>,
+    /// Bounded pool of reusable frame buffers returned by the renderer via
+    /// [`Self::recycle`] and reused by the decode thread (avoids a fresh ~4 MB
+    /// allocation per frame — issue #42).
+    frame_pool: Arc<Mutex<Vec<Vec<u8>>>>,
     _thread: Option<std::thread::JoinHandle<()>>,
     pub width: u32,
     pub height: u32,
@@ -325,14 +334,17 @@ impl VideoDecodeHandle {
         let snapshot: Arc<Mutex<PlaybackSnapshot>> = Arc::new(Mutex::new(initial_snapshot));
         let stop_flag = Arc::new(AtomicBool::new(false));
 
+        let frame_pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+
         let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
+        let fp = frame_pool.clone();
 
         let thread = std::thread::Builder::new()
             .name("video-decode".into())
             .spawn(move || {
-                video_decode_thread(player, cmd_rx, fd, ss, sf, fps);
+                video_decode_thread(player, cmd_rx, fd, ss, sf, fp, fps);
             })
             .expect("failed to spawn video decode thread");
 
@@ -341,6 +353,7 @@ impl VideoDecodeHandle {
             frame_data,
             snapshot,
             stop_flag,
+            frame_pool,
             _thread: Some(thread),
             width,
             height,
@@ -361,14 +374,17 @@ impl VideoDecodeHandle {
         let snapshot: Arc<Mutex<PlaybackSnapshot>> = Arc::new(Mutex::new(initial_snapshot));
         let stop_flag = Arc::new(AtomicBool::new(false));
 
+        let frame_pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+
         let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
+        let fp = frame_pool.clone();
 
         let thread = std::thread::Builder::new()
             .name("hap-decode".into())
             .spawn(move || {
-                hap_decode_thread(player, cmd_rx, fd, ss, sf, fps);
+                hap_decode_thread(player, cmd_rx, fd, ss, sf, fp, fps);
             })
             .expect("failed to spawn hap decode thread");
 
@@ -377,6 +393,7 @@ impl VideoDecodeHandle {
             frame_data,
             snapshot,
             stop_flag,
+            frame_pool,
             _thread: Some(thread),
             width,
             height,
@@ -385,8 +402,19 @@ impl VideoDecodeHandle {
     }
 
     /// Take the latest decoded frame (returns None if no new frame available).
+    /// Return the frame to the decode thread via [`Self::recycle`] after upload
+    /// so its buffer is reused instead of freed.
     pub fn take_frame(&self) -> Option<DecodedFrame> {
         self.frame_data.lock().ok()?.take()
+    }
+
+    /// Return a consumed frame's buffers to the pool for reuse by the decode
+    /// thread. Call after the frame's data has been uploaded to the GPU.
+    pub fn recycle(&self, frame: DecodedFrame) {
+        pool_return(&self.frame_pool, frame.color_data);
+        if let Some(alpha) = frame.alpha_data {
+            pool_return(&self.frame_pool, alpha);
+        }
     }
 
     /// Send a command to the decode thread.
@@ -410,6 +438,7 @@ impl VideoDecodeHandle {
                 reverse: false,
                 reached_end: false,
                 frame_rate: 30.0,
+                pingpong_cache_truncated: false,
             })
     }
 }
@@ -446,12 +475,35 @@ fn apply_command(ps: &mut PlaybackState, cmd: VideoCommand) {
 }
 
 /// Background decode loop for standard (ffmpeg) video.
+/// Maximum number of reusable frame buffers held in a decode handle's pool.
+/// Enough to cover the in-flight frame plus a displaced frame; bounded so the
+/// pool itself can never grow unbounded.
+const FRAME_POOL_CAP: usize = 4;
+
+/// Take a reusable buffer from the pool, or a fresh empty one if it is empty.
+fn pool_take(pool: &Arc<Mutex<Vec<Vec<u8>>>>) -> Vec<u8> {
+    pool.lock()
+        .ok()
+        .and_then(|mut p| p.pop())
+        .unwrap_or_default()
+}
+
+/// Return a buffer to the pool for reuse, dropping it if the pool is at capacity.
+fn pool_return(pool: &Arc<Mutex<Vec<Vec<u8>>>>, buf: Vec<u8>) {
+    if let Ok(mut p) = pool.lock() {
+        if p.len() < FRAME_POOL_CAP {
+            p.push(buf);
+        }
+    }
+}
+
 fn video_decode_thread(
     mut player: VideoPlayer,
     cmd_rx: mpsc::Receiver<VideoCommand>,
     frame_data: Arc<Mutex<Option<DecodedFrame>>>,
     snapshot: Arc<Mutex<PlaybackSnapshot>>,
     stop_flag: Arc<AtomicBool>,
+    frame_pool: Arc<Mutex<Vec<Vec<u8>>>>,
     fps: f64,
 ) {
     let interval = std::time::Duration::from_secs_f64((1.0 / fps).max(0.001));
@@ -479,13 +531,25 @@ fn video_decode_thread(
         // Decode next frame
         match player.next_frame() {
             Ok(Some(data)) => {
+                let mut buf = pool_take(&frame_pool);
+                buf.clear();
+                buf.extend_from_slice(data);
                 let frame = DecodedFrame {
-                    color_data: data.to_vec(),
+                    color_data: buf,
                     alpha_data: None,
                     color_format: None,
                     alpha_format: None,
                 };
                 if let Ok(mut slot) = frame_data.lock() {
+                    // Recycle a frame the renderer never consumed (happens when
+                    // it falls behind — exactly the #42 scenario) instead of
+                    // dropping its buffer.
+                    if let Some(old) = slot.take() {
+                        pool_return(&frame_pool, old.color_data);
+                        if let Some(alpha) = old.alpha_data {
+                            pool_return(&frame_pool, alpha);
+                        }
+                    }
                     *slot = Some(frame);
                 }
             }
@@ -497,7 +561,9 @@ fn video_decode_thread(
 
         // Publish snapshot
         if let Ok(mut ss) = snapshot.lock() {
-            *ss = PlaybackSnapshot::from_state(&player.playback);
+            let mut snap = PlaybackSnapshot::from_state(&player.playback);
+            snap.pingpong_cache_truncated = player.pingpong_cache_truncated();
+            *ss = snap;
         }
 
         // Sleep until next frame or wake on command
@@ -527,6 +593,7 @@ fn hap_decode_thread(
     frame_data: Arc<Mutex<Option<DecodedFrame>>>,
     snapshot: Arc<Mutex<PlaybackSnapshot>>,
     stop_flag: Arc<AtomicBool>,
+    frame_pool: Arc<Mutex<Vec<Vec<u8>>>>,
     fps: f64,
 ) {
     let interval = std::time::Duration::from_secs_f64((1.0 / fps).max(0.001));
@@ -554,13 +621,28 @@ fn hap_decode_thread(
         // Decode next frame
         match player.next_frame() {
             Ok(Some(result)) => {
+                let mut color = pool_take(&frame_pool);
+                color.clear();
+                color.extend_from_slice(result.color_data);
+                let alpha = result.alpha_data.map(|d| {
+                    let mut a = pool_take(&frame_pool);
+                    a.clear();
+                    a.extend_from_slice(d);
+                    a
+                });
                 let frame = DecodedFrame {
-                    color_data: result.color_data.to_vec(),
-                    alpha_data: result.alpha_data.map(|d| d.to_vec()),
+                    color_data: color,
+                    alpha_data: alpha,
                     color_format: Some(result.color_format),
                     alpha_format: result.alpha_format,
                 };
                 if let Ok(mut slot) = frame_data.lock() {
+                    if let Some(old) = slot.take() {
+                        pool_return(&frame_pool, old.color_data);
+                        if let Some(alpha) = old.alpha_data {
+                            pool_return(&frame_pool, alpha);
+                        }
+                    }
                     *slot = Some(frame);
                 }
             }
@@ -599,29 +681,43 @@ fn hap_decode_thread(
 /// Returns the HAP texture format if it is HAP, or None for standard codecs.
 pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureFormat>> {
     ffmpeg::init().context("Failed to initialize FFmpeg")?;
-    let ictx = input(&path).context("Failed to open video file for codec detection")?;
+    let mut ictx = input(&path).context("Failed to open video file for codec detection")?;
 
-    let video_stream = ictx
-        .streams()
-        .best(Type::Video)
-        .context("No video stream found")?;
+    // ffmpeg maps every HAP variant to one codec id, so confirm it's HAP here
+    // and then read the real texture format from the first frame's section header.
+    let (video_stream_index, is_hap) = {
+        let video_stream = ictx
+            .streams()
+            .best(Type::Video)
+            .context("No video stream found")?;
+        let codec_ctx =
+            ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())?;
+        (video_stream.index(), codec_ctx.id().name() == "hap")
+    };
 
-    // Get the codec tag (FourCC) from stream parameters
-    let params = video_stream.parameters();
-    let codec_ctx = ffmpeg::codec::context::Context::from_parameters(params)?;
-    let codec_id = codec_ctx.id();
-
-    // Check if codec is HAP by examining the codec ID
-    // ffmpeg maps HAP variants to AV_CODEC_ID_HAP
-    let codec_name = codec_id.name();
-    if codec_name == "hap" {
-        // Determine the specific HAP variant from the codec tag
-        // We need to probe the first frame to determine the exact texture format
-        // since ffmpeg groups all HAP variants under one codec ID.
-        // We'll determine the format when we parse the first frame in HapPlayer.
-        return Ok(Some(HapTextureFormat::Bc7)); // default; HapPlayer refines this
+    if !is_hap {
+        return Ok(None);
     }
 
+    // Probe the first video packet for the exact variant (BC1/BC3/BC7/YCoCg).
+    // The texture and staging buffers are sized from this, so a wrong format
+    // overruns the staging copy (issue: Hap1/BC1 misdetected as Bc7).
+    for (stream, packet) in ictx.packets() {
+        if stream.index() != video_stream_index {
+            continue;
+        }
+        if let Some(data) = packet.data() {
+            return match hap::detect_hap_format(data) {
+                Ok(fmt) => Ok(Some(fmt)),
+                Err(e) => {
+                    log::warn!("HAP format detection failed ({e}) — using CPU decode fallback");
+                    Ok(None)
+                }
+            };
+        }
+    }
+
+    log::warn!("HAP stream has no readable packets — using CPU decode fallback");
     Ok(None)
 }
 
@@ -658,10 +754,16 @@ pub struct VideoPlayer {
     caching_enabled: bool,
     /// Set when cache overflows this pass — reset each new forward pass.
     cache_overflowed: bool,
-    /// Permanent flag: suppresses repeated log warnings after the first overflow.
+    /// Permanent latch set on the first cache overflow. Suppresses repeated log
+    /// warnings and drives the one-time "transcode to HAP" UI notice (exposed
+    /// via [`VideoPlayer::pingpong_cache_truncated`]).
     cache_overflow_warned: bool,
     /// Bytes per frame for cache budget calculation.
     frame_byte_size: usize,
+    /// Reused decoder output frame (avoids a per-frame ffmpeg frame allocation).
+    decoded: Video,
+    /// Reused scaler output frame (RGBA), avoids a per-frame allocation.
+    rgb_frame: Video,
 }
 
 // SAFETY: See doc comment on VideoPlayer. Exclusive ownership of C allocations, no concurrent use.
@@ -724,6 +826,8 @@ impl VideoPlayer {
             cache_overflowed: false,
             cache_overflow_warned: false,
             frame_byte_size,
+            decoded: Video::empty(),
+            rgb_frame: Video::empty(),
         })
     }
 
@@ -797,15 +901,13 @@ impl VideoPlayer {
         let target_frames = result.frames_to_decode.max(1);
         let mut decoded_count = 0u32;
         loop {
-            let mut decoded = Video::empty();
-            if self.decoder.receive_frame(&mut decoded).is_ok() {
+            if self.decoder.receive_frame(&mut self.decoded).is_ok() {
                 decoded_count += 1;
                 // Only convert the last frame we need (skip intermediate for speed > 1)
                 if decoded_count >= target_frames {
-                    let mut rgb_frame = Video::empty();
-                    self.scaler.run(&decoded, &mut rgb_frame)?;
-                    let data = rgb_frame.data(0);
-                    let stride = rgb_frame.stride(0);
+                    self.scaler.run(&self.decoded, &mut self.rgb_frame)?;
+                    let data = self.rgb_frame.data(0);
+                    let stride = self.rgb_frame.stride(0);
                     for y in 0..self.height as usize {
                         let src_offset = y * stride;
                         let dst_offset = y * (self.width as usize * 4);
@@ -833,10 +935,9 @@ impl VideoPlayer {
                 // Intermediate frame at speed > 1: still cache for ping-pong
                 if self.caching_enabled && self.playback.loop_mode == LoopMode::PingPong {
                     // Lightweight: decode into scaler for cache but skip if over budget
-                    let mut rgb_frame = Video::empty();
-                    self.scaler.run(&decoded, &mut rgb_frame)?;
-                    let data = rgb_frame.data(0);
-                    let stride = rgb_frame.stride(0);
+                    self.scaler.run(&self.decoded, &mut self.rgb_frame)?;
+                    let data = self.rgb_frame.data(0);
+                    let stride = self.rgb_frame.stride(0);
                     let mut cache_buf = vec![0u8; self.frame_byte_size];
                     for y in 0..self.height as usize {
                         let src_offset = y * stride;
@@ -911,6 +1012,13 @@ impl VideoPlayer {
         self.seek(time_secs)
     }
 
+    /// Whether this player's ping-pong RAM cache has ever been truncated (hit
+    /// the memory cap). Permanent latch — once true, stays true for the
+    /// player's lifetime. Drives the one-time "transcode to HAP" UI notice.
+    pub fn pingpong_cache_truncated(&self) -> bool {
+        self.cache_overflow_warned
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -944,6 +1052,46 @@ impl VideoPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: the birds HAP fixture is Hap1/BC1, not Bc7. detect_hap_codec
+    /// must report the real format so the deck sizes its texture/staging
+    /// correctly (a wrong format overran the staging copy and panicked).
+    /// Skips when the local-only fixture is absent (tests/media/ is gitignored).
+    #[test]
+    fn detect_hap_codec_birds_fixture_is_bc1() {
+        let path = "tests/media/birds_combined_hap.mov";
+        if !std::path::Path::new(path).exists() {
+            eprintln!("skipping: {path} not present (local-only fixture)");
+            return;
+        }
+        assert_eq!(
+            detect_hap_codec(path).unwrap(),
+            Some(HapTextureFormat::Bc1),
+            "Hap1 fixture must be detected as BC1, not the old hardcoded Bc7"
+        );
+    }
+
+    #[test]
+    fn frame_pool_reuses_and_bounds_buffers() {
+        let pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // Empty pool yields a fresh buffer.
+        let buf = pool_take(&pool);
+        assert!(buf.is_empty());
+
+        // A returned buffer is handed back out (reuse, not realloc).
+        let mut b = Vec::with_capacity(4096);
+        b.extend_from_slice(&[1u8, 2, 3]);
+        pool_return(&pool, b);
+        let reused = pool_take(&pool);
+        assert!(reused.capacity() >= 4096);
+
+        // The pool never grows past FRAME_POOL_CAP.
+        for _ in 0..(FRAME_POOL_CAP + 4) {
+            pool_return(&pool, Vec::new());
+        }
+        assert_eq!(pool.lock().unwrap().len(), FRAME_POOL_CAP);
+    }
 
     #[test]
     fn test_playback_snapshot_from_state() {

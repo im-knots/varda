@@ -91,18 +91,13 @@ pub struct Surface {
 ///   shows source UVs from (0.2, 0.3) to (0.3, 0.4). Multiple surfaces with the same
 ///   source in Mapped mode implicitly form a group, each showing its slice of one
 ///   continuous image.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum ContentMapping {
     /// Entire source scaled to fill the surface (independent per surface)
+    #[default]
     Fill,
     /// Surface position on canvas = UV crop into the source (spatial mapping)
     Mapped,
-}
-
-impl Default for ContentMapping {
-    fn default() -> Self {
-        ContentMapping::Fill
-    }
 }
 
 impl std::fmt::Display for ContentMapping {

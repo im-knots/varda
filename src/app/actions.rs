@@ -171,9 +171,8 @@ impl VardaApp {
 
         // Camera add + channel remove
         self.apply_camera_add(ui_actions, egui_renderer, deck_preview_textures);
-        let removed_channel = self.apply_remove_channel(ui_actions);
 
-        removed_channel
+        self.apply_remove_channel(ui_actions)
     }
 
     fn apply_add_channel(&mut self, ui_actions: &ui::UIActions) {
@@ -328,7 +327,7 @@ impl VardaApp {
             self.execute_command(EngineCommand::ClearMidiMappings);
         }
         for key in &ui_actions.midi_remove_mapping {
-            self.execute_command(EngineCommand::RemoveMidiMapping { key: key.clone() });
+            self.execute_command(EngineCommand::RemoveMidiMapping { key: *key });
         }
         if ui_actions.ndi_rescan {
             self.execute_command(EngineCommand::RescanNdi);

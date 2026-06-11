@@ -206,6 +206,7 @@ fn solve_homography(src: &[[f32; 2]; 4], dst: &[[f32; 2]; 4]) -> [f32; 9] {
 }
 
 /// Gaussian elimination with partial pivoting for an 8x8 system
+#[allow(clippy::needless_range_loop)]
 fn gauss_solve_8x8(a: &mut [[f64; 8]; 8], b: &mut [f64; 8]) -> [f64; 8] {
     let n = 8;
     // Forward elimination
@@ -667,11 +668,9 @@ mod tests {
     fn chaos_csv_infinity_coordinates() {
         let csv = "2 2\ninf inf inf inf 1.0\n1.0 0.0 1.0 0.0 1.0\n0.0 1.0 0.0 1.0 1.0\n1.0 1.0 1.0 1.0 1.0\n";
         let result = WarpMesh::from_xyuv_csv(csv);
-        match result {
-            Ok(mesh) => {
-                assert_eq!(mesh.points.len(), 4);
-            }
-            Err(_) => {} // count mismatch is acceptable
+        // count mismatch is acceptable
+        if let Ok(mesh) = result {
+            assert_eq!(mesh.points.len(), 4);
         }
     }
 
@@ -718,10 +717,10 @@ mod tests {
     fn chaos_csv_mixed_valid_invalid() {
         let csv = "2 2\n0.0 0.0 0.0 0.0 1.0\nNaN 0.0 NaN 0.0 1.0\n0.0 1.0 0.0 1.0 1.0\n1.0 1.0 1.0 1.0 1.0\n";
         let result = WarpMesh::from_xyuv_csv(csv);
-        // NaN parses fine as f32, so all 4 points should be present
-        match result {
-            Ok(mesh) => assert_eq!(mesh.points.len(), 4),
-            Err(_) => {} // if NaN fields are dropped, count mismatch
+        // NaN parses fine as f32, so all 4 points should be present;
+        // if NaN fields are dropped, a count mismatch is acceptable.
+        if let Ok(mesh) = result {
+            assert_eq!(mesh.points.len(), 4);
         }
     }
 }

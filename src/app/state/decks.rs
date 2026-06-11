@@ -94,64 +94,65 @@ impl VardaApp {
 
         // Move deck between channels if requested
         if let Some((src_ch, src_deck, dst_ch)) = actions.deck_to_move {
-            if src_ch != dst_ch && src_ch < mixer.channel_count() && dst_ch < mixer.channel_count()
+            if src_ch != dst_ch
+                && src_ch < mixer.channel_count()
+                && dst_ch < mixer.channel_count()
+                && src_deck < mixer.channels_mut()[src_ch].decks.len()
             {
-                if src_deck < mixer.channels_mut()[src_ch].decks.len() {
-                    let Some(slot) = mixer.channels_mut()[src_ch].remove_deck_slot(src_deck) else {
-                        log::warn!(
-                            "deck_to_move: deck {} not found in channel {}",
-                            src_deck,
-                            src_ch
-                        );
-                        return;
-                    };
-                    let new_idx = mixer.channels_mut()[dst_ch].add_deck_slot(slot);
-
-                    log::info!(
-                        "Moved deck {} from channel {} to channel {} (new index {})",
+                let Some(slot) = mixer.channels_mut()[src_ch].remove_deck_slot(src_deck) else {
+                    log::warn!(
+                        "deck_to_move: deck {} not found in channel {}",
                         src_deck,
-                        src_ch,
-                        dst_ch,
-                        new_idx
+                        src_ch
                     );
+                    return;
+                };
+                let new_idx = mixer.channels_mut()[dst_ch].add_deck_slot(slot);
 
-                    let src_keys: Vec<_> = deck_preview_textures
-                        .keys()
-                        .filter(|(c, _)| *c == src_ch)
-                        .copied()
-                        .collect();
-                    for key in src_keys {
-                        if let Some(tex_id) = deck_preview_textures.remove(&key) {
-                            egui_renderer.free_texture(&tex_id);
-                        }
-                    }
-                    for (i, deck_slot) in mixer.channels_mut()[src_ch].decks.iter().enumerate() {
-                        let tex_id = egui_renderer.register_native_texture(
-                            &context.device,
-                            &deck_slot.deck.texture_view,
-                            wgpu::FilterMode::Linear,
-                        );
-                        deck_preview_textures.insert((src_ch, i), tex_id);
-                    }
+                log::info!(
+                    "Moved deck {} from channel {} to channel {} (new index {})",
+                    src_deck,
+                    src_ch,
+                    dst_ch,
+                    new_idx
+                );
 
-                    let dst_keys: Vec<_> = deck_preview_textures
-                        .keys()
-                        .filter(|(c, _)| *c == dst_ch)
-                        .copied()
-                        .collect();
-                    for key in dst_keys {
-                        if let Some(tex_id) = deck_preview_textures.remove(&key) {
-                            egui_renderer.free_texture(&tex_id);
-                        }
+                let src_keys: Vec<_> = deck_preview_textures
+                    .keys()
+                    .filter(|(c, _)| *c == src_ch)
+                    .copied()
+                    .collect();
+                for key in src_keys {
+                    if let Some(tex_id) = deck_preview_textures.remove(&key) {
+                        egui_renderer.free_texture(&tex_id);
                     }
-                    for (i, deck_slot) in mixer.channels_mut()[dst_ch].decks.iter().enumerate() {
-                        let tex_id = egui_renderer.register_native_texture(
-                            &context.device,
-                            &deck_slot.deck.texture_view,
-                            wgpu::FilterMode::Linear,
-                        );
-                        deck_preview_textures.insert((dst_ch, i), tex_id);
+                }
+                for (i, deck_slot) in mixer.channels_mut()[src_ch].decks.iter().enumerate() {
+                    let tex_id = egui_renderer.register_native_texture(
+                        &context.device,
+                        &deck_slot.deck.texture_view,
+                        wgpu::FilterMode::Linear,
+                    );
+                    deck_preview_textures.insert((src_ch, i), tex_id);
+                }
+
+                let dst_keys: Vec<_> = deck_preview_textures
+                    .keys()
+                    .filter(|(c, _)| *c == dst_ch)
+                    .copied()
+                    .collect();
+                for key in dst_keys {
+                    if let Some(tex_id) = deck_preview_textures.remove(&key) {
+                        egui_renderer.free_texture(&tex_id);
                     }
+                }
+                for (i, deck_slot) in mixer.channels_mut()[dst_ch].decks.iter().enumerate() {
+                    let tex_id = egui_renderer.register_native_texture(
+                        &context.device,
+                        &deck_slot.deck.texture_view,
+                        wgpu::FilterMode::Linear,
+                    );
+                    deck_preview_textures.insert((dst_ch, i), tex_id);
                 }
             }
         }

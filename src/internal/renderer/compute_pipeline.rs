@@ -42,6 +42,8 @@ pub struct ComputePipeline {
 
 impl ComputePipeline {
     /// Create a compute pipeline from SPIR-V bytecode.
+    // Pipeline construction takes many distinct GPU descriptors; no shared invariant to bundle.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         spirv: &[u32],

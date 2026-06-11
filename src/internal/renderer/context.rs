@@ -88,29 +88,7 @@ impl GpuContext {
         log::info!("Using GPU: {}", adapter.get_info().name);
         log::info!("Backend: {:?}", adapter.get_info().backend);
 
-        let mut required_features = wgpu::Features::empty();
-        if adapter
-            .features()
-            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
-        {
-            required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
-            log::info!("GPU supports BC texture compression (HAP video enabled)");
-        } else {
-            log::warn!("GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode");
-        }
-
-        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-            required_features |= wgpu::Features::TIMESTAMP_QUERY;
-            if adapter
-                .features()
-                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
-            {
-                required_features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-                log::info!("GPU supports timestamp queries inside encoders (GPU timing enabled)");
-            } else {
-                log::warn!("GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled");
-            }
-        }
+        let (required_features, timestamp_supported) = Self::select_optional_features(&adapter);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -170,10 +148,6 @@ impl GpuContext {
 
         surface.configure(&device, &surface_config);
 
-        let timestamp_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY)
-            && adapter
-                .features()
-                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
         let gpu = GpuContext {
             instance,
             adapter,
@@ -191,11 +165,48 @@ impl GpuContext {
         Ok((gpu, win_surface))
     }
 
+    /// Select the optional device features to request from an adapter.
+    ///
+    /// Shared by the windowed and headless paths so HAP (BC texture
+    /// compression) and GPU timing behave identically regardless of whether a
+    /// window surface exists. Returns the feature set to request and whether
+    /// timestamp queries are usable for GPU timing.
+    fn select_optional_features(adapter: &wgpu::Adapter) -> (wgpu::Features, bool) {
+        let mut required_features = wgpu::Features::empty();
+        if adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+        {
+            required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
+            log::info!("GPU supports BC texture compression (HAP video enabled)");
+        } else {
+            log::warn!("GPU does not support BC texture compression — HAP video will fall back to ffmpeg CPU decode");
+        }
+
+        let mut timestamp_supported = false;
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            required_features |= wgpu::Features::TIMESTAMP_QUERY;
+            if adapter
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
+            {
+                required_features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+                timestamp_supported = true;
+                log::info!("GPU supports timestamp queries inside encoders (GPU timing enabled)");
+            } else {
+                log::warn!("GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled");
+            }
+        }
+
+        (required_features, timestamp_supported)
+    }
+
     /// Create a headless GPU context (no window surface).
     ///
-    /// Uses the default backend and requests a device without any surface
-    /// compatibility requirements. Falls back to software adapter if no
-    /// hardware GPU is available. Used for headless mode and tests.
+    /// Requests the same optional features as the windowed path (notably
+    /// `TEXTURE_COMPRESSION_BC`) so HAP video uses the GPU-native BCn path in
+    /// headless installations. Falls back to software adapter if no hardware
+    /// GPU is available. Used for headless mode and tests.
     pub fn new_headless() -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -206,16 +217,24 @@ impl GpuContext {
         });
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
+            power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
         }))
         .context("Failed to find GPU adapter for headless context")?;
 
+        log::info!("Using GPU: {}", adapter.get_info().name);
+        log::info!("Backend: {:?}", adapter.get_info().backend);
+
+        let (required_features, timestamp_supported) = Self::select_optional_features(&adapter);
+
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Varda Headless Device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
+            required_features,
+            required_limits: wgpu::Limits {
+                max_texture_dimension_2d: 16384,
+                ..wgpu::Limits::default()
+            },
             memory_hints: Default::default(),
             experimental_features: Default::default(),
             trace: Default::default(),
@@ -228,7 +247,7 @@ impl GpuContext {
             device,
             queue,
             texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            timestamp_supported: false,
+            timestamp_supported,
         })
     }
 
@@ -744,14 +763,16 @@ impl OutputWindow {
                 label: Some(&format!("Output '{}' Encoder", self.name)),
             });
 
-        // Pass 1: Render surfaces into the surface render target
-        let prepared: Vec<_> = surfaces
+        // Pass 1: Render surfaces into the surface render target.
+        // Triangulate on the CPU, then prepare draws from the pipeline's
+        // persistent param/vertex pools (no per-frame GPU buffer allocation).
+        let draws: Vec<super::blit::PolygonDrawDesc<'_>> = surfaces
             .iter()
             .map(|surf| {
                 let bb = surf.bounding_box;
 
                 // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
-                let (homography, vb, num_tris) = match &surf.warp_mode {
+                let (homography, vertices) = match &surf.warp_mode {
                     Some(super::warp::WarpMode::CornerPin { corners }) => {
                         let src_corners = [
                             [bb[0], bb[1]],
@@ -760,50 +781,45 @@ impl OutputWindow {
                             [bb[0], bb[1] + bb[3]],
                         ];
                         let h = super::warp::compute_forward_homography(&src_corners, corners);
-                        let (vb, nt) = PolygonBlitPipeline::triangulate(
-                            &context.device,
+                        let verts = PolygonBlitPipeline::triangulate_verts(
                             surf.vertices,
                             bb[0],
                             bb[1],
                             bb[2],
                             bb[3],
                         );
-                        (Some(h), vb, nt)
+                        (Some(h), verts)
                     }
                     Some(super::warp::WarpMode::Mesh(mesh)) => {
                         // Mesh mode: warp baked into vertices, identity homography
-                        let (vb, nt) = PolygonBlitPipeline::triangulate_with_mesh(
-                            &context.device,
-                            surf.vertices,
-                            bb,
-                            mesh,
-                        );
-                        (None, vb, nt)
+                        (None, PolygonBlitPipeline::mesh_verts(mesh))
                     }
                     None => {
-                        let (vb, nt) = PolygonBlitPipeline::triangulate(
-                            &context.device,
+                        let verts = PolygonBlitPipeline::triangulate_verts(
                             surf.vertices,
                             bb[0],
                             bb[1],
                             bb[2],
                             bb[3],
                         );
-                        (None, vb, nt)
+                        (None, verts)
                     }
                 };
 
-                let bind_group = self.polygon_pipeline.create_bind_group(
-                    &context.device,
-                    surf.content_view,
-                    surf.uv_scale,
-                    surf.uv_offset,
-                    homography.as_ref(),
-                    &surf.overlap_zones,
-                );
-                (bind_group, vb, num_tris)
+                super::blit::PolygonDrawDesc {
+                    content_view: surf.content_view,
+                    uv_scale: surf.uv_scale,
+                    uv_offset: surf.uv_offset,
+                    homography,
+                    overlap_zones: &surf.overlap_zones,
+                    vertices,
+                }
             })
             .collect();
+
+        let (prepared, vertex_pool) =
+            self.polygon_pipeline
+                .prepare(&context.device, &context.queue, &draws);
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -823,17 +839,8 @@ impl OutputWindow {
                 multiview_mask: None,
             });
 
-            for (bind_group, vb, num_tris) in &prepared {
-                if *num_tris > 0 {
-                    self.polygon_pipeline.render_polygon(
-                        &context.device,
-                        &mut render_pass,
-                        bind_group,
-                        vb,
-                        *num_tris,
-                    );
-                }
-            }
+            self.polygon_pipeline
+                .draw(&mut render_pass, &prepared, &vertex_pool);
         }
 
         // Pass 2 (edge blend only): surface_texture → edge blend → preview_texture
@@ -1010,7 +1017,7 @@ pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) ->
                     // 8×8 grid
                     let gx_frac = (gx_norm * 8.0).fract();
                     let gy_frac = (gy_norm * 8.0).fract();
-                    if gx_frac < 0.02 || gx_frac > 0.98 || gy_frac < 0.02 || gy_frac > 0.98 {
+                    if !(0.02..=0.98).contains(&gx_frac) || !(0.02..=0.98).contains(&gy_frac) {
                         color = grid_color;
                     }
 
@@ -1162,18 +1169,15 @@ impl std::fmt::Display for RecordingCodec {
 }
 
 /// Streaming codec for SRT output.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
+)]
 pub enum SrtCodec {
     /// H.264 ultrafast + zerolatency
+    #[default]
     H264,
     /// H.265 / HEVC ultrafast + zerolatency
     H265,
-}
-
-impl Default for SrtCodec {
-    fn default() -> Self {
-        Self::H264
-    }
 }
 
 impl std::fmt::Display for SrtCodec {
@@ -1186,20 +1190,17 @@ impl std::fmt::Display for SrtCodec {
 }
 
 /// Streaming codec for HLS/DASH output.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
+)]
 pub enum StreamingCodec {
     /// H.264 ultrafast preset
+    #[default]
     H264,
     /// H.265 / HEVC ultrafast preset
     H265,
     /// AV1 via SVT-AV1
     AV1,
-}
-
-impl Default for StreamingCodec {
-    fn default() -> Self {
-        Self::H264
-    }
 }
 
 impl std::fmt::Display for StreamingCodec {
@@ -1617,5 +1618,27 @@ mod tests {
         // Missing field should deserialize as Deg0
         let config: OutputRotation = serde_json::from_str("\"Deg0\"").unwrap();
         assert_eq!(config, OutputRotation::Deg0);
+    }
+
+    #[test]
+    fn headless_context_enables_bc_when_adapter_supports() {
+        // Headless installations must take the HAP GPU path, so the headless
+        // device has to request TEXTURE_COMPRESSION_BC whenever the adapter
+        // exposes it. Skips gracefully when no GPU adapter is available.
+        let Ok(gpu) = super::GpuContext::new_headless() else {
+            return;
+        };
+        let adapter_bc = gpu
+            .adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let device_bc = gpu
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        assert_eq!(
+            adapter_bc, device_bc,
+            "headless device should request BC iff the adapter supports it"
+        );
     }
 }

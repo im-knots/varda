@@ -101,6 +101,7 @@ impl Deck {
                     let width = handle.width;
                     let height = handle.height;
                     staging.upload(&frame.color_data, texture, width, height, encoder);
+                    handle.recycle(frame);
                 }
             }
             DeckSource::HapVideo {
@@ -125,6 +126,7 @@ impl Deck {
                             a_staging.upload(alpha_data, alpha_tex, width, height, encoder);
                         }
                     }
+                    handle.recycle(frame);
                 }
             }
             _ => {}
@@ -315,7 +317,7 @@ impl Deck {
                         audio_data,
                         &mut self.generator_params,
                         modulation,
-                        &param_prefix,
+                        param_prefix,
                         &imported_views,
                         &preprocessor_views,
                         generator_phase_times,
@@ -333,7 +335,7 @@ impl Deck {
                         audio_data,
                         &mut self.generator_params,
                         modulation,
-                        &param_prefix,
+                        param_prefix,
                         &imported_views,
                         &preprocessor_views,
                         generator_phase_times,
@@ -553,7 +555,7 @@ impl Deck {
                 self.generator_params.update_buffer_with_modulation(
                     &context.queue,
                     modulation,
-                    Some(&param_prefix),
+                    Some(param_prefix),
                 );
 
                 let user_params_buffer = self
@@ -754,6 +756,8 @@ impl Deck {
     }
 
     /// Render simple (non-multi-pass) shader (static version)
+    // Hot-path render helper; args are distinct GPU inputs with no shared invariant.
+    #[allow(clippy::too_many_arguments)]
     fn render_simple_static(
         context: &GpuContext,
         pipeline: &UnifiedPipeline,
@@ -842,6 +846,8 @@ impl Deck {
     }
 
     /// Render multi-pass shader with proper ping-pong buffers
+    // Hot-path render helper; args are distinct GPU inputs with no shared invariant.
+    #[allow(clippy::too_many_arguments)]
     fn render_multi_pass_static(
         context: &GpuContext,
         multi_pass: &UnifiedPipeline,
@@ -1060,6 +1066,8 @@ impl Deck {
     }
 
     /// Blit an external source (Camera, NDI, Syphon) with scaling to the generator target.
+    // Hot-path blit helper; args are distinct GPU inputs with no shared invariant.
+    #[allow(clippy::too_many_arguments)]
     fn blit_external_source(
         context: &GpuContext,
         blit_pipeline: &BlitPipeline,

@@ -428,7 +428,7 @@ impl Mixer {
         }
 
         // Log mixer-level timing every 120 frames
-        if self.frame_count % 120 == 0 {
+        if self.frame_count.is_multiple_of(120) {
             let total_us = now.elapsed().as_micros();
             log::debug!(
                 "[PERF] mixer | channels_rendered={} channels={}us | \
@@ -536,7 +536,7 @@ impl Mixer {
         // Batch channel compositing into command buffers for deferred submission.
         let mut is_first = true;
         let mut slot: usize = 0;
-        for (_i, (channel, &opacity)) in self.channels.iter().zip(opacities.iter()).enumerate() {
+        for (channel, &opacity) in self.channels.iter().zip(opacities.iter()) {
             if opacity <= 0.0 {
                 continue;
             }

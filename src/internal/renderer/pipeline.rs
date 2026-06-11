@@ -88,6 +88,8 @@ impl UnifiedPipeline {
     /// - `num_imported_textures`: number of ISF IMPORTED image textures
     /// - `num_preprocessor_textures`: number of preprocessor texture bindings
     /// - `surface_format`: target texture format (Rgba8Unorm for decks, surface format for master)
+    // Pipeline construction takes many distinct GPU descriptors; no shared invariant to bundle.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         spirv: &[u32],

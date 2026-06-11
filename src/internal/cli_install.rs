@@ -26,11 +26,11 @@ fn try_install() -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        return install_macos(&exe);
+        install_macos(&exe)
     }
     #[cfg(target_os = "linux")]
     {
-        return install_linux(&exe);
+        install_linux(&exe)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
@@ -53,7 +53,7 @@ fn install_macos(exe: &Path) -> Result<(), String> {
     }
     let contents_dir = macos_dir.parent().ok_or("no Contents dir")?;
     let app_dir = contents_dir.parent().ok_or("no .app dir")?;
-    if !app_dir.extension().map_or(false, |ext| ext == "app") {
+    if app_dir.extension().is_none_or(|ext| ext != "app") {
         return Err("not a .app bundle".into());
     }
 

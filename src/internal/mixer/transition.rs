@@ -142,6 +142,12 @@ pub struct SequencerState {
     pub step_elapsed: f64,
 }
 
+impl Default for SequencerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SequencerState {
     pub fn new() -> Self {
         Self {
@@ -234,10 +240,7 @@ impl Mixer {
     /// Whether a crossfade transition is currently in progress
     pub fn is_crossfading(&self) -> bool {
         self.auto_crossfade.is_some()
-            || self
-                .beat_sync_crossfade
-                .as_ref()
-                .map_or(false, |b| b.started)
+            || self.beat_sync_crossfade.as_ref().is_some_and(|b| b.started)
     }
 
     /// Set the active transition shader. Compiles the shader and creates the pipeline.
@@ -250,12 +253,7 @@ impl Mixer {
         let pipeline = TransitionPipeline::new(&context.device, &spirv, target_format)
             .context("Failed to create transition pipeline")?;
 
-        let inputs = shader
-            .metadata
-            .inputs
-            .as_ref()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
         let mut params = ShaderParams::from_inputs(inputs);
         params.ensure_buffer(&context.device);
 
@@ -408,21 +406,19 @@ impl Mixer {
                             from_val + (to_val - from_val) * eased
                         };
                     }
+                } else if completed {
+                    if from < channel_count {
+                        self.channels[from].opacity = 1.0 - target_amount;
+                    }
+                    if to < channel_count {
+                        self.channels[to].opacity = target_amount;
+                    }
                 } else {
-                    if completed {
-                        if from < channel_count {
-                            self.channels[from].opacity = 1.0 - target_amount;
-                        }
-                        if to < channel_count {
-                            self.channels[to].opacity = target_amount;
-                        }
-                    } else {
-                        if from < channel_count {
-                            self.channels[from].opacity = 1.0 - eased * target_amount;
-                        }
-                        if to < channel_count {
-                            self.channels[to].opacity = eased * target_amount;
-                        }
+                    if from < channel_count {
+                        self.channels[from].opacity = 1.0 - eased * target_amount;
+                    }
+                    if to < channel_count {
+                        self.channels[to].opacity = eased * target_amount;
                     }
                 }
             }

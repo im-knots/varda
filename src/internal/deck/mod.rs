@@ -19,9 +19,12 @@ pub fn generate_short_uuid() -> String {
 }
 
 /// Scaling mode for non-shader sources (images, video)
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema, Default,
+)]
 pub enum ScalingMode {
     /// Scale to fill the entire target, cropping edges if aspect ratio differs
+    #[default]
     Fill,
     /// Scale to fit within the target, letterboxing if aspect ratio differs
     Fit,
@@ -29,12 +32,6 @@ pub enum ScalingMode {
     Stretch,
     /// No scaling, center at native resolution
     Center,
-}
-
-impl Default for ScalingMode {
-    fn default() -> Self {
-        ScalingMode::Fill
-    }
 }
 
 impl ScalingMode {

@@ -136,8 +136,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                         let item_id = egui::Id::new(("lib_cam", *cam_id));
                         ui.dnd_drag_source(item_id, LibraryDrag::Camera(*cam_id), |ui| {
                             ui.label(egui::RichText::new(format!("  📹 {}", name)).size(12.0));
-                        })
-                        .response;
+                        });
                         if ui.ctx().is_being_dragged(item_id) {
                             ui.ctx().memory_mut(|mem| {
                                 mem.data
@@ -196,8 +195,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                                     .size(12.0),
                                             );
                                         },
-                                    )
-                                    .response;
+                                    );
                                     if ui.ctx().is_being_dragged(item_id) {
                                         ui.ctx().memory_mut(|mem| {
                                             mem.data.insert_temp(
@@ -302,8 +300,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                                     );
                                                 });
                                             },
-                                        )
-                                        .response;
+                                        );
                                         if ui
                                             .small_button("✕")
                                             .on_hover_text("Remove from library")
@@ -394,8 +391,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                                     );
                                                 });
                                             },
-                                        )
-                                        .response;
+                                        );
                                         if ui
                                             .small_button("✕")
                                             .on_hover_text("Remove from library")
@@ -481,8 +477,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                                     );
                                                 });
                                             },
-                                        )
-                                        .response;
+                                        );
                                         if ui
                                             .small_button("✕")
                                             .on_hover_text("Remove from library")
@@ -634,8 +629,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                                     );
                                                 });
                                             },
-                                        )
-                                        .response;
+                                        );
                                         if ui
                                             .small_button("✕")
                                             .on_hover_text("Remove from library")
@@ -684,8 +678,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             let item_id = egui::Id::new(("lib_syph", i));
                             ui.dnd_drag_source(item_id, LibraryDrag::Syphon(name.clone()), |ui| {
                                 ui.label(egui::RichText::new(format!("  🔗 {}", name)).size(12.0));
-                            })
-                            .response;
+                            });
                             if ui.ctx().is_being_dragged(item_id) {
                                 ui.ctx().memory_mut(|mem| {
                                     mem.data.insert_temp(

@@ -201,6 +201,31 @@ pub fn decode_hap_frame(
     }
 }
 
+/// Detect the color-plane texture format of a HAP frame from a raw packet,
+/// reading only the section header(s) — no decompression. Mirrors the format
+/// resolution in [`decode_hap_frame`]; used to size the GPU texture and staging
+/// buffers correctly before playback begins (ffmpeg groups all HAP variants
+/// under one codec id, so the format must be read from the frame itself).
+pub fn detect_hap_format(packet_data: &[u8]) -> Result<HapTextureFormat> {
+    let h = parse_header(packet_data)?;
+    if h.section_type == SECTION_MULTI_IMAGE {
+        let section_data = &packet_data[h.header_size..h.header_size + h.data_length];
+        let mut pos = 0;
+        let mut color_fmt = None;
+        while pos < section_data.len() {
+            let sub = parse_header(&section_data[pos..])?;
+            // The non-alpha plane carries the color format (mirrors decode_hap_frame).
+            if !matches!(tex_fmt(sub.section_type)?, HapTextureFormat::Bc4) {
+                color_fmt = Some(tex_fmt(sub.section_type)?);
+            }
+            pos += sub.header_size + sub.data_length;
+        }
+        color_fmt.context("HAP multi-image missing color plane")
+    } else {
+        tex_fmt(h.section_type)
+    }
+}
+
 /// Result of a HapPlayer::next_frame() call.
 pub struct HapFrameResult<'a> {
     /// Color plane data (always present).
@@ -546,6 +571,32 @@ mod tests {
             }
             _ => panic!("Expected Single frame"),
         }
+    }
+
+    #[test]
+    fn detect_hap_format_single_bc1() {
+        let packet = make_section(COMPRESSOR_NONE | (FMT_BC1 & 0x0F), &[0xAA; 16]);
+        assert_eq!(detect_hap_format(&packet).unwrap(), HapTextureFormat::Bc1);
+    }
+
+    #[test]
+    fn detect_hap_format_single_bc7() {
+        let packet = make_section(COMPRESSOR_SNAPPY | (FMT_BC7 & 0x0F), &[0xBB; 16]);
+        assert_eq!(detect_hap_format(&packet).unwrap(), HapTextureFormat::Bc7);
+    }
+
+    #[test]
+    fn detect_hap_format_multi_image_returns_color_plane() {
+        // HAP Q Alpha: multi-image with YCoCg color plane + BC4 alpha plane.
+        let color = make_section(COMPRESSOR_NONE | (FMT_YCOCG & 0x0F), &[0xCC; 16]);
+        let alpha = make_section(COMPRESSOR_NONE | (FMT_BC4 & 0x0F), &[0xDD; 8]);
+        let mut payload = color;
+        payload.extend_from_slice(&alpha);
+        let packet = make_section(SECTION_MULTI_IMAGE, &payload);
+        assert_eq!(
+            detect_hap_format(&packet).unwrap(),
+            HapTextureFormat::Bc3YCoCg
+        );
     }
 
     #[test]

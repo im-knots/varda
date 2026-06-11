@@ -276,7 +276,7 @@ impl ShaderParams {
                     ParamValue::Point2D(_) => 8,
                     ParamValue::Color(_) => 16,
                 };
-                while self.scratch.len() % alignment != 0 {
+                while !self.scratch.len().is_multiple_of(alignment) {
                     self.scratch.push(0);
                 }
                 value.write_bytes(&mut self.scratch);
@@ -285,7 +285,7 @@ impl ShaderParams {
         while self.scratch.len() < 16 {
             self.scratch.push(0);
         }
-        while self.scratch.len() % 16 != 0 {
+        while !self.scratch.len().is_multiple_of(16) {
             self.scratch.push(0);
         }
         &self.scratch
@@ -374,7 +374,7 @@ impl ShaderParams {
                     ParamValue::Point2D(_) => 8,
                     ParamValue::Color(_) => 16,
                 };
-                while self.scratch.len() % alignment != 0 {
+                while !self.scratch.len().is_multiple_of(alignment) {
                     self.scratch.push(0);
                 }
 
@@ -398,7 +398,7 @@ impl ShaderParams {
         while self.scratch.len() < 16 {
             self.scratch.push(0);
         }
-        while self.scratch.len() % 16 != 0 {
+        while !self.scratch.len().is_multiple_of(16) {
             self.scratch.push(0);
         }
         &self.scratch
@@ -430,20 +430,20 @@ impl ShaderParams {
             }
             ParamValue::Color(base) => {
                 let mut result = *base;
-                for i in 0..4 {
+                for (i, comp) in result.iter_mut().enumerate() {
                     let offset = modulation.get_modulation_for_component(mod_key, Some(i));
                     if offset != 0.0 {
-                        result[i] = (result[i] + offset).clamp(0.0, 1.0);
+                        *comp = (*comp + offset).clamp(0.0, 1.0);
                     }
                 }
                 ParamValue::Color(result)
             }
             ParamValue::Point2D(base) => {
                 let mut result = *base;
-                for i in 0..2 {
+                for (i, comp) in result.iter_mut().enumerate() {
                     let offset = modulation.get_modulation_for_component(mod_key, Some(i));
                     if offset != 0.0 {
-                        result[i] = result[i] + offset;
+                        *comp += offset;
                     }
                 }
                 ParamValue::Point2D(result)

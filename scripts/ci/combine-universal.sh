@@ -36,7 +36,7 @@ for arm64_dylib in "$ARM64_APP/Contents/Frameworks/"*.dylib; do
 
   if [ -f "$x86_dylib" ]; then
     # Check that the two dylibs actually have different architectures before
-    # lipo — if both are arm64-only (e.g. libonnxruntime.dylib) lipo will fail.
+    # lipo — if both slices carry the same arch, lipo will fail.
     arm64_archs=$(lipo -info "$arm64_dylib" 2>/dev/null | sed 's/.*: //')
     x86_archs=$(lipo -info "$x86_dylib" 2>/dev/null | sed 's/.*: //')
     if [ "$arm64_archs" = "$x86_archs" ]; then

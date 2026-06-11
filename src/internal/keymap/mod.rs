@@ -71,6 +71,12 @@ pub struct KeymapStore {
     pub learn_target: Option<KeyTarget>,
 }
 
+impl Default for KeymapStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeymapStore {
     /// Create an empty keymap store.
     pub fn new() -> Self {

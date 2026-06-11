@@ -243,9 +243,10 @@ fn headless_output_create_and_stop() {
         },
     );
     assert!(matches!(r, CommandResult::Ok));
-    // Verify output was created in state
-    let state = app.build_engine_state();
-    assert!(!state.outputs.windows.is_empty() || true); // Headless outputs may not appear in windows
+    // Verify engine state can be built after the headless output command.
+    // Headless outputs (e.g. NDI send) do not necessarily appear in the
+    // windows list, so we only assert the state builds without panicking.
+    let _state = app.build_engine_state();
 }
 
 // ── Stream Library Commands ─────────────────────────────────────────

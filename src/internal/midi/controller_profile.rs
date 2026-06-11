@@ -312,11 +312,16 @@ pub struct ProfileRegistry {
     profiles: Vec<Arc<ControllerProfileData>>,
 }
 
+impl Default for ProfileRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProfileRegistry {
     /// Create a registry with only the built-in profiles.
     pub fn new() -> Self {
-        let mut profiles = Vec::new();
-        profiles.push(Arc::new(builtin_apc_mini()));
+        let profiles = vec![Arc::new(builtin_apc_mini())];
         Self { profiles }
     }
 
@@ -484,6 +489,12 @@ impl DeviceLeds {
 /// Manages LED state for all connected devices that have a controller profile.
 pub struct ControllerLedManager {
     device_leds: HashMap<DeviceId, DeviceLeds>,
+}
+
+impl Default for ControllerLedManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ControllerLedManager {

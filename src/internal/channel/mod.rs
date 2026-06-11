@@ -249,6 +249,12 @@ pub struct DeckAutoTransition {
     pub phase: DeckTransitionPhase,
 }
 
+impl Default for DeckAutoTransition {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeckAutoTransition {
     pub fn new() -> Self {
         Self {
@@ -272,17 +278,13 @@ pub struct DeckTransitionEffect {
 /// Per-deck render FPS setting.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DeckRenderFps {
     /// Automatic adaptive skipping based on render cost
+    #[default]
     Auto,
     /// Fixed render rate (renders every Nth frame to hit target)
     Fixed(u32),
-}
-
-impl Default for DeckRenderFps {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl std::fmt::Display for DeckRenderFps {
@@ -343,12 +345,7 @@ impl DeckSlot {
             .context("Failed to compile transition shader to SPIR-V")?;
         let pipeline = TransitionPipeline::new(&context.device, &spirv, context.texture_format)?;
         let name = shader.name();
-        let inputs = shader
-            .metadata
-            .inputs
-            .as_ref()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
         let mut params = ShaderParams::from_inputs(inputs);
         params.ensure_buffer(&context.device);
 
@@ -538,6 +535,9 @@ impl Channel {
     /// `total_active_decks` is the total active deck count across all channels (from last frame).
     /// `gpu_load_ratio` scales CPU-measured render costs to estimate true GPU execution time.
     /// A ratio of 1.0 means CPU and GPU costs match; >1.0 means GPU-bound (GPU takes longer).
+    // Hot-path render entry; args are distinct per-frame inputs and bundling them into a
+    // struct would add indirection without a shared invariant.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         context: &GpuContext,
@@ -676,7 +676,7 @@ impl Channel {
         // the updated textures — all in a single queue.submit() call.
         let t_deck_submit = std::time::Instant::now();
         if !prefix_cmds.is_empty() {
-            let mut all_cmds: Vec<wgpu::CommandBuffer> = prefix_cmds.drain(..).collect();
+            let mut all_cmds: Vec<wgpu::CommandBuffer> = std::mem::take(prefix_cmds);
             all_cmds.extend(cmd_buffers);
             context.queue.submit(all_cmds);
         } else if !cmd_buffers.is_empty() {
@@ -703,7 +703,7 @@ impl Channel {
                 // Inactive and Done auto-transition decks don't composite.
                 // Inactive = waiting for turn. Done = already played, no longer needed
                 // (the next deck in sequence gets re-activated to Playing when needed).
-                let has_at = slot.auto_transition.as_ref().map_or(false, |at| at.enabled);
+                let has_at = slot.auto_transition.as_ref().is_some_and(|at| at.enabled);
                 if has_at
                     && (phase == DeckTransitionPhase::Inactive
                         || phase == DeckTransitionPhase::Done)
@@ -737,10 +737,8 @@ impl Channel {
                 non_transitioning.push(info);
             }
         }
-        let ordered: Vec<&DeckCompositeInfo> = non_transitioning
-            .into_iter()
-            .chain(transitioning.into_iter())
-            .collect();
+        let ordered: Vec<&DeckCompositeInfo> =
+            non_transitioning.into_iter().chain(transitioning).collect();
 
         // Composite all decks to the composite texture.
         // Per-draw params are written into a persistent ring buffer (one slot per
@@ -1145,7 +1143,7 @@ impl Channel {
         // Log detailed timing every 127 frames (~2s at 60fps).
         // Prime interval avoids systematic alignment with skip intervals
         // (e.g., 120 % 2/3/4/5/6 == 0 would always sample render frames).
-        if self.frame_count % 127 == 0 && active_count > 0 {
+        if self.frame_count.is_multiple_of(127) && active_count > 0 {
             let total_us = render_start.elapsed().as_micros();
             // Build per-deck breakdown string: "shader_name=123us" or "shader_name=SKIP"
             let deck_breakdown: String = per_deck_timings
@@ -1260,7 +1258,7 @@ impl Channel {
         // Find the topmost deck that is visible and has auto-transition enabled
         let active_idx = sorted.iter().copied().find(|&i| {
             let slot = &self.decks[i];
-            let has_at = slot.auto_transition.as_ref().map_or(false, |at| at.enabled);
+            let has_at = slot.auto_transition.as_ref().is_some_and(|at| at.enabled);
             let phase = slot.transition_phase();
             has_at && !slot.mute && phase != DeckTransitionPhase::Done
         });
@@ -1292,7 +1290,7 @@ impl Channel {
                         TransitionTrigger::ClipEnd => {
                             // Check if video reached end
                             let snap = slot.deck.playback_snapshot();
-                            let clip_ended = snap.as_ref().map_or(false, |ps| ps.reached_end);
+                            let clip_ended = snap.as_ref().is_some_and(|ps| ps.reached_end);
                             // Also respect timer as fallback for non-video sources
                             clip_ended || (snap.is_none() && *elapsed >= play_secs)
                         }
@@ -1328,9 +1326,10 @@ impl Channel {
             // Try Inactive first
             for j in 0..self.decks.len() {
                 let slot = &self.decks[j];
-                let is_candidate = slot.auto_transition.as_ref().map_or(false, |at| {
-                    at.enabled && at.phase == DeckTransitionPhase::Inactive
-                });
+                let is_candidate = slot
+                    .auto_transition
+                    .as_ref()
+                    .is_some_and(|at| at.enabled && at.phase == DeckTransitionPhase::Inactive);
                 if is_candidate && !slot.mute {
                     if let Some(at) = self.decks[j].auto_transition.as_mut() {
                         at.phase = DeckTransitionPhase::Playing { elapsed: 0.0 };
@@ -1343,9 +1342,10 @@ impl Channel {
             if !activated {
                 for j in 0..self.decks.len() {
                     let slot = &self.decks[j];
-                    let is_candidate = slot.auto_transition.as_ref().map_or(false, |at| {
-                        at.enabled && at.phase == DeckTransitionPhase::Done
-                    });
+                    let is_candidate = slot
+                        .auto_transition
+                        .as_ref()
+                        .is_some_and(|at| at.enabled && at.phase == DeckTransitionPhase::Done);
                     if is_candidate && !slot.mute {
                         if let Some(at) = self.decks[j].auto_transition.as_mut() {
                             at.phase = DeckTransitionPhase::Playing { elapsed: 0.0 };
@@ -1366,7 +1366,7 @@ impl Channel {
         let any_at = self
             .decks
             .iter()
-            .any(|slot| slot.auto_transition.as_ref().map_or(false, |at| at.enabled));
+            .any(|slot| slot.auto_transition.as_ref().is_some_and(|at| at.enabled));
 
         if all_done && any_at {
             // Reset all AT decks to Inactive, then immediately activate the first one
@@ -1379,9 +1379,10 @@ impl Channel {
             }
             for slot in &mut self.decks {
                 let dominated = slot.mute;
-                let is_inactive_at = slot.auto_transition.as_ref().map_or(false, |at| {
-                    at.enabled && at.phase == DeckTransitionPhase::Inactive
-                });
+                let is_inactive_at = slot
+                    .auto_transition
+                    .as_ref()
+                    .is_some_and(|at| at.enabled && at.phase == DeckTransitionPhase::Inactive);
                 if is_inactive_at && !dominated {
                     if let Some(at) = slot.auto_transition.as_mut() {
                         at.phase = DeckTransitionPhase::Playing { elapsed: 0.0 };

@@ -593,7 +593,7 @@ mod tests {
         let mut state = SequencerState::new();
         state.playing = true;
         state.current_step = 5;
-        state.step_elapsed = 3.14;
+        state.step_elapsed = 2.5;
         state.reset();
         assert!(!state.playing);
         assert_eq!(state.current_step, 0);

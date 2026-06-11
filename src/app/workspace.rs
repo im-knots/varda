@@ -602,11 +602,8 @@ impl VardaApp {
 
         // Patch auto-transition config
         if let Some(at_config) = &config.auto_transition {
-            use crate::channel::{DeckAutoTransition, TransitionTrigger};
-            let mut at = slot
-                .auto_transition
-                .take()
-                .unwrap_or_else(DeckAutoTransition::new);
+            use crate::channel::TransitionTrigger;
+            let mut at = slot.auto_transition.take().unwrap_or_default();
             at.enabled = at_config.enabled;
             at.trigger = match at_config.trigger {
                 crate::scene::TriggerConfig::Timer => TransitionTrigger::Timer,
@@ -826,9 +823,11 @@ mod tests {
         let Some(app) = headless_app_in(tmp.path()) else {
             return;
         };
-        let mut layout = UILayoutState::default();
-        layout.stage_editor_open = true;
-        layout.library_panel_open = true;
+        let layout = UILayoutState {
+            stage_editor_open: true,
+            library_panel_open: true,
+            ..Default::default()
+        };
         app.save_workspace(&layout);
 
         let Some(mut app2) = headless_app_in(tmp.path()) else {

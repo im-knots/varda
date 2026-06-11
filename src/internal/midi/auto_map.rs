@@ -89,7 +89,7 @@ impl DeviceAutoMapState {
 
     fn is_page_button(&self, note: u8) -> bool {
         self.page_range
-            .map_or(false, |r| note >= r[0] && note <= r[1])
+            .is_some_and(|r| note >= r[0] && note <= r[1])
     }
 }
 
@@ -111,6 +111,12 @@ pub fn grid_note_to_channel_deck(note: u8, page_offset: usize, columns: u8) -> (
 
 pub struct AutoMapEngine {
     devices: HashMap<DeviceId, DeviceAutoMapState>,
+}
+
+impl Default for AutoMapEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AutoMapEngine {

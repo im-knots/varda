@@ -191,13 +191,11 @@ fn render_windowed_controls(
                         .surface_assignments
                         .iter()
                         .any(|a| a.surface_uuid == surface.uuid);
-                    if !already_assigned {
-                        if ui.selectable_label(false, &surface.name).clicked() {
-                            actions.output_actions.push(OutputAction::AssignSurface {
-                                output_idx: idx,
-                                surface_uuid: surface.uuid.clone(),
-                            });
-                        }
+                    if !already_assigned && ui.selectable_label(false, &surface.name).clicked() {
+                        actions.output_actions.push(OutputAction::AssignSurface {
+                            output_idx: idx,
+                            surface_uuid: surface.uuid.clone(),
+                        });
                     }
                 }
             });
@@ -349,13 +347,11 @@ fn render_headless_controls(
                         .surface_assignments
                         .iter()
                         .any(|a| a.surface_uuid == surface.uuid);
-                    if !already_assigned {
-                        if ui.selectable_label(false, &surface.name).clicked() {
-                            actions.output_actions.push(OutputAction::AssignSurface {
-                                output_idx: idx,
-                                surface_uuid: surface.uuid.clone(),
-                            });
-                        }
+                    if !already_assigned && ui.selectable_label(false, &surface.name).clicked() {
+                        actions.output_actions.push(OutputAction::AssignSurface {
+                            output_idx: idx,
+                            surface_uuid: surface.uuid.clone(),
+                        });
                     }
                 }
             });
@@ -431,7 +427,7 @@ fn render_stream_config(
                         (
                             "SRT",
                             OutputTarget::SrtStream {
-                                url: format!("srt://0.0.0.0:9001"),
+                                url: "srt://0.0.0.0:9001".to_string(),
                                 codec: SrtCodec::default(),
                             },
                         ),
@@ -646,32 +642,30 @@ fn render_stream_config(
                 });
             }
         }
-        OutputTarget::NdiSend { ref sender_name } => {
-            if !output.is_active {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Name:").small());
-                    let name_id = egui::Id::new(format!("ndi_name_{}", idx));
-                    let mut current_name: String = ui
-                        .data(|d| d.get_temp(name_id))
-                        .unwrap_or_else(|| sender_name.clone());
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut current_name)
-                            .desired_width(140.0)
-                            .font(egui::TextStyle::Small),
-                    );
-                    if response.lost_focus() || response.changed() {
-                        ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
-                        if response.lost_focus() {
-                            actions.output_actions.push(OutputAction::SetTarget {
-                                idx,
-                                target: OutputTarget::NdiSend {
-                                    sender_name: current_name,
-                                },
-                            });
-                        }
+        OutputTarget::NdiSend { ref sender_name } if !output.is_active => {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Name:").small());
+                let name_id = egui::Id::new(format!("ndi_name_{}", idx));
+                let mut current_name: String = ui
+                    .data(|d| d.get_temp(name_id))
+                    .unwrap_or_else(|| sender_name.clone());
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut current_name)
+                        .desired_width(140.0)
+                        .font(egui::TextStyle::Small),
+                );
+                if response.lost_focus() || response.changed() {
+                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
+                    if response.lost_focus() {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: OutputTarget::NdiSend {
+                                sender_name: current_name,
+                            },
+                        });
                     }
-                });
-            }
+                }
+            });
         }
         _ => {}
     }
@@ -704,6 +698,8 @@ fn render_copyable_url(
 }
 
 /// Shared codec + name config for HLS and DASH stream outputs.
+// UI render fn taking many independent egui state/handle args; no shared invariant to bundle.
+#[allow(clippy::too_many_arguments)]
 fn render_hls_dash_name_codec(
     ui: &mut egui::Ui,
     idx: usize,
@@ -1034,10 +1030,8 @@ pub(super) fn render_warp_calibration(
                 for (ci, corner) in corners.iter().enumerate() {
                     let screen_pos = to_screen(corner[0], corner[1]);
                     let dist = pos.distance(screen_pos);
-                    if dist < 20.0 {
-                        if best.map_or(true, |(_, _, d)| dist < d) {
-                            best = Some((ai, ci, dist));
-                        }
+                    if dist < 20.0 && best.is_none_or(|(_, _, d)| dist < d) {
+                        best = Some((ai, ci, dist));
                     }
                 }
             }

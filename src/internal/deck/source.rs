@@ -146,78 +146,40 @@ impl Deck {
 
         // Extract passes from metadata
         let passes = shader.metadata.passes.clone().unwrap_or_default();
-        let has_passes = !passes.is_empty();
 
         // Create render target textures (two for ping-pong effect chain)
-        let (texture, texture_b) = if has_passes {
-            let tex = context.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Deck Texture (Linear)"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            let tex_b = context.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Deck Texture B (Linear)"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            (tex, tex_b)
-        } else {
-            let tex = context.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Deck Texture (Linear)"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            let tex_b = context.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Deck Texture B (Linear)"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            (tex, tex_b)
-        };
+        let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Deck Texture (Linear)"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let texture_b = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Deck Texture B (Linear)"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let texture_b_view = texture_b.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -347,12 +309,7 @@ impl Deck {
         let now = Instant::now();
         let source_name = shader.name();
 
-        let inputs = shader
-            .metadata
-            .inputs
-            .as_ref()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
         let generator_params = ShaderParams::from_inputs(inputs);
         let generator_phase_inputs = shader.metadata.phase_inputs.clone();
 
@@ -554,8 +511,8 @@ impl Deck {
 
             log::info!("Using HAP GPU path for '{}' ({:?})", source_name, hap_fmt);
 
-            let blocks_x = (vid_w + 3) / 4;
-            let blocks_y = (vid_h + 3) / 4;
+            let blocks_x = vid_w.div_ceil(4);
+            let blocks_y = vid_h.div_ceil(4);
             let color_bpr = blocks_x * hap_fmt.block_bytes();
             let staging =
                 VideoStagingBuffers::new(&context.device, color_bpr, blocks_y, "HAP Color");
@@ -1054,12 +1011,7 @@ impl Deck {
         let source_name = shader.name();
         let source_path = shader.file_path.clone();
 
-        let inputs = shader
-            .metadata
-            .inputs
-            .as_ref()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let inputs = shader.metadata.inputs.as_deref().unwrap_or(&[]);
         let generator_params = ShaderParams::from_inputs(inputs);
         let generator_phase_inputs = shader.metadata.phase_inputs.clone();
 
