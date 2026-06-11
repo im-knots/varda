@@ -133,6 +133,9 @@ impl Mixer {
                 buf.unmap();
                 self.staging_mapped_idx
                     .store(usize::MAX, std::sync::atomic::Ordering::Release);
+                // The map has been consumed and the buffer unmapped — clear the
+                // in-flight guard so the resolve path may issue the next map.
+                self.timing_map_inflight = false;
             }
         }
 
@@ -297,14 +300,14 @@ impl Mixer {
 
         // ── GPU Timestamp: resolve + readback ───────────────────────────
         // Only issue a new resolve/copy/map when no map is in flight.
-        // If the previous map_async hasn't been consumed yet, skip timing
-        // this frame — dropping an occasional measurement is harmless;
-        // reusing a still-mapped buffer is fatal.
-        let map_in_flight = self
-            .staging_mapped_idx
-            .load(std::sync::atomic::Ordering::Acquire)
-            != usize::MAX;
-        if !map_in_flight {
+        // `timing_map_inflight` is set the moment a map_async is *issued* (not
+        // when its callback fires), so the pending window between issue and
+        // callback is covered. Deriving this from `staging_mapped_idx` alone is
+        // unsound: it stays `MAX` until the callback runs, which would let a
+        // second map_async be issued on the other buffer, leaving one buffer
+        // permanently mapped and crashing the next submit with "still mapped".
+        // Dropping an occasional measurement is harmless; a stuck map is fatal.
+        if !self.timing_map_inflight {
             if let (Some(ref qs), Some(ref resolve_buf), Some(ref staging)) =
                 (&self.query_set, &self.resolve_buffer, &self.staging_buffers)
             {
@@ -341,6 +344,11 @@ impl Mixer {
                                 }
                             },
                         );
+
+                        // Mark the map in flight from the moment it is issued so
+                        // no second map_async can be started before the read path
+                        // consumes and unmaps this buffer.
+                        self.timing_map_inflight = true;
 
                         // Save allocations for readback next frame
                         self.prev_timing_allocations = timing.allocations.clone();
