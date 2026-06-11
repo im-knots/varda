@@ -476,10 +476,19 @@ mod tests {
             .request("face_detect", &registry, &opts)
             .expect("should spawn worker");
 
-        // Give the worker time to run init() (which fails) and exit.
-        std::thread::sleep(Duration::from_millis(300));
-
-        deck.prune_dead();
+        // Poll for the worker to run init() (which fails) and exit, then be
+        // pruned. A single fixed sleep is racy: under CPU load the worker may not
+        // have finished the failing ONNX init() and dropped its done_tx yet.
+        // Poll prune_dead() until the dead instance is removed, bounded by a
+        // generous timeout so a genuine hang still fails the test.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while deck.has_active_instances() && Instant::now() < deadline {
+            deck.prune_dead();
+            if !deck.has_active_instances() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert!(
             !deck.has_active_instances(),
             "dead worker instance should be pruned"
