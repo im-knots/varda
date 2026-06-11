@@ -141,6 +141,13 @@ pub struct Mixer {
     /// Index of the staging buffer whose map_async has completed (ready to read).
     /// `usize::MAX` means no buffer is pending/ready. Set by the map_async callback.
     staging_mapped_idx: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// True while a timing-staging `map_async` is outstanding — from the moment it
+    /// is *issued* until the read path consumes and unmaps the buffer. Gates the
+    /// resolve/readback path so at most one map is ever in flight. The callback
+    /// only sets `staging_mapped_idx` later, so relying on that alone would let a
+    /// second map_async be issued during the pending window, leaving a buffer
+    /// permanently mapped and crashing the next submit with "still mapped".
+    timing_map_inflight: bool,
 }
 
 impl Mixer {
@@ -237,6 +244,7 @@ impl Mixer {
             staging_mapped_idx: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
                 usize::MAX,
             )),
+            timing_map_inflight: false,
         })
     }
 
