@@ -101,3 +101,33 @@ pub async fn set_tonemap_mode(
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
 }
+
+#[derive(Deserialize, ToSchema)]
+pub struct LoadLutBody {
+    /// LUT filename (relative to `.varda/luts/`)
+    pub filename: String,
+}
+
+#[utoipa::path(put, path = "/api/mixer/lut", request_body = LoadLutBody, responses((status = 200, body = CommandResult)), tag = "Mixer")]
+pub async fn load_lut(
+    State(state): State<SharedState>,
+    Json(body): Json<LoadLutBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::LoadLut {
+            filename: body.filename,
+        })
+        .await
+    {
+        Ok(result) => command_response(result),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(delete, path = "/api/mixer/lut", responses((status = 200, body = CommandResult)), tag = "Mixer")]
+pub async fn unload_lut(State(state): State<SharedState>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::UnloadLut).await {
+        Ok(result) => command_response(result),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}

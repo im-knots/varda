@@ -874,6 +874,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         let (warnings, _structural) = app.apply_scene_diff(&scene, 1920, 1080);
         assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);

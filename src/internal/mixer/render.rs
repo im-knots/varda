@@ -289,6 +289,7 @@ impl Mixer {
         // Tonemap pass: compress HDR composite into displayable [0,1] range.
         // Bypass mode is a no-op (values clamp at the output boundary anyway).
         self.apply_tonemap(context);
+        self.apply_lut(context);
 
         // GPU profiling: drain composite + master FX GPU work
         let gpu_composite_us = if profiling {
@@ -690,6 +691,17 @@ impl Mixer {
                     context,
                 );
             }
+            if let Some((sub_tex, sub_view)) = self.sub_mix_cache.get(&indices) {
+                apply_lut_in_place(
+                    &self.lut_pipeline,
+                    self.active_lut.as_ref(),
+                    sub_tex,
+                    sub_view,
+                    &self.effect_ping_texture,
+                    &self.effect_ping_view,
+                    context,
+                );
+            }
         }
     }
 
@@ -960,6 +972,20 @@ impl Mixer {
         );
     }
 
+    /// Apply LUT to the main composite texture in-place.
+    /// Runs after tonemap, before outputs read the composite.
+    fn apply_lut(&self, context: &GpuContext) {
+        apply_lut_in_place(
+            &self.lut_pipeline,
+            self.active_lut.as_ref(),
+            &self.composite_texture,
+            &self.composite_view,
+            &self.effect_ping_texture,
+            &self.effect_ping_view,
+            context,
+        );
+    }
+
     /// Prepare tonemapped copies of individual channel composites.
     /// Called for channels used as direct `OutputSource::Channel(idx)` sources.
     /// Channel composites can't be tonemapped in-place because they feed into
@@ -1003,6 +1029,31 @@ impl Mixer {
             self.tonemap_pipeline
                 .render(&context.device, &mut encoder, ch_view, cached_view);
             context.queue.submit(Some(encoder.finish()));
+
+            // Apply LUT to the tonemapped channel copy
+            if let Some(lut) = &self.active_lut {
+                let (cache_tex, cache_view) = &self.tonemapped_channel_cache[&ch_idx];
+                let mut lut_encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Channel LUT Encoder"),
+                        });
+                // Copy cache → effect_ping, then LUT ping → cache
+                lut_encoder.copy_texture_to_texture(
+                    cache_tex.as_image_copy(),
+                    self.effect_ping_texture.as_image_copy(),
+                    cache_tex.size(),
+                );
+                self.lut_pipeline.render(
+                    &context.device,
+                    &mut lut_encoder,
+                    &self.effect_ping_view,
+                    cache_view,
+                    lut,
+                );
+                context.queue.submit(Some(lut_encoder.finish()));
+            }
         }
     }
 }
@@ -1038,5 +1089,44 @@ fn tonemap_in_place(
     );
 
     pipeline.render(&context.device, &mut encoder, scratch_view, target_view);
+    context.queue.submit(Some(encoder.finish()));
+}
+
+/// Apply a LUT to a texture in-place using a scratch texture.
+/// No-op if no LUT is loaded.
+fn apply_lut_in_place(
+    pipeline: &crate::renderer::lut::LutPipeline,
+    lut: Option<&crate::renderer::lut::LoadedLut>,
+    target_tex: &wgpu::Texture,
+    target_view: &wgpu::TextureView,
+    scratch_tex: &wgpu::Texture,
+    scratch_view: &wgpu::TextureView,
+    context: &GpuContext,
+) {
+    let lut = match lut {
+        Some(l) => l,
+        None => return,
+    };
+
+    let mut encoder = context
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("LUT Encoder"),
+        });
+
+    // Copy target → scratch so the shader can read scratch and write back to target.
+    encoder.copy_texture_to_texture(
+        target_tex.as_image_copy(),
+        scratch_tex.as_image_copy(),
+        target_tex.size(),
+    );
+
+    pipeline.render(
+        &context.device,
+        &mut encoder,
+        scratch_view,
+        target_view,
+        lut,
+    );
     context.queue.submit(Some(encoder.finish()));
 }

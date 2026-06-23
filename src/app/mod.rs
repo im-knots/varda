@@ -506,6 +506,17 @@ impl VardaApp {
                 self.set_tonemap_mode(mode);
                 CommandResult::Ok
             }
+            EngineCommand::LoadLut { filename } => match self.load_lut(&filename) {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::UnloadLut => {
+                self.unload_lut();
+                CommandResult::Ok
+            }
             EngineCommand::AutoCrossfade {
                 target,
                 duration_secs,

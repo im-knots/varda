@@ -52,6 +52,10 @@ pub enum EngineCommand {
     // ── Mixer ──────────────────────────────────────────────────
     SetCrossfader(f32),
     SetTonemapMode(crate::renderer::tonemap::TonemapMode),
+    LoadLut {
+        filename: String,
+    },
+    UnloadLut,
     AutoCrossfade {
         target: f32,
         duration_secs: f32,

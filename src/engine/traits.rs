@@ -39,6 +39,8 @@ pub trait MixerCommands {
     fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize);
     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()>;
     fn set_tonemap_mode(&mut self, mode: crate::renderer::tonemap::TonemapMode);
+    fn load_lut(&mut self, filename: &str) -> Result<()>;
+    fn unload_lut(&mut self);
     fn set_param(&mut self, path: &str, value: ParamValue);
 }
 

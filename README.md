@@ -9,7 +9,8 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
 - **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, HLS, DASH, RTMP/RTMPS, images
-- **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 6 blend modes
+- **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 6 blend modes, linear-light HDR pipeline
+- **Color**: 9 tonemap presets (ACES, AgX, Reinhard, Hable, etc.), 3D LUT support (.cube/.3dl) for color grading
 - **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations.
 - **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
 - **Modulation**: LFO, audio-reactive, ADSR, step sequencer, mod-on-mod chaining on any parameter
@@ -124,7 +125,7 @@ Varda treats the current working directory as a workspace. All state lives in a 
 ```
 your-show/
   .varda/
-    scene.json            # channels, decks, effects, modulation, crossfader, transition sequences
+    scene.json            # channels, decks, effects, modulation, crossfader, tonemap, LUT, transition sequences
     stage.json            # surface layout, outputs, warp calibration
     midi.json             # MIDI controller mappings that differ from the auto-mapped defaults
     keymap.json           # keyboard shortcut bindings
@@ -132,6 +133,7 @@ your-show/
       decks/              # saved deck presets (JSON)
       channels/           # saved channel presets (JSON)
     shaders/              # ISF shaders
+    luts/                 # 3D LUT files (.cube, .3dl) for color grading
     controller-profiles/  # MIDI controller profiles (JSON)
     recordings/           # recording output files
     streams/              # HLS/DASH output files

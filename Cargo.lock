@@ -6688,6 +6688,7 @@ dependencies = [
  "futures-lite",
  "futures-util",
  "geo",
+ "half",
  "image",
  "imageproc",
  "json-patch",

@@ -1,4 +1,4 @@
-//! Tonemap post-process pipeline — applies tonemapping (bypass/ACES) to linear HDR composites.
+//! Tonemap post-process pipeline — applies tonemapping to linear HDR composites.
 use anyhow::Result;
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
@@ -17,10 +17,24 @@ use wgpu::util::DeviceExt;
 )]
 pub enum TonemapMode {
     /// Clamp to [0, 1] — equivalent to pre-tonemap behavior.
-    #[default]
     Bypass = 0,
     /// ACES filmic curve — smooth highlight rolloff, preserves saturation.
+    #[default]
     Aces = 1,
+    /// Simple Reinhard: x/(x+1) per channel.
+    Reinhard = 2,
+    /// Reinhard with white point control, uses full SDR range.
+    ReinhardExtended = 3,
+    /// Hable/Uncharted 2 filmic curve — nice toe and shoulder.
+    HableFilmic = 4,
+    /// Gran Turismo style (Uchimura) — tunable shoulder and toe.
+    Uchimura = 5,
+    /// AMD Lottes — fast, invertible, high contrast.
+    Lottes = 6,
+    /// AgX — neutral, minimal hue shift, modern ACES alternative.
+    AgX = 7,
+    /// Khronos PBR Neutral — color-accurate, minimal look.
+    KhronosPbrNeutral = 8,
 }
 
 /// GPU uniform for tonemap shader — 16 bytes, matches TonemapParams in tonemap.wgsl.
@@ -79,7 +93,7 @@ impl TonemapPipeline {
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Tonemap Params Buffer"),
             contents: bytemuck::cast_slice(&[TonemapParams {
-                mode: TonemapMode::Bypass as u32,
+                mode: TonemapMode::Aces as u32,
                 _pad0: 0,
                 _pad1: 0,
                 _pad2: 0,

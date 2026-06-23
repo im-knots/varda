@@ -478,6 +478,23 @@ impl MixerCommands for VardaApp {
         self.mixer.set_tonemap_mode(&self.context.queue, mode);
     }
 
+    fn load_lut(&mut self, filename: &str) -> Result<()> {
+        let lut_dir = self.session.workspace.varda_dir().join("luts");
+        let path = lut_dir.join(filename);
+        let parsed = crate::renderer::lut::parse_lut_file(&path)?;
+        self.mixer.load_lut(
+            &self.context.device,
+            &self.context.queue,
+            &parsed,
+            filename.to_string(),
+        );
+        Ok(())
+    }
+
+    fn unload_lut(&mut self) {
+        self.mixer.unload_lut();
+    }
+
     fn set_param(&mut self, path: &str, value: ParamValue) {
         // Convert ParamValue to f32 for the param router
         let f_value = match value {

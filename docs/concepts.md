@@ -24,7 +24,7 @@ Composites multiple decks into a single layer. Each channel has its own effect c
 
 ### Mixer
 
-Composites channels into the final output. With 2 channels, an A/B crossfader blends between them. With 3+ channels, per-channel opacity controls the mix. The mixer owns the master effect chain.
+Composites channels into the final output. With 2 channels, an A/B crossfader blends between them. With 3+ channels, per-channel opacity controls the mix. The mixer owns the master effect chain, tonemapping, and optional 3D LUT color grading.
 
 ### Surface
 
@@ -66,6 +66,38 @@ Effects can be reordered via drag-and-drop and toggled on/off individually.
 
 ---
 
+## Tonemapping & Color Grading
+
+The compositing pipeline operates in **linear-light HDR** (`Rgba16Float`). Before frames reach outputs, two optional color transforms are applied in order:
+
+### Tonemap
+
+Compresses HDR values into displayable [0, 1] range. Nine algorithmic presets are available:
+
+| Preset | Character |
+|--------|-----------|
+| **Bypass** | No compression — values >1.0 clamp at the output boundary |
+| **ACES Filmic** (default) | Cinematic rolloff with warm highlight shift |
+| **Reinhard** | Gentle curve, never reaches pure white |
+| **Reinhard Extended** | Reinhard with configurable white point |
+| **Hable Filmic** | Game-industry standard with nice toe and shoulder |
+| **Uchimura (GT)** | Gran Turismo style, tunable shoulder |
+| **Lottes (AMD)** | Fast, invertible, high contrast |
+| **AgX** | Neutral, minimal hue shift |
+| **PBR Neutral** | Color-accurate, minimal look modification |
+
+Select via the **TM:** label in the top bar or `PUT /api/mixer/tonemap`.
+
+### 3D LUT
+
+An optional 3D Look-Up Table applied after tonemapping for color grading, gamut transforms, or creative looks. Supports industry-standard `.cube` and `.3dl` files (including 1D shaper LUTs for shadow precision).
+
+Place LUT files in `.varda/luts/` — they appear in the tonemap popover for one-click selection. The active LUT persists across sessions.
+
+LUTs are the universal mechanism for importing color transforms from DaVinci Resolve, Photoshop, or any color grading tool. A single `.cube` file can encode tonemapping + color grading + gamut mapping in one pass.
+
+---
+
 ## Modulation
 
 Any numeric parameter in the hierarchy can be automated by modulation sources:
@@ -89,10 +121,11 @@ All state is saved to the `.varda/` directory in the workspace root:
 
 | File | Contents |
 |------|----------|
-| `scene.json` | Show state — channels, decks, effects, modulation, crossfader, transition sequences |
+| `scene.json` | Show state — channels, decks, effects, modulation, crossfader, tonemap mode, active LUT, transition sequences |
 | `stage.json` | Venue state — surface layout, outputs, warp calibration, editor preferences |
 | `midi.json` | MIDI controller mappings (device-name-keyed) |
 | `keymap.json` | Keyboard shortcut bindings |
 | `presets/` | Saved deck and channel presets |
+| `luts/` | 3D LUT files (.cube, .3dl) for color grading |
 
 Save with **Cmd+S** or auto-save on clean exit. Reload everything at a different venue — the scene (your show) is separate from the stage (the venue's physical layout).

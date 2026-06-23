@@ -724,6 +724,10 @@ pub struct UIData {
     pub auto_crossfade_progress: f32,
     /// Current tonemap mode (Bypass or ACES)
     pub tonemap_mode: crate::renderer::tonemap::TonemapMode,
+    /// Active LUT filename (if any)
+    pub active_lut_filename: Option<String>,
+    /// Available LUT files in .varda/luts/
+    pub available_luts: Vec<String>,
     /// Whether MIDI learn mode is active
     pub midi_learn_active: bool,
     /// The parameter path currently waiting for MIDI learn
@@ -1213,6 +1217,10 @@ pub struct UIActions {
     pub crossfader_action: Option<CrossfaderAction>,
     /// Set tonemap mode (Bypass or ACES)
     pub set_tonemap_mode: Option<crate::renderer::tonemap::TonemapMode>,
+    /// Load a LUT file (filename relative to .varda/luts/)
+    pub load_lut: Option<String>,
+    /// Unload the active LUT
+    pub unload_lut: bool,
     /// (ch_idx, opacity, blend_mode) — per-channel updates
     pub channel_updates: Vec<(usize, f32, BlendMode)>,
     /// MIDI learn: toggle learn mode on/off
@@ -1511,6 +1519,8 @@ impl UIActions {
             info_notifications: Vec::new(),
             crossfader_action: None,
             set_tonemap_mode: None,
+            load_lut: None,
+            unload_lut: false,
             channel_updates: Vec::new(),
             midi_learn_toggle: false,
             midi_learn_select: None,
@@ -1911,6 +1921,8 @@ impl UIData {
             auto_crossfade_active: false,
             auto_crossfade_progress: 0.0,
             tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut_filename: None,
+            available_luts: vec![],
             midi_learn_active: false,
             midi_learn_target: None,
             keyboard_learn_active: false,

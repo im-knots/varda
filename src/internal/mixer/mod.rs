@@ -11,6 +11,7 @@ pub use transition::{
 use crate::channel::Channel;
 use crate::deck::Effect;
 use crate::modulation::ModulationEngine;
+use crate::renderer::lut::{LoadedLut, LutPipeline};
 pub use crate::renderer::tonemap::TonemapMode;
 use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext, TonemapPipeline};
 use anyhow::Result;
@@ -116,6 +117,12 @@ pub struct Mixer {
     /// Current tonemap mode
     tonemap_mode: TonemapMode,
 
+    /// LUT pipeline for applying 3D LUTs after tonemapping
+    lut_pipeline: LutPipeline,
+
+    /// Currently loaded LUT (applied after tonemap, before output)
+    active_lut: Option<LoadedLut>,
+
     /// Active transition effect (replaces opacity-based crossfade when set)
     active_transition: Option<TransitionEffect>,
 
@@ -179,6 +186,7 @@ impl Mixer {
             wgpu::BlendState::ALPHA_BLENDING,
         )?;
         let tonemap_pipeline = TonemapPipeline::new(&context.device, context.compositing_format)?;
+        let lut_pipeline = LutPipeline::new(&context.device, context.compositing_format)?;
 
         // Create two default channels
         let channel_0 = Channel::new("Ch 0".to_string(), context, width, height)?;
@@ -206,6 +214,8 @@ impl Mixer {
             blit_pipeline,
             tonemap_pipeline,
             tonemap_mode: TonemapMode::default(),
+            lut_pipeline,
+            active_lut: None,
             active_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),
@@ -427,6 +437,32 @@ impl Mixer {
     pub fn set_tonemap_mode(&mut self, queue: &wgpu::Queue, mode: TonemapMode) {
         self.tonemap_mode = mode;
         self.tonemap_pipeline.set_mode(queue, mode);
+    }
+
+    /// Load a LUT from a parsed file and upload to GPU.
+    pub fn load_lut(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        parsed: &crate::renderer::lut::ParsedLut,
+        filename: String,
+    ) {
+        self.active_lut = Some(LoadedLut::from_parsed(device, queue, parsed, filename));
+    }
+
+    /// Unload the active LUT.
+    pub fn unload_lut(&mut self) {
+        self.active_lut = None;
+    }
+
+    /// Get the active LUT filename (if any).
+    pub fn active_lut_filename(&self) -> Option<&str> {
+        self.active_lut.as_ref().map(|l| l.filename.as_str())
+    }
+
+    /// Whether a LUT is currently active.
+    pub fn has_active_lut(&self) -> bool {
+        self.active_lut.is_some()
     }
 
     /// GPU utilization % (0–100), smoothed. Based on GPU timestamp data

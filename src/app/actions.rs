@@ -100,6 +100,14 @@ impl VardaApp {
             self.execute_command(EngineCommand::SetTonemapMode(mode));
         }
 
+        // LUT load/unload
+        if let Some(filename) = ui_actions.load_lut.take() {
+            self.execute_command(EngineCommand::LoadLut { filename });
+        }
+        if ui_actions.unload_lut {
+            self.execute_command(EngineCommand::UnloadLut);
+        }
+
         // Channel updates — route through execute_command
         for &(ch_idx, opacity, blend_mode) in &ui_actions.channel_updates {
             self.execute_command(EngineCommand::SetChannelOpacity {
