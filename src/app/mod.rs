@@ -502,6 +502,10 @@ impl VardaApp {
                 self.set_crossfader(pos);
                 CommandResult::Ok
             }
+            EngineCommand::SetTonemapMode(mode) => {
+                self.set_tonemap_mode(mode);
+                CommandResult::Ok
+            }
             EngineCommand::AutoCrossfade {
                 target,
                 duration_secs,

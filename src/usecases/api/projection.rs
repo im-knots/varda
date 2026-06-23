@@ -191,6 +191,7 @@ pub(crate) mod tests {
                 active_transition_name: None,
                 transition_names: vec!["Dissolve".into()],
                 sequences: vec![],
+                tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
             },
             audio: AudioSnapshot {
                 level: 0.0,

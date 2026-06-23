@@ -11,7 +11,8 @@ pub use transition::{
 use crate::channel::Channel;
 use crate::deck::Effect;
 use crate::modulation::ModulationEngine;
-use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext};
+pub use crate::renderer::tonemap::TonemapMode;
+use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext, TonemapPipeline};
 use anyhow::Result;
 
 /// Per-frame GPU timing allocation context.
@@ -109,6 +110,12 @@ pub struct Mixer {
     /// Simple blit pipeline for first-channel copy
     blit_pipeline: BlitPipeline,
 
+    /// Tonemap pipeline (bypass/ACES) applied after master effects
+    tonemap_pipeline: TonemapPipeline,
+
+    /// Current tonemap mode
+    tonemap_mode: TonemapMode,
+
     /// Active transition effect (replaces opacity-based crossfade when set)
     active_transition: Option<TransitionEffect>,
 
@@ -167,6 +174,7 @@ impl Mixer {
             context.compositing_format,
             wgpu::BlendState::ALPHA_BLENDING,
         )?;
+        let tonemap_pipeline = TonemapPipeline::new(&context.device, context.compositing_format)?;
 
         // Create two default channels
         let channel_0 = Channel::new("Ch 0".to_string(), context, width, height)?;
@@ -192,6 +200,8 @@ impl Mixer {
             gpu_utilization: 0.0,
             composite_pipeline,
             blit_pipeline,
+            tonemap_pipeline,
+            tonemap_mode: TonemapMode::default(),
             active_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),
@@ -391,9 +401,20 @@ impl Mixer {
         &mut self.transition_sequences
     }
 
-    /// The composited output texture view (post-crossfade, post-master-effects).
+    /// The composited output texture view (post-crossfade, post-master-effects, post-tonemap).
     pub fn composite_view(&self) -> &wgpu::TextureView {
         &self.composite_view
+    }
+
+    /// Current tonemap mode.
+    pub fn tonemap_mode(&self) -> TonemapMode {
+        self.tonemap_mode
+    }
+
+    /// Set tonemap mode and update GPU uniform.
+    pub fn set_tonemap_mode(&mut self, queue: &wgpu::Queue, mode: TonemapMode) {
+        self.tonemap_mode = mode;
+        self.tonemap_pipeline.set_mode(queue, mode);
     }
 
     /// GPU utilization % (0–100), smoothed. Based on GPU timestamp data

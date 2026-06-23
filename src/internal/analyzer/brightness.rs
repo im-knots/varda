@@ -10,10 +10,10 @@ use super::traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot, S
 /// Pixel stride default — skip every N-th pixel for speed.
 const DEFAULT_SAMPLE_STRIDE: usize = 4;
 
-/// Luminance weights (ITU-R BT.601).
-const LUM_R: f32 = 0.299;
-const LUM_G: f32 = 0.587;
-const LUM_B: f32 = 0.114;
+/// Luminance weights (Rec.709).
+const LUM_R: f32 = 0.2126;
+const LUM_G: f32 = 0.7152;
+const LUM_B: f32 = 0.0722;
 
 pub(crate) struct BrightnessAnalyzer {
     sample_stride: usize,
@@ -37,7 +37,7 @@ impl Analyzer for BrightnessAnalyzer {
             scalars: vec![
                 ScalarOutputDef {
                     name: "brightness".into(),
-                    description: "Average luminance (BT.601)".into(),
+                    description: "Average luminance (Rec.709)".into(),
                     range: (0.0, 1.0),
                     default: 0.0,
                     default_smoothing: 0.1,
@@ -220,8 +220,8 @@ mod tests {
         assert!(snap.scalars["green"].abs() < 1e-4);
         assert!(snap.scalars["blue"].abs() < 1e-4);
 
-        // Luminance of pure red = 0.299
+        // Luminance of pure red = 0.2126
         let b = snap.scalars["brightness"];
-        assert!((b - 0.299).abs() < 1e-3, "expected ~0.299, got {b}");
+        assert!((b - 0.2126).abs() < 1e-3, "expected ~0.2126, got {b}");
     }
 }

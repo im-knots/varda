@@ -62,7 +62,7 @@ void main() {
     if (uv.x < -1.0) { fragColor = vec4(audioSum + timeSum, 0.0, 0.0, 1.0); return; }
 
     vec4 src = texture(sampler2D(inputImage, texSampler), uv);
-    float lum = dot(src.rgb, vec3(0.299, 0.587, 0.114));
+    float lum = dot(src.rgb, vec3(0.2126, 0.7152, 0.0722));
 
     // Weight functions for shadows, midtones, highlights
     float shadowW = 1.0 - smoothstep(0.0, 0.5, lum);

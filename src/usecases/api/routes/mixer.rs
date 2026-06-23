@@ -81,3 +81,23 @@ pub async fn beat_crossfade(
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
 }
+
+#[derive(Deserialize, ToSchema)]
+pub struct TonemapModeBody {
+    /// Tonemapping mode: "bypass" or "aces".
+    pub mode: crate::renderer::tonemap::TonemapMode,
+}
+
+#[utoipa::path(put, path = "/api/mixer/tonemap", request_body = TonemapModeBody, responses((status = 200, body = CommandResult)), tag = "Mixer")]
+pub async fn set_tonemap_mode(
+    State(state): State<SharedState>,
+    Json(body): Json<TonemapModeBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetTonemapMode(body.mode))
+        .await
+    {
+        Ok(result) => command_response(result),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}

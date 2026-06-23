@@ -9,6 +9,7 @@ pub mod pipeline;
 pub mod readback;
 pub mod slicer;
 pub mod subprocess;
+pub mod tonemap;
 pub mod transition;
 pub mod warp;
 
@@ -23,5 +24,6 @@ pub use pipeline::*;
 pub use readback::*;
 pub use slicer::*;
 pub use subprocess::*;
+pub use tonemap::*;
 pub use transition::*;
 pub use warp::*;

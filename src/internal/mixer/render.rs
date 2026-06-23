@@ -286,6 +286,10 @@ impl Mixer {
         self.apply_master_effects(context, audio_data, time, composite_cmds)?;
         let master_fx_us = t_master_fx.elapsed().as_micros();
 
+        // Tonemap pass: compress HDR composite into displayable [0,1] range.
+        // Bypass mode is a no-op (values clamp at the output boundary anyway).
+        self.apply_tonemap(context);
+
         // GPU profiling: drain composite + master FX GPU work
         let gpu_composite_us = if profiling {
             let t = std::time::Instant::now();
@@ -926,5 +930,39 @@ impl Mixer {
         }
 
         Ok(())
+    }
+
+    /// Apply tonemap to the composite. Skips the pass in Bypass mode (clamp
+    /// happens at the output boundary anyway, so no extra GPU work is needed).
+    fn apply_tonemap(&self, context: &GpuContext) {
+        use crate::renderer::tonemap::TonemapMode;
+
+        if self.tonemap_mode == TonemapMode::Bypass {
+            return;
+        }
+
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Tonemap Encoder"),
+            });
+
+        // Copy composite → effect_ping so the tonemap shader can read from ping
+        // and write back to composite.
+        encoder.copy_texture_to_texture(
+            self.composite_texture.as_image_copy(),
+            self.effect_ping_texture.as_image_copy(),
+            self.composite_texture.size(),
+        );
+
+        // Run tonemap: read effect_ping → write composite
+        self.tonemap_pipeline.render(
+            &context.device,
+            &mut encoder,
+            &self.effect_ping_view,
+            &self.composite_view,
+        );
+
+        context.queue.submit(Some(encoder.finish()));
     }
 }

@@ -60,7 +60,7 @@ void main() {
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
             vec3 c = texture(sampler2D(inputImage, texSampler), uv + vec2(float(x), float(y)) * texel).rgb;
-            s[idx++] = dot(c, vec3(0.299, 0.587, 0.114));
+            s[idx++] = dot(c, vec3(0.2126, 0.7152, 0.0722));
         }
     }
 

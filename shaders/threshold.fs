@@ -56,7 +56,7 @@ void main() {
     vec4 color = texture(sampler2D(inputImage, texSampler), uv);
 
     // Luminance
-    float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
 
     // Threshold with optional smoothness
     float t;

@@ -176,6 +176,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
         active_transition_name,
         transition_names,
         sequences,
+        tonemap_mode: mixer.tonemap_mode(),
     }
 }
 
@@ -939,6 +940,7 @@ pub(crate) fn build_ui_data(
         crossfader: engine.mixer.crossfader,
         auto_crossfade_active: engine.mixer.auto_crossfade_active,
         auto_crossfade_progress: engine.mixer.auto_crossfade_progress,
+        tonemap_mode: engine.mixer.tonemap_mode,
         midi_learn_active: engine.midi.learn_active,
         midi_learn_target: engine.midi.learn_target,
         keyboard_learn_active: app.input.keymap.learn_mode,

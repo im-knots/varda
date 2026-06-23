@@ -474,6 +474,10 @@ impl MixerCommands for VardaApp {
         }
     }
 
+    fn set_tonemap_mode(&mut self, mode: crate::renderer::tonemap::TonemapMode) {
+        self.mixer.set_tonemap_mode(&self.context.queue, mode);
+    }
+
     fn set_param(&mut self, path: &str, value: ParamValue) {
         // Convert ParamValue to f32 for the param router
         let f_value = match value {

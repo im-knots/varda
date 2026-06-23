@@ -95,6 +95,11 @@ impl VardaApp {
             self.execute_command(cmd);
         }
 
+        // Tonemap mode
+        if let Some(mode) = ui_actions.set_tonemap_mode {
+            self.execute_command(EngineCommand::SetTonemapMode(mode));
+        }
+
         // Channel updates — route through execute_command
         for &(ch_idx, opacity, blend_mode) in &ui_actions.channel_updates {
             self.execute_command(EngineCommand::SetChannelOpacity {

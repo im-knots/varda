@@ -40,6 +40,7 @@ use utoipa_swagger_ui::SwaggerUi;
         // Mixer
         routes::mixer::set_crossfader, routes::mixer::auto_crossfade,
         routes::mixer::beat_crossfade,
+        routes::mixer::set_tonemap_mode,
         // Channels
         routes::channels::add_channel, routes::channels::remove_channel,
         routes::channels::set_opacity, routes::channels::set_blend_mode,
@@ -248,6 +249,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/mixer/beat-crossfade",
             axum::routing::post(routes::mixer::beat_crossfade),
+        )
+        .route(
+            "/api/mixer/tonemap",
+            axum::routing::put(routes::mixer::set_tonemap_mode),
         )
         // ── Write: Channels ─────────────────────────────────────
         .route(

@@ -8,6 +8,7 @@ use super::sequence::render_sequence_builder;
 use super::stage::render_stage_editor;
 use super::utils::channel_color;
 use crate::mixer::CrossfadeEasing;
+use crate::renderer::tonemap::TonemapMode;
 use crate::BlendMode;
 
 pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
@@ -469,6 +470,35 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         }
                     });
             }
+
+            // Tonemap mode
+            ui.add_space(2.0);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Tonemap").small());
+                let current = data.tonemap_mode;
+                let label = match current {
+                    TonemapMode::Bypass => "Bypass",
+                    TonemapMode::Aces => "ACES",
+                };
+                egui::ComboBox::from_id_salt("tonemap_mode")
+                    .selected_text(egui::RichText::new(label).small())
+                    .width(60.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(current == TonemapMode::Bypass, "Bypass")
+                            .clicked()
+                        {
+                            actions.set_tonemap_mode = Some(TonemapMode::Bypass);
+                        }
+                        if ui
+                            .selectable_label(current == TonemapMode::Aces, "ACES")
+                            .clicked()
+                        {
+                            actions.set_tonemap_mode = Some(TonemapMode::Aces);
+                        }
+                    });
+            });
         });
 }
 

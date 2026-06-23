@@ -74,7 +74,18 @@ impl ParamValue {
             _ => ParamValue::Float(0.0), // Default fallback
         }
     }
+}
 
+/// Convert a single sRGB component to linear light.
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+impl ParamValue {
     /// Size in bytes (aligned to 4 bytes for GPU)
     pub fn byte_size(&self) -> usize {
         match self {
@@ -95,8 +106,11 @@ impl ParamValue {
             }
             ParamValue::Long(v) => buffer.extend_from_slice(&v.to_le_bytes()),
             ParamValue::Color(v) => {
-                for f in v {
-                    buffer.extend_from_slice(&f.to_le_bytes());
+                // Linearize RGB from sRGB (egui color picker values);
+                // preserve alpha unchanged.
+                for (i, f) in v.iter().enumerate() {
+                    let val = if i < 3 { srgb_to_linear(*f) } else { *f };
+                    buffer.extend_from_slice(&val.to_le_bytes());
                 }
             }
             ParamValue::Point2D(v) => {

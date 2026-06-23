@@ -38,6 +38,7 @@ pub trait MixerCommands {
     fn toggle_effect(&mut self, target: EffectTarget, effect_idx: usize);
     fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize);
     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()>;
+    fn set_tonemap_mode(&mut self, mode: crate::renderer::tonemap::TonemapMode);
     fn set_param(&mut self, path: &str, value: ParamValue);
 }
 
