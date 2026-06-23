@@ -349,6 +349,23 @@ impl VardaApp {
             self.mixer.prepare_sub_mixes(&sub_mix_sources, context);
         }
 
+        // Prepare tonemapped copies for any Channel(idx) sources
+        {
+            let mut channel_indices: Vec<usize> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for surface in &self.output.surface_manager.surfaces {
+                if let OutputSource::Channel(idx) = &surface.source {
+                    if seen.insert(*idx) {
+                        channel_indices.push(*idx);
+                    }
+                }
+            }
+            if !channel_indices.is_empty() {
+                self.mixer
+                    .prepare_channel_tonemaps(&channel_indices, &self.context);
+            }
+        }
+
         let mixer = &self.mixer;
 
         // Run domemaster renderer if enabled (content rotation is updated each frame via set_content_rotation)
@@ -487,9 +504,9 @@ impl VardaApp {
     ) -> Option<&'a wgpu::TextureView> {
         match source {
             OutputSource::Master => Some(mixer.composite_view()),
-            OutputSource::Channel(ch_idx) => {
-                mixer.channels().get(*ch_idx).map(|ch| &ch.composite_view)
-            }
+            OutputSource::Channel(ch_idx) => mixer
+                .get_tonemapped_channel_view(*ch_idx)
+                .or_else(|| mixer.channels().get(*ch_idx).map(|ch| &ch.composite_view)),
             OutputSource::Channels(indices) => {
                 let mut sorted = indices.clone();
                 sorted.sort();

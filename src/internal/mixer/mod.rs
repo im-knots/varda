@@ -125,6 +125,10 @@ pub struct Mixer {
     /// Cached sub-mix textures for multi-channel surface assignments.
     /// Key: sorted channel indices, Value: (texture, view).
     sub_mix_cache: std::collections::HashMap<Vec<usize>, (wgpu::Texture, wgpu::TextureView)>,
+    /// Cached tonemapped copies of individual channel composites.
+    /// Used when surfaces source from Channel(idx) — the raw channel composite
+    /// can't be tonemapped in-place since it feeds into the mixer composite.
+    tonemapped_channel_cache: std::collections::HashMap<usize, (wgpu::Texture, wgpu::TextureView)>,
 
     /// GPU performance profiling: when > 0, insert device.poll(Wait) between
     /// GPU work stages to measure actual GPU drain time per category.
@@ -205,6 +209,7 @@ impl Mixer {
             active_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),
+            tonemapped_channel_cache: std::collections::HashMap::new(),
             perf_profile_frames: 0,
             query_set: if context.timestamp_supported {
                 Some(context.device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -273,11 +278,18 @@ impl Mixer {
             channel.resize(context, width, height);
         }
         self.sub_mix_cache.clear();
+        self.tonemapped_channel_cache.clear();
     }
 
     /// Clear the sub-mix texture cache (e.g. after resolution change).
     pub fn clear_sub_mix_cache(&mut self) {
         self.sub_mix_cache.clear();
+    }
+
+    /// Get the tonemapped view for a channel, if available.
+    /// Returns None in Bypass mode or if the channel isn't used as a direct source.
+    pub fn get_tonemapped_channel_view(&self, ch_idx: usize) -> Option<&wgpu::TextureView> {
+        self.tonemapped_channel_cache.get(&ch_idx).map(|(_, v)| v)
     }
 
     /// Start GPU performance profiling for the next N frames.

@@ -675,6 +675,21 @@ impl Mixer {
                 self.sub_mix_cache.insert(indices.clone(), (tex, view));
             }
             self.composite_sub_mix(&indices, context);
+
+            // Tonemap the sub-mix in-place (same pattern as main composite).
+            // Uses effect_ping as scratch — safe because composite_sub_mix has
+            // already finished with it by the time we get here.
+            if let Some((sub_tex, sub_view)) = self.sub_mix_cache.get(&indices) {
+                tonemap_in_place(
+                    self.tonemap_mode,
+                    &self.tonemap_pipeline,
+                    sub_tex,
+                    sub_view,
+                    &self.effect_ping_texture,
+                    &self.effect_ping_view,
+                    context,
+                );
+            }
         }
     }
 
@@ -932,37 +947,96 @@ impl Mixer {
         Ok(())
     }
 
-    /// Apply tonemap to the composite. Skips the pass in Bypass mode (clamp
-    /// happens at the output boundary anyway, so no extra GPU work is needed).
+    /// Apply tonemap to the main composite texture in-place.
     fn apply_tonemap(&self, context: &GpuContext) {
+        tonemap_in_place(
+            self.tonemap_mode,
+            &self.tonemap_pipeline,
+            &self.composite_texture,
+            &self.composite_view,
+            &self.effect_ping_texture,
+            &self.effect_ping_view,
+            context,
+        );
+    }
+
+    /// Prepare tonemapped copies of individual channel composites.
+    /// Called for channels used as direct `OutputSource::Channel(idx)` sources.
+    /// Channel composites can't be tonemapped in-place because they feed into
+    /// the mixer composite on subsequent frames.
+    pub fn prepare_channel_tonemaps(&mut self, channel_indices: &[usize], context: &GpuContext) {
         use crate::renderer::tonemap::TonemapMode;
 
         if self.tonemap_mode == TonemapMode::Bypass {
+            self.tonemapped_channel_cache.clear();
             return;
         }
 
-        let mut encoder = context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Tonemap Encoder"),
-            });
+        // Remove stale entries
+        self.tonemapped_channel_cache
+            .retain(|idx, _| channel_indices.contains(idx));
 
-        // Copy composite → effect_ping so the tonemap shader can read from ping
-        // and write back to composite.
-        encoder.copy_texture_to_texture(
-            self.composite_texture.as_image_copy(),
-            self.effect_ping_texture.as_image_copy(),
-            self.composite_texture.size(),
-        );
+        for &ch_idx in channel_indices {
+            let ch_view = match self.channels.get(ch_idx) {
+                Some(ch) => &ch.composite_view,
+                None => continue,
+            };
 
-        // Run tonemap: read effect_ping → write composite
-        self.tonemap_pipeline.render(
-            &context.device,
-            &mut encoder,
-            &self.effect_ping_view,
-            &self.composite_view,
-        );
+            // Create cached texture if needed
+            if !self.tonemapped_channel_cache.contains_key(&ch_idx) {
+                let width = self.composite_texture.width();
+                let height = self.composite_texture.height();
+                let tex = context.create_compositing_texture(width, height);
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                self.tonemapped_channel_cache.insert(ch_idx, (tex, view));
+            }
 
-        context.queue.submit(Some(encoder.finish()));
+            // Tonemap directly: channel composite → cached texture
+            // (no copy needed since source and target are different textures)
+            let cached_view = &self.tonemapped_channel_cache[&ch_idx].1;
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Channel Tonemap Encoder"),
+                    });
+            self.tonemap_pipeline
+                .render(&context.device, &mut encoder, ch_view, cached_view);
+            context.queue.submit(Some(encoder.finish()));
+        }
     }
+}
+
+/// Tonemap a texture in-place using a scratch texture for the copy.
+/// Skips the pass in Bypass mode.
+fn tonemap_in_place(
+    mode: crate::renderer::tonemap::TonemapMode,
+    pipeline: &crate::renderer::tonemap::TonemapPipeline,
+    target_tex: &wgpu::Texture,
+    target_view: &wgpu::TextureView,
+    scratch_tex: &wgpu::Texture,
+    scratch_view: &wgpu::TextureView,
+    context: &GpuContext,
+) {
+    use crate::renderer::tonemap::TonemapMode;
+
+    if mode == TonemapMode::Bypass {
+        return;
+    }
+
+    let mut encoder = context
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Tonemap Encoder"),
+        });
+
+    // Copy target → scratch so the shader can read scratch and write back to target.
+    encoder.copy_texture_to_texture(
+        target_tex.as_image_copy(),
+        scratch_tex.as_image_copy(),
+        target_tex.size(),
+    );
+
+    pipeline.render(&context.device, &mut encoder, scratch_view, target_view);
+    context.queue.submit(Some(encoder.finish()));
 }
