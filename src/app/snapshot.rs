@@ -1152,6 +1152,28 @@ fn effect_snapshot_to_ui(snap: &EffectSnapshot) -> EffectInfo {
     )
 }
 
+/// Scan `.varda/luts/` for available LUT files (.cube, .3dl).
+fn list_available_luts(workspace: &crate::persistence::Workspace) -> Vec<String> {
+    let dir = workspace.luts_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
+    let mut files: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".cube") || lower.ends_with(".3dl") {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort();
+    files
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1311,26 +1333,4 @@ mod tests {
             "duplicate stream receivers found"
         );
     }
-}
-
-/// Scan `.varda/luts/` for available LUT files (.cube, .3dl).
-fn list_available_luts(workspace: &crate::persistence::Workspace) -> Vec<String> {
-    let dir = workspace.luts_dir();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return vec![];
-    };
-    let mut files: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            let lower = name.to_ascii_lowercase();
-            if lower.ends_with(".cube") || lower.ends_with(".3dl") {
-                Some(name)
-            } else {
-                None
-            }
-        })
-        .collect();
-    files.sort();
-    files
 }
