@@ -666,7 +666,7 @@ impl Mixer {
             if !self.sub_mix_cache.contains_key(&indices) {
                 let width = self.composite_texture.width();
                 let height = self.composite_texture.height();
-                let tex = context.create_render_texture(width, height);
+                let tex = context.create_compositing_texture(width, height);
                 let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
                 self.sub_mix_cache.insert(indices.clone(), (tex, view));
             }

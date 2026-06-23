@@ -1981,7 +1981,7 @@ impl VardaApp {
             let config = crate::renderer::dome::DomemasterConfig::default();
             match crate::renderer::dome::DomemasterRenderer::new(
                 &self.context.device,
-                self.context.texture_format,
+                self.context.compositing_format,
                 config,
             ) {
                 Ok(mut dome) => {

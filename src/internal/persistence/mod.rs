@@ -869,7 +869,7 @@ pub fn restore_scene(
 
         // Restore channel effects
         for eff_config in &ch_config.effects {
-            match restore_effect(eff_config, context, context.texture_format) {
+            match restore_effect(eff_config, context, context.compositing_format) {
                 Ok(eff) => channel.add_effect(eff),
                 Err(e) => {
                     let msg = format!(
@@ -902,7 +902,7 @@ pub fn restore_scene(
 
     // Restore master effects
     for eff_config in &config.master_effects {
-        match restore_effect(eff_config, context, context.texture_format) {
+        match restore_effect(eff_config, context, context.compositing_format) {
             Ok(eff) => mixer.master_effects_mut().push(eff),
             Err(e) => {
                 let msg = format!(
@@ -1231,7 +1231,7 @@ pub(crate) fn restore_deck(
 
 /// Restore a single effect from config.
 /// `target_format` should be `Rgba8Unorm` for deck effects,
-/// or `context.texture_format` for channel/master effects.
+/// or `context.compositing_format` (Rgba16Float) for channel/master effects.
 pub(crate) fn restore_effect(
     config: &EffectConfig,
     context: &GpuContext,

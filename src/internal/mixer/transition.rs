@@ -249,7 +249,7 @@ impl Mixer {
         let spirv = compile_glsl_to_spirv(&shader.fragment_source, &name)
             .context("Failed to compile transition shader")?;
 
-        let target_format = wgpu::TextureFormat::Rgba8Unorm;
+        let target_format = context.compositing_format;
         let pipeline = TransitionPipeline::new(&context.device, &spirv, target_format)
             .context("Failed to create transition pipeline")?;
 

@@ -153,18 +153,18 @@ pub struct Mixer {
 impl Mixer {
     /// Create a new mixer with two default channels (A and B)
     pub fn new(context: &GpuContext, width: u32, height: u32) -> Result<Self> {
-        let composite_texture = context.create_render_texture(width, height);
+        let composite_texture = context.create_compositing_texture(width, height);
         let composite_view = composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let effect_ping_texture = context.create_render_texture(width, height);
+        let effect_ping_texture = context.create_compositing_texture(width, height);
         let effect_ping_view =
             effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let composite_pipeline =
-            CompositeBlitPipeline::new(&context.device, context.texture_format)?;
+            CompositeBlitPipeline::new(&context.device, context.compositing_format)?;
         let blit_pipeline = BlitPipeline::with_blend(
             &context.device,
-            context.texture_format,
+            context.compositing_format,
             wgpu::BlendState::ALPHA_BLENDING,
         )?;
 
@@ -250,11 +250,11 @@ impl Mixer {
 
     /// Resize mixer and all channel textures
     pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
-        self.composite_texture = context.create_render_texture(width, height);
+        self.composite_texture = context.create_compositing_texture(width, height);
         self.composite_view = self
             .composite_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.effect_ping_texture = context.create_render_texture(width, height);
+        self.effect_ping_texture = context.create_compositing_texture(width, height);
         self.effect_ping_view = self
             .effect_ping_texture
             .create_view(&wgpu::TextureViewDescriptor::default());

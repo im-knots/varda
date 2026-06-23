@@ -425,7 +425,7 @@ impl VardaApp {
                 &mut ch.effects,
                 &ch_config.effects,
                 &self.context,
-                self.context.texture_format,
+                self.context.compositing_format,
                 &mut warnings,
             );
         }
@@ -516,7 +516,7 @@ impl VardaApp {
             self.mixer.master_effects_mut(),
             &target.master_effects,
             &self.context,
-            self.context.texture_format,
+            self.context.compositing_format,
             &mut warnings,
         );
 

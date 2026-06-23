@@ -356,7 +356,7 @@ impl MixerCommands for VardaApp {
                 let effect = Effect::new_with_format(
                     &self.context,
                     (*shader).clone(),
-                    self.context.texture_format,
+                    self.context.compositing_format,
                 )?;
                 let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
                 ch.add_effect(effect);
@@ -366,7 +366,7 @@ impl MixerCommands for VardaApp {
                 let effect = Effect::new_with_format(
                     &self.context,
                     (*shader).clone(),
-                    self.context.texture_format,
+                    self.context.compositing_format,
                 )?;
                 self.mixer.add_master_effect(effect);
                 log::info!("Added master effect: {}", shader_name);
