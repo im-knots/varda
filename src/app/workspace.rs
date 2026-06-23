@@ -425,7 +425,7 @@ impl VardaApp {
                 &mut ch.effects,
                 &ch_config.effects,
                 &self.context,
-                self.context.texture_format,
+                self.context.compositing_format,
                 &mut warnings,
             );
         }
@@ -516,7 +516,7 @@ impl VardaApp {
             self.mixer.master_effects_mut(),
             &target.master_effects,
             &self.context,
-            self.context.texture_format,
+            self.context.compositing_format,
             &mut warnings,
         );
 
@@ -874,6 +874,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         let (warnings, _structural) = app.apply_scene_diff(&scene, 1920, 1080);
         assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);

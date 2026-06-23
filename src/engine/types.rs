@@ -132,6 +132,8 @@ pub struct MixerSnapshot {
     pub active_transition_name: Option<String>,
     pub transition_names: Vec<String>,
     pub sequences: Vec<SequenceSnapshot>,
+    pub tonemap_mode: crate::renderer::tonemap::TonemapMode,
+    pub active_lut: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -509,6 +511,8 @@ mod tests {
                 active_transition_name: None,
                 transition_names: vec![],
                 sequences: vec![],
+                tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+                active_lut: None,
             },
             audio: AudioSnapshot {
                 level: 0.0,
@@ -584,6 +588,8 @@ mod tests {
                 active_transition_name: None,
                 transition_names: vec![],
                 sequences: vec![],
+                tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+                active_lut: None,
             },
             audio: AudioSnapshot {
                 level: 0.0,

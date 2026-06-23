@@ -73,13 +73,13 @@ void main() {
 
     if (mode == 0) {
         // Black and white
-        float lum = dot(src.rgb, vec3(0.299, 0.587, 0.114));
+        float lum = dot(src.rgb, vec3(0.2126, 0.7152, 0.0722));
         float dot = halftoneLayer(rotCoord, lum);
         vec3 col = mix(bg_color.rgb, vec3(0.0), dot);
         fragColor = vec4(col, src.a);
     } else if (mode == 1) {
         // Color: use luminance for size, keep color
-        float lum = dot(src.rgb, vec3(0.299, 0.587, 0.114));
+        float lum = dot(src.rgb, vec3(0.2126, 0.7152, 0.0722));
         float dot = halftoneLayer(rotCoord, lum);
         vec3 col = mix(bg_color.rgb, src.rgb, dot);
         fragColor = vec4(col, src.a);

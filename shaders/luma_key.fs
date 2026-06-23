@@ -58,9 +58,9 @@ float hash12(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
-// ITU-R BT.601 luma coefficients
+// Rec.709 luma coefficients
 float luma(vec3 rgb) {
-    return dot(rgb, vec3(0.299, 0.587, 0.114));
+    return dot(rgb, vec3(0.2126, 0.7152, 0.0722));
 }
 
 // Compute key match for a given pixel

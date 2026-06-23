@@ -382,6 +382,24 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         .show(|ui| {
                             render_target_fps_popover(ui, data, &mut actions);
                         });
+
+                    ui.separator();
+
+                    // Tonemap mode selector
+                    let tonemap_label = tonemap_short_name(data.tonemap_mode);
+                    let tonemap_response = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(tonemap_label).monospace().small(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text("Tonemap mode — click to change");
+                    egui::Popup::from_toggle_button_response(&tonemap_response)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            render_tonemap_popover(ui, data, &mut actions);
+                        });
                 });
             });
         });
@@ -1401,6 +1419,97 @@ fn render_target_fps_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
         .weak()
         .small(),
     );
+}
+
+fn tonemap_short_name(mode: crate::renderer::tonemap::TonemapMode) -> &'static str {
+    use crate::renderer::tonemap::TonemapMode;
+    match mode {
+        TonemapMode::Bypass => "TM:Off",
+        TonemapMode::Aces => "TM:ACES",
+        TonemapMode::Reinhard => "TM:Rein",
+        TonemapMode::ReinhardExtended => "TM:ReinX",
+        TonemapMode::HableFilmic => "TM:Hable",
+        TonemapMode::Uchimura => "TM:Uchi",
+        TonemapMode::Lottes => "TM:Lottes",
+        TonemapMode::AgX => "TM:AgX",
+        TonemapMode::KhronosPbrNeutral => "TM:PBR",
+    }
+}
+
+const TONEMAP_PRESETS: &[(&str, crate::renderer::tonemap::TonemapMode)] = {
+    use crate::renderer::tonemap::TonemapMode;
+    &[
+        ("Bypass (clamp)", TonemapMode::Bypass),
+        ("ACES Filmic", TonemapMode::Aces),
+        ("Reinhard", TonemapMode::Reinhard),
+        ("Reinhard Extended", TonemapMode::ReinhardExtended),
+        ("Hable Filmic", TonemapMode::HableFilmic),
+        ("Uchimura (GT)", TonemapMode::Uchimura),
+        ("Lottes (AMD)", TonemapMode::Lottes),
+        ("AgX", TonemapMode::AgX),
+        ("PBR Neutral", TonemapMode::KhronosPbrNeutral),
+    ]
+};
+
+/// Render the tonemap mode popover (shown when clicking tonemap label in the top bar).
+fn render_tonemap_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    use crate::renderer::tonemap::TonemapMode;
+
+    ui.set_min_width(180.0);
+    ui.label(egui::RichText::new("🎨 Tonemap Mode").strong());
+    ui.separator();
+
+    let current = data.tonemap_mode;
+
+    for &(label, mode) in TONEMAP_PRESETS {
+        if ui.radio(current == mode, label).clicked() && current != mode {
+            actions.set_tonemap_mode = Some(mode);
+        }
+    }
+
+    ui.separator();
+    ui.label(
+        egui::RichText::new(match current {
+            TonemapMode::Bypass => "Values >1.0 are clamped at the output boundary",
+            TonemapMode::Aces => "Cinematic rolloff, warm highlight shift",
+            TonemapMode::Reinhard => "Gentle curve, never reaches pure white",
+            TonemapMode::ReinhardExtended => "Reinhard with white point, full SDR range",
+            TonemapMode::HableFilmic => "Nice toe and shoulder, game-industry standard",
+            TonemapMode::Uchimura => "Gran Turismo style, tunable shoulder",
+            TonemapMode::Lottes => "Fast, invertible, high contrast",
+            TonemapMode::AgX => "Neutral, minimal hue shift",
+            TonemapMode::KhronosPbrNeutral => "Color-accurate, minimal look modification",
+        })
+        .weak()
+        .small(),
+    );
+
+    // ── LUT Section ──
+    ui.separator();
+    ui.label(egui::RichText::new("🎞 3D LUT").strong());
+
+    let active_lut = data.active_lut_filename.as_deref();
+
+    // "None" option
+    if ui.radio(active_lut.is_none(), "None").clicked() && active_lut.is_some() {
+        actions.unload_lut = true;
+    }
+
+    // Available LUT files
+    for lut_name in &data.available_luts {
+        let is_active = active_lut == Some(lut_name.as_str());
+        if ui.radio(is_active, lut_name).clicked() && !is_active {
+            actions.load_lut = Some(lut_name.clone());
+        }
+    }
+
+    if data.available_luts.is_empty() {
+        ui.label(
+            egui::RichText::new("Place .cube/.3dl files in .varda/luts/")
+                .weak()
+                .small(),
+        );
+    }
 }
 
 #[cfg(test)]

@@ -182,6 +182,11 @@ impl Workspace {
         self.varda_dir().join("stage.json")
     }
 
+    /// Path to the `luts/` directory inside `.varda/`.
+    pub fn luts_dir(&self) -> PathBuf {
+        self.varda_dir().join("luts")
+    }
+
     /// Path to `keymap.json`.
     pub fn keymap_path(&self) -> PathBuf {
         self.varda_dir().join("keymap.json")
@@ -547,6 +552,8 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
         transition_sequences,
         render_width: Some(render_width),
         render_height: Some(render_height),
+        tonemap_mode: mixer.tonemap_mode(),
+        active_lut: mixer.active_lut_filename().map(|s| s.to_string()),
     }
 }
 
@@ -869,7 +876,7 @@ pub fn restore_scene(
 
         // Restore channel effects
         for eff_config in &ch_config.effects {
-            match restore_effect(eff_config, context, context.texture_format) {
+            match restore_effect(eff_config, context, context.compositing_format) {
                 Ok(eff) => channel.add_effect(eff),
                 Err(e) => {
                     let msg = format!(
@@ -902,7 +909,7 @@ pub fn restore_scene(
 
     // Restore master effects
     for eff_config in &config.master_effects {
-        match restore_effect(eff_config, context, context.texture_format) {
+        match restore_effect(eff_config, context, context.compositing_format) {
             Ok(eff) => mixer.master_effects_mut().push(eff),
             Err(e) => {
                 let msg = format!(
@@ -985,6 +992,33 @@ pub fn restore_scene(
             enabled: seq_config.enabled,
             state: SequencerState::new(),
         });
+    }
+
+    // Restore tonemap mode
+    mixer.set_tonemap_mode(&context.queue, config.tonemap_mode);
+
+    // Restore active LUT
+    if let Some(lut_filename) = &config.active_lut {
+        let lut_path = std::env::current_dir()
+            .unwrap_or_default()
+            .join(".varda/luts")
+            .join(lut_filename);
+        match crate::renderer::lut::parse_lut_file(&lut_path) {
+            Ok(parsed) => {
+                mixer.load_lut(
+                    &context.device,
+                    &context.queue,
+                    &parsed,
+                    lut_filename.clone(),
+                );
+                log::info!("Restored LUT: {}", lut_filename);
+            }
+            Err(e) => {
+                let msg = format!("Failed to restore LUT '{}': {}", lut_filename, e);
+                log::warn!("{}", msg);
+                warnings.push(msg);
+            }
+        }
     }
 
     Ok(RestoreResult { mixer, warnings })
@@ -1231,7 +1265,7 @@ pub(crate) fn restore_deck(
 
 /// Restore a single effect from config.
 /// `target_format` should be `Rgba8Unorm` for deck effects,
-/// or `context.texture_format` for channel/master effects.
+/// or `context.compositing_format` (Rgba16Float) for channel/master effects.
 pub(crate) fn restore_effect(
     config: &EffectConfig,
     context: &GpuContext,

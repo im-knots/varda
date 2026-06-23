@@ -11,7 +11,9 @@ pub use transition::{
 use crate::channel::Channel;
 use crate::deck::Effect;
 use crate::modulation::ModulationEngine;
-use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext};
+use crate::renderer::lut::{LoadedLut, LutPipeline};
+pub use crate::renderer::tonemap::TonemapMode;
+use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext, TonemapPipeline};
 use anyhow::Result;
 
 /// Per-frame GPU timing allocation context.
@@ -109,6 +111,18 @@ pub struct Mixer {
     /// Simple blit pipeline for first-channel copy
     blit_pipeline: BlitPipeline,
 
+    /// Tonemap pipeline (bypass/ACES) applied after master effects
+    tonemap_pipeline: TonemapPipeline,
+
+    /// Current tonemap mode
+    tonemap_mode: TonemapMode,
+
+    /// LUT pipeline for applying 3D LUTs after tonemapping
+    lut_pipeline: LutPipeline,
+
+    /// Currently loaded LUT (applied after tonemap, before output)
+    active_lut: Option<LoadedLut>,
+
     /// Active transition effect (replaces opacity-based crossfade when set)
     active_transition: Option<TransitionEffect>,
 
@@ -118,6 +132,10 @@ pub struct Mixer {
     /// Cached sub-mix textures for multi-channel surface assignments.
     /// Key: sorted channel indices, Value: (texture, view).
     sub_mix_cache: std::collections::HashMap<Vec<usize>, (wgpu::Texture, wgpu::TextureView)>,
+    /// Cached tonemapped copies of individual channel composites.
+    /// Used when surfaces source from Channel(idx) — the raw channel composite
+    /// can't be tonemapped in-place since it feeds into the mixer composite.
+    tonemapped_channel_cache: std::collections::HashMap<usize, (wgpu::Texture, wgpu::TextureView)>,
 
     /// GPU performance profiling: when > 0, insert device.poll(Wait) between
     /// GPU work stages to measure actual GPU drain time per category.
@@ -153,20 +171,22 @@ pub struct Mixer {
 impl Mixer {
     /// Create a new mixer with two default channels (A and B)
     pub fn new(context: &GpuContext, width: u32, height: u32) -> Result<Self> {
-        let composite_texture = context.create_render_texture(width, height);
+        let composite_texture = context.create_compositing_texture(width, height);
         let composite_view = composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let effect_ping_texture = context.create_render_texture(width, height);
+        let effect_ping_texture = context.create_compositing_texture(width, height);
         let effect_ping_view =
             effect_ping_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let composite_pipeline =
-            CompositeBlitPipeline::new(&context.device, context.texture_format)?;
+            CompositeBlitPipeline::new(&context.device, context.compositing_format)?;
         let blit_pipeline = BlitPipeline::with_blend(
             &context.device,
-            context.texture_format,
+            context.compositing_format,
             wgpu::BlendState::ALPHA_BLENDING,
         )?;
+        let tonemap_pipeline = TonemapPipeline::new(&context.device, context.compositing_format)?;
+        let lut_pipeline = LutPipeline::new(&context.device, context.compositing_format)?;
 
         // Create two default channels
         let channel_0 = Channel::new("Ch 0".to_string(), context, width, height)?;
@@ -192,9 +212,14 @@ impl Mixer {
             gpu_utilization: 0.0,
             composite_pipeline,
             blit_pipeline,
+            tonemap_pipeline,
+            tonemap_mode: TonemapMode::default(),
+            lut_pipeline,
+            active_lut: None,
             active_transition: None,
             transition_sequences: Vec::new(),
             sub_mix_cache: std::collections::HashMap::new(),
+            tonemapped_channel_cache: std::collections::HashMap::new(),
             perf_profile_frames: 0,
             query_set: if context.timestamp_supported {
                 Some(context.device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -250,11 +275,11 @@ impl Mixer {
 
     /// Resize mixer and all channel textures
     pub fn resize(&mut self, context: &GpuContext, width: u32, height: u32) {
-        self.composite_texture = context.create_render_texture(width, height);
+        self.composite_texture = context.create_compositing_texture(width, height);
         self.composite_view = self
             .composite_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.effect_ping_texture = context.create_render_texture(width, height);
+        self.effect_ping_texture = context.create_compositing_texture(width, height);
         self.effect_ping_view = self
             .effect_ping_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -263,11 +288,18 @@ impl Mixer {
             channel.resize(context, width, height);
         }
         self.sub_mix_cache.clear();
+        self.tonemapped_channel_cache.clear();
     }
 
     /// Clear the sub-mix texture cache (e.g. after resolution change).
     pub fn clear_sub_mix_cache(&mut self) {
         self.sub_mix_cache.clear();
+    }
+
+    /// Get the tonemapped view for a channel, if available.
+    /// Returns None in Bypass mode or if the channel isn't used as a direct source.
+    pub fn get_tonemapped_channel_view(&self, ch_idx: usize) -> Option<&wgpu::TextureView> {
+        self.tonemapped_channel_cache.get(&ch_idx).map(|(_, v)| v)
     }
 
     /// Start GPU performance profiling for the next N frames.
@@ -391,9 +423,46 @@ impl Mixer {
         &mut self.transition_sequences
     }
 
-    /// The composited output texture view (post-crossfade, post-master-effects).
+    /// The composited output texture view (post-crossfade, post-master-effects, post-tonemap).
     pub fn composite_view(&self) -> &wgpu::TextureView {
         &self.composite_view
+    }
+
+    /// Current tonemap mode.
+    pub fn tonemap_mode(&self) -> TonemapMode {
+        self.tonemap_mode
+    }
+
+    /// Set tonemap mode and update GPU uniform.
+    pub fn set_tonemap_mode(&mut self, queue: &wgpu::Queue, mode: TonemapMode) {
+        self.tonemap_mode = mode;
+        self.tonemap_pipeline.set_mode(queue, mode);
+    }
+
+    /// Load a LUT from a parsed file and upload to GPU.
+    pub fn load_lut(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        parsed: &crate::renderer::lut::ParsedLut,
+        filename: String,
+    ) {
+        self.active_lut = Some(LoadedLut::from_parsed(device, queue, parsed, filename));
+    }
+
+    /// Unload the active LUT.
+    pub fn unload_lut(&mut self) {
+        self.active_lut = None;
+    }
+
+    /// Get the active LUT filename (if any).
+    pub fn active_lut_filename(&self) -> Option<&str> {
+        self.active_lut.as_ref().map(|l| l.filename.as_str())
+    }
+
+    /// Whether a LUT is currently active.
+    pub fn has_active_lut(&self) -> bool {
+        self.active_lut.is_some()
     }
 
     /// GPU utilization % (0–100), smoothed. Based on GPU timestamp data

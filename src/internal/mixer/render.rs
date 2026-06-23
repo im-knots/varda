@@ -286,6 +286,11 @@ impl Mixer {
         self.apply_master_effects(context, audio_data, time, composite_cmds)?;
         let master_fx_us = t_master_fx.elapsed().as_micros();
 
+        // Tonemap pass: compress HDR composite into displayable [0,1] range.
+        // Bypass mode is a no-op (values clamp at the output boundary anyway).
+        self.apply_tonemap(context);
+        self.apply_lut(context);
+
         // GPU profiling: drain composite + master FX GPU work
         let gpu_composite_us = if profiling {
             let t = std::time::Instant::now();
@@ -666,11 +671,37 @@ impl Mixer {
             if !self.sub_mix_cache.contains_key(&indices) {
                 let width = self.composite_texture.width();
                 let height = self.composite_texture.height();
-                let tex = context.create_render_texture(width, height);
+                let tex = context.create_compositing_texture(width, height);
                 let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
                 self.sub_mix_cache.insert(indices.clone(), (tex, view));
             }
             self.composite_sub_mix(&indices, context);
+
+            // Tonemap the sub-mix in-place (same pattern as main composite).
+            // Uses effect_ping as scratch — safe because composite_sub_mix has
+            // already finished with it by the time we get here.
+            if let Some((sub_tex, sub_view)) = self.sub_mix_cache.get(&indices) {
+                tonemap_in_place(
+                    self.tonemap_mode,
+                    &self.tonemap_pipeline,
+                    sub_tex,
+                    sub_view,
+                    &self.effect_ping_texture,
+                    &self.effect_ping_view,
+                    context,
+                );
+            }
+            if let Some((sub_tex, sub_view)) = self.sub_mix_cache.get(&indices) {
+                apply_lut_in_place(
+                    &self.lut_pipeline,
+                    self.active_lut.as_ref(),
+                    sub_tex,
+                    sub_view,
+                    &self.effect_ping_texture,
+                    &self.effect_ping_view,
+                    context,
+                );
+            }
         }
     }
 
@@ -927,4 +958,175 @@ impl Mixer {
 
         Ok(())
     }
+
+    /// Apply tonemap to the main composite texture in-place.
+    fn apply_tonemap(&self, context: &GpuContext) {
+        tonemap_in_place(
+            self.tonemap_mode,
+            &self.tonemap_pipeline,
+            &self.composite_texture,
+            &self.composite_view,
+            &self.effect_ping_texture,
+            &self.effect_ping_view,
+            context,
+        );
+    }
+
+    /// Apply LUT to the main composite texture in-place.
+    /// Runs after tonemap, before outputs read the composite.
+    fn apply_lut(&self, context: &GpuContext) {
+        apply_lut_in_place(
+            &self.lut_pipeline,
+            self.active_lut.as_ref(),
+            &self.composite_texture,
+            &self.composite_view,
+            &self.effect_ping_texture,
+            &self.effect_ping_view,
+            context,
+        );
+    }
+
+    /// Prepare tonemapped copies of individual channel composites.
+    /// Called for channels used as direct `OutputSource::Channel(idx)` sources.
+    /// Channel composites can't be tonemapped in-place because they feed into
+    /// the mixer composite on subsequent frames.
+    pub fn prepare_channel_tonemaps(&mut self, channel_indices: &[usize], context: &GpuContext) {
+        use crate::renderer::tonemap::TonemapMode;
+
+        if self.tonemap_mode == TonemapMode::Bypass {
+            self.tonemapped_channel_cache.clear();
+            return;
+        }
+
+        // Remove stale entries
+        self.tonemapped_channel_cache
+            .retain(|idx, _| channel_indices.contains(idx));
+
+        for &ch_idx in channel_indices {
+            let ch_view = match self.channels.get(ch_idx) {
+                Some(ch) => &ch.composite_view,
+                None => continue,
+            };
+
+            // Create cached texture if needed
+            if !self.tonemapped_channel_cache.contains_key(&ch_idx) {
+                let width = self.composite_texture.width();
+                let height = self.composite_texture.height();
+                let tex = context.create_compositing_texture(width, height);
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                self.tonemapped_channel_cache.insert(ch_idx, (tex, view));
+            }
+
+            // Tonemap directly: channel composite → cached texture
+            // (no copy needed since source and target are different textures)
+            let cached_view = &self.tonemapped_channel_cache[&ch_idx].1;
+            let mut encoder =
+                context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Channel Tonemap Encoder"),
+                    });
+            self.tonemap_pipeline
+                .render(&context.device, &mut encoder, ch_view, cached_view);
+            context.queue.submit(Some(encoder.finish()));
+
+            // Apply LUT to the tonemapped channel copy
+            if let Some(lut) = &self.active_lut {
+                let (cache_tex, cache_view) = &self.tonemapped_channel_cache[&ch_idx];
+                let mut lut_encoder =
+                    context
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Channel LUT Encoder"),
+                        });
+                // Copy cache → effect_ping, then LUT ping → cache
+                lut_encoder.copy_texture_to_texture(
+                    cache_tex.as_image_copy(),
+                    self.effect_ping_texture.as_image_copy(),
+                    cache_tex.size(),
+                );
+                self.lut_pipeline.render(
+                    &context.device,
+                    &mut lut_encoder,
+                    &self.effect_ping_view,
+                    cache_view,
+                    lut,
+                );
+                context.queue.submit(Some(lut_encoder.finish()));
+            }
+        }
+    }
+}
+
+/// Tonemap a texture in-place using a scratch texture for the copy.
+/// Skips the pass in Bypass mode.
+fn tonemap_in_place(
+    mode: crate::renderer::tonemap::TonemapMode,
+    pipeline: &crate::renderer::tonemap::TonemapPipeline,
+    target_tex: &wgpu::Texture,
+    target_view: &wgpu::TextureView,
+    scratch_tex: &wgpu::Texture,
+    scratch_view: &wgpu::TextureView,
+    context: &GpuContext,
+) {
+    use crate::renderer::tonemap::TonemapMode;
+
+    if mode == TonemapMode::Bypass {
+        return;
+    }
+
+    let mut encoder = context
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Tonemap Encoder"),
+        });
+
+    // Copy target → scratch so the shader can read scratch and write back to target.
+    encoder.copy_texture_to_texture(
+        target_tex.as_image_copy(),
+        scratch_tex.as_image_copy(),
+        target_tex.size(),
+    );
+
+    pipeline.render(&context.device, &mut encoder, scratch_view, target_view);
+    context.queue.submit(Some(encoder.finish()));
+}
+
+/// Apply a LUT to a texture in-place using a scratch texture.
+/// No-op if no LUT is loaded.
+fn apply_lut_in_place(
+    pipeline: &crate::renderer::lut::LutPipeline,
+    lut: Option<&crate::renderer::lut::LoadedLut>,
+    target_tex: &wgpu::Texture,
+    target_view: &wgpu::TextureView,
+    scratch_tex: &wgpu::Texture,
+    scratch_view: &wgpu::TextureView,
+    context: &GpuContext,
+) {
+    let lut = match lut {
+        Some(l) => l,
+        None => return,
+    };
+
+    let mut encoder = context
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("LUT Encoder"),
+        });
+
+    // Copy target → scratch so the shader can read scratch and write back to target.
+    encoder.copy_texture_to_texture(
+        target_tex.as_image_copy(),
+        scratch_tex.as_image_copy(),
+        target_tex.size(),
+    );
+
+    pipeline.render(
+        &context.device,
+        &mut encoder,
+        scratch_view,
+        target_view,
+        lut,
+    );
+    context.queue.submit(Some(encoder.finish()));
 }

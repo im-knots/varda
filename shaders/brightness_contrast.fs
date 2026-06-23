@@ -58,7 +58,7 @@ void main() {
     color.rgb = (color.rgb - 0.5) * contrast_amt + 0.5;
 
     // Saturation
-    float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
     color.rgb = mix(vec3(lum), color.rgb, saturation);
 
     color.rgb = clamp(color.rgb, 0.0, 1.0);

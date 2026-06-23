@@ -15,6 +15,7 @@ path = "src/lib.rs"
 wgpu = "29.0"
 winit = "0.30"
 bytemuck = { version = "1.25", features = ["derive"] }
+half = "2.6"
 
 # Shader compilation (build-from-source ensures static linking — avoids
 # libshaderc_shared.dylib runtime errors when users have Homebrew shaderc)

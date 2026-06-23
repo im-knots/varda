@@ -79,6 +79,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         }
     }
 

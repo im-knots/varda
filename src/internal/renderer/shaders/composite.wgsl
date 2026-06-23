@@ -55,11 +55,11 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         // Normal (alpha-over): just use source color
         blended = src.rgb;
     } else if (mode == 1u) {
-        // Add
-        blended = clamp(src.rgb + dst.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+        // Add (unclamped — values > 1.0 preserved for downstream tonemap)
+        blended = src.rgb + dst.rgb;
     } else if (mode == 2u) {
-        // Subtract
-        blended = clamp(dst.rgb - src.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+        // Subtract (floor at 0, no ceiling)
+        blended = max(dst.rgb - src.rgb, vec3<f32>(0.0));
     } else if (mode == 3u) {
         // Multiply
         blended = src.rgb * dst.rgb;
@@ -84,12 +84,12 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
             select(1.0 - 2.0 * (1.0 - src.b) * (1.0 - dst.b), 2.0 * src.b * dst.b, src.b < 0.5),
         );
     } else if (mode == 8u) {
-        // Color Dodge: dst / (1 - src), clamped
-        blended = clamp(vec3<f32>(
+        // Color Dodge: dst / (1 - src), unclamped for HDR accumulation
+        blended = vec3<f32>(
             dst.r / max(1.0 - src.r, EPSILON),
             dst.g / max(1.0 - src.g, EPSILON),
             dst.b / max(1.0 - src.b, EPSILON),
-        ), vec3<f32>(0.0), vec3<f32>(1.0));
+        );
     } else if (mode == 9u) {
         // Color Burn: 1 - (1-dst)/src, clamped
         blended = clamp(vec3<f32>(
@@ -110,8 +110,8 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         // Lighten
         blended = max(src.rgb, dst.rgb);
     } else if (mode == 14u) {
-        // Linear Burn: src + dst - 1, clamped to 0
-        blended = max(src.rgb + dst.rgb - vec3<f32>(1.0), vec3<f32>(0.0));
+        // Linear Burn: src + dst - 1 (allow negative, floor at tonemap)
+        blended = src.rgb + dst.rgb - vec3<f32>(1.0);
     } else {
         // Fallback: Normal
         blended = src.rgb;

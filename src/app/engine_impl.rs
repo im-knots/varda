@@ -356,7 +356,7 @@ impl MixerCommands for VardaApp {
                 let effect = Effect::new_with_format(
                     &self.context,
                     (*shader).clone(),
-                    self.context.texture_format,
+                    self.context.compositing_format,
                 )?;
                 let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
                 ch.add_effect(effect);
@@ -366,7 +366,7 @@ impl MixerCommands for VardaApp {
                 let effect = Effect::new_with_format(
                     &self.context,
                     (*shader).clone(),
-                    self.context.texture_format,
+                    self.context.compositing_format,
                 )?;
                 self.mixer.add_master_effect(effect);
                 log::info!("Added master effect: {}", shader_name);
@@ -472,6 +472,27 @@ impl MixerCommands for VardaApp {
                 self.mixer.set_transition(&self.context, shader.clone())
             }
         }
+    }
+
+    fn set_tonemap_mode(&mut self, mode: crate::renderer::tonemap::TonemapMode) {
+        self.mixer.set_tonemap_mode(&self.context.queue, mode);
+    }
+
+    fn load_lut(&mut self, filename: &str) -> Result<()> {
+        let lut_dir = self.session.workspace.varda_dir().join("luts");
+        let path = lut_dir.join(filename);
+        let parsed = crate::renderer::lut::parse_lut_file(&path)?;
+        self.mixer.load_lut(
+            &self.context.device,
+            &self.context.queue,
+            &parsed,
+            filename.to_string(),
+        );
+        Ok(())
+    }
+
+    fn unload_lut(&mut self) {
+        self.mixer.unload_lut();
     }
 
     fn set_param(&mut self, path: &str, value: ParamValue) {

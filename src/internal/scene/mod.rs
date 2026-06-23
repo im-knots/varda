@@ -52,6 +52,14 @@ pub struct SceneConfig {
     /// Master render height (defaults to 1080 if absent in old files)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_height: Option<u32>,
+
+    /// Tonemap mode (defaults to ACES if absent)
+    #[serde(default)]
+    pub tonemap_mode: crate::renderer::tonemap::TonemapMode,
+
+    /// Active LUT filename (relative to `.varda/luts/`), if any
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_lut: Option<String>,
 }
 
 fn default_version() -> u32 {
@@ -736,6 +744,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -779,6 +789,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -811,6 +823,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         let json = serde_json::to_string_pretty(&scene).unwrap();
         let restored: SceneConfig = serde_json::from_str(&json).unwrap();
@@ -1010,6 +1024,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         scene.save(&path).unwrap();
         let loaded = SceneConfig::load(&path).unwrap();
@@ -1059,6 +1075,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         assert!(scene.validate().is_empty());
     }
@@ -1075,6 +1093,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         let errors = scene.validate();
         assert!(errors.iter().any(|e| e.contains("crossfader")));
@@ -1094,6 +1114,8 @@ mod tests {
             transition_sequences: vec![],
             render_width: Some(0),
             render_height: Some(0),
+            tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+            active_lut: None,
         };
         let errors = scene.validate();
         assert!(errors.iter().any(|e| e.contains("render_width")));

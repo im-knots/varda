@@ -735,7 +735,7 @@ impl VardaApp {
                             match crate::persistence::restore_effect(
                                 eff_config,
                                 context,
-                                context.texture_format,
+                                context.compositing_format,
                             ) {
                                 Ok(eff) => {
                                     if let Some(ch) = mixer.channel_mut(ch_idx) {
@@ -961,7 +961,7 @@ impl VardaApp {
                     match Effect::new_with_format(
                         context,
                         filter_shader.clone(),
-                        context.texture_format,
+                        context.compositing_format,
                     ) {
                         Ok(effect) => {
                             ch.add_effect(effect);
@@ -1006,7 +1006,7 @@ impl VardaApp {
             if filter_idx < filters.len() {
                 let filter_shader = filters[filter_idx].clone();
                 let filter_name = filter_shader.name();
-                match Effect::new_with_format(context, filter_shader, context.texture_format) {
+                match Effect::new_with_format(context, filter_shader, context.compositing_format) {
                     Ok(effect) => {
                         mixer.add_master_effect(effect);
                         log::info!("Added master effect: {}", filter_name);

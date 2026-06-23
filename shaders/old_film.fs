@@ -63,7 +63,7 @@ void main() {
     float frame = float(FRAMEINDEX);
 
     // Desaturate
-    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col = mix(col, vec3(lum), desaturate);
 
     // Sepia tone

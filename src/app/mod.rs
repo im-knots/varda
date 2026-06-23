@@ -502,6 +502,21 @@ impl VardaApp {
                 self.set_crossfader(pos);
                 CommandResult::Ok
             }
+            EngineCommand::SetTonemapMode(mode) => {
+                self.set_tonemap_mode(mode);
+                CommandResult::Ok
+            }
+            EngineCommand::LoadLut { filename } => match self.load_lut(&filename) {
+                Ok(()) => CommandResult::Ok,
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::UnloadLut => {
+                self.unload_lut();
+                CommandResult::Ok
+            }
             EngineCommand::AutoCrossfade {
                 target,
                 duration_secs,
@@ -1981,7 +1996,7 @@ impl VardaApp {
             let config = crate::renderer::dome::DomemasterConfig::default();
             match crate::renderer::dome::DomemasterRenderer::new(
                 &self.context.device,
-                self.context.texture_format,
+                self.context.compositing_format,
                 config,
             ) {
                 Ok(mut dome) => {

@@ -135,7 +135,7 @@ void main() {
 
     vec2 sampleUV = (cell + 0.5) / cellCount;
     vec4 src = texture(sampler2D(inputImage, texSampler), sampleUV);
-    float lum = dot(src.rgb, vec3(0.299, 0.587, 0.114));
+    float lum = dot(src.rgb, vec3(0.2126, 0.7152, 0.0722));
 
     float inv = step(0.5, invert);
     lum = mix(lum, 1.0 - lum, inv);

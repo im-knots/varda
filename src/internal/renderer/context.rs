@@ -20,6 +20,9 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub texture_format: wgpu::TextureFormat,
+    /// Linear-light compositing format (Rgba16Float) for channel/mixer composites.
+    /// Distinct from `texture_format` which is the surface/presentation format.
+    pub compositing_format: wgpu::TextureFormat,
     pub timestamp_supported: bool,
 }
 
@@ -154,6 +157,7 @@ impl GpuContext {
             device,
             queue,
             texture_format: surface_format,
+            compositing_format: wgpu::TextureFormat::Rgba16Float,
             timestamp_supported,
         };
         let win_surface = WindowSurface {
@@ -247,6 +251,7 @@ impl GpuContext {
             device,
             queue,
             texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            compositing_format: wgpu::TextureFormat::Rgba16Float,
             timestamp_supported,
         })
     }
@@ -264,6 +269,28 @@ impl GpuContext {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.texture_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    /// Create a texture for compositing in linear-light space (Rgba16Float).
+    /// Used for channel composites, mixer composites, effect ping-pong, and sub-mixes.
+    pub fn create_compositing_texture(&self, width: u32, height: u32) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Compositing Texture (Rgba16Float)"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.compositing_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
@@ -1363,7 +1390,7 @@ impl HeadlessOutput {
         width: u32,
         height: u32,
     ) -> Self {
-        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Headless Output Texture"),
             size: wgpu::Extent3d {

@@ -176,6 +176,8 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
         active_transition_name,
         transition_names,
         sequences,
+        tonemap_mode: mixer.tonemap_mode(),
+        active_lut: mixer.active_lut_filename().map(|s| s.to_string()),
     }
 }
 
@@ -939,6 +941,9 @@ pub(crate) fn build_ui_data(
         crossfader: engine.mixer.crossfader,
         auto_crossfade_active: engine.mixer.auto_crossfade_active,
         auto_crossfade_progress: engine.mixer.auto_crossfade_progress,
+        tonemap_mode: engine.mixer.tonemap_mode,
+        active_lut_filename: engine.mixer.active_lut.clone(),
+        available_luts: list_available_luts(&app.session.workspace),
         midi_learn_active: engine.midi.learn_active,
         midi_learn_target: engine.midi.learn_target,
         keyboard_learn_active: app.input.keymap.learn_mode,
@@ -1145,6 +1150,28 @@ fn effect_snapshot_to_ui(snap: &EffectSnapshot) -> EffectInfo {
         snap.enabled,
         params_snapshot_to_ui(&snap.params),
     )
+}
+
+/// Scan `.varda/luts/` for available LUT files (.cube, .3dl).
+fn list_available_luts(workspace: &crate::persistence::Workspace) -> Vec<String> {
+    let dir = workspace.luts_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
+    let mut files: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".cube") || lower.ends_with(".3dl") {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort();
+    files
 }
 
 #[cfg(test)]

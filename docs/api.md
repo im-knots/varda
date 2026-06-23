@@ -93,6 +93,32 @@ curl -X POST http://localhost:8080/api/mixer/auto-crossfade \
   -d '{"target": 1.0, "duration_secs": 2.0, "easing": "Linear"}'
 ```
 
+### Set tonemap mode
+
+```sh
+curl -X PUT http://localhost:8080/api/mixer/tonemap \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "Aces"}'
+```
+
+Modes: `Bypass`, `Aces`, `Reinhard`, `ReinhardExtended`, `HableFilmic`, `Uchimura`, `Lottes`, `AgX`, `KhronosPbrNeutral`
+
+### Load a 3D LUT
+
+```sh
+curl -X PUT http://localhost:8080/api/mixer/lut \
+  -H "Content-Type: application/json" \
+  -d '{"filename": "my-look.cube"}'
+```
+
+Place `.cube` or `.3dl` files in `.varda/luts/`. The filename is relative to that directory.
+
+### Unload the active LUT
+
+```sh
+curl -X DELETE http://localhost:8080/api/mixer/lut
+```
+
 ### Send any engine command
 
 ```sh
@@ -120,7 +146,7 @@ The API is organized into 15 OpenAPI tags:
 | Tag | Examples |
 |-----|----------|
 | **System** | `GET /api/health`, `POST /api/shutdown` |
-| **Mixer** | `PUT /api/mixer/crossfader`, `POST /api/mixer/auto-crossfade` |
+| **Mixer** | `PUT /api/mixer/crossfader`, `POST /api/mixer/auto-crossfade`, `PUT /api/mixer/tonemap`, `PUT /api/mixer/lut`, `DELETE /api/mixer/lut` |
 | **Channels** | `POST /api/channels`, `PUT /api/channels/:uuid/opacity` |
 | **Decks** | `POST /api/channels/:uuid/decks/shader`, `PUT /api/decks/:uuid/opacity` |
 | **Video** | `POST /api/decks/:uuid/video/toggle-play`, `PUT /api/decks/:uuid/video/speed` |
