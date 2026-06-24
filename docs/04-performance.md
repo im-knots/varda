@@ -8,14 +8,20 @@ When a deck's source is a video file, the deck detail panel (bottom bar) shows p
 
 | Mode | Behavior |
 |------|----------|
-| **Loop** | Restart from in-point when reaching out-point (default) |
-| **Ping-Pong** | Play forward, then reverse, repeating indefinitely |
-| **One-Shot** | Play once and stop at the out-point |
-| **Hold Last** | Play once and freeze on the final frame |
+| **Loop** 🔁 | Restart from in-point when reaching out-point (default) |
+| **Ping-Pong** 🔄 | Play forward, then reverse, repeating indefinitely |
+| **One Shot** 1️⃣ | Play once and stop at the out-point |
+| **Hold Last** ⏹ | Play once and freeze on the final frame |
+
+Ping-Pong reverse is served from frames cached during the forward pass — see [Ping-Pong & Reverse Cache](#ping-pong--reverse-cache).
 
 ### Speed Control
 
-Set the playback speed multiplier from the deck detail panel. Values below 1.0 slow down, above 1.0 speed up. Negative values play in reverse.
+The **speed** slider in the deck detail panel runs from **0.1× to 4.0×** (below 1.0 slows down, above speeds up). Reverse playback is **not** exposed on the slider; the playback engine supports negative speeds, but the UI control is positive-only.
+
+### Scrub / Seek
+
+The **position slider** in the Playback section shows the current time on the left and the clip duration on the right. **Click or drag** it to scrub. Unlike the other transport controls, seeking is **UI-only** — there is no parameter path for it, so it cannot be mapped to MIDI/OSC.
 
 ### In/Out Points
 
@@ -27,7 +33,26 @@ Define a sub-range of the clip to play:
 
 Click **Clear In/Out** to reset to the full clip duration.
 
-All video controls — play/pause, speed, loop mode, in/out points, seek position — are MIDI, OSC, and keyboard mappable.
+Play/pause, speed, loop mode, and in/out points are MIDI, OSC, and keyboard mappable; **seek position is not** (see above).
+
+### HAP Hardware Codecs
+
+HAP clips decode straight to GPU-native compressed textures (no CPU color conversion), making them the most efficient option for high-resolution playback and reliable reverse/scrubbing. All HAP variants are supported on playback:
+
+| Variant | Encoding |
+|---------|----------|
+| **HAP** | BC1 (RGB) |
+| **HAP Alpha** | BC3 (RGBA) |
+| **HAP Q** | YCoCg (BC3) — higher quality |
+| **HAP Q Alpha** | Dual-plane: YCoCg color + BC4 alpha |
+
+### Ping-Pong & Reverse Cache
+
+During forward playback, Ping-Pong mode caches decoded frames so it can replay them in reverse. The cache is capped at **2 GB** (roughly 13 s of 1080p at 60 fps). If a clip's forward pass exceeds that, the reverse leg is truncated to what fits, and Varda shows a **one-time** notice:
+
+> Deck '<name>': reverse playback truncated (cache full). Transcode to HAP for full-length reverse.
+
+As the message suggests, transcoding the clip to a **HAP** codec removes the limit — HAP frames decode cheaply enough to play in reverse directly, without relying on the frame cache.
 
 ---
 
@@ -87,7 +112,7 @@ Transition sequences automate crossfades across channels over time. Unlike deck 
 
 ### Duration Units
 
-All durations support: **seconds**, **minutes**, **hours**, and **beats** (resolved via the current BPM — see [Clock Synchronization](control-surfaces.md#clock-synchronization)).
+All durations support: **seconds**, **minutes**, **hours**, and **beats** (resolved via the current BPM — see [Clock Synchronization](06-control-surfaces.md#clock-synchronization)).
 
 ### Building a Sequence
 
@@ -170,3 +195,7 @@ A channel preset captures an entire channel: all decks (with their presets), the
 ### File Location
 
 Presets are stored in `.varda/presets/decks/` and `.varda/presets/channels/` as JSON files. They appear in the Library panel for drag-and-drop loading.
+
+---
+
+[← Prev: Library Panel](03-library-panel.md) · [Home](README.md) · [Next: Modulation & Audio Reactivity →](05-modulation.md)

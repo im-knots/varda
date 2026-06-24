@@ -17,10 +17,11 @@ No surfaces are needed. The output receives the full master mix directly.
 Surfaces let you place content in specific regions of the output. Use them when the physical projection surface isn't a simple rectangle, or when different regions need different content.
 
 1. Open the **Stage Editor** (center panel toggle)
-2. Draw surfaces using the drawing tools:
-   - **R** — Rectangle
-   - **P** — Polygon (click vertices, close the shape)
-   - **C** — Circle (with interactive radius handle)
+2. Pick a drawing tool from the toolbar (keyboard shortcut in parentheses):
+   - **⬚ Select** (S) — select and edit existing surfaces
+   - **▭ Rectangle** (R) — drag out a rectangle
+   - **⬠ Polygon** (P) — click to place vertices, double-click to finish
+   - **⬤ Circle** (C) — circle / N-gon with an interactive radius handle
 3. Set each surface's **content source**:
    - **Master** — the full mixer output
    - **Channel** — a single channel's output
@@ -38,17 +39,22 @@ Surfaces let you place content in specific regions of the output. Use them when 
 - **Snap-to-grid** for precise alignment
 - **D** — Duplicate selected surface
 - **H / V** — Flip horizontal / vertical
-- **G** — Combine multiple selected surfaces
+- **🔗 Combine** (G) — merge selected surfaces into one
+
+### Combining Surfaces (Multi-Contour)
+
+Select two or more surfaces and click **🔗 Combine** (G) to merge them into a single surface. Varda computes a polygon union: overlapping regions fuse into one outline, while disjoint regions are kept as **extra contours** on the combined surface. All contours share the same content source, color, and warp — useful for treating several separate shapes (e.g. a row of panels) as one routing target.
 
 ### Corner-Pin Warp
 
 Each surface assigned to an output gets independent corner-pin warp calibration:
 
-1. Enable **Calibration Mode** on the output (shows test cards)
-2. Drag the 4 corner handles to align the projected image with the physical surface
-3. Varda computes a perspective-correct homography (DLT) for accurate UV mapping
+1. On the output, click **🔧 Calibrate** to enter calibration mode (the output shows test cards instead of live content — one color per surface)
+2. Drag the 4 corner handles (TL, TR, BR, BL) in the warp canvas to align the projected image with the physical surface
+3. Varda computes a perspective-correct homography (DLT 3×3) for accurate UV mapping
+4. Click **🔧 Done** to exit. Use **↺** to reset a surface's warp to identity.
 
-Test cards include: 8 colors, 8×8 grid, corner brackets, and gradient bars.
+Test cards include colored grids, crosshairs, and corner/edge markers for alignment.
 
 ---
 
@@ -65,8 +71,8 @@ For multi-projector setups where projectors overlap:
 
 **Edge blend modes:**
 
-- **Auto** — Varda detects overlapping surface regions using polygon intersection analysis and computes blend zones automatically. Reactive — recomputes when surfaces move.
-- **Manual** — per-edge controls: enable/disable, blend width, and gamma per edge
+- **Manual** (default) — per-edge controls for the top/bottom/left/right edges: enable/disable, blend **width** (0.0–0.5), and **gamma** (default 2.2, the smoothstep exponent for the falloff ramp). Applied as a post-process over the whole output. Best for simple side-by-side projectors with straight overlap edges.
+- **Auto** — Varda detects overlapping surface regions via precise polygon intersection and computes blend zones automatically (up to 4 overlap zones per surface), applying the ramp per-surface in the fragment shader. Reactive — recomputes when surfaces move. Best for complex stages with arbitrary, circular, or non-rectangular overlaps.
 
 Each output's edge blend settings are independent and saved in `stage.json`.
 
@@ -91,6 +97,8 @@ Mesh warp is used automatically by the dome slicer and can be loaded from extern
 
 ## Dome Projection
 
+> **🧪 Experimental.** Dome projection is under active development. The workflow and parameters described below may change, and edge cases (especially multi-projector slicing) are not yet fully hardened. Validate your setup before relying on it for a live show.
+
 Varda includes built-in dome projection: a domemaster renderer, an auto-slicer for 1–8 projectors, and an interactive 3D preview. No external tools needed.
 
 ### Domemaster Format
@@ -106,9 +114,9 @@ A domemaster is a circular fisheye image using **equidistant azimuthal projectio
 
 ### Setup Workflow
 
-**1. Switch to Dome 3D mode** in the Stage Editor. An interactive hemisphere appears with the domemaster texture mapped onto it.
+**1. Switch to Dome 3D mode** — toggle the Stage Editor between **⬡ 2D** and **🔮 3D Dome** at the top of the panel. In 3D mode an interactive hemisphere appears with the domemaster texture mapped onto it.
 
-**2. Configure dome geometry** — radius, truncation angle, and tilt.
+**2. Configure dome geometry** — **R** (radius, 0.5–5.0), **Trunc** (truncation angle, 30°–90°), and **Tilt** (0°–45°).
 
 **3. Choose a projector preset:**
 
@@ -130,6 +138,16 @@ Or configure projector positions and orientations manually.
 
 **6. Calibrate** — use calibration mode with test cards to verify alignment.
 
+#### 3D Preview Navigation
+
+The 3D dome view uses an orbit camera:
+
+- **Drag** to rotate (azimuth + elevation; elevation clamps just below the zenith)
+- **Scroll** to zoom (distance clamps between 1.5 and 10)
+- **Reset/Home** returns to the default view
+
+When a projector preset is active, each projector's coverage is drawn as a semi-transparent colored **wedge overlay** on the hemisphere (colors cycle per projector) so you can see how the slices tile the dome.
+
 ### Content Rotation
 
 Real-time rotation applied in the GPU shader — does not recompute meshes:
@@ -144,21 +162,49 @@ All three axes are **MIDI-mappable** for live performance. Rotation order: Roll 
 
 ### Surface Auto-Detection
 
-Import stage plans and auto-detect projection surfaces instead of drawing them manually. Varda supports three file types:
+> **🧪 Experimental.** Auto-detection (both file import and live camera) is under active development. Detection results vary with lighting and source quality — review and refine detected surfaces manually before going live.
+
+Instead of drawing surfaces by hand, Varda can detect them automatically — either from an imported file or from a live camera pointed at the stage.
+
+#### From a File
+
+Import a stage plan and auto-detect surfaces. Three file types are supported:
 
 | Format | Detection Method |
 |--------|-----------------|
-| **PNG / JPG** | Canny edge detection + contour tracing. Best for photos of venues or simple stage plan images. |
+| **PNG / JPG** | Threshold or Canny edge detection + contour tracing. Best for photos of venues or simple stage plan images. |
 | **SVG** | Path flattening — extracts shapes directly from vector paths. Best for designed floor plans. |
 | **DXF** | Geometric entity extraction (lines, polylines, circles, arcs, ellipses). Best for CAD venue plans. |
-
-**Workflow:**
 
 1. In the Stage Editor, click **Import** and select a file (PNG, JPG, SVG, or DXF)
 2. Varda detects contours and presents them as candidate surfaces
 3. Review and confirm — detected surfaces are added to the stage canvas
 
-Detection is configurable: edge thresholds, simplification tolerance, and minimum area can be adjusted. Small contours are filtered out, near-circular shapes are detected and created as circles, and surfaces are named by position (e.g., "Top-Left", "Center").
+#### From a Camera
+
+1. Point a camera at the stage and click **📷 Detect** to enter camera detection mode. A **live** feed appears.
+2. Frame the shot, then **freeze** a still (the mode switches from live to a captured preview).
+3. Varda traces contours on the frozen frame and presents them as candidate surfaces.
+4. Review and confirm — detected surfaces are added to the canvas.
+
+#### Detection Parameters
+
+Both paths share the same tunable contour detector (defaults in parentheses):
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| **Method** | Threshold | Binary **Threshold** or **Canny** edge detection |
+| **Threshold** | 127 | Binary cutoff (0–255), Threshold mode |
+| **Canny Low / High** | 50 / 150 | Edge thresholds, Canny mode |
+| **Invert** | off | Swap foreground/background |
+| **Blur** | 1 | Gaussian blur radius before detection |
+| **Morph Close** | 0 | Morphological close kernel radius (0 = off) |
+| **Simplify** | 0.005 | Douglas-Peucker simplification tolerance |
+| **Min Area** | 0.001 | Minimum contour area (fraction of image) |
+| **Min Vertices** | 3 | Smaller contours are discarded |
+| **Hull** | None | Optional convex-hull cleanup |
+
+Small contours are filtered out, near-circular shapes are created as circles, and surfaces are named by position (e.g. "Top-Left", "Center").
 
 This feature is also available via the HTTP API: `POST /api/stage/detect/image`, `/svg`, `/dxf`, and `POST /api/stage/detect/confirm`.
 
@@ -172,3 +218,7 @@ This feature is also available via the HTTP API: `POST /api/stage/detect/image`,
 | **JSON** | Varda's native mesh format |
 
 Auto-detected by file extension. Load and save from surface warp settings.
+
+---
+
+[← Prev: Outputs](07-outputs.md) · [Home](README.md) · [Next: Streaming, Recording & Network I/O →](09-streaming-and-io.md)

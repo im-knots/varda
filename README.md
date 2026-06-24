@@ -9,7 +9,7 @@ Varda applies broadcast video workflows to live visuals. Sources (video, cameras
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
 - **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, HLS, DASH, RTMP/RTMPS, images
-- **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 6 blend modes, linear-light HDR pipeline
+- **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 15 blend modes, linear-light HDR pipeline
 - **Color**: 9 tonemap presets (ACES, AgX, Reinhard, Hable, etc.), 3D LUT support (.cube/.3dl) for color grading
 - **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations.
 - **Effect chains**: 3-level hierarchy (deck > channel > master), drag-and-drop from library, reorderable
@@ -129,6 +129,7 @@ your-show/
     stage.json            # surface layout, outputs, warp calibration
     midi.json             # MIDI controller mappings that differ from the auto-mapped defaults
     keymap.json           # keyboard shortcut bindings
+    osc.json              # OSC input port and feedback targets
     presets/
       decks/              # saved deck presets (JSON)
       channels/           # saved channel presets (JSON)

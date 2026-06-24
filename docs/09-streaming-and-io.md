@@ -80,7 +80,7 @@ The auto-generated `player.html` uses hls.js or dash.js and works in any modern 
 2. Add a stream URL (`.m3u8` for HLS, `.mpd` for DASH)
 3. **Drag** into a channel to create a live deck
 
-Input streams include stall detection (5-second timeout) and auto-reconnect on failure.
+Input streams include stall detection and auto-reconnect on failure (see [Stream Input Reliability](#stream-input-reliability)).
 
 ---
 
@@ -98,15 +98,18 @@ Each output can record to a video file independently. Multiple simultaneous reco
 | ProRes 422 | Professional edit-ready |
 | HAP | VJ content re-use, GPU-native playback |
 | HAP Alpha | HAP with alpha channel |
-| HAP Q | Higher quality HAP (BC7 compression) |
+| HAP Q | Higher quality HAP (YCoCg compression) |
 
 ### Usage
 
-1. In the output panel, create a recording output or use an existing output
-2. Select a codec and output path
-3. Start/stop recording with the inline controls
+1. In the output panel, click **+ Recording** to create a recording output (repeat for each simultaneous recording — each runs its own ffmpeg subprocess).
+2. Set the **File:** path (plain text input; default `output.mp4`, relative to the working directory). Paths are literal — there is **no automatic timestamping**, so give each recording a distinct name.
+3. Pick a **Codec:** from the table above.
+4. Click **▶ Start** to begin; the button becomes **⏹ Stop** and a red elapsed-time counter shows while recording.
 
-Recording uses non-blocking frame delivery — if the encoder can't keep up, frames are silently dropped rather than stalling the render thread.
+Each recording starts and stops independently, and ffmpeg writes directly to the path you specify. Recording uses non-blocking frame delivery — if the encoder can't keep up, frames are silently dropped rather than stalling the render thread.
+
+> **Video only.** Recordings — like all streaming outputs — contain no audio track. Capture audio separately if you need it.
 
 ---
 
@@ -122,6 +125,8 @@ Push video directly to Twitch, YouTube, Kick, or any RTMP/RTMPS ingest endpoint 
 4. Start the output
 
 Varda uses FLV muxing with auto-scaled CBR bitrate and 2-second keyframe intervals. Frame delivery is non-blocking.
+
+> **Stream keys are credentials.** An ingest URL contains your platform stream key. Treat it as a password — avoid screen-sharing or recording your screen while the RTMP output field is visible, and never paste full ingest URLs into bug reports.
 
 ### Input (Receiving RTMP Streams)
 
@@ -152,14 +157,20 @@ Syphon enables inter-application GPU texture sharing on macOS. Varda includes fr
 
 ---
 
+## Stream Input Reliability
+
+All stream **input** protocols — SRT, HLS, DASH, and RTMP — share the same resilience layer:
+
+- **Deduplication** — the same URL used by multiple decks shares one underlying connection, so adding a stream to several channels costs a single receive.
+- **Stall detection** — if no frames arrive for a timeout window, the receiver reconnects. The window is **5 s** for the live protocols (SRT, RTMP) and **15 s** for segment protocols (HLS, DASH), which buffer in larger chunks.
+- **Auto-reconnect** — on failure or stall, the receiver retries with **exponential backoff** (500 ms up to 10 s) until the source returns.
+
+---
+
 ## Headless Mode
 
-All I/O features work identically in headless mode — the engine renders without any UI window, controlled entirely via the [HTTP API](api.md).
+All streaming, recording, and network I/O features work identically in headless mode — outputs defined in `stage.json` auto-start on launch. See [HTTP API & Headless Mode](13-api.md#headless-mode).
 
-```sh
-varda --headless --port 8080 --fps 60
-```
+---
 
-Outputs defined in `stage.json` auto-start on launch: NDI sends, SRT streams, HLS/DASH outputs, recordings, and display outputs (fullscreen on connected monitors) all activate automatically.
-
-This enables the installation use case: configure in windowed mode, save, deploy headless.
+[← Prev: Projection Mapping](08-projection.md) · [Home](README.md) · [Next: Resolution, Settings & Monitoring →](10-resolution-and-monitoring.md)
