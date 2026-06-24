@@ -147,6 +147,8 @@ Once a parameter is modulated, a thin **vertical line in the source's color** is
 
 > Behind the scenes, assignments map to the same parameter paths as MIDI/OSC (`deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, `fx/<uuid>/param/<name>`, etc. — see [Parameter Paths](06-control-surfaces.md#parameter-paths)). The UI assigns each modulation at a sensible default depth; fine-grained per-assignment **amount** (a signed scale where negative inverts) is exposed through the [HTTP API](13-api.md) rather than the slider dropdown.
 
+Deck **video playback** (play, speed, seek, in/out points, loop mode) and **source scaling mode** are modulatable too, since they share the same parameter router. An LFO can scrub `seek`, an audio band can gate `play`, and discrete targets (`loop_mode`, `scaling_mode`) step through their options via fader bucketing. As with `mute`/`solo`, choose musically sensible sources for these.
+
 ### Stacking Multiple Sources
 
 Multiple sources can target the same parameter. Their contributions are summed before being applied:

@@ -14,6 +14,39 @@ use crate::channel::DeckRenderFps;
 use crate::params::ParamValue;
 use crate::{BlendMode, ScalingMode};
 
+/// Apply MIDI + keyboard learn affordances (glow + click-to-select) to a just-drawn
+/// control. `path` is the parameter-router path the control binds to. The two learn
+/// modes are mutually exclusive, so at most one overlay is active at a time.
+fn learn_overlay(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    path: String,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    if data.midi_learn_active {
+        if data.midi_learn_target.as_deref() == Some(path.as_str()) {
+            widgets::draw_midi_learn_selected(ui, rect);
+        } else {
+            widgets::draw_midi_learn_glow(ui, rect);
+        }
+        let id = ui.id().with(("midi_learn", path.as_str()));
+        if ui.interact(rect, id, egui::Sense::click()).clicked() {
+            actions.midi_learn_select = Some(path);
+        }
+    } else if data.keyboard_learn_active {
+        if data.keyboard_learn_target.as_deref() == Some(path.as_str()) {
+            widgets::draw_keyboard_learn_selected(ui, rect);
+        } else {
+            widgets::draw_keyboard_learn_glow(ui, rect);
+        }
+        let id = ui.id().with(("kb_learn", path.as_str()));
+        if ui.interact(rect, id, egui::Sense::click()).clicked() {
+            actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
+        }
+    }
+}
+
 pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     // MIDI learn status indicator
     if data.midi_learn_active {
@@ -170,9 +203,11 @@ pub(super) fn render_selected_deck_detail(
 
                             // Play/Pause button
                             let play_label = if vp.playing { "⏸ Pause" } else { "▶ Play" };
-                            if ui.button(play_label).clicked() {
+                            let play_resp = ui.button(play_label);
+                            if play_resp.clicked() {
                                 actions.video_actions.push((ch_idx, deck_idx, VideoAction::TogglePlay));
                             }
+                            learn_overlay(ui, play_resp.rect, format!("deck/{}/video/play", deck.uuid), data, actions);
 
                             // Position scrub bar
                             let duration = vp.duration.max(0.001);
@@ -182,9 +217,11 @@ pub(super) fn render_selected_deck_detail(
                                 let slider = egui::Slider::new(&mut pos, 0.0..=duration as f32)
                                     .show_value(false)
                                     .trailing_fill(true);
-                                if ui.add(slider).changed() {
+                                let resp = ui.add(slider);
+                                if resp.changed() {
                                     actions.video_actions.push((ch_idx, deck_idx, VideoAction::Seek(pos as f64)));
                                 }
+                                learn_overlay(ui, resp.rect, format!("deck/{}/video/seek", deck.uuid), data, actions);
                                 ui.label(format_time(duration));
                             });
 
@@ -192,13 +229,15 @@ pub(super) fn render_selected_deck_detail(
                             let mut speed = vp.speed as f32;
                             ui.horizontal(|ui| {
                                 ui.label("Speed:");
-                                if ui.add(egui::Slider::new(&mut speed, 0.1..=4.0).step_by(0.05).suffix("x")).changed() {
+                                let resp = ui.add(egui::Slider::new(&mut speed, 0.1..=4.0).step_by(0.05).suffix("x"));
+                                if resp.changed() {
                                     actions.video_actions.push((ch_idx, deck_idx, VideoAction::SetSpeed(speed as f64)));
                                 }
+                                learn_overlay(ui, resp.rect, format!("deck/{}/video/speed", deck.uuid), data, actions);
                             });
 
                             // Loop mode
-                            ui.horizontal(|ui| {
+                            let loop_resp = ui.horizontal(|ui| {
                                 ui.label("Loop:");
                                 let modes = [
                                     ("🔁", crate::video::LoopMode::Loop, "Loop"),
@@ -214,6 +253,7 @@ pub(super) fn render_selected_deck_detail(
                                     }
                                 }
                             });
+                            learn_overlay(ui, loop_resp.response.rect, format!("deck/{}/video/loop_mode", deck.uuid), data, actions);
 
                             // In/Out points (bookshelf)
                             ui.add_space(4.0);
@@ -225,12 +265,14 @@ pub(super) fn render_selected_deck_detail(
                             let mut in_pt = vp.in_point as f32;
                             ui.horizontal(|ui| {
                                 ui.label("In:");
-                                if ui.add(egui::Slider::new(&mut in_pt, 0.0..=duration as f32)
-                                    .show_value(false).trailing_fill(true)).changed()
+                                let resp = ui.add(egui::Slider::new(&mut in_pt, 0.0..=duration as f32)
+                                    .show_value(false).trailing_fill(true));
+                                if resp.changed()
                                 {
                                     actions.video_actions.push((ch_idx, deck_idx,
                                         VideoAction::SetInPoint(in_pt as f64)));
                                 }
+                                learn_overlay(ui, resp.rect, format!("deck/{}/video/in_point", deck.uuid), data, actions);
                                 ui.label(format_time(in_pt as f64));
                             });
 
@@ -238,12 +280,14 @@ pub(super) fn render_selected_deck_detail(
                             let mut out_pt = effective_out as f32;
                             ui.horizontal(|ui| {
                                 ui.label("Out:");
-                                if ui.add(egui::Slider::new(&mut out_pt, 0.0..=duration as f32)
-                                    .show_value(false).trailing_fill(true)).changed()
+                                let resp = ui.add(egui::Slider::new(&mut out_pt, 0.0..=duration as f32)
+                                    .show_value(false).trailing_fill(true));
+                                if resp.changed()
                                 {
                                     actions.video_actions.push((ch_idx, deck_idx,
                                         VideoAction::SetOutPoint(out_pt as f64)));
                                 }
+                                learn_overlay(ui, resp.rect, format!("deck/{}/video/out_point", deck.uuid), data, actions);
                                 ui.label(format_time(out_pt as f64));
                             });
 
@@ -257,11 +301,15 @@ pub(super) fn render_selected_deck_detail(
                                     actions.video_actions.push((ch_idx, deck_idx,
                                         VideoAction::SetOutPoint(vp.position)));
                                 }
-                                if has_range
-                                    && ui.small_button("x Clear").on_hover_text("Reset to full clip").clicked() {
-                                        actions.video_actions.push((ch_idx, deck_idx,
-                                            VideoAction::ClearInOutPoints));
-                                    }
+                                // Clear is always shown (disabled when no range) so it stays MIDI/keyboard-mappable.
+                                let clear_resp = ui
+                                    .add_enabled(has_range, egui::Button::new("x Clear").small())
+                                    .on_hover_text("Reset to full clip");
+                                if clear_resp.clicked() {
+                                    actions.video_actions.push((ch_idx, deck_idx,
+                                        VideoAction::ClearInOutPoints));
+                                }
+                                learn_overlay(ui, clear_resp.rect, format!("deck/{}/video/clear", deck.uuid), data, actions);
                             });
 
                             if has_range {
@@ -521,7 +569,7 @@ pub(super) fn render_selected_deck_detail(
                                     let mut selected_scaling = current_idx;
                                     ui.horizontal(|ui| {
                                         ui.label("Scale:");
-                                        egui::ComboBox::from_id_salt("sel_deck_scale")
+                                        let combo = egui::ComboBox::from_id_salt("sel_deck_scale")
                                             .selected_text(scaling_modes[selected_scaling])
                                             .width(60.0)
                                             .show_ui(ui, |ui| {
@@ -529,6 +577,7 @@ pub(super) fn render_selected_deck_detail(
                                                     ui.selectable_value(&mut selected_scaling, i, *mode_name);
                                                 }
                                             });
+                                        learn_overlay(ui, combo.response.rect, format!("deck/{}/scaling_mode", deck.uuid), data, actions);
                                     });
                                     if selected_scaling != current_idx {
                                         let new_scaling = match selected_scaling {

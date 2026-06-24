@@ -21,7 +21,7 @@ The **speed** slider in the deck detail panel runs from **0.1× to 4.0×** (belo
 
 ### Scrub / Seek
 
-The **position slider** in the Playback section shows the current time on the left and the clip duration on the right. **Click or drag** it to scrub. Unlike the other transport controls, seeking is **UI-only** — there is no parameter path for it, so it cannot be mapped to MIDI/OSC.
+The **position slider** in the Playback section shows the current time on the left and the clip duration on the right. **Click or drag** it to scrub. Seeking is also MIDI/OSC/keyboard-mappable via `deck/<uuid>/video/seek`: the normalized 0.0–1.0 value maps to the clip's full duration, so the same mapping works for clips of any length (handy for scrubbing from a fader or an LFO).
 
 ### In/Out Points
 
@@ -33,7 +33,7 @@ Define a sub-range of the clip to play:
 
 Click **Clear In/Out** to reset to the full clip duration.
 
-Play/pause, speed, loop mode, and in/out points are MIDI, OSC, and keyboard mappable; **seek position is not** (see above).
+Play/pause, speed, seek, loop mode, in/out points, and clear are all MIDI, OSC, and keyboard mappable — and modulatable. Loop mode uses **fader bucketing**: sweeping a fader/knob steps through Loop → Ping-Pong → One Shot → Hold Last. Enter learn mode and click any of these controls in the deck detail panel to bind it. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
 
 ### HAP Hardware Codecs
 

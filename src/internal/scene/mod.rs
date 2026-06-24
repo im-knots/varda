@@ -329,9 +329,17 @@ pub enum SourceConfig {
         /// Out-point in seconds (default: 0.0 = end of file)
         #[serde(default)]
         out_point: f64,
+        /// How the video is scaled to the deck (default: Fill)
+        #[serde(default)]
+        scaling_mode: crate::deck::ScalingMode,
     },
     /// Static image
-    Image { path: String },
+    Image {
+        path: String,
+        /// How the image is scaled to the deck (default: Fill)
+        #[serde(default)]
+        scaling_mode: crate::deck::ScalingMode,
+    },
     /// Solid color fill
     SolidColor { color: [f32; 4] },
     /// Live camera feed (matched by name on restore)
@@ -568,7 +576,7 @@ impl SourceConfig {
                     errors.push(format!("{}: video path is empty", prefix));
                 }
             }
-            SourceConfig::Image { path } => {
+            SourceConfig::Image { path, .. } => {
                 if path.trim().is_empty() {
                     errors.push(format!("{}: image path is empty", prefix));
                 }
@@ -855,6 +863,7 @@ mod tests {
             speed: 1.0,
             in_point: 0.0,
             out_point: 0.0,
+            scaling_mode: crate::deck::ScalingMode::Fit,
         };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
@@ -865,12 +874,14 @@ mod tests {
                 speed,
                 in_point,
                 out_point,
+                scaling_mode,
             } => {
                 assert_eq!(path, "clips/intro.mov");
                 assert_eq!(loop_mode, crate::video::LoopMode::Loop);
                 assert!((speed - 1.0).abs() < 1e-5);
                 assert!((in_point - 0.0).abs() < 1e-5);
                 assert!((out_point - 0.0).abs() < 1e-5);
+                assert_eq!(scaling_mode, crate::deck::ScalingMode::Fit);
             }
             _ => panic!("Expected Video"),
         }
@@ -880,11 +891,15 @@ mod tests {
     fn scene_config_roundtrip_image_source() {
         let source = SourceConfig::Image {
             path: "images/logo.png".into(),
+            scaling_mode: crate::deck::ScalingMode::Center,
         };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
         match restored {
-            SourceConfig::Image { path } => assert_eq!(path, "images/logo.png"),
+            SourceConfig::Image { path, scaling_mode } => {
+                assert_eq!(path, "images/logo.png");
+                assert_eq!(scaling_mode, crate::deck::ScalingMode::Center);
+            }
             _ => panic!("Expected Image"),
         }
     }
@@ -1172,9 +1187,13 @@ mod tests {
             speed: 1.0,
             in_point: 0.0,
             out_point: 0.0,
+            scaling_mode: Default::default(),
         };
         assert!(!s.validate("src").is_empty());
-        let s = SourceConfig::Image { path: "".into() };
+        let s = SourceConfig::Image {
+            path: "".into(),
+            scaling_mode: Default::default(),
+        };
         assert!(!s.validate("src").is_empty());
     }
 
