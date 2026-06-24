@@ -28,11 +28,11 @@ Composites channels into the final output. With 2 channels, an A/B crossfader bl
 
 ### Surface
 
-A named polygon region in the stage editor. Each surface pulls content from a configurable source: Master (full mix), a specific Channel, a multi-Channel sub-mix, a single Deck, or the Domemaster output. Surfaces define *what content goes where* spatially.
+A named polygon region in the stage editor. Each surface pulls content from a configurable source: Master (full mix), a specific Channel, a multi-Channel sub-mix, or the Domemaster output. Surfaces define *what content goes where* spatially.
 
 ### Output
 
-Renders assigned surfaces onto a display target — a monitor/projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp) and edge blending.
+Renders assigned surfaces onto a display target — a monitor/projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. See [Outputs](07-outputs.md).
 
 ---
 
@@ -49,8 +49,26 @@ Renders assigned surfaces onto a display target — a monitor/projector window, 
 | SRT | Secure Reliable Transport stream receive |
 | HLS | HTTP Live Streaming input |
 | DASH | MPEG-DASH input |
+| RTMP | RTMP/RTMPS stream receive |
+| Compute Shader | GLSL compute shader (`.comp`) — particle systems, simulations, GPU-native generators |
 | Syphon | macOS inter-app texture sharing (runtime bridge pending) |
 | Solid Color | Flat RGBA color |
+
+---
+
+## Blend Modes
+
+Each deck composites onto its channel using a blend mode (and the same set is available for per-channel mixing with 3+ channels). Varda implements 15 modes:
+
+| Group | Modes |
+|-------|-------|
+| **Normal** | Normal |
+| **Lighten** | Add, Screen, Color Dodge, Lighten |
+| **Darken** | Multiply, Color Burn, Linear Burn, Darken |
+| **Contrast** | Overlay, Soft Light, Hard Light |
+| **Comparative** | Difference, Exclusion, Subtract |
+
+Compositing runs in linear-light HDR, so additive and screen modes can push values above 1.0 — the tonemap stage (below) brings them back into displayable range.
 
 ---
 
@@ -108,8 +126,9 @@ Any numeric parameter in the hierarchy can be automated by modulation sources:
 | **Audio Band** | Bass, mid, or treble energy from FFT analysis — drives parameters with the music |
 | **ADSR Envelope** | Attack/Decay/Sustain/Release envelope, triggered manually or via MIDI |
 | **Step Sequencer** | N-step pattern at configurable rate, with interpolation modes |
+| **Analyzer** | Scalar outputs derived from analysis of a deck's input frame (e.g. brightness, contrast) |
 
-Multiple sources can target the same parameter (summed). Modulator-on-modulator chaining is supported up to 4 levels deep — for example, an LFO modulating the frequency of another LFO.
+Sources are created in the modulation panel and assigned to any parameter with its **〰** button. Multiple sources can target the same parameter (summed). Modulator-on-modulator chaining is supported up to 4 levels deep — for example, an LFO modulating the frequency of another LFO. See [Modulation & Audio Reactivity](05-modulation.md) for the assignment workflow.
 
 Parameter paths use the format `deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, etc.
 
@@ -125,7 +144,13 @@ All state is saved to the `.varda/` directory in the workspace root:
 | `stage.json` | Venue state — surface layout, outputs, warp calibration, editor preferences |
 | `midi.json` | MIDI controller mappings (device-name-keyed) |
 | `keymap.json` | Keyboard shortcut bindings |
+| `osc.json` | OSC input port and feedback targets |
 | `presets/` | Saved deck and channel presets |
 | `luts/` | 3D LUT files (.cube, .3dl) for color grading |
+| `controller-profiles/` | Custom MIDI controller profiles (JSON) |
 
 Save with **Cmd+S** or auto-save on clean exit. Reload everything at a different venue — the scene (your show) is separate from the stage (the venue's physical layout).
+
+---
+
+[← Prev: Getting Started](01-getting-started.md) · [Home](README.md) · [Next: Library Panel →](03-library-panel.md)

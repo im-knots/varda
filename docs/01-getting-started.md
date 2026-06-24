@@ -44,7 +44,7 @@ Varda treats the current directory (or `--workspace` path) as the workspace root
 my-show/
   shaders/       ← ISF shader files (.fs) — auto-discovered, hot-reloaded on save
   media/         ← videos and images (loaded via Library panel)
-  .varda/        ← created automatically (scene, stage, presets, mappings)
+  .varda/        ← created automatically (scene, stage, presets, mappings, OSC config)
 ```
 
 Shaders in `shaders/` appear automatically in the Library panel under **Generators**, **Effects**, or **Transitions** based on their type. Videos and images are loaded through the Library panel's file browser.
@@ -57,6 +57,8 @@ Shaders in `shaders/` appear automatically in the Library panel under **Generato
 | **Video** | Any ffmpeg-supported container/codec — MP4, MOV, MKV, AVI, WebM (H.264, H.265, ProRes, VP9, etc.) |
 | **HAP Video** | MOV with HAP, HAP Alpha, HAP Q, HAP Q Alpha, HAP R — GPU-native decode, no CPU overhead |
 | **Images** | PNG, JPG/JPEG |
+
+The table above covers local file content. Varda can also route live and network inputs — cameras, NDI, SRT, HLS, DASH, RTMP, compute shaders, and more. See [Source Types](02-concepts.md#source-types) for the complete list.
 
 ## Build from Source
 
@@ -93,9 +95,9 @@ cargo run --release
 
 ## UI Layout
 
-![Varda UI](../img/screenshot.png)
+![Varda UI](img/screenshot.png)
 
-- **Library** (left, toggle with **L**) — content browser: shaders, video, images, cameras, NDI, SRT, HLS/DASH sources, and presets
+- **Library** (left, toggle with **L**) — content browser: shaders, video, images, cameras, NDI, SRT, HLS/DASH sources, and presets. See [Library Panel](03-library-panel.md).
 - **Center** — channel/deck grid with mixer crossfader. Toggle to **Stage Editor** for surface drawing.
 - **Right** — main output preview (always visible), output list, modulation panel, MIDI device list
 - **Bottom** (resizable) — context-sensitive: shows the selected deck's parameters, effect chains, or sequence editor
@@ -133,6 +135,8 @@ To load **video or images**, use the Video or Image sections in the Library — 
 3. In the output settings, select a **display target** (enumerate monitors from the dropdown)
 4. Click **Fullscreen** to send the output to the selected projector or display
 
+For rotation, source routing, and multi-output recording, see [Outputs](07-outputs.md).
+
 ## Audio Reactivity
 
 Varda analyzes audio input for beat detection and frequency-band modulation. To get started:
@@ -144,19 +148,20 @@ Varda analyzes audio input for beat detection and frequency-band modulation. To 
 
 Beat detection activates automatically from the audio input — BPM appears in the mixer for beat-synced transitions and auto-crossfades.
 
-ISF shaders also receive audio data directly via built-in uniforms (`audio_bass`, `audio_mid`, `audio_treble`, `audio_bpm`, `audio_beat_phase`) — no modulation setup needed. See [Modulation & Audio Reactivity](modulation.md) for the full guide.
+ISF shaders also receive audio data directly via built-in uniforms (`audio_bass`, `audio_mid`, `audio_treble`, `audio_bpm`, `audio_beat_phase`) — no modulation setup needed. See [Modulation & Audio Reactivity](05-modulation.md) for the full guide.
 
 ## Next Steps
 
 Once you have content playing on a display, explore deeper capabilities:
 
-- **[Performance & Automation](performance.md)** — video playback controls, deck auto-transitions, transition sequences, undo/redo, presets
-- **[Modulation & Audio Reactivity](modulation.md)** — LFO, audio bands, ADSR, step sequencer, mod-on-mod chaining
-- **[Control Surfaces](control-surfaces.md)** — MIDI learn, OSC, keyboard shortcuts, clock sync
-- **[Projection Mapping](projection.md)** — surfaces, corner-pin warp, multi-projector edge blending, dome projection
-- **[Streaming & I/O](streaming-and-io.md)** — NDI, SRT, HLS/DASH, recording
-- **[ISF Shader Authoring](isf-authoring.md)** — write your own generators, filters, and transitions
-- **[HTTP API](api.md)** — REST/WebSocket control, headless mode
+- **[Performance & Automation](04-performance.md)** — video playback controls, deck auto-transitions, transition sequences, undo/redo, presets
+- **[Modulation & Audio Reactivity](05-modulation.md)** — LFO, audio bands, ADSR, step sequencer, mod-on-mod chaining
+- **[Control Surfaces](06-control-surfaces.md)** — MIDI learn, OSC, keyboard shortcuts, clock sync
+- **[Projection Mapping](08-projection.md)** — surfaces, corner-pin warp, multi-projector edge blending, dome projection
+- **[Outputs](07-outputs.md)** — display targets, rotation, source routing, multi-output recording
+- **[Streaming & I/O](09-streaming-and-io.md)** — NDI, SRT, HLS/DASH, recording
+- **[ISF Shader Authoring](12-isf-authoring.md)** — write your own generators, filters, and transitions
+- **[HTTP API](13-api.md)** — REST/WebSocket control, headless mode
 
 ## Save Your Work
 
@@ -186,3 +191,7 @@ varda [OPTIONS]
 ```
 
 CLI flags override persisted config for that session without modifying the saved files.
+
+---
+
+[Home](README.md) · [Next: Core Concepts →](02-concepts.md)

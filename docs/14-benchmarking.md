@@ -44,3 +44,7 @@ The `empty_mod − no_mod` gap is the per-param allocation cost paid even when n
 Criterion HTML reports land in `target/criterion/`.
 
 `compositing` runs at 1920×1080 and calls `device.poll(Wait)` after each iteration so wall-clock reflects GPU work. Without a GPU adapter it prints `no GPU adapter — skipping` and exits clean. Numbers are machine-local; close other GPU work and warm the machine for stability.
+
+---
+
+[← Prev: HTTP API & Headless Mode](13-api.md) · [Home](README.md)

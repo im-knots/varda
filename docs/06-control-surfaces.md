@@ -34,6 +34,48 @@ Controller profiles are data-driven JSON files. Custom profiles can be placed in
 
 MIDI mappings are saved to `.varda/midi.json`, keyed by device name. Mappings persist across sessions and survive device reconnection.
 
+### Controller Profiles
+
+A controller profile teaches Varda the physical layout of a device — its control ranges, LED capabilities, and an optional auto-map strategy. The Akai APC Mini profile is built in; you can add profiles for other controllers by dropping `.json` files into `.varda/controller-profiles/`. Files are loaded on startup and matched against connected devices by name.
+
+A profile has four sections:
+
+```json
+{
+  "profile": { "name": "Akai APC Mini mk1", "name_match": "apc mini" },
+  "leds": {
+    "method": "note_velocity",
+    "channel": 0,
+    "colors": { "off": 0, "green": 1, "green_blink": 2, "red": 3, "yellow": 5 }
+  },
+  "controls": [
+    { "name": "grid", "type": "button", "midi_type": "note", "channel": 0, "range": [0, 63], "has_led": true },
+    { "name": "faders", "type": "fader", "midi_type": "cc", "channel": 0, "range": [48, 56], "has_led": false }
+  ],
+  "auto_map": {
+    "strategy": "channel_grid",
+    "grid_control": "grid",
+    "fader_control": "faders",
+    "shift_control": "shift",
+    "page_buttons_control": "bottom_buttons",
+    "columns": 8, "rows": 8,
+    "tap_hold_threshold_ms": 300,
+    "tap_action": "mute", "hold_action": "solo",
+    "fader_target": "channel_opacity", "last_fader_target": "crossfader",
+    "led_rules": { "active": "green", "muted": "red", "zero_opacity": "red", "soloed": "yellow", "empty": "off" }
+  }
+}
+```
+
+| Section | Purpose |
+|---------|---------|
+| `profile` | Display `name` and `name_match` — a case-insensitive substring matched against the connected device's name |
+| `leds` | Feedback `method` (`note_velocity`), MIDI `channel`, and a `colors` map of named states to velocity values |
+| `controls` | Named control groups. Each declares `type` (`button`/`fader`), `midi_type` (`note`/`cc`), `channel`, an inclusive `range` of note/CC numbers, and `has_led` |
+| `auto_map` | Optional. Maps a grid+faders layout onto channels/decks automatically (`strategy: "channel_grid"`), with tap/hold actions, fader targets, and `led_rules` that color the grid by deck state |
+
+`auto_map` is optional — omit it to define only the device's controls and use MIDI learn for mapping. Profiles with invalid control ranges or unknown references are skipped with a warning in the log.
+
 ---
 
 ## OSC
@@ -185,3 +227,7 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `action/save` | Trigger save |
 
 Entity UUIDs are stable 8-character hex strings that persist across moves, reorders, and scene save/restore.
+
+---
+
+[← Prev: Modulation & Audio Reactivity](05-modulation.md) · [Home](README.md) · [Next: Outputs →](07-outputs.md)

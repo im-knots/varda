@@ -181,6 +181,72 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 - Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers
 - Optional `FLOAT: true` for 32-bit float buffers (HDR, simulation data)
 
+## Compute Shaders
+
+Beyond fragment shaders, Varda supports **GLSL 450 compute shaders** for work that doesn't fit the one-output-pixel-per-invocation model — particle systems, N-body simulations, cellular automata, and other GPU-native generators or effects. Compute shaders use the **same language and compilation pipeline** as fragment shaders, with an ISF-style JSON header for metadata.
+
+Compute shaders use the `.comp` extension and require `"TYPE": "compute"` plus a `"COMPUTE"` block in the header:
+
+```glsl
+/*{
+    "DESCRIPTION": "Animated gradient (compute)",
+    "CATEGORIES": ["Generator"],
+    "TYPE": "compute",
+    "COMPUTE": { "WORKGROUP_SIZE": [16, 16, 1], "DISPATCH": "resolution" },
+    "INPUTS": [
+        { "NAME": "speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 10.0 }
+    ]
+}*/
+#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform ISFUniforms { float TIME; /* ...same fields as fragment... */ };
+layout(set = 0, binding = 1) uniform UserParams { float speed; };
+layout(set = 0, binding = 4, rgba8) writeonly uniform image2D output_image;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    vec2 uv = vec2(gid) / RENDERSIZE;
+    imageStore(output_image, gid, vec4(uv, 0.5 + 0.5 * sin(TIME * speed), 1.0));
+}
+```
+
+### Compute Metadata Fields
+
+Standard ISF fields (`DESCRIPTION`, `CREDIT`, `CATEGORIES`, `INPUTS`, `PASSES`, `PHASE_INPUTS`, `IMPORTED`, `PREPROCESSORS`) work identically. Compute adds:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `"TYPE": "compute"` | Yes | Distinguishes compute from fragment shaders |
+| `"COMPUTE".WORKGROUP_SIZE` | Yes | `[x, y, z]` — must match the GLSL `layout(local_size_*)` declaration |
+| `"COMPUTE".DISPATCH` | Yes | `"resolution"` (groups derived from output size) or `"custom"` (from `dispatch_x/y/z` inputs) |
+| `"BUFFERS"` | Optional | Typed storage buffers (SSBOs) — see below |
+
+### Storage Buffers
+
+Compute shaders can declare persistent storage buffers for simulation state — something fragment shaders can't do:
+
+```json
+"BUFFERS": [
+    { "NAME": "particles", "TYPE": "storage", "STRUCT": "Particle", "COUNT": 65536, "STRIDE": 32, "PERSISTENT": true }
+]
+```
+
+- **`TYPE`**: `"storage"` (read-write) or `"read-only-storage"`
+- **`STRUCT`**: the GLSL struct name; the engine sizes the buffer as `COUNT × STRIDE` bytes
+- **`STRIDE`**: byte size per element (required for allocation)
+- **`PERSISTENT`**: `true` keeps contents across frames (simulation state); otherwise zeroed each frame
+
+### Output & Binding Layout
+
+A compute source writes its result to a storage texture that becomes the deck's output:
+
+```glsl
+layout(set = 0, binding = N, rgba8) writeonly uniform image2D output_image;
+```
+
+Bindings follow a deterministic order: `[0]` ISFUniforms, `[1]` UserParams, `[2]`/`[3]` input texture + sampler (effects only), `[4]` output storage texture, then storage buffers, pass buffers, imported textures, and preprocessor textures in declaration order. Compute **effects** additionally bind the input as a sampled `texture2D`; compute **generators** omit the input texture.
+
 ## Analyzer Preprocessors (Advanced)
 
 Some effects need **structured data about the input frame** that plain GLSL can't compute — face detection bounding boxes, depth maps, segmentation masks, optical flow fields. Varda's analyzer/preprocessor system bridges this gap: CPU-side analysis (often ML-powered via ONNX Runtime) produces data textures that are automatically injected into your shader as additional texture bindings.
@@ -278,3 +344,7 @@ No restart required. Edit shaders in any external editor and see results immedia
 ## File Location
 
 Place shader files in `shaders/` at the workspace root. They are automatically discovered on startup and appear in the **Library** panel under Generators, Effects, or Transitions based on their type.
+
+---
+
+[← Prev: Shader Library](11-shader-library.md) · [Home](README.md) · [Next: HTTP API & Headless Mode →](13-api.md)

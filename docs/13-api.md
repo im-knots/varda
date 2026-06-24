@@ -27,8 +27,10 @@ varda --headless --port 8080 --fps 60
 In headless mode:
 - No main window is created (output windows for projectors can still be created via API)
 - The render loop runs at `--fps` rate using sleep-based throttling
-- All outputs from `stage.json` auto-start on launch
+- All outputs defined in `stage.json` auto-start on launch — NDI sends, SRT streams, HLS/DASH outputs, recordings, and display outputs (fullscreen on connected monitors) all activate automatically
 - Graceful shutdown on SIGTERM/SIGINT or `POST /api/shutdown`
+
+This enables the installation use case: configure in windowed mode, save, then deploy headless. All streaming, recording, and network I/O features work identically with or without the UI.
 
 ## WebSocket
 
@@ -174,3 +176,7 @@ Access-Control-Allow-Headers: Content-Type, Authorization
 ```
 
 Browser-based control panels work from any origin without configuration.
+
+---
+
+[← Prev: ISF Shader Authoring](12-isf-authoring.md) · [Home](README.md) · [Next: Benchmarking →](14-benchmarking.md)
