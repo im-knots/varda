@@ -47,6 +47,8 @@ Every deck renders to a texture at the render resolution, regardless of its sour
 
 Because scaling happens once on load rather than every frame, the compositing pipeline and all effect chains operate at a single consistent resolution.
 
+Scaling mode is **MIDI/OSC/keyboard-mappable and modulatable** via `deck/<uuid>/scaling_mode` — a fader sweeps through Fill → Fit → Stretch → Center ([fader bucketing](06-control-surfaces.md#parameter-paths)). The selected mode is **saved in the scene** and restored on reload (older scenes without the field default to Fill).
+
 ## Performance Monitoring
 
 All metrics are displayed inline in the top bar, each with a clickable drill-down popover. Reading left to right:

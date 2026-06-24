@@ -342,10 +342,12 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                                 speed: pb.as_ref().map(|p| p.speed).unwrap_or(1.0),
                                 in_point: pb.as_ref().map(|p| p.in_point).unwrap_or(0.0),
                                 out_point: pb.as_ref().map(|p| p.out_point).unwrap_or(0.0),
+                                scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
                             }
                         }
                         "image" => SourceConfig::Image {
                             path: slot.deck.source_path().unwrap_or_default().to_string(),
+                            scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
                         },
                         "solid_color" => {
                             let color = slot.deck.solid_color().unwrap_or([0.0, 0.0, 0.0, 1.0]);
@@ -1058,16 +1060,20 @@ pub(crate) fn restore_deck(
             speed,
             in_point,
             out_point,
+            scaling_mode,
         } => {
-            let deck = Deck::new_from_video(context, path, render_width, render_height)?;
+            let mut deck = Deck::new_from_video(context, path, render_width, render_height)?;
             deck.video_set_loop_mode(*loop_mode);
             deck.video_set_speed(*speed);
             deck.video_set_in_point(*in_point);
             deck.video_set_out_point(*out_point);
+            deck.set_scaling_mode(*scaling_mode);
             deck
         }
-        SourceConfig::Image { path } => {
-            Deck::new_from_image(context, path, render_width, render_height)?
+        SourceConfig::Image { path, scaling_mode } => {
+            let mut deck = Deck::new_from_image(context, path, render_width, render_height)?;
+            deck.set_scaling_mode(*scaling_mode);
+            deck
         }
         SourceConfig::SolidColor { color } => {
             Deck::new_solid_color(context, *color, render_width, render_height)?
@@ -1289,7 +1295,7 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
     match (deck.source_type(), config) {
         ("shader", SourceConfig::Shader { path, .. }) => deck.source_path() == Some(path.as_str()),
         ("video", SourceConfig::Video { path, .. }) => deck.source_path() == Some(path.as_str()),
-        ("image", SourceConfig::Image { path }) => deck.source_path() == Some(path.as_str()),
+        ("image", SourceConfig::Image { path, .. }) => deck.source_path() == Some(path.as_str()),
         ("solid_color", SourceConfig::SolidColor { .. }) => true,
         ("camera", SourceConfig::Camera { name }) => {
             deck.source_name().trim_start_matches("📹 ") == name
@@ -1339,7 +1345,8 @@ mod tests {
                 loop_mode: Default::default(),
                 speed: 1.0,
                 in_point: 0.0,
-                out_point: 0.0
+                out_point: 0.0,
+                scaling_mode: Default::default()
             }
         ));
         assert!(!source_configs_match(
@@ -1358,7 +1365,8 @@ mod tests {
         assert!(!source_configs_match(
             &deck,
             &SourceConfig::Image {
-                path: "test.png".into()
+                path: "test.png".into(),
+                scaling_mode: Default::default()
             }
         ));
         assert!(!source_configs_match(

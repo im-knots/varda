@@ -183,48 +183,132 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 
 ## Compute Shaders
 
-Beyond fragment shaders, Varda supports **GLSL 450 compute shaders** for work that doesn't fit the one-output-pixel-per-invocation model — particle systems, N-body simulations, cellular automata, and other GPU-native generators or effects. Compute shaders use the **same language and compilation pipeline** as fragment shaders, with an ISF-style JSON header for metadata.
+Beyond fragment shaders, Varda supports **GLSL 450 compute shaders** for work that doesn't fit the one-output-pixel-per-invocation model — particle systems, N-body simulations, cellular automata, and other GPU-native generators. Compute shaders use the **same language and compilation pipeline** as fragment shaders, with an ISF-style JSON header for metadata.
 
-Compute shaders use the `.comp` extension and require `"TYPE": "compute"` plus a `"COMPUTE"` block in the header:
+Compute shaders are **generators**: each one renders into its own output image that becomes the deck's source. There is no compute *effect* path — a compute shader does not receive an upstream input texture. If you need to process an incoming frame, use a fragment-shader filter (see [Shader Types](#shader-types)).
 
-```glsl
-/*{
-    "DESCRIPTION": "Animated gradient (compute)",
-    "CATEGORIES": ["Generator"],
-    "TYPE": "compute",
-    "COMPUTE": { "WORKGROUP_SIZE": [16, 16, 1], "DISPATCH": "resolution" },
-    "INPUTS": [
-        { "NAME": "speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 10.0 }
-    ]
-}*/
-#version 450
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+### Anatomy of a Compute Shader
 
-layout(set = 0, binding = 0) uniform ISFUniforms { float TIME; /* ...same fields as fragment... */ };
-layout(set = 0, binding = 1) uniform UserParams { float speed; };
-layout(set = 0, binding = 4, rgba8) writeonly uniform image2D output_image;
+A compute shader uses the `.comp` extension and requires `"TYPE": "compute"` plus a `"COMPUTE"` block in the header. Three things must line up:
 
-void main() {
-    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
-    vec2 uv = vec2(gid) / RENDERSIZE;
-    imageStore(output_image, gid, vec4(uv, 0.5 + 0.5 * sin(TIME * speed), 1.0));
-}
-```
+1. The JSON `"COMPUTE".WORKGROUP_SIZE` must equal the GLSL `layout(local_size_*)` declaration.
+2. The output is **always** a write-only `rgba8` storage image at **`binding = 2`**.
+3. Every `INPUTS` entry maps, in order, into the `UserParams` uniform block at `binding = 1`.
 
 ### Compute Metadata Fields
 
-Standard ISF fields (`DESCRIPTION`, `CREDIT`, `CATEGORIES`, `INPUTS`, `PASSES`, `PHASE_INPUTS`, `IMPORTED`, `PREPROCESSORS`) work identically. Compute adds:
+Standard ISF fields (`DESCRIPTION`, `CREDIT`, `CATEGORIES`, `INPUTS`, `PHASE_INPUTS`, `IMPORTED`, `PREPROCESSORS`) work identically. Compute adds:
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `"TYPE": "compute"` | Yes | Distinguishes compute from fragment shaders |
 | `"COMPUTE".WORKGROUP_SIZE` | Yes | `[x, y, z]` — must match the GLSL `layout(local_size_*)` declaration |
-| `"COMPUTE".DISPATCH` | Yes | `"resolution"` (groups derived from output size) or `"custom"` (from `dispatch_x/y/z` inputs) |
-| `"BUFFERS"` | Optional | Typed storage buffers (SSBOs) — see below |
+| `"COMPUTE".DISPATCH` | Yes | Only `"resolution"` is implemented (workgroup count derived from the output size). `"custom"` is reserved and currently behaves as a no-op — do not rely on it. |
+| `"COMPUTE".NUM_PASSES` | No | Number of sequential dispatches per frame (default `1`). See [Multi-Pass Compute](#multi-pass-compute). |
+| `"BUFFERS"` | No | Typed storage buffers (SSBOs). See [Storage Buffers](#storage-buffers). |
+
+### Binding Layout
+
+Compute bindings are fixed and assigned in this order:
+
+| Binding | Resource | Notes |
+|---------|----------|-------|
+| `set=0, binding=0` | `ISFUniforms` | Same fields as fragment shaders (`TIME`, `RENDERSIZE`, audio, `PHASE_TIME_*`, etc.) |
+| `set=0, binding=1` | `UserParams` | Your `INPUTS`, packed in declaration order |
+| `set=0, binding=2` | Output image | `rgba8`, `writeonly` — this is what the deck displays |
+| `set=0, binding=3 …` | Storage buffers | One per `BUFFERS` entry, in declaration order |
+
+The output format is hard-wired to `rgba8`; declare it exactly as `rgba8` in the layout qualifier and write with `imageStore`.
+
+### Dispatch Model
+
+In `"resolution"` mode the engine launches `ceil(RENDERSIZE / WORKGROUP_SIZE)` workgroups in X and Y (Z is always `1`):
+
+```
+dispatch_x = ceil(width  / local_size_x)
+dispatch_y = ceil(height / local_size_y)
+dispatch_z = 1
+```
+
+Because the count is rounded **up**, the last row/column of workgroups overruns the image. **Every kernel must bounds-check** its invocation against the work it's responsible for and early-out, or it will write out of range. For a per-pixel generator that means guarding against `RENDERSIZE`; for a buffer sim it means guarding against the element count (below).
+
+### Worked Example 1 — Per-Pixel Generator
+
+The smallest useful compute generator: one invocation per output pixel, no storage buffers. This is `shaders/compute_gradient.comp` in full.
+
+```glsl
+/*{
+    "DESCRIPTION": "Simple animated gradient (compute shader)",
+    "CREDIT": "Varda VJ",
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator"],
+    "TYPE": "compute",
+    "COMPUTE": {
+        "WORKGROUP_SIZE": [16, 16, 1],
+        "DISPATCH": "resolution"
+    },
+    "INPUTS": [
+        {"NAME": "speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 5.0, "LABEL": "Speed"}
+    ]
+}*/
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Binding 0: ISF automatic uniforms (identical field order to fragment shaders).
+layout(set = 0, binding = 0) uniform ISFUniforms {
+    float TIME;
+    float TIMEDELTA;
+    uint  FRAMEINDEX;
+    int   PASSINDEX;
+    vec2  RENDERSIZE;
+    float audio_level;
+    float audio_bass;
+    float audio_mid;
+    float audio_treble;
+    float audio_bpm;
+    float audio_beat_phase;
+    vec4  DATE;
+    float PHASE_TIME_0;
+    float PHASE_TIME_1;
+    float PHASE_TIME_2;
+    float PHASE_TIME_3;
+};
+
+// Binding 1: your INPUTS, in declaration order.
+layout(set = 0, binding = 1) uniform UserParams {
+    float speed;
+};
+
+// Binding 2: the output image (always rgba8, writeonly).
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = ivec2(RENDERSIZE);
+
+    // Mandatory bounds guard — the last workgroup overruns the image.
+    if (pixel.x >= size.x || pixel.y >= size.y) {
+        return;
+    }
+
+    vec2 uv = vec2(pixel) / vec2(size);
+    float t = TIME * speed * 0.2;
+
+    float r = 0.5 + 0.5 * sin(uv.x * 3.14159 + t);
+    float g = 0.5 + 0.5 * sin(uv.y * 3.14159 + t * 1.3);
+    float b = 0.5 + 0.5 * sin((uv.x + uv.y) * 3.14159 + t * 0.7);
+
+    imageStore(outputImage, pixel, vec4(r, g, b, 1.0));
+}
+```
+
+Copy the `ISFUniforms` block verbatim into every compute shader — the field order is part of the ABI.
 
 ### Storage Buffers
 
-Compute shaders can declare persistent storage buffers for simulation state — something fragment shaders can't do:
+Storage buffers (SSBOs) give compute shaders something fragment shaders can't have: **mutable memory that persists across frames**. This is what makes simulations possible.
 
 ```json
 "BUFFERS": [
@@ -232,20 +316,101 @@ Compute shaders can declare persistent storage buffers for simulation state — 
 ]
 ```
 
-- **`TYPE`**: `"storage"` (read-write) or `"read-only-storage"`
-- **`STRUCT`**: the GLSL struct name; the engine sizes the buffer as `COUNT × STRIDE` bytes
-- **`STRIDE`**: byte size per element (required for allocation)
-- **`PERSISTENT`**: `true` keeps contents across frames (simulation state); otherwise zeroed each frame
+| Field | Description |
+|-------|-------------|
+| `NAME` | Label used for the GPU allocation (not referenced from GLSL — see below) |
+| `TYPE` | `"storage"` (read-write) or `"read-only-storage"` |
+| `STRUCT` | Documentation only — names the conceptual element type. The engine does **not** parse it. |
+| `COUNT` | Number of elements |
+| `STRIDE` | Bytes per element |
+| `PERSISTENT` | `true` keeps contents across frames; `false` is zeroed before pass 0 every frame |
 
-### Output & Binding Layout
+**Sizing.** The engine allocates exactly `COUNT × STRIDE` bytes and zero-fills it once at creation. It does *not* inspect your GLSL struct — `STRUCT` and `STRIDE` are purely for *you* to size the allocation. How you interpret those bytes in GLSL is up to you: declare a struct array or, as the bundled simulations do, a flat `vec4[]`. Just make the total match. The example above reserves `65536 × 32 = 2 MiB`, i.e. two `vec4`s (32 bytes) per particle.
 
-A compute source writes its result to a storage texture that becomes the deck's output:
+**GLSL declaration.** Always `std430` layout, at the next binding after the output image:
 
 ```glsl
-layout(set = 0, binding = N, rgba8) writeonly uniform image2D output_image;
+// First BUFFERS entry → binding 3. 32-byte stride = 2 vec4 per particle.
+layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
+    vec4 particle_data[];   // [2*i] = position/extra, [2*i+1] = velocity/extra
+};
 ```
 
-Bindings follow a deterministic order: `[0]` ISFUniforms, `[1]` UserParams, `[2]`/`[3]` input texture + sampler (effects only), `[4]` output storage texture, then storage buffers, pass buffers, imported textures, and preprocessor textures in declaration order. Compute **effects** additionally bind the input as a sampled `texture2D`; compute **generators** omit the input texture.
+Use `std430` (tightly packed) and watch the classic alignment trap: a `vec3` still consumes 16 bytes. Pack as `vec4` to keep `STRIDE` predictable.
+
+**Lifecycle.** A `PERSISTENT: true` buffer accumulates state frame to frame — ideal for particle positions, Game-of-Life grids, or feedback. A `PERSISTENT: false` buffer is cleared to zero before pass 0 each frame — ideal for per-frame scratch space such as a spatial binning grid.
+
+### Worked Example 2 — Buffer-Backed Simulation
+
+A simulation updates *N* elements, not *W×H* pixels — but dispatch is still resolution-based. The idiom (taken from `shaders/black_hole_sim.comp`) is to **linearize the 2D dispatch grid into a 1D element index** and guard against the element count. Size your render resolution so that `width × height ≥ COUNT`, or some elements never get a thread.
+
+```glsl
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform ISFUniforms { /* ...full block as in Example 1... */ };
+layout(set = 0, binding = 1) uniform UserParams { float gravity; };
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+
+// Persistent particle state: 2 vec4 per particle (pos.xyz + vel.xyz).
+layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
+    vec4 particle_data[];
+};
+
+const uint NUM_PARTICLES = 65536u;
+
+void main() {
+    // Linearize the (possibly oversized) 2D dispatch grid into a 1D index.
+    uint row_width = gl_NumWorkGroups.x * 256u;          // 256 == local_size_x
+    uint idx = gl_GlobalInvocationID.y * row_width + gl_GlobalInvocationID.x;
+    if (idx >= NUM_PARTICLES) return;                    // mandatory guard
+
+    // Initialize on the first frame, otherwise integrate.
+    if (FRAMEINDEX == 0u) {
+        particle_data[2u * idx]      = vec4(/* spawn position */ vec3(0.0), 0.0);
+        particle_data[2u * idx + 1u] = vec4(/* initial velocity */ vec3(0.0), 0.0);
+        return;
+    }
+
+    vec3 pos = particle_data[2u * idx].xyz;
+    vec3 vel = particle_data[2u * idx + 1u].xyz;
+
+    vel += vec3(0.0, -gravity, 0.0) * TIMEDELTA;          // step the sim
+    pos += vel * TIMEDELTA;
+
+    particle_data[2u * idx]      = vec4(pos, 0.0);         // write back (persists)
+    particle_data[2u * idx + 1u] = vec4(vel, 0.0);
+}
+```
+
+The two load-bearing lines are the `idx` computation and the `if (idx >= NUM_PARTICLES) return;` guard — everything else is your simulation. To turn particle state into pixels, add a second pass that reads this buffer and writes `outputImage` (next section).
+
+### Multi-Pass Compute
+
+Set `"COMPUTE".NUM_PASSES` to run several dispatches per frame. The engine runs them **sequentially** — each pass completes on the GPU before the next begins — and exposes the current pass via the `PASSINDEX` uniform. Non-persistent buffers are zeroed once, before pass 0; persistent buffers carry through every pass.
+
+```glsl
+void main() {
+    if (PASSINDEX == 0) {
+        simulate();   // update persistent particle buffer, bin into a scratch grid
+    } else {
+        render();     // read buffers, imageStore() into outputImage
+    }
+}
+```
+
+This "simulate, then render" split is exactly how `black_hole_sim.comp` works: pass 0 advances 65536 persistent particles and bins them into a non-persistent screen grid; pass 1 reads both and ray-traces the final image.
+
+### Limitations
+
+- **Generators only** — no compute-effect (input-texture) path. Use a fragment filter to process upstream frames.
+- **Output is `rgba8`** — no HDR/float compute output yet.
+- **`DISPATCH: "custom"` is not implemented** — only `"resolution"` works.
+
+### See Also
+
+`shaders/black_hole_sim.comp` is the comprehensive reference: persistent + scratch buffers, two-pass simulate/render, `PHASE_INPUTS`, atomic spatial binning, and audio reactivity. Read it once the fundamentals above make sense — it puts every feature in this section to work at once.
 
 ## Analyzer Preprocessors (Advanced)
 

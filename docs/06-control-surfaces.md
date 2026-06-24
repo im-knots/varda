@@ -217,6 +217,14 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `deck/<uuid>/trigger` | Set deck opacity to 1.0 |
 | `deck/<uuid>/param/<name>` | Shader parameter |
 | `deck/<uuid>/effect/<k>/param/<name>` | Deck effect parameter |
+| `deck/<uuid>/video/play` | Set video play state (playing when > 0.5) |
+| `deck/<uuid>/video/speed` | Video playback speed (0.0–1.0 → 0.1×–4.0×) |
+| `deck/<uuid>/video/seek` | Seek position (0.0–1.0 → start–end of clip) |
+| `deck/<uuid>/video/in_point` | Loop in-point (0.0–1.0 → start–end of clip) |
+| `deck/<uuid>/video/out_point` | Loop out-point (0.0–1.0 → start–end of clip) |
+| `deck/<uuid>/video/clear` | Clear in/out points (trigger, > 0.5) |
+| `deck/<uuid>/video/loop_mode` | Loop mode, fader-bucketed (Loop / Ping-Pong / One Shot / Hold Last) |
+| `deck/<uuid>/scaling_mode` | Source scaling, fader-bucketed (Fill / Fit / Stretch / Center) |
 | `ch/<uuid>/opacity` | Channel opacity |
 | `ch/<uuid>/effect/<k>/param/<name>` | Channel effect parameter |
 | `master/effect/<k>/param/<name>` | Master effect parameter |
@@ -227,6 +235,8 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `action/save` | Trigger save |
 
 Entity UUIDs are stable 8-character hex strings that persist across moves, reorders, and scene save/restore.
+
+The `video/*` and `scaling_mode` paths resolve only on the matching source type (video controls on video decks; `scaling_mode` on image, video, camera, and external-source decks). **Discrete (enum) controls** — `loop_mode` and `scaling_mode` — use **fader bucketing**: the 0.0–1.0 range is split into equal segments so a fader or knob sweeps through the options. **Seek and in/out points** scale the 0.0–1.0 value against the clip's duration, so one mapping works for clips of any length.
 
 ---
 
