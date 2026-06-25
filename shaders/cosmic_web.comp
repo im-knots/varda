@@ -1,0 +1,266 @@
+/*{
+    "DESCRIPTION": "Cosmic Web — scientifically grounded dark matter structure via the Zel'dovich approximation. A grid of Lagrangian particles is displaced by an analytic Fourier-synthesised displacement field drawn from a CDM (BBKS) power spectrum; a growth factor animates the collapse of voids -> walls -> filaments -> halos. Cloud-in-cell deposit + tone-mapped density render.",
+    "CREDIT": "Varda VJ",
+    "ISFVSN": "2.0",
+    "CATEGORIES": ["Generator", "Generative", "Simulation"],
+    "TYPE": "compute",
+    "COMPUTE": {
+        "WORKGROUP_SIZE": [16, 16, 1],
+        "DISPATCH": "resolution",
+        "NUM_PASSES": 3
+    },
+    "INPUTS": [
+        {"NAME": "growth",       "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.0,  "MAX": 2.0,   "LABEL": "Structure Growth"},
+        {"NAME": "evolve",       "TYPE": "float", "DEFAULT": 0.6,   "MIN": 0.0,  "MAX": 1.0,   "LABEL": "Auto Evolve"},
+        {"NAME": "evolve_speed", "TYPE": "float", "DEFAULT": 0.2,   "MIN": 0.0,  "MAX": 2.0,   "LABEL": "Evolve Speed"},
+        {"NAME": "web_scale",    "TYPE": "float", "DEFAULT": 4.0,   "MIN": 1.0,  "MAX": 16.0,  "LABEL": "Web Scale"},
+        {"NAME": "tilt",         "TYPE": "float", "DEFAULT": 0.965, "MIN": 0.7,  "MAX": 1.2,   "LABEL": "Spectral Index"},
+        {"NAME": "kmax",         "TYPE": "float", "DEFAULT": 32.0,  "MIN": 8.0,  "MAX": 64.0,  "LABEL": "Detail (k-max)"},
+        {"NAME": "seed",         "TYPE": "float", "DEFAULT": 0.0,   "MIN": 0.0,  "MAX": 100.0, "LABEL": "Realization Seed"},
+        {"NAME": "density_gain", "TYPE": "float", "DEFAULT": 2.0,   "MIN": 0.1,  "MAX": 8.0,   "LABEL": "Density Gain"},
+        {"NAME": "contrast",     "TYPE": "float", "DEFAULT": 1.6,   "MIN": 0.5,  "MAX": 4.0,   "LABEL": "Contrast"},
+        {"NAME": "node_boost",   "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.0,  "MAX": 3.0,   "LABEL": "Node Glow"},
+        {"NAME": "zoom",         "TYPE": "float", "DEFAULT": 1.0,   "MIN": 0.5,  "MAX": 3.0,   "LABEL": "Zoom"},
+        {"NAME": "void_color",     "TYPE": "color", "DEFAULT": [0.04, 0.02, 0.10, 1.0], "LABEL": "Void Color"},
+        {"NAME": "filament_color", "TYPE": "color", "DEFAULT": [0.45, 0.25, 0.75, 1.0], "LABEL": "Filament Color"},
+        {"NAME": "node_color",     "TYPE": "color", "DEFAULT": [1.0,  0.75, 0.20, 1.0], "LABEL": "Node Color"},
+        {"NAME": "bg_color",       "TYPE": "color", "DEFAULT": [0.0,  0.0,  0.0,  1.0], "LABEL": "Background"}
+    ],
+    "BUFFERS": [
+        {"NAME": "modes",   "TYPE": "storage", "STRUCT": "Mode", "COUNT": 96,     "STRIDE": 16, "PERSISTENT": false},
+        {"NAME": "density", "TYPE": "storage", "STRUCT": "Cell", "COUNT": 262144, "STRIDE": 4,  "PERSISTENT": false}
+    ]
+}*/
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform ISFUniforms {
+    float TIME; float TIMEDELTA; uint FRAMEINDEX; int PASSINDEX;
+    vec2 RENDERSIZE;
+    float audio_level; float audio_bass; float audio_mid; float audio_treble;
+    float audio_bpm; float audio_beat_phase;
+    vec4 DATE;
+    float PHASE_TIME_0; float PHASE_TIME_1; float PHASE_TIME_2; float PHASE_TIME_3;
+};
+
+layout(set = 0, binding = 1) uniform UserParams {
+    float growth; float evolve; float evolve_speed;
+    float web_scale; float tilt; float kmax; float seed;
+    float density_gain; float contrast; float node_boost;
+    float zoom;
+    vec4 void_color; vec4 filament_color; vec4 node_color; vec4 bg_color;
+};
+
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+
+// Pass 0 synthesises NUM_MODES plane waves: xy = wavevector, z = amplitude, w = phase.
+layout(std430, set = 0, binding = 3) buffer ModeBuffer {
+    vec4 modes[];
+};
+
+// Fixed-resolution density field; CIC mass is deposited as fixed-point uints.
+layout(std430, set = 0, binding = 4) buffer DensityBuffer {
+    uint density[];
+};
+
+const float TAU = 6.28318530718;
+const uint  GRID_N        = 512u;     // particles per side (Lagrangian grid)
+const uint  NUM_PARTICLES = 262144u;  // GRID_N * GRID_N
+const uint  NUM_MODES     = 96u;
+const int   DENSITY_RES   = 512;      // density grid per side
+const float FIXED         = 1024.0;   // fixed-point scale for atomic deposit
+
+// ── Linearise the 2D resolution dispatch into a 1D element index ───────
+uint linearIndex() {
+    uint row = gl_NumWorkGroups.x * 16u;
+    return gl_GlobalInvocationID.y * row + gl_GlobalInvocationID.x;
+}
+
+// ── Integer hash -> [0,1) ─────────────────────────────────────────────
+float hash(uint n) {
+    n = (n << 13u) ^ n;
+    n = n * (n * n * 15731u + 789221u) + 1376312589u;
+    return float(n & 0x7FFFFFFFu) / float(0x7FFFFFFF);
+}
+
+// ── BBKS (Bardeen et al. 1986) CDM transfer function ──────────────────
+// web_scale sets the turnover scale (in box-mode units): larger = smaller,
+// more numerous filaments; smaller = a few large super-structures.
+float transfer(float k) {
+    float q = k / (TAU * max(web_scale, 0.5));
+    float num  = log(1.0 + 2.34 * q) / max(2.34 * q, 1e-6);
+    float poly = 1.0 + 3.89 * q
+               + (16.1 * q) * (16.1 * q)
+               + (5.46 * q) * (5.46 * q) * (5.46 * q)
+               + (6.71 * q) * (6.71 * q) * (6.71 * q) * (6.71 * q);
+    return num * pow(poly, -0.25);
+}
+
+// CDM power spectrum P(k) = k^ns * T(k)^2.
+float powerSpectrum(float k) {
+    float t = transfer(k);
+    return pow(k, tilt) * t * t;
+}
+
+// ── Density grid helpers (periodic / toroidal box) ────────────────────
+int wrapi(int v) { return ((v % DENSITY_RES) + DENSITY_RES) % DENSITY_RES; }
+uint cellIndex(int cx, int cy) {
+    return uint(wrapi(cy)) * uint(DENSITY_RES) + uint(wrapi(cx));
+}
+void splat(int cx, int cy, float w) {
+    if (w <= 0.0) return;
+    atomicAdd(density[cellIndex(cx, cy)], uint(w * FIXED));
+}
+float densityAt(int cx, int cy) {
+    return float(density[cellIndex(cx, cy)]) / FIXED;
+}
+
+// ── Cosmic clock: a monotonic forward time split into discrete formation
+//    epochs. The scale factor `a` (= fract) ramps 0->1 within an epoch, so
+//    structure grows monotonically rather than breathing back and forth.
+float cosmicClock() { return TIME * max(evolve_speed, 0.0) * 0.2; }
+
+// =====================================================================
+// PASS 0: Synthesise the Gaussian displacement field as plane-wave modes
+// =====================================================================
+void pass_modes() {
+    uint i = linearIndex();
+    if (i >= NUM_MODES) return;
+
+    // Re-seed once per epoch so each formation cycle is a fresh universe
+    // (only while auto-evolving; a fixed realization when static).
+    uint s = uint(seed);
+    if (evolve > 0.01) s += uint(floor(cosmicClock())) * 1664525u + 1013904223u;
+    float u_dir   = hash(i * 3u  + s * 131u + 1u);
+    float u_k     = (float(i) + hash(i * 7u + s * 197u + 5u)) / float(NUM_MODES);
+    float u_amp   = hash(i * 13u + s * 263u + 9u);
+    float u_phase = hash(i * 17u + s * 397u + 13u);
+
+    // Log-spaced wavenumber from the fundamental (box) mode to the cutoff.
+    float kmin  = TAU;
+    float kmaxw = TAU * max(kmax, 2.0);
+    float kmag  = kmin * pow(kmaxw / kmin, u_k);
+
+    float ang  = u_dir * TAU;
+    vec2  kvec = kmag * vec2(cos(ang), sin(ang));
+
+    // Rayleigh-distributed amplitude => Gaussian random field realization.
+    float rayl = sqrt(max(-2.0 * log(max(u_amp, 1e-6)), 0.0));
+    float amp  = sqrt(max(powerSpectrum(kmag), 0.0)) * rayl;
+
+    modes[i] = vec4(kvec, amp, u_phase * TAU);
+}
+
+// =====================================================================
+// PASS 1: Zel'dovich displacement of each grid particle + CIC deposit
+//   x(q, t) = q + D(t) * Psi(q),   Psi = sum of modes (Psi_k along k-hat)
+// =====================================================================
+void pass_displace() {
+    uint i = linearIndex();
+    if (i >= NUM_PARTICLES) return;
+
+    uint gx = i % GRID_N;
+    uint gy = i / GRID_N;
+    vec2 q  = (vec2(float(gx), float(gy)) + 0.5) / float(GRID_N);
+
+    // Synthesise the displacement field at this Lagrangian point.
+    vec2  psi = vec2(0.0);
+    float var = 0.0;
+    for (uint m = 0u; m < NUM_MODES; m++) {
+        vec4 md = modes[m];
+        float kk = dot(md.xy, md.xy);
+        if (kk < 1e-8) continue;
+        vec2 khat = md.xy * inversesqrt(kk);
+        psi += khat * md.z * sin(dot(md.xy, q) + md.w);
+        var += md.z * md.z;
+    }
+    // Normalise to unit-variance displacement so `growth` is realization-stable.
+    psi *= inversesqrt(max(var, 1e-6));
+
+    // Linear growth factor D(a): monotonic forward collapse (void -> wall ->
+    // filament -> node) that never reverses. `evolve` blends between a static
+    // field (driven by `growth`) and the auto-evolving forward ramp.
+    float a     = fract(cosmicClock());
+    float Dauto = a * 3.0;
+    float D     = mix(1.0, Dauto, clamp(evolve, 0.0, 1.0));
+
+    vec2 x = fract(q + (growth * 0.2 * D) * psi);
+
+    // Cloud-in-cell deposit into the four surrounding cells.
+    float fx = x.x * float(DENSITY_RES) - 0.5;
+    float fy = x.y * float(DENSITY_RES) - 0.5;
+    int   x0 = int(floor(fx));
+    int   y0 = int(floor(fy));
+    float wx = fx - float(x0);
+    float wy = fy - float(y0);
+    splat(x0,     y0,     (1.0 - wx) * (1.0 - wy));
+    splat(x0 + 1, y0,     wx * (1.0 - wy));
+    splat(x0,     y0 + 1, (1.0 - wx) * wy);
+    splat(x0 + 1, y0 + 1, wx * wy);
+}
+
+// ── Bilinear density sample in box coords (periodic wrap) ──────────────
+float sampleDensity(vec2 buv) {
+    float fx = buv.x * float(DENSITY_RES) - 0.5;
+    float fy = buv.y * float(DENSITY_RES) - 0.5;
+    int   x0 = int(floor(fx));
+    int   y0 = int(floor(fy));
+    float wx = fx - float(x0);
+    float wy = fy - float(y0);
+    float d00 = densityAt(x0,     y0);
+    float d10 = densityAt(x0 + 1, y0);
+    float d01 = densityAt(x0,     y0 + 1);
+    float d11 = densityAt(x0 + 1, y0 + 1);
+    return mix(mix(d00, d10, wx), mix(d01, d11, wx), wy);
+}
+
+// =====================================================================
+// PASS 2: Tone-map the density field into the cosmic-web colormap
+// =====================================================================
+void pass_render() {
+    uint px = gl_GlobalInvocationID.x;
+    uint py = gl_GlobalInvocationID.y;
+    if (px >= uint(RENDERSIZE.x) || py >= uint(RENDERSIZE.y)) return;
+
+    vec2 uv = (vec2(float(px), float(py)) + 0.5) / RENDERSIZE;
+
+    // Aspect-correct, zoom, and tile the periodic simulation box.
+    vec2 c = uv - 0.5;
+    c.x *= RENDERSIZE.x / RENDERSIZE.y;
+    vec2 buv = fract(c / max(zoom, 0.05) + 0.5);
+
+    float od = sampleDensity(buv);  // overdensity (mean cell density ~= 1)
+
+    // Log tone-map across the large dynamic range, then exposure + contrast.
+    float t = log(1.0 + od * density_gain) * 0.3;
+    t = pow(clamp(t, 0.0, 1.0), 1.0 / max(contrast, 0.1));
+
+    // Hide the epoch wrap: fade structure in at the start and out at the end
+    // of each formation cycle so re-seeding reads as continuous evolution.
+    float a        = fract(cosmicClock());
+    float epochEnv = smoothstep(0.0, 0.08, a) * smoothstep(1.0, 0.88, a);
+    t *= mix(1.0, epochEnv, clamp(evolve, 0.0, 1.0));
+
+    // Background -> void glow -> filament -> halo node -> white-hot core.
+    vec3 col = bg_color.rgb;
+    col = mix(col, void_color.rgb,     smoothstep(0.0,  0.20, t));
+    col = mix(col, filament_color.rgb, smoothstep(0.15, 0.55, t));
+    col = mix(col, node_color.rgb,     smoothstep(0.55, 0.85, t));
+    float node = smoothstep(0.80, 1.0, t) * node_boost;
+    col += vec3(1.0, 0.95, 0.88) * node;
+
+    col = clamp(col, 0.0, 1.0);
+    imageStore(outputImage, ivec2(int(px), int(py)), vec4(col, 1.0));
+}
+
+void main() {
+    if (PASSINDEX == 0) {
+        pass_modes();
+    } else if (PASSINDEX == 1) {
+        pass_displace();
+    } else {
+        pass_render();
+    }
+}

@@ -145,6 +145,7 @@ Shaders are classified automatically by type:
 |--------|-------------|
 | `black_hole_sim.comp` | N-body black hole with 65,536 persistent shell particles, Schwarzschild lensing, accretion disk, Hawking glow |
 | `compute_gradient.comp` | Simple animated gradient (compute shader) |
+| `cosmic_web.comp` | Dark matter cosmic web via the Zel'dovich approximation — analytic Fourier mode synthesis from a CDM power spectrum, cloud-in-cell density deposit, growth-factor collapse |
 
 > The catalog grows over time. The authoritative list is whatever sits in your workspace `shaders/` directory — open the Library panel to see exactly what's available in your build.
 
