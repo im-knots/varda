@@ -410,7 +410,12 @@ This "simulate, then render" split is exactly how `black_hole_sim.comp` works: p
 
 ### See Also
 
-`shaders/black_hole_sim.comp` is the comprehensive reference: persistent + scratch buffers, two-pass simulate/render, `PHASE_INPUTS`, atomic spatial binning, and audio reactivity. Read it once the fundamentals above make sense — it puts every feature in this section to work at once.
+Two reference compute shaders ship with Varda, each demonstrating a different idiom:
+
+- `shaders/black_hole_sim.comp` — a **stateful N-body** simulation: a `PERSISTENT: true` particle buffer that leapfrog-integrates frame to frame, a non-persistent scratch grid for atomic spatial binning, two-pass simulate/render, `PHASE_INPUTS`, and audio reactivity. It puts every feature in this section to work at once.
+- `shaders/cosmic_web.comp` — a **stateless, analytic** simulation: a scientifically grounded dark-matter cosmic web built from the *Zel'dovich approximation*. Pass 0 synthesises a Gaussian displacement field as plane-wave modes drawn from a CDM (BBKS) power spectrum; pass 1 displaces a grid of Lagrangian particles (`x = q + D·Ψ(q)`) and cloud-in-cell deposits them into a fixed-resolution density buffer; pass 2 tone-maps that field into a void→filament→node colormap. Because positions are recomputed each frame from a deterministic seed (no persistent state), it is fully scrubbable, and the growth factor `D` animates the collapse of structure.
+
+Read `black_hole_sim.comp` for persistence and binning; read `cosmic_web.comp` for the multi-pass "generate → deposit → render" split and how to keep a sim deterministic and scrub-safe.
 
 ## Analyzer Preprocessors (Advanced)
 

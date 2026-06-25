@@ -361,4 +361,67 @@ void main() {
             wgsl.len()
         );
     }
+
+    #[test]
+    fn test_compile_cosmic_web_full_pipeline() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let shader_path = manifest_dir.join("shaders/cosmic_web.comp");
+        let source = match std::fs::read_to_string(&shader_path) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Skipping: cosmic_web.comp not found");
+                return;
+            }
+        };
+
+        // Parse ISF metadata
+        let json_end = source.find("}*/").expect("ISF JSON header not found");
+        let json_str = &source[2..json_end + 1]; // skip /*
+        let meta: super::super::ISFMetadata =
+            serde_json::from_str(json_str).expect("ISF metadata should parse");
+        assert!(meta.is_compute(), "should be a compute shader");
+        assert_eq!(
+            meta.buffers.len(),
+            2,
+            "should have 2 storage buffers (modes + density)"
+        );
+        let compute = meta.compute.as_ref().expect("compute config");
+        assert_eq!(compute.num_passes, 3, "Zel'dovich sim is a 3-pass compute");
+
+        // Extract GLSL (everything after }*/)
+        let glsl = source[json_end + 3..].trim();
+
+        // Step 1: shaderc GLSL → SPIR-V
+        let spirv = compile_glsl_compute_to_spirv(glsl, "cosmic_web.comp");
+        if let Err(ref e) = spirv {
+            panic!("shaderc compilation failed: {}", e);
+        }
+        let spirv_data = spirv.unwrap();
+        assert_eq!(spirv_data[0], 0x07230203, "SPIR-V magic number");
+
+        // Step 2: naga SPIR-V parse + validation
+        let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let module =
+            naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
+                .expect("naga SPIR-V parse should succeed");
+
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("naga validation should succeed");
+
+        // Step 3: naga → WGSL output
+        let wgsl =
+            naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
+                .expect("WGSL output should succeed");
+
+        assert!(!wgsl.is_empty(), "WGSL output should not be empty");
+        println!(
+            "cosmic_web.comp: SPIR-V {} words → WGSL {} chars",
+            spirv_data.len(),
+            wgsl.len()
+        );
+    }
 }
