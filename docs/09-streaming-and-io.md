@@ -109,7 +109,37 @@ Each output can record to a video file independently. Multiple simultaneous reco
 
 Each recording starts and stops independently, and ffmpeg writes directly to the path you specify. Recording uses non-blocking frame delivery — if the encoder can't keep up, frames are silently dropped rather than stalling the render thread.
 
-> **Video only.** Recordings — like all streaming outputs — contain no audio track. Capture audio separately if you need it.
+> **Add audio with passthrough.** To include sound, pick a device in the output's **Audio:** dropdown — see [Audio Passthrough](#audio-passthrough) below.
+
+---
+
+## Audio Passthrough
+
+Every ffmpeg-backed output (Recording, SRT, HLS, DASH, RTMP) can mux audio from a capture device alongside the video. This is the **same physical device** that drives Varda's modulation engine — one device feeds analysis, the live monitor, and every output at once, all off one hardware clock so audio and visuals stay in sync.
+
+### Selecting a device
+
+1. Configure an ffmpeg output (Recording or any streaming target) and leave it **stopped**.
+2. In the output's **Audio:** dropdown, pick a capture device, or **None (silent)** for video-only (the default).
+3. Click **▶ Start**. The output now carries that device's audio.
+
+While the output is active, a small readout shows the selected device with live `sent` / `dropped` chunk counts. A non-zero drop count (shown amber) means the encoder briefly couldn't keep up — audio is never allowed to stall the real-time capture thread, so the oldest backlog is dropped instead.
+
+### What you get
+
+- **Recording** muxes AAC at the device's **native sample rate** for faithful, edit-ready captures.
+- **Streaming targets** (SRT, HLS, DASH, RTMP) normalize to **48 kHz AAC** for platform compatibility (Twitch/YouTube expect 48k).
+- Audio is **downmixed to stereo** and kept in sync (±~1 frame) via asynchronous resampling — good for live-set recordings and streams.
+
+### Graceful fallback
+
+If a scene selects a device that isn't present at load (unplugged, renamed), the output starts **video-only** and a notification explains why. A missing microphone never blocks the visual recording or stream.
+
+### Co-equal control
+
+The selected device persists in your scene and is available from the GUI dropdown, the HTTP API (the `audio_device` field on an output target), and any scene authored elsewhere — it replays with audio on load. The API is a co-equal consumer in both directions: set the device on create/update, and **read it back** — `GET /api/state/outputs` (and `/api/stage/outputs`) returns each output's full `target` plus an `audio_passthrough` block (`device`, `frames_written`, `frames_dropped`) with the same live health the GUI card shows. List the available capture devices via `GET /api/state/audio`.
+
+> **Not a DJ tool.** Audio passthrough is a clean one-device passthrough for delivery; there is no audio-file playback, mixing, or per-output gain. Audio reactivity is driven by the [modulation system](05-modulation.md).
 
 ---
 

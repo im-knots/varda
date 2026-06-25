@@ -1043,6 +1043,19 @@ pub struct OutputUI {
     pub edge_blend: crate::renderer::edge_blend::EdgeBlendConfig,
     /// Per-output rotation (0°/90°/180°/270°)
     pub rotation: crate::renderer::context::OutputRotation,
+    /// Audio passthrough health for an active ffmpeg output (None = video-only).
+    pub audio_passthrough: Option<AudioPassthroughUI>,
+}
+
+/// Live audio passthrough health for an active output.
+#[derive(Clone)]
+pub struct AudioPassthroughUI {
+    /// Selected capture device name.
+    pub device: String,
+    /// PCM chunks written to ffmpeg so far.
+    pub frames_written: u64,
+    /// PCM chunks dropped on backpressure.
+    pub frames_dropped: u64,
 }
 
 /// Surface action from UI

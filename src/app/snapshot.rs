@@ -784,6 +784,20 @@ pub(crate) fn build_ui_data(
             };
             let edge_blend_mode = o.edge_blend_mode();
             let edge_blend = o.edge_blend();
+            let audio_passthrough = match o {
+                crate::renderer::context::UnifiedOutput::Headless(h) => {
+                    h.audio_pcm.as_ref().map(|p| AudioPassthroughUI {
+                        device: h.target.audio_device().unwrap_or_default().to_string(),
+                        frames_written: h
+                            .subprocess
+                            .as_ref()
+                            .and_then(|s| s.audio_frames_written())
+                            .unwrap_or(0),
+                        frames_dropped: p.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                    })
+                }
+                _ => None,
+            };
             OutputUI {
                 uuid: o.uuid().to_string(),
                 name: o.name().to_string(),
@@ -797,6 +811,7 @@ pub(crate) fn build_ui_data(
                 edge_blend_mode,
                 edge_blend,
                 rotation: o.rotation(),
+                audio_passthrough,
             }
         })
         .collect();

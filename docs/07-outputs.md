@@ -55,7 +55,7 @@ Selecting multiple channels (via checkboxes in the source picker) creates a **Ch
 
 Click **+ Recording** to add a recording output; each runs its own ffmpeg subprocess, so several feeds can record at once. Codecs, file-path rules, and the **▶ Start / ⏹ Stop** controls are covered in [Recording](09-streaming-and-io.md#recording).
 
-> **Outputs are video-only.** Recording and all streaming targets carry no audio.
+> **Audio passthrough.** Recording and all streaming targets can mux audio from a capture device via the output's **Audio:** dropdown — see [Audio Passthrough](09-streaming-and-io.md#audio-passthrough).
 
 ## Persistence
 

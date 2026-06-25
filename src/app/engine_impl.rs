@@ -802,38 +802,68 @@ impl OutputQueries for VardaApp {
                 .output
                 .outputs
                 .iter()
-                .filter_map(|o| {
-                    if let crate::renderer::context::UnifiedOutput::Window(w) = o {
-                        Some(OutputWindowSnapshot {
-                            uuid: w.uuid.clone(),
-                            name: w.name.clone(),
-                            target_label: format!("{}", w.target),
-                            is_on_display: matches!(
-                                w.target,
-                                crate::renderer::context::OutputTarget::Display { .. }
-                            ),
-                            surface_assignments: w
-                                .surface_assignments
-                                .iter()
-                                .map(|a| {
-                                    let surface_name = self
-                                        .output
-                                        .surface_manager
-                                        .find_by_uuid(&a.surface_uuid)
-                                        .map(|(_, s)| s.name.clone())
-                                        .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
-                                    SurfaceAssignmentSnapshot {
-                                        surface_uuid: a.surface_uuid.clone(),
-                                        surface_name,
-                                        warp_mode: a.warp_mode.clone(),
-                                        enabled: a.enabled,
-                                    }
-                                })
-                                .collect(),
-                            calibration_mode: w.calibration_mode,
+                .map(|o| {
+                    use crate::renderer::context::{OutputTarget, UnifiedOutput};
+                    let assignments = match o {
+                        UnifiedOutput::Window(w) => &w.surface_assignments,
+                        UnifiedOutput::Headless(h) => &h.surface_assignments,
+                    };
+                    let surface_assignments = assignments
+                        .iter()
+                        .map(|a| {
+                            let surface_name = self
+                                .output
+                                .surface_manager
+                                .find_by_uuid(&a.surface_uuid)
+                                .map(|(_, s)| s.name.clone())
+                                .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
+                            SurfaceAssignmentSnapshot {
+                                surface_uuid: a.surface_uuid.clone(),
+                                surface_name,
+                                warp_mode: a.warp_mode.clone(),
+                                enabled: a.enabled,
+                            }
                         })
-                    } else {
-                        None
+                        .collect();
+                    let (target, is_on_display, is_active, calibration_mode, audio_passthrough) =
+                        match o {
+                            UnifiedOutput::Window(w) => (
+                                w.target.clone(),
+                                matches!(w.target, OutputTarget::Display { .. }),
+                                false,
+                                w.calibration_mode,
+                                None,
+                            ),
+                            UnifiedOutput::Headless(h) => {
+                                let audio =
+                                    h.audio_pcm.as_ref().map(|p| AudioPassthroughSnapshot {
+                                        device: h
+                                            .target
+                                            .audio_device()
+                                            .unwrap_or_default()
+                                            .to_string(),
+                                        frames_written: h
+                                            .subprocess
+                                            .as_ref()
+                                            .and_then(|s| s.audio_frames_written())
+                                            .unwrap_or(0),
+                                        frames_dropped: p
+                                            .dropped
+                                            .load(std::sync::atomic::Ordering::Relaxed),
+                                    });
+                                (h.target.clone(), false, h.active, false, audio)
+                            }
+                        };
+                    OutputWindowSnapshot {
+                        uuid: o.uuid().to_string(),
+                        name: o.name().to_string(),
+                        target_label: format!("{}", target),
+                        target,
+                        is_on_display,
+                        is_active,
+                        surface_assignments,
+                        calibration_mode,
+                        audio_passthrough,
                     }
                 })
                 .collect(),

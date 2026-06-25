@@ -15,6 +15,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                 target: OutputTarget::Recording {
                     path: "output.mp4".to_string(),
                     codec: RecordingCodec::H264,
+                    audio_device: None,
                 },
             });
         }
@@ -61,6 +62,23 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
 
                     // Target label
                     ui.label(egui::RichText::new(&output.target_label).small().weak());
+
+                    // Audio passthrough health (active outputs with audio only)
+                    if let Some(audio) = &output.audio_passthrough {
+                        let color = if audio.frames_dropped > 0 {
+                            egui::Color32::from_rgb(255, 200, 80)
+                        } else {
+                            egui::Color32::from_rgb(120, 200, 255)
+                        };
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "♪ {} — {} sent, {} dropped",
+                                audio.device, audio.frames_written, audio.frames_dropped
+                            ))
+                            .small()
+                            .color(color),
+                        );
+                    }
 
                     // Preview toggle + image
                     {
@@ -241,6 +259,7 @@ fn render_headless_controls(
     if let OutputTarget::Recording {
         ref path,
         ref codec,
+        ref audio_device,
     } = output.target
     {
         if !output.is_active {
@@ -267,6 +286,7 @@ fn render_headless_controls(
                                     target: OutputTarget::Recording {
                                         path: path.clone(),
                                         codec: c.clone(),
+                                        audio_device: audio_device.clone(),
                                     },
                                 });
                             }
@@ -293,6 +313,7 @@ fn render_headless_controls(
                             target: OutputTarget::Recording {
                                 path: current_path,
                                 codec: codec.clone(),
+                                audio_device: audio_device.clone(),
                             },
                         });
                     }
@@ -312,6 +333,46 @@ fn render_headless_controls(
     );
     if is_stream {
         render_stream_config(ui, idx, output, actions);
+    }
+
+    // Audio passthrough device selector (ffmpeg targets only; locked while active)
+    let is_ffmpeg = matches!(
+        output.target,
+        OutputTarget::Recording { .. }
+            | OutputTarget::SrtStream { .. }
+            | OutputTarget::HlsStream { .. }
+            | OutputTarget::DashStream { .. }
+            | OutputTarget::RtmpStream { .. }
+    );
+    if is_ffmpeg && !output.is_active {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Audio:").small());
+            let current = output.target.audio_device();
+            let selected_text = current.unwrap_or("None (silent)");
+            egui::ComboBox::from_id_salt(format!("out_audio_{}", idx))
+                .selected_text(egui::RichText::new(selected_text).small())
+                .width(160.0)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(current.is_none(), "None (silent)")
+                        .clicked()
+                    {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: output.target.with_audio_device(None),
+                        });
+                    }
+                    for dev in &data.audio.devices {
+                        let selected = current == Some(dev.name.as_str());
+                        if ui.selectable_label(selected, &dev.name).clicked() {
+                            actions.output_actions.push(OutputAction::SetTarget {
+                                idx,
+                                target: output.target.with_audio_device(Some(dev.name.clone())),
+                            });
+                        }
+                    }
+                });
+        });
     }
 
     // Rotation selector
@@ -429,6 +490,7 @@ fn render_stream_config(
                             OutputTarget::SrtStream {
                                 url: "srt://0.0.0.0:9001".to_string(),
                                 codec: SrtCodec::default(),
+                                audio_device: None,
                             },
                         ),
                         (
@@ -437,6 +499,7 @@ fn render_stream_config(
                                 name: "live".to_string(),
                                 codec: StreamingCodec::default(),
                                 low_latency: false,
+                                audio_device: None,
                             },
                         ),
                         (
@@ -444,6 +507,7 @@ fn render_stream_config(
                             OutputTarget::DashStream {
                                 name: "live".to_string(),
                                 codec: StreamingCodec::default(),
+                                audio_device: None,
                             },
                         ),
                         (
@@ -451,6 +515,7 @@ fn render_stream_config(
                             OutputTarget::RtmpStream {
                                 url: "rtmp://".to_string(),
                                 codec: StreamingCodec::default(),
+                                audio_device: None,
                             },
                         ),
                         (
@@ -483,7 +548,11 @@ fn render_stream_config(
 
     // Protocol-specific config
     match &output.target {
-        OutputTarget::SrtStream { ref url, ref codec } => {
+        OutputTarget::SrtStream {
+            ref url,
+            ref codec,
+            ref audio_device,
+        } => {
             if !output.is_active {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Codec:").small());
@@ -498,6 +567,7 @@ fn render_stream_config(
                                         target: OutputTarget::SrtStream {
                                             url: url.clone(),
                                             codec: c.clone(),
+                                            audio_device: audio_device.clone(),
                                         },
                                     });
                                 }
@@ -523,6 +593,7 @@ fn render_stream_config(
                                 target: OutputTarget::SrtStream {
                                     url: current_url,
                                     codec: codec.clone(),
+                                    audio_device: audio_device.clone(),
                                 },
                             });
                         }
@@ -534,6 +605,7 @@ fn render_stream_config(
             ref name,
             ref codec,
             low_latency,
+            ref audio_device,
         } => {
             render_hls_dash_name_codec(
                 ui,
@@ -547,6 +619,7 @@ fn render_stream_config(
                     name: n,
                     codec: c,
                     low_latency: *low_latency,
+                    audio_device: audio_device.clone(),
                 },
             );
             if !output.is_active {
@@ -562,6 +635,7 @@ fn render_stream_config(
                                 name: name.clone(),
                                 codec: codec.clone(),
                                 low_latency: ll,
+                                audio_device: audio_device.clone(),
                             },
                         });
                     }
@@ -575,6 +649,7 @@ fn render_stream_config(
         OutputTarget::DashStream {
             ref name,
             ref codec,
+            ref audio_device,
         } => {
             render_hls_dash_name_codec(
                 ui,
@@ -584,14 +659,22 @@ fn render_stream_config(
                 codec,
                 output.is_active,
                 actions,
-                |n, c| OutputTarget::DashStream { name: n, codec: c },
+                |n, c| OutputTarget::DashStream {
+                    name: n,
+                    codec: c,
+                    audio_device: audio_device.clone(),
+                },
             );
             let player_url = format!("http://localhost:8080/streams/{}/player.html", name);
             let manifest_url = format!("http://localhost:8080/streams/{}/manifest.mpd", name);
             render_copyable_url(ui, "▶", &player_url, 10.0, actions);
             render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
         }
-        OutputTarget::RtmpStream { ref url, ref codec } => {
+        OutputTarget::RtmpStream {
+            ref url,
+            ref codec,
+            ref audio_device,
+        } => {
             if !output.is_active {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Codec:").small());
@@ -610,6 +693,7 @@ fn render_stream_config(
                                         target: OutputTarget::RtmpStream {
                                             url: url.clone(),
                                             codec: c.clone(),
+                                            audio_device: audio_device.clone(),
                                         },
                                     });
                                 }
@@ -635,6 +719,7 @@ fn render_stream_config(
                                 target: OutputTarget::RtmpStream {
                                     url: current_url,
                                     codec: codec.clone(),
+                                    audio_device: audio_device.clone(),
                                 },
                             });
                         }
@@ -1091,6 +1176,7 @@ mod tests {
             edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
             rotation: crate::renderer::context::OutputRotation::default(),
+            audio_passthrough: None,
         });
         let mut actions = UIActions::new();
         let _harness = egui_kittest::Harness::new_ui(|ui| {
