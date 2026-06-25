@@ -395,11 +395,16 @@ pub enum OutputTargetConfig {
     Recording {
         path: String,
         codec: String,
+        /// Audio passthrough device name (None = silent). See spec/audio-passthrough.md.
+        #[serde(default)]
+        audio_device: Option<String>,
     },
     SrtStream {
         url: String,
         #[serde(default)]
         codec: String,
+        #[serde(default)]
+        audio_device: Option<String>,
     },
     HlsStream {
         name: String,
@@ -407,16 +412,22 @@ pub enum OutputTargetConfig {
         codec: String,
         #[serde(default)]
         low_latency: bool,
+        #[serde(default)]
+        audio_device: Option<String>,
     },
     DashStream {
         name: String,
         #[serde(default)]
         codec: String,
+        #[serde(default)]
+        audio_device: Option<String>,
     },
     RtmpStream {
         url: String,
         #[serde(default)]
         codec: String,
+        #[serde(default)]
+        audio_device: Option<String>,
     },
     NdiSend {
         sender_name: String,
@@ -1240,15 +1251,64 @@ mod tests {
         let target = OutputTargetConfig::RtmpStream {
             url: "rtmp://live.twitch.tv/app/key".to_string(),
             codec: "H.264".to_string(),
+            audio_device: None,
         };
         let json = serde_json::to_string(&target).unwrap();
         let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
         match restored {
-            OutputTargetConfig::RtmpStream { url, codec } => {
+            OutputTargetConfig::RtmpStream {
+                url,
+                codec,
+                audio_device,
+            } => {
                 assert_eq!(url, "rtmp://live.twitch.tv/app/key");
                 assert_eq!(codec, "H.264");
+                assert_eq!(audio_device, None);
             }
             _ => panic!("Expected RtmpStream target"),
+        }
+    }
+
+    #[test]
+    fn scene_config_legacy_output_loads_video_only() {
+        // A scene authored before audio passthrough (no `audio_device` field)
+        // must still deserialize, defaulting to video-only (None).
+        let legacy = r#"{"type":"recording","path":"set.mp4","codec":"H.264"}"#;
+        let restored: OutputTargetConfig = serde_json::from_str(legacy).unwrap();
+        match restored {
+            OutputTargetConfig::Recording {
+                path,
+                codec,
+                audio_device,
+            } => {
+                assert_eq!(path, "set.mp4");
+                assert_eq!(codec, "H.264");
+                assert_eq!(audio_device, None, "legacy scene → video-only");
+            }
+            _ => panic!("Expected Recording target"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_recording_with_audio() {
+        let target = OutputTargetConfig::Recording {
+            path: "set.mp4".to_string(),
+            codec: "ProRes 422".to_string(),
+            audio_device: Some("Scarlett 2i2".to_string()),
+        };
+        let json = serde_json::to_string(&target).unwrap();
+        let restored: OutputTargetConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            OutputTargetConfig::Recording {
+                path,
+                codec,
+                audio_device,
+            } => {
+                assert_eq!(path, "set.mp4");
+                assert_eq!(codec, "ProRes 422");
+                assert_eq!(audio_device.as_deref(), Some("Scarlett 2i2"));
+            }
+            _ => panic!("Expected Recording target"),
         }
     }
 }

@@ -29,6 +29,17 @@ pub struct DeckLoadResult {
     pub name: String,
 }
 
+/// Mutable external delivery sinks the headless render loop feeds frames and
+/// audio into. Bundled so the render helper stays under the argument-count lint
+/// while each manager remains a disjoint `&mut` borrow of `VardaApp`.
+struct HeadlessDeliverySinks<'a> {
+    ndi_manager: &'a mut crate::ndi::NdiManager,
+    #[cfg(target_os = "macos")]
+    syphon_manager: &'a mut crate::syphon::SyphonManager,
+    audio_manager: &'a mut crate::audio::AudioManager,
+    notifications: &'a mut crate::notifications::NotificationSystem,
+}
+
 impl VardaApp {
     /// Spawn background threads to create decks from file paths and shaders.
     /// Each thread creates a full Deck (CPU decode + GPU upload) and sends
@@ -404,14 +415,19 @@ impl VardaApp {
         }
 
         // Render headless outputs (needs &mut self for subprocess feeding)
+        let sinks = HeadlessDeliverySinks {
+            ndi_manager: &mut self.external_io.ndi_manager,
+            #[cfg(target_os = "macos")]
+            syphon_manager: &mut self.external_io.syphon_manager,
+            audio_manager: &mut self.audio_manager,
+            notifications: &mut self.session.notifications,
+        };
         Self::render_headless_outputs_inner(
             &mut self.output.outputs,
             context,
             mixer,
             &self.output.surface_manager,
-            &mut self.external_io.ndi_manager,
-            #[cfg(target_os = "macos")]
-            &mut self.external_io.syphon_manager,
+            sinks,
             domemaster_view,
         );
     }
@@ -549,8 +565,7 @@ impl VardaApp {
         context: &crate::renderer::context::GpuContext,
         mixer: &crate::mixer::Mixer,
         surface_manager: &crate::surface::SurfaceManager,
-        ndi_manager: &mut crate::ndi::NdiManager,
-        #[cfg(target_os = "macos")] syphon_manager: &mut crate::syphon::SyphonManager,
+        sinks: HeadlessDeliverySinks,
         domemaster_view: Option<&wgpu::TextureView>,
     ) {
         for output in outputs.iter_mut() {
@@ -705,16 +720,62 @@ impl VardaApp {
             if let Some(frame_data) = h.readback.try_read(&context.device) {
                 match h.deliver_frame(
                     &frame_data,
-                    ndi_manager,
+                    sinks.ndi_manager,
                     #[cfg(target_os = "macos")]
-                    syphon_manager,
+                    sinks.syphon_manager,
                 ) {
                     crate::renderer::context::DeliveryResult::Failed(msg) => {
                         log::error!("{}", msg);
                         h.active = false;
                     }
-                    crate::renderer::context::DeliveryResult::Restarted => {
-                        log::info!("SRT restarted for '{}'", h.name);
+                    crate::renderer::context::DeliveryResult::SrtNeedsRestart => {
+                        // The disconnected client's PCM tap is now stale; drop it,
+                        // then respawn the listener with a fresh audio tap so the
+                        // reconnecting client gets audio again (parity with start).
+                        if let Some(stale) = h.audio_pcm.take() {
+                            sinks
+                                .audio_manager
+                                .unsubscribe_pcm(stale.source_id, stale.token);
+                        }
+                        let (url, codec) = match &h.target {
+                            crate::renderer::context::OutputTarget::SrtStream {
+                                url,
+                                codec,
+                                ..
+                            } => (url.clone(), codec.clone()),
+                            _ => continue,
+                        };
+                        let device = h.target.audio_device().map(str::to_string);
+                        let name = h.name.clone();
+                        let (audio_input, passthrough) = super::state::resolve_output_audio(
+                            sinks.audio_manager,
+                            sinks.notifications,
+                            device.as_deref(),
+                            &name,
+                        );
+                        match crate::renderer::FfmpegSubprocess::spawn_srt(
+                            &url,
+                            &codec,
+                            h.width,
+                            h.height,
+                            30,
+                            audio_input,
+                        ) {
+                            Ok(new_sub) => {
+                                h.subprocess = Some(new_sub);
+                                h.audio_pcm = passthrough.map(Box::new);
+                                log::info!("SRT restarted for '{}'", name);
+                            }
+                            Err(e) => {
+                                if let Some(pass) = passthrough {
+                                    sinks
+                                        .audio_manager
+                                        .unsubscribe_pcm(pass.source_id, pass.token);
+                                }
+                                log::error!("Failed to restart SRT listener for '{}': {}", name, e);
+                                h.active = false;
+                            }
+                        }
                     }
                     _ => {}
                 }

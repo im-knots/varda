@@ -360,10 +360,26 @@ pub struct OutputSnapshot {
 pub struct OutputWindowSnapshot {
     pub uuid: String,
     pub name: String,
+    /// Full output target (carries `audio_device` for ffmpeg-backed outputs).
+    pub target: crate::renderer::context::OutputTarget,
     pub target_label: String,
     pub is_on_display: bool,
+    /// Whether a headless output is actively recording/streaming.
+    pub is_active: bool,
     pub surface_assignments: Vec<SurfaceAssignmentSnapshot>,
     pub calibration_mode: bool,
+    /// Live audio passthrough health for an active ffmpeg output (None = video-only).
+    pub audio_passthrough: Option<AudioPassthroughSnapshot>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct AudioPassthroughSnapshot {
+    /// Selected capture device name.
+    pub device: String,
+    /// PCM chunks written to ffmpeg so far.
+    pub frames_written: u64,
+    /// PCM chunks dropped on backpressure.
+    pub frames_dropped: u64,
 }
 
 #[derive(Clone, Serialize)]

@@ -5,6 +5,7 @@ spec/
 vision/
 notes/
 .varda/
+.DS_Store
 
 # UI snapshot test diffs/new images (reference .png files are tracked)
 **/tests/snapshots/**/*.diff.png

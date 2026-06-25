@@ -564,30 +564,52 @@ fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
     match target {
         OutputTarget::Windowed => OutputTargetConfig::Windowed,
         OutputTarget::Display { name, .. } => OutputTargetConfig::Display { name: name.clone() },
-        OutputTarget::Recording { path, codec } => OutputTargetConfig::Recording {
+        OutputTarget::Recording {
+            path,
+            codec,
+            audio_device,
+        } => OutputTargetConfig::Recording {
             path: path.clone(),
             codec: codec.to_string(),
+            audio_device: audio_device.clone(),
         },
-        OutputTarget::SrtStream { url, codec } => OutputTargetConfig::SrtStream {
+        OutputTarget::SrtStream {
+            url,
+            codec,
+            audio_device,
+        } => OutputTargetConfig::SrtStream {
             url: url.clone(),
             codec: codec.to_string(),
+            audio_device: audio_device.clone(),
         },
         OutputTarget::HlsStream {
             name,
             codec,
             low_latency,
+            audio_device,
         } => OutputTargetConfig::HlsStream {
             name: name.clone(),
             codec: codec.to_string(),
             low_latency: *low_latency,
+            audio_device: audio_device.clone(),
         },
-        OutputTarget::DashStream { name, codec } => OutputTargetConfig::DashStream {
+        OutputTarget::DashStream {
+            name,
+            codec,
+            audio_device,
+        } => OutputTargetConfig::DashStream {
             name: name.clone(),
             codec: codec.to_string(),
+            audio_device: audio_device.clone(),
         },
-        OutputTarget::RtmpStream { url, codec } => OutputTargetConfig::RtmpStream {
+        OutputTarget::RtmpStream {
+            url,
+            codec,
+            audio_device,
+        } => OutputTargetConfig::RtmpStream {
             url: url.clone(),
             codec: codec.to_string(),
+            audio_device: audio_device.clone(),
         },
         OutputTarget::NdiSend { sender_name } => OutputTargetConfig::NdiSend {
             sender_name: sender_name.clone(),
@@ -611,7 +633,11 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
             name: name.clone(),
             monitor_index: 0, // Will be matched at runtime
         },
-        OutputTargetConfig::Recording { path, codec } => OutputTarget::Recording {
+        OutputTargetConfig::Recording {
+            path,
+            codec,
+            audio_device,
+        } => OutputTarget::Recording {
             path: path.clone(),
             codec: match codec.as_str() {
                 "prores" | "ProRes" | "ProRes 422" => RecordingCodec::ProRes,
@@ -622,18 +648,25 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
                 "hapq" | "HapQ" | "HAP Q" => RecordingCodec::HapQ,
                 _ => RecordingCodec::H264,
             },
+            audio_device: audio_device.clone(),
         },
-        OutputTargetConfig::SrtStream { url, codec } => OutputTarget::SrtStream {
+        OutputTargetConfig::SrtStream {
+            url,
+            codec,
+            audio_device,
+        } => OutputTarget::SrtStream {
             url: url.clone(),
             codec: match codec.as_str() {
                 "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::SrtCodec::H265,
                 _ => crate::renderer::context::SrtCodec::H264,
             },
+            audio_device: audio_device.clone(),
         },
         OutputTargetConfig::HlsStream {
             name,
             codec,
             low_latency,
+            audio_device,
         } => OutputTarget::HlsStream {
             name: name.clone(),
             codec: match codec.as_str() {
@@ -642,22 +675,33 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
                 _ => crate::renderer::context::StreamingCodec::H264,
             },
             low_latency: *low_latency,
+            audio_device: audio_device.clone(),
         },
-        OutputTargetConfig::DashStream { name, codec } => OutputTarget::DashStream {
+        OutputTargetConfig::DashStream {
+            name,
+            codec,
+            audio_device,
+        } => OutputTarget::DashStream {
             name: name.clone(),
             codec: match codec.as_str() {
                 "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
                 "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
                 _ => crate::renderer::context::StreamingCodec::H264,
             },
+            audio_device: audio_device.clone(),
         },
-        OutputTargetConfig::RtmpStream { url, codec } => OutputTarget::RtmpStream {
+        OutputTargetConfig::RtmpStream {
+            url,
+            codec,
+            audio_device,
+        } => OutputTarget::RtmpStream {
             url: url.clone(),
             codec: match codec.as_str() {
                 "H.265 (HEVC)" | "H265" | "h265" => crate::renderer::context::StreamingCodec::H265,
                 "AV1" | "av1" => crate::renderer::context::StreamingCodec::AV1,
                 _ => crate::renderer::context::StreamingCodec::H264,
             },
+            audio_device: audio_device.clone(),
         },
         OutputTargetConfig::NdiSend { sender_name } => OutputTarget::NdiSend {
             sender_name: sender_name.clone(),
@@ -1473,5 +1517,28 @@ mod tests {
         let ws = Workspace::new(tmp.path().to_path_buf());
         let shaders_dir = ws.shaders_dir();
         assert_eq!(shaders_dir, tmp.path().join(".varda").join("shaders"));
+    }
+
+    #[test]
+    fn output_audio_device_survives_target_config_roundtrip() {
+        // audio_device must round-trip live OutputTarget ↔ persisted config.
+        let recording = OutputTarget::Recording {
+            path: "set.mov".into(),
+            codec: RecordingCodec::ProRes,
+            audio_device: Some("Scarlett 2i2".into()),
+        };
+        let back = config_to_target(&target_to_config(&recording));
+        assert_eq!(back.audio_device(), Some("Scarlett 2i2"));
+
+        // None (video-only) round-trips as None.
+        let silent = OutputTarget::RtmpStream {
+            url: "rtmp://x".into(),
+            codec: crate::renderer::context::StreamingCodec::H264,
+            audio_device: None,
+        };
+        assert_eq!(
+            config_to_target(&target_to_config(&silent)).audio_device(),
+            None
+        );
     }
 }

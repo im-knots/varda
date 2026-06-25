@@ -215,10 +215,16 @@ pub(crate) mod tests {
                 windows: vec![OutputWindowSnapshot {
                     uuid: "out-001".into(),
                     name: "Output 1".into(),
+                    target: crate::renderer::context::OutputTarget::Display {
+                        name: "HDMI-1".into(),
+                        monitor_index: 0,
+                    },
                     target_label: "HDMI-1".into(),
                     is_on_display: true,
+                    is_active: false,
                     surface_assignments: vec![],
                     calibration_mode: false,
+                    audio_passthrough: None,
                 }],
                 surfaces: vec![SurfaceSnapshot {
                     uuid: "srf-001".into(),
@@ -340,5 +346,37 @@ pub(crate) mod tests {
         let state = make_test_state();
         assert!(find_output(&state, "out-001").is_some());
         assert!(find_output(&state, "nonexistent").is_none());
+    }
+
+    /// Co-equal consumer parity: the serialized output snapshot must expose the
+    /// selected audio device (via `target`) and live passthrough health so an
+    /// API client can read back what the GUI shows.
+    #[test]
+    fn test_output_snapshot_exposes_audio_passthrough() {
+        let snap = OutputWindowSnapshot {
+            uuid: "out-rec".into(),
+            name: "Rec".into(),
+            target: crate::renderer::context::OutputTarget::Recording {
+                path: "/tmp/out.mp4".into(),
+                codec: crate::renderer::context::RecordingCodec::H264,
+                audio_device: Some("Scarlett 2i2".into()),
+            },
+            target_label: "Rec: /tmp/out.mp4".into(),
+            is_on_display: false,
+            is_active: true,
+            surface_assignments: vec![],
+            calibration_mode: false,
+            audio_passthrough: Some(AudioPassthroughSnapshot {
+                device: "Scarlett 2i2".into(),
+                frames_written: 42,
+                frames_dropped: 1,
+            }),
+        };
+        let v = serde_json::to_value(&snap).unwrap();
+        assert_eq!(v["target"]["Recording"]["audio_device"], "Scarlett 2i2");
+        assert_eq!(v["is_active"], true);
+        assert_eq!(v["audio_passthrough"]["device"], "Scarlett 2i2");
+        assert_eq!(v["audio_passthrough"]["frames_written"], 42);
+        assert_eq!(v["audio_passthrough"]["frames_dropped"], 1);
     }
 }

@@ -2,7 +2,9 @@
 
 use super::super::VardaApp;
 use crate::engine::{CommandResult, ErrorCode};
-use crate::renderer::context::{HeadlessOutput, OutputSource, OutputTarget, UnifiedOutput};
+use crate::renderer::context::{
+    AudioPassthrough, HeadlessOutput, OutputSource, OutputTarget, UnifiedOutput,
+};
 use crate::renderer::edge_blend::EdgeBlendMode;
 use crate::renderer::warp::WarpMode;
 
@@ -31,8 +33,13 @@ impl VardaApp {
                             if let Some(mut sub) = h.subprocess.take() {
                                 sub.stop();
                             }
+                            let passthrough = h.audio_pcm.take();
                             h.active = false;
                             h.started_at = None;
+                            if let Some(pass) = passthrough {
+                                self.audio_manager
+                                    .unsubscribe_pcm(pass.source_id, pass.token);
+                            }
                         }
                         h.target = target;
                     }
@@ -66,118 +73,141 @@ impl VardaApp {
 
     /// Start a headless output (spawn ffmpeg subprocess or activate NDI/Syphon).
     pub fn cmd_start_output(&mut self, idx: usize) -> CommandResult {
-        if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
-            if !h.active {
-                match &h.target {
-                    OutputTarget::SrtStream { url, codec } => {
-                        match crate::renderer::FfmpegSubprocess::spawn_srt(
-                            url, codec, h.width, h.height, 30,
-                        ) {
-                            Ok(sub) => {
-                                h.subprocess = Some(sub);
-                                h.active = true;
-                            }
-                            Err(e) => {
-                                return CommandResult::Err {
-                                    code: ErrorCode::InternalError,
-                                    message: e.to_string(),
-                                }
-                            }
-                        }
-                    }
-                    OutputTarget::Recording { path, codec } => {
-                        match crate::renderer::FfmpegSubprocess::spawn_recording(
-                            path, codec, h.width, h.height, 30,
-                        ) {
-                            Ok(sub) => {
-                                h.subprocess = Some(sub);
-                                h.active = true;
-                            }
-                            Err(e) => {
-                                return CommandResult::Err {
-                                    code: ErrorCode::InternalError,
-                                    message: e.to_string(),
-                                }
-                            }
-                        }
-                    }
-                    OutputTarget::HlsStream {
-                        name,
-                        codec,
-                        low_latency,
-                    } => {
-                        match crate::renderer::FfmpegSubprocess::spawn_hls(
-                            name,
-                            codec,
-                            h.width,
-                            h.height,
-                            30,
-                            *low_latency,
-                        ) {
-                            Ok(sub) => {
-                                h.subprocess = Some(sub);
-                                h.active = true;
-                            }
-                            Err(e) => {
-                                return CommandResult::Err {
-                                    code: ErrorCode::InternalError,
-                                    message: e.to_string(),
-                                }
-                            }
-                        }
-                    }
-                    OutputTarget::DashStream { name, codec } => {
-                        match crate::renderer::FfmpegSubprocess::spawn_dash(
-                            name, codec, h.width, h.height, 30,
-                        ) {
-                            Ok(sub) => {
-                                h.subprocess = Some(sub);
-                                h.active = true;
-                            }
-                            Err(e) => {
-                                return CommandResult::Err {
-                                    code: ErrorCode::InternalError,
-                                    message: e.to_string(),
-                                }
-                            }
-                        }
-                    }
-                    OutputTarget::RtmpStream { url, codec } => {
-                        match crate::renderer::FfmpegSubprocess::spawn_rtmp(
-                            url, codec, h.width, h.height, 30,
-                        ) {
-                            Ok(sub) => {
-                                h.subprocess = Some(sub);
-                                h.active = true;
-                            }
-                            Err(e) => {
-                                return CommandResult::Err {
-                                    code: ErrorCode::InternalError,
-                                    message: e.to_string(),
-                                }
-                            }
-                        }
-                    }
-                    OutputTarget::NdiSend { .. } | OutputTarget::SyphonServer { .. } => {
-                        h.active = true;
-                        h.started_at = Some(std::time::Instant::now());
-                    }
-                    _ => {
-                        return CommandResult::Err {
-                            code: ErrorCode::InvalidInput,
-                            message: "Cannot start windowed target".into(),
-                        }
-                    }
+        // Snapshot what we need so no borrow of `self.output` is held across the
+        // audio-subscription and spawn work (which borrow other `self` fields).
+        // Also take any stale subscription left by a prior delivery failure.
+        let (target, name, width, height, stale) = match self.output.outputs.get_mut(idx) {
+            Some(UnifiedOutput::Headless(h)) => {
+                if h.active {
+                    return CommandResult::Ok; // already active
+                }
+                (
+                    h.target.clone(),
+                    h.name.clone(),
+                    h.width,
+                    h.height,
+                    h.audio_pcm.take(),
+                )
+            }
+            _ => {
+                return CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: "Output not found or not headless".into(),
+                }
+            }
+        };
+        self.release_passthrough(stale.map(|b| *b));
+
+        // Resolve optional audio passthrough (emits a notification + falls back
+        // to video-only if the device is missing — Decision 6).
+        let (audio_input, passthrough) = resolve_output_audio(
+            &mut self.audio_manager,
+            &mut self.session.notifications,
+            target.audio_device(),
+            &name,
+        );
+
+        let spawn_result = match &target {
+            OutputTarget::SrtStream { url, codec, .. } => {
+                crate::renderer::FfmpegSubprocess::spawn_srt(
+                    url,
+                    codec,
+                    width,
+                    height,
+                    30,
+                    audio_input,
+                )
+            }
+            OutputTarget::Recording { path, codec, .. } => {
+                crate::renderer::FfmpegSubprocess::spawn_recording(
+                    path,
+                    codec,
+                    width,
+                    height,
+                    30,
+                    audio_input,
+                )
+            }
+            OutputTarget::HlsStream {
+                name: target_name,
+                codec,
+                low_latency,
+                ..
+            } => crate::renderer::FfmpegSubprocess::spawn_hls(
+                target_name,
+                codec,
+                width,
+                height,
+                30,
+                *low_latency,
+                audio_input,
+            ),
+            OutputTarget::DashStream {
+                name: target_name,
+                codec,
+                ..
+            } => crate::renderer::FfmpegSubprocess::spawn_dash(
+                target_name,
+                codec,
+                width,
+                height,
+                30,
+                audio_input,
+            ),
+            OutputTarget::RtmpStream { url, codec, .. } => {
+                crate::renderer::FfmpegSubprocess::spawn_rtmp(
+                    url,
+                    codec,
+                    width,
+                    height,
+                    30,
+                    audio_input,
+                )
+            }
+            OutputTarget::NdiSend { .. } | OutputTarget::SyphonServer { .. } => {
+                // No ffmpeg subprocess; NDI/Syphon don't carry passthrough audio.
+                self.release_passthrough(passthrough);
+                if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
+                    h.active = true;
+                    h.started_at = Some(std::time::Instant::now());
+                }
+                return CommandResult::Ok;
+            }
+            _ => {
+                self.release_passthrough(passthrough);
+                return CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: "Cannot start windowed target".into(),
+                };
+            }
+        };
+
+        match spawn_result {
+            Ok(sub) => {
+                if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
+                    h.subprocess = Some(sub);
+                    h.audio_pcm = passthrough.map(Box::new);
+                    h.active = true;
                 }
                 CommandResult::Ok
-            } else {
-                CommandResult::Ok // already active
             }
-        } else {
-            CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Output not found or not headless".into(),
+            Err(e) => {
+                // Spawn failed — release the PCM subscription we reserved.
+                self.release_passthrough(passthrough);
+                CommandResult::Err {
+                    code: ErrorCode::InternalError,
+                    message: e.to_string(),
+                }
             }
+        }
+    }
+
+    /// Release a reserved PCM subscription (used when an output fails to start or
+    /// is a non-ffmpeg target that can't carry passthrough audio).
+    fn release_passthrough(&mut self, passthrough: Option<AudioPassthrough>) {
+        if let Some(pass) = passthrough {
+            self.audio_manager
+                .unsubscribe_pcm(pass.source_id, pass.token);
         }
     }
 
@@ -188,8 +218,15 @@ impl VardaApp {
                 if let Some(mut sub) = h.subprocess.take() {
                     sub.stop();
                 }
+                let passthrough = h.audio_pcm.take();
                 h.active = false;
                 h.started_at = None;
+                // Disjoint field borrow (audio_manager vs. output): release the
+                // PCM subscription so the cpal callback stops fanning to it.
+                if let Some(pass) = passthrough {
+                    self.audio_manager
+                        .unsubscribe_pcm(pass.source_id, pass.token);
+                }
             }
             CommandResult::Ok
         } else {
@@ -341,6 +378,60 @@ impl VardaApp {
                 code: ErrorCode::NotFound,
                 message: "Output not found".into(),
             }
+        }
+    }
+}
+
+/// Resolve a persisted audio device name to a live PCM subscription for output
+/// passthrough. Returns `(AudioInput for ffmpeg, AudioPassthrough to retain for
+/// teardown)`. On a missing/unopenable device, emits a warning and returns
+/// `(None, None)` → video-only (Decision 6). Shared by `cmd_start_output` and
+/// the SRT auto-restart path in the render loop, which both need a fresh tap
+/// off disjoint field borrows rather than `&mut self`.
+pub(crate) fn resolve_output_audio(
+    audio_manager: &mut crate::audio::AudioManager,
+    notifications: &mut crate::notifications::NotificationSystem,
+    device_name: Option<&str>,
+    output_name: &str,
+) -> (
+    Option<crate::renderer::AudioInput>,
+    Option<AudioPassthrough>,
+) {
+    let Some(device_name) = device_name else {
+        return (None, None);
+    };
+    let source_id = audio_manager
+        .devices()
+        .iter()
+        .find(|d| d.name == device_name)
+        .map(|d| d.id);
+    let Some(source_id) = source_id else {
+        notifications.warn(format!(
+            "Audio device '{}' not found for output '{}'; recording/streaming video-only",
+            device_name, output_name
+        ));
+        return (None, None);
+    };
+    match audio_manager.subscribe_pcm(source_id) {
+        Some(sub) => {
+            let input = crate::renderer::AudioInput {
+                rx: sub.receiver,
+                sample_rate: sub.format.sample_rate,
+                channels: sub.format.channels,
+            };
+            let passthrough = AudioPassthrough {
+                source_id,
+                token: sub.token,
+                dropped: sub.dropped,
+            };
+            (Some(input), Some(passthrough))
+        }
+        None => {
+            notifications.warn(format!(
+                "Failed to open audio device '{}' for output '{}'; video-only",
+                device_name, output_name
+            ));
+            (None, None)
         }
     }
 }

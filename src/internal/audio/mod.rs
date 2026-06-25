@@ -1,16 +1,83 @@
 //! Audio input and analysis for audio-reactive shaders
 
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Sample;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 /// Opaque audio source identifier.
 pub type AudioSourceId = u32;
+
+/// Opaque token identifying a single PCM passthrough subscription.
+pub type PcmToken = u64;
+
+/// Bounded capacity (in chunks) of a passthrough PCM channel. One chunk is
+/// produced per cpal callback (~10ms), so 32 ≈ 320ms of slack before drops.
+const PCM_CHANNEL_CAPACITY: usize = 32;
+
+/// Monotonic source of unique [`PcmToken`]s.
+static NEXT_PCM_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+/// Native PCM layout of a capture device, reported to passthrough subscribers
+/// so they can build matching ffmpeg input args.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioFormat {
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+/// A chunk of raw interleaved PCM (native channel count, native sample rate),
+/// tee'd from the cpal capture callback for output passthrough. Distinct from
+/// [`AudioData`], which is mono-downmixed and FFT-processed for analysis.
+pub struct PcmChunk {
+    /// Interleaved `f32` samples in the device's native channel count.
+    pub samples: Vec<f32>,
+}
+
+/// A registered passthrough consumer. The cpal callback fans raw PCM out to
+/// every subscriber on a source (a "tee").
+#[derive(Clone)]
+struct PcmSubscriber {
+    token: PcmToken,
+    sender: Sender<PcmChunk>,
+    dropped: Arc<AtomicU64>,
+}
+
+/// Handle returned by [`AudioManager::subscribe_pcm`]. The receiver yields raw
+/// PCM; `format` describes its layout; `token` identifies the subscription for
+/// [`AudioManager::unsubscribe_pcm`]; `dropped` counts backpressure drops.
+pub struct PcmSubscription {
+    pub receiver: Receiver<PcmChunk>,
+    pub format: AudioFormat,
+    pub token: PcmToken,
+    pub dropped: Arc<AtomicU64>,
+}
+
+/// Fan a chunk of raw interleaved PCM out to every passthrough subscriber.
+///
+/// Never blocks: on a full channel the chunk is dropped (newest-drop, matching
+/// the video frame-drop philosophy in `FfmpegSubprocess`) and counted so the
+/// owning output can surface a health warning. Disconnected subscribers (the
+/// output stopped without unsubscribing) are silently skipped.
+fn fan_out_pcm(subs: &[PcmSubscriber], samples: &[f32]) {
+    for sub in subs {
+        match sub.sender.try_send(PcmChunk {
+            samples: samples.to_vec(),
+        }) {
+            Ok(()) => {}
+            Err(crossbeam_channel::TrySendError::Full(_)) => {
+                sub.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {}
+        }
+    }
+}
 
 /// Audio buffer size (samples per channel) — 256 @ 48kHz ≈ 5.3ms latency
 pub const AUDIO_BUFFER_SIZE: usize = 256;
@@ -179,6 +246,13 @@ struct ActiveAudioSource {
     receiver: Receiver<AudioData>,
     /// Latest polled data (cached between polls)
     pub latest: AudioData,
+    /// Native sample rate (Hz) of the capture device.
+    sample_rate_hz: u32,
+    /// Native channel count of the capture device.
+    channels: u16,
+    /// Passthrough subscribers. Swapped lock-free so the real-time cpal
+    /// callback reads without locking while subscribe/unsubscribe mutate.
+    pcm_subs: Arc<ArcSwap<Vec<PcmSubscriber>>>,
 }
 
 /// Manages audio device enumeration and multiple simultaneous audio input streams.
@@ -266,20 +340,35 @@ impl AudioManager {
             .default_input_config()
             .context("Failed to get default audio input config")?;
         let sample_rate = config.sample_rate() as f32;
+        let sample_rate_hz = config.sample_rate() as u32;
+        let channels = config.channels();
         log::info!("Audio config for '{}': {:?}", dev_name, config);
 
         let (sender, receiver) = bounded::<AudioData>(16);
+        let pcm_subs = Arc::new(ArcSwap::from_pointee(Vec::new()));
 
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => {
-                Self::build_stream::<f32>(&device, &config.into(), sender, sample_rate)?
-            }
-            cpal::SampleFormat::I16 => {
-                Self::build_stream::<i16>(&device, &config.into(), sender, sample_rate)?
-            }
-            cpal::SampleFormat::U16 => {
-                Self::build_stream::<u16>(&device, &config.into(), sender, sample_rate)?
-            }
+            cpal::SampleFormat::F32 => Self::build_stream::<f32>(
+                &device,
+                &config.into(),
+                sender,
+                sample_rate,
+                pcm_subs.clone(),
+            )?,
+            cpal::SampleFormat::I16 => Self::build_stream::<i16>(
+                &device,
+                &config.into(),
+                sender,
+                sample_rate,
+                pcm_subs.clone(),
+            )?,
+            cpal::SampleFormat::U16 => Self::build_stream::<u16>(
+                &device,
+                &config.into(),
+                sender,
+                sample_rate,
+                pcm_subs.clone(),
+            )?,
             _ => anyhow::bail!("Unsupported sample format"),
         };
 
@@ -294,10 +383,76 @@ impl AudioManager {
                     sample_rate,
                     ..AudioData::default()
                 },
+                sample_rate_hz,
+                channels,
+                pcm_subs,
             },
         );
 
         Ok(())
+    }
+
+    /// Subscribe to raw PCM passthrough for a source, opening it if needed.
+    ///
+    /// Returns a fresh receiver plus the device's native [`AudioFormat`] so the
+    /// caller can build matching ffmpeg input args. The audio callback fans raw
+    /// interleaved `f32` to this and every other subscriber off one hardware
+    /// clock, keeping analysis and passthrough coherent. Returns `None` if the
+    /// source can't be opened.
+    pub fn subscribe_pcm(&mut self, id: AudioSourceId) -> Option<PcmSubscription> {
+        if !self.active.contains_key(&id) {
+            if let Err(e) = self.open_source(id) {
+                log::warn!("subscribe_pcm: failed to open audio source {}: {}", id, e);
+                return None;
+            }
+        }
+        let source = self.active.get(&id)?;
+        let format = AudioFormat {
+            sample_rate: source.sample_rate_hz,
+            channels: source.channels,
+        };
+        let (sender, receiver) = bounded::<PcmChunk>(PCM_CHANNEL_CAPACITY);
+        let token = NEXT_PCM_TOKEN.fetch_add(1, Ordering::Relaxed);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let sub = PcmSubscriber {
+            token,
+            sender,
+            dropped: dropped.clone(),
+        };
+        source.pcm_subs.rcu(|cur| {
+            let mut next = Vec::with_capacity(cur.len() + 1);
+            next.extend(cur.iter().cloned());
+            next.push(sub.clone());
+            next
+        });
+        log::info!(
+            "PCM passthrough subscriber {} added to source {}",
+            token,
+            id
+        );
+        Some(PcmSubscription {
+            receiver,
+            format,
+            token,
+            dropped,
+        })
+    }
+
+    /// Remove a PCM passthrough subscriber when its output stops.
+    pub fn unsubscribe_pcm(&mut self, id: AudioSourceId, token: PcmToken) {
+        if let Some(source) = self.active.get(&id) {
+            source.pcm_subs.rcu(|cur| {
+                cur.iter()
+                    .filter(|s| s.token != token)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            log::info!(
+                "PCM passthrough subscriber {} removed from source {}",
+                token,
+                id
+            );
+        }
     }
 
     /// Close an audio source.
@@ -350,6 +505,7 @@ impl AudioManager {
         config: &cpal::StreamConfig,
         sender: Sender<AudioData>,
         sample_rate: f32,
+        pcm_subs: Arc<ArcSwap<Vec<PcmSubscriber>>>,
     ) -> Result<cpal::Stream>
     where
         T: cpal::Sample + cpal::SizedSample,
@@ -386,6 +542,18 @@ impl AudioManager {
         let stream = device.build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
+                // Passthrough tee: forward raw interleaved PCM, untouched by the
+                // FFT pipeline, to every subscriber. Skipped entirely when there
+                // are no subscribers so the video-only path pays nothing.
+                let subs = pcm_subs.load();
+                if !subs.is_empty() {
+                    let pcm: Vec<f32> = data
+                        .iter()
+                        .map(|s| <f32 as Sample>::from_sample(*s))
+                        .collect();
+                    fan_out_pcm(&subs, &pcm);
+                }
+
                 for chunk in data.chunks(channels) {
                     let sample: f32 = chunk
                         .iter()
@@ -888,6 +1056,73 @@ mod tests {
         };
         let val = data.energy_in_range(20.0, 20000.0);
         assert_eq!(val, 0.0, "empty FFT should return 0.0");
+    }
+
+    // ── Phase 19a: PCM passthrough tap ─────────────────────────────────
+
+    fn make_sub(cap: usize) -> (PcmSubscriber, Receiver<PcmChunk>, Arc<AtomicU64>) {
+        let (sender, receiver) = bounded::<PcmChunk>(cap);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let sub = PcmSubscriber {
+            token: NEXT_PCM_TOKEN.fetch_add(1, Ordering::Relaxed),
+            sender,
+            dropped: dropped.clone(),
+        };
+        (sub, receiver, dropped)
+    }
+
+    #[test]
+    fn pcm_fan_out_delivers_to_all_subscribers() {
+        let (sub1, rx1, _) = make_sub(4);
+        let (sub2, rx2, _) = make_sub(4);
+        let subs = vec![sub1, sub2];
+        let samples = vec![0.1, -0.2, 0.3, -0.4];
+
+        fan_out_pcm(&subs, &samples);
+
+        assert_eq!(rx1.try_recv().unwrap().samples, samples);
+        assert_eq!(rx2.try_recv().unwrap().samples, samples);
+    }
+
+    #[test]
+    fn pcm_fan_out_counts_drops_when_full() {
+        // Capacity 2, receiver never drains: 5 sends → 2 buffered, 3 dropped.
+        let (sub, _rx, dropped) = make_sub(2);
+        let subs = vec![sub];
+        let samples = vec![0.0; 8];
+
+        for _ in 0..5 {
+            fan_out_pcm(&subs, &samples);
+        }
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn pcm_fan_out_skips_disconnected_without_counting_drops() {
+        let (sub, rx, dropped) = make_sub(2);
+        drop(rx); // receiver gone → Disconnected, not Full
+        let subs = vec![sub];
+
+        fan_out_pcm(&subs, &[0.0; 4]);
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn pcm_fan_out_empty_is_noop() {
+        let subs: Vec<PcmSubscriber> = Vec::new();
+        fan_out_pcm(&subs, &[0.0; 4]); // must not panic
+    }
+
+    #[test]
+    fn audio_format_carries_native_layout() {
+        let fmt = AudioFormat {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        assert_eq!(fmt.sample_rate, 44100);
+        assert_eq!(fmt.channels, 2);
     }
 
     #[test]

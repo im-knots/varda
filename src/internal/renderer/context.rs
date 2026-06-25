@@ -473,19 +473,42 @@ pub enum OutputTarget {
         monitor_index: usize,
     },
     /// Record frames to a video file via ffmpeg subprocess
-    Recording { path: String, codec: RecordingCodec },
+    Recording {
+        path: String,
+        codec: RecordingCodec,
+        /// Audio passthrough device NAME (None = silent). See spec/audio-passthrough.md.
+        #[serde(default)]
+        audio_device: Option<String>,
+    },
     /// Stream frames via SRT (Secure Reliable Transport) through ffmpeg
-    SrtStream { url: String, codec: SrtCodec },
+    SrtStream {
+        url: String,
+        codec: SrtCodec,
+        #[serde(default)]
+        audio_device: Option<String>,
+    },
     /// Stream frames as HLS segments via ffmpeg
     HlsStream {
         name: String,
         codec: StreamingCodec,
         low_latency: bool,
+        #[serde(default)]
+        audio_device: Option<String>,
     },
     /// Stream frames as DASH segments via ffmpeg
-    DashStream { name: String, codec: StreamingCodec },
+    DashStream {
+        name: String,
+        codec: StreamingCodec,
+        #[serde(default)]
+        audio_device: Option<String>,
+    },
     /// Push frames to an RTMP/RTMPS ingest endpoint via ffmpeg
-    RtmpStream { url: String, codec: StreamingCodec },
+    RtmpStream {
+        url: String,
+        codec: StreamingCodec,
+        #[serde(default)]
+        audio_device: Option<String>,
+    },
     /// Send frames over NDI network protocol
     NdiSend { sender_name: String },
     /// Publish frames via Syphon (macOS inter-app sharing)
@@ -502,6 +525,35 @@ impl OutputTarget {
     pub fn is_headless(&self) -> bool {
         !self.is_windowed()
     }
+
+    /// The selected audio passthrough device name, if this is an ffmpeg target
+    /// configured with audio. `None` for video-only or non-ffmpeg targets.
+    pub fn audio_device(&self) -> Option<&str> {
+        match self {
+            OutputTarget::Recording { audio_device, .. }
+            | OutputTarget::SrtStream { audio_device, .. }
+            | OutputTarget::HlsStream { audio_device, .. }
+            | OutputTarget::DashStream { audio_device, .. }
+            | OutputTarget::RtmpStream { audio_device, .. } => audio_device.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Return a clone of this target with the audio passthrough device replaced.
+    /// No-op for non-ffmpeg targets. Lets the GUI flip the device without
+    /// re-specifying every variant field.
+    pub fn with_audio_device(&self, device: Option<String>) -> OutputTarget {
+        let mut target = self.clone();
+        match &mut target {
+            OutputTarget::Recording { audio_device, .. }
+            | OutputTarget::SrtStream { audio_device, .. }
+            | OutputTarget::HlsStream { audio_device, .. }
+            | OutputTarget::DashStream { audio_device, .. }
+            | OutputTarget::RtmpStream { audio_device, .. } => *audio_device = device,
+            _ => {}
+        }
+        target
+    }
 }
 
 impl std::fmt::Display for OutputTarget {
@@ -509,12 +561,13 @@ impl std::fmt::Display for OutputTarget {
         match self {
             OutputTarget::Windowed => write!(f, "Windowed"),
             OutputTarget::Display { name, .. } => write!(f, "{}", name),
-            OutputTarget::Recording { path, codec } => write!(f, "Rec [{}]: {}", codec, path),
-            OutputTarget::SrtStream { url, codec } => write!(f, "SRT [{}]: {}", codec, url),
+            OutputTarget::Recording { path, codec, .. } => write!(f, "Rec [{}]: {}", codec, path),
+            OutputTarget::SrtStream { url, codec, .. } => write!(f, "SRT [{}]: {}", codec, url),
             OutputTarget::HlsStream {
                 name,
                 codec,
                 low_latency,
+                ..
             } => {
                 if *low_latency {
                     write!(f, "LL-HLS [{}]: {}", codec, name)
@@ -522,8 +575,8 @@ impl std::fmt::Display for OutputTarget {
                     write!(f, "HLS [{}]: {}", codec, name)
                 }
             }
-            OutputTarget::DashStream { name, codec } => write!(f, "DASH [{}]: {}", codec, name),
-            OutputTarget::RtmpStream { url, codec } => write!(f, "RTMP [{}]: {}", codec, url),
+            OutputTarget::DashStream { name, codec, .. } => write!(f, "DASH [{}]: {}", codec, name),
+            OutputTarget::RtmpStream { url, codec, .. } => write!(f, "RTMP [{}]: {}", codec, url),
             OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {}", sender_name),
             OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {}", server_name),
         }
@@ -1242,6 +1295,18 @@ impl std::fmt::Display for StreamingCodec {
 
 // HeadlessOutputTarget has been merged into the unified OutputTarget enum above.
 
+/// A live audio passthrough subscription held by an active output, used to
+/// unsubscribe on stop and to report passthrough health (dropped chunks).
+/// See spec/audio-passthrough.md.
+pub struct AudioPassthrough {
+    /// The audio source this output is tee'd from.
+    pub source_id: crate::audio::AudioSourceId,
+    /// Subscription token, for unsubscribe on stop.
+    pub token: crate::audio::PcmToken,
+    /// PCM chunks dropped on backpressure (producer side health stat).
+    pub dropped: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
 /// A headless output renders content to a GPU texture, reads it back to CPU,
 /// and sends it to an external target (NDI, Syphon, recording, SRT).
 ///
@@ -1272,6 +1337,9 @@ pub struct HeadlessOutput {
     pub height: u32,
     /// Active ffmpeg subprocess (for Recording/SRT targets)
     pub subprocess: Option<super::FfmpegSubprocess>,
+    /// Active audio passthrough subscription (None = video-only). Boxed to keep
+    /// the rarely-set field off the hot `UnifiedOutput` enum's size.
+    pub audio_pcm: Option<Box<AudioPassthrough>>,
     /// Whether this output is actively streaming/recording
     pub active: bool,
     /// When this output was started (for duration tracking on non-subprocess outputs)
@@ -1299,8 +1367,11 @@ pub enum DeliveryResult {
     Ok,
     /// Subprocess write failed — output should be deactivated.
     Failed(String),
-    /// SRT listener auto-restarted after client disconnect.
-    Restarted,
+    /// SRT client disconnected: the old subprocess has been stopped and the
+    /// caller must respawn the listener. The caller owns the respawn (rather
+    /// than this method) so it can re-subscribe audio passthrough — `deliver_frame`
+    /// has no `AudioManager` handle.
+    SrtNeedsRestart,
 }
 
 impl HeadlessOutput {
@@ -1333,32 +1404,16 @@ impl HeadlessOutput {
                 }
                 DeliveryResult::Ok
             }
-            OutputTarget::SrtStream { ref url, ref codec } => {
+            OutputTarget::SrtStream { .. } => {
                 if let Some(sub) = &mut self.subprocess {
                     if !sub.feed_frame(frame_data) {
-                        let url = url.clone();
-                        let codec = codec.clone();
+                        // Client disconnected. Tear down the dead listener and
+                        // hand the respawn back to the caller, which re-subscribes
+                        // audio passthrough (this method has no AudioManager).
                         if let Some(mut sub) = self.subprocess.take() {
                             sub.stop();
                         }
-                        match super::FfmpegSubprocess::spawn_srt(
-                            &url,
-                            &codec,
-                            self.width,
-                            self.height,
-                            30,
-                        ) {
-                            Ok(new_sub) => {
-                                self.subprocess = Some(new_sub);
-                                return DeliveryResult::Restarted;
-                            }
-                            Err(e) => {
-                                return DeliveryResult::Failed(format!(
-                                    "Failed to restart SRT listener: {}",
-                                    e
-                                ));
-                            }
-                        }
+                        return DeliveryResult::SrtNeedsRestart;
                     }
                 }
                 DeliveryResult::Ok
@@ -1444,6 +1499,7 @@ impl HeadlessOutput {
             width,
             height,
             subprocess: None,
+            audio_pcm: None,
             active: false,
             started_at: None,
             surface_assignments: Vec::new(),

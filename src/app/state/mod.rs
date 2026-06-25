@@ -20,3 +20,5 @@ mod params;
 mod sequences;
 mod surfaces;
 mod video;
+
+pub(crate) use outputs::resolve_output_audio;

@@ -5,12 +5,23 @@
 //! ffmpeg can't keep up (e.g. SRT listener waiting for client), frames are dropped.
 
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 
+use crate::audio::PcmChunk;
 use crate::renderer::context::RecordingCodec;
+
+/// `O_NONBLOCK` for opening a FIFO read end during teardown without blocking.
+/// Hardcoded per-OS (std doesn't expose it) to avoid a `libc`/`nix` dependency
+/// and the universal-dmg retest that a new native crate would trigger.
+#[cfg(target_os = "macos")]
+const O_NONBLOCK: i32 = 0x0004;
+#[cfg(target_os = "linux")]
+const O_NONBLOCK: i32 = 0o4000;
 
 /// Write a self-contained HTML player page into a stream directory.
 /// Uses hls.js for HLS streams and dash.js for DASH streams.
@@ -85,6 +96,13 @@ pub struct FfmpegSubprocess {
     start_time: std::time::Instant,
     /// Whether stop() has already been called (prevent double-wait)
     stopped: bool,
+    /// Optional audio passthrough side-channel (None = video-only).
+    audio: Option<AudioPipe>,
+    /// When true, stop() closes stdin and waits for ffmpeg to exit naturally
+    /// (so it can finalize the container — e.g. write the MP4 moov atom).
+    /// When false, stop() kills ffmpeg immediately (safe for streams, required
+    /// when the writer thread may be blocked on a full network pipe).
+    graceful_shutdown: bool,
 }
 
 /// Bounded channel capacity — 2 frames of buffer allows the writer thread
@@ -102,6 +120,220 @@ fn compute_rtmp_bitrate(width: u32, height: u32, fps: u32) -> (u32, u32) {
     };
     let maxrate = if fps > 30 { base * 3 / 2 } else { base };
     (maxrate, maxrate * 2)
+}
+
+/// AAC output bitrate for passthrough audio.
+const AUDIO_BITRATE: &str = "192k";
+/// Normalized sample rate for streaming targets (Twitch/YouTube expect 48k AAC).
+const STREAM_SAMPLE_RATE: &str = "48000";
+
+/// Optional second (audio) input for an ffmpeg subprocess: a stream of raw
+/// interleaved `f32` PCM plus the capture device's native format. Built from an
+/// `AudioManager` PCM subscription; `None` keeps the byte-for-byte video-only path.
+pub struct AudioInput {
+    /// Raw interleaved PCM, drained by the audio writer thread into the FIFO.
+    pub rx: crossbeam_channel::Receiver<PcmChunk>,
+    /// Device native sample rate (Hz).
+    pub sample_rate: u32,
+    /// Device native channel count.
+    pub channels: u16,
+}
+
+/// ffmpeg argument vectors + the live FIFO/receiver, computed before the
+/// `Command` is assembled so audio input args can be interleaved after the video
+/// input and audio output args before the destination.
+struct PreparedAudio {
+    in_args: Vec<String>,
+    out_args: Vec<String>,
+    fifo_path: PathBuf,
+    rx: crossbeam_channel::Receiver<PcmChunk>,
+}
+
+/// Build the ffmpeg audio input/output args and create the FIFO for an optional
+/// audio passthrough. `is_stream` selects the sample-rate policy: native rate
+/// for Recording, normalized 48k for streaming targets (Decision 5).
+fn prepare_audio(
+    audio: Option<AudioInput>,
+    is_stream: bool,
+) -> anyhow::Result<Option<PreparedAudio>> {
+    let Some(audio) = audio else {
+        return Ok(None);
+    };
+    let fifo_path = create_audio_fifo()?;
+    // Input opts (must precede the audio `-i`): wallclock timestamps anchor the
+    // first sample near the first video frame; f32le matches the raw PCM tap.
+    let in_args = vec![
+        "-use_wallclock_as_timestamps".into(),
+        "1".into(),
+        "-f".into(),
+        "f32le".into(),
+        "-ar".into(),
+        audio.sample_rate.to_string(),
+        "-ac".into(),
+        audio.channels.to_string(),
+        "-i".into(),
+        fifo_path.to_string_lossy().into_owned(),
+    ];
+    // Output opts: AAC, stereo downmix (Decision: stereo for v1), async resample
+    // to absorb A/V drift; force 48k on streams, leave native on recordings.
+    let mut out_args = vec![
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        AUDIO_BITRATE.into(),
+        "-ac".into(),
+        "2".into(),
+        "-af".into(),
+        "aresample=async=1:first_pts=0".into(),
+    ];
+    if is_stream {
+        out_args.push("-ar".into());
+        out_args.push(STREAM_SAMPLE_RATE.into());
+    }
+    // Explicit stream mapping once a second input exists.
+    out_args.push("-map".into());
+    out_args.push("0:v:0".into());
+    out_args.push("-map".into());
+    out_args.push("1:a:0".into());
+    Ok(Some(PreparedAudio {
+        in_args,
+        out_args,
+        fifo_path,
+        rx: audio.rx,
+    }))
+}
+
+/// Create a uniquely-named FIFO in the temp dir via the system `mkfifo` binary
+/// (no `libc`/`nix` crate, per Decision 3).
+fn create_audio_fifo() -> anyhow::Result<PathBuf> {
+    let mut path = std::env::temp_dir();
+    path.push(format!("varda-audio-{}.pcm", uuid::Uuid::new_v4()));
+    let _ = std::fs::remove_file(&path); // clear any stale node
+    let status = Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .map_err(|e| anyhow::anyhow!("Failed to run mkfifo: {}", e))?;
+    if !status.success() {
+        anyhow::bail!("mkfifo failed for '{}'", path.display());
+    }
+    Ok(path)
+}
+
+/// Start the audio writer thread for a prepared passthrough, if any. Called
+/// after the ffmpeg child is spawned so the FIFO read end exists to rendezvous.
+fn finalize_audio(
+    prepared: Option<PreparedAudio>,
+    label: String,
+) -> anyhow::Result<Option<AudioPipe>> {
+    match prepared {
+        Some(p) => Ok(Some(AudioPipe::start(p.fifo_path, p.rx, label)?)),
+        None => Ok(None),
+    }
+}
+
+/// Audio side-channel for an [`FfmpegSubprocess`]: a FIFO plus a writer thread
+/// that drains raw PCM into it, symmetric with the video writer thread.
+pub struct AudioPipe {
+    fifo_path: PathBuf,
+    /// Set before teardown so an expected broken pipe isn't logged as ERROR.
+    shutting_down: Arc<AtomicBool>,
+    writer_thread: Option<std::thread::JoinHandle<()>>,
+    /// PCM chunks written to the FIFO so far (health stat).
+    frames_written: Arc<AtomicU64>,
+}
+
+impl AudioPipe {
+    /// Start the audio writer thread. It opens the FIFO for writing (blocking
+    /// until ffmpeg opens the read end), then drains `rx` into it as f32le bytes.
+    fn start(
+        fifo_path: PathBuf,
+        rx: crossbeam_channel::Receiver<PcmChunk>,
+        label: String,
+    ) -> anyhow::Result<Self> {
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let frames_written = Arc::new(AtomicU64::new(0));
+        let fifo = fifo_path.clone();
+        let sd = shutting_down.clone();
+        let fw = frames_written.clone();
+        let writer_thread = std::thread::Builder::new()
+            .name(format!("ffmpeg-audio-{}", label))
+            .spawn(move || {
+                let mut file = match std::fs::OpenOptions::new().write(true).open(&fifo) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        if !sd.load(Ordering::SeqCst) {
+                            log::error!("audio FIFO open failed for '{}': {}", label, e);
+                        }
+                        return;
+                    }
+                };
+                loop {
+                    match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                        Ok(chunk) => {
+                            let bytes: &[u8] = bytemuck::cast_slice(&chunk.samples);
+                            if let Err(e) = file.write_all(bytes) {
+                                if sd.load(Ordering::SeqCst) {
+                                    log::debug!(
+                                        "audio pipe closed during shutdown for '{}': {}",
+                                        label,
+                                        e
+                                    );
+                                } else {
+                                    log::error!("audio pipe write error for '{}': {}", label, e);
+                                }
+                                return;
+                            }
+                            fw.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                            if sd.load(Ordering::SeqCst) {
+                                let _ = file.flush();
+                                return;
+                            }
+                        }
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                            let _ = file.flush();
+                            return;
+                        }
+                    }
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to spawn audio writer thread: {}", e))?;
+
+        Ok(Self {
+            fifo_path,
+            shutting_down,
+            writer_thread: Some(writer_thread),
+            frames_written,
+        })
+    }
+
+    /// Tear down the FIFO and writer thread. Idempotent.
+    fn stop(&mut self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        // Unblock a writer still blocked opening the FIFO for write (ffmpeg died
+        // before opening its read end): a non-blocking read-open returns at once
+        // and satisfies the pending write-open without risking our own block.
+        let _ = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(O_NONBLOCK)
+            .open(&self.fifo_path);
+        if let Some(handle) = self.writer_thread.take() {
+            let _ = handle.join();
+        }
+        let _ = std::fs::remove_file(&self.fifo_path);
+    }
+
+    /// PCM chunks written to the FIFO so far.
+    fn frames_written(&self) -> u64 {
+        self.frames_written.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for AudioPipe {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 impl FfmpegSubprocess {
@@ -146,7 +378,15 @@ impl FfmpegSubprocess {
         width: u32,
         height: u32,
         fps: u32,
+        audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
+        // Recording keeps the device's native sample rate (Decision 5).
+        let prepared = prepare_audio(audio, false)?;
+        let empty: Vec<String> = Vec::new();
+        let (a_in, a_out) = match &prepared {
+            Some(p) => (&p.in_args, &p.out_args),
+            None => (&empty, &empty),
+        };
         let (codec_args, needs_yuv420p): (Vec<&str>, bool) = match codec {
             RecordingCodec::H264 => (
                 vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18"],
@@ -173,11 +413,13 @@ impl FfmpegSubprocess {
             .args(["-s", &format!("{}x{}", width, height)])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
+            .args(a_in)
             .args(&codec_args);
         if needs_yuv420p {
             cmd.args(["-pix_fmt", "yuv420p"]);
         }
-        cmd.arg(path)
+        cmd.args(a_out)
+            .arg(path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -208,6 +450,7 @@ impl FfmpegSubprocess {
             shutting_down.clone(),
             path.to_string(),
         );
+        let audio = finalize_audio(prepared, path.to_string())?;
 
         Ok(Self {
             child,
@@ -219,6 +462,8 @@ impl FfmpegSubprocess {
             label: path.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
+            audio,
+            graceful_shutdown: true,
         })
     }
 
@@ -230,7 +475,15 @@ impl FfmpegSubprocess {
         width: u32,
         height: u32,
         fps: u32,
+        audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
+        // Streaming target: normalize audio to 48k (Decision 5).
+        let prepared = prepare_audio(audio, true)?;
+        let empty: Vec<String> = Vec::new();
+        let (a_in, a_out) = match &prepared {
+            Some(p) => (&p.in_args, &p.out_args),
+            None => (&empty, &empty),
+        };
         // Ensure listener mode so ffmpeg acts as an SRT server
         let srt_url = if url.contains("mode=") {
             url.to_string()
@@ -252,10 +505,12 @@ impl FfmpegSubprocess {
             .args(["-s", &format!("{}x{}", width, height)])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
+            .args(a_in)
             .args(["-c:v", encoder])
             .args(["-preset", "ultrafast"])
             .args(["-tune", "zerolatency"])
             .args(["-pix_fmt", "yuv420p"])
+            .args(a_out)
             .args(["-f", "mpegts"])
             .arg(&srt_url)
             .stdin(Stdio::piped())
@@ -290,6 +545,7 @@ impl FfmpegSubprocess {
             shutting_down.clone(),
             url.to_string(),
         );
+        let audio = finalize_audio(prepared, url.to_string())?;
 
         Ok(Self {
             child,
@@ -301,6 +557,8 @@ impl FfmpegSubprocess {
             label: url.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
+            audio,
+            graceful_shutdown: false,
         })
     }
 
@@ -313,7 +571,15 @@ impl FfmpegSubprocess {
         height: u32,
         fps: u32,
         low_latency: bool,
+        audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
+        // Streaming target: normalize audio to 48k (Decision 5).
+        let prepared = prepare_audio(audio, true)?;
+        let empty: Vec<String> = Vec::new();
+        let (a_in, a_out) = match &prepared {
+            Some(p) => (&p.in_args, &p.out_args),
+            None => (&empty, &empty),
+        };
         let dir = format!(".varda/streams/{}", name);
         std::fs::create_dir_all(&dir)
             .map_err(|e| anyhow::anyhow!("Failed to create HLS output dir '{}': {}", dir, e))?;
@@ -336,9 +602,11 @@ impl FfmpegSubprocess {
             .args(["-s", &format!("{}x{}", width, height)])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
+            .args(a_in)
             .args(["-c:v", encoder])
             .args(&extra)
             .args(["-pix_fmt", "yuv420p"])
+            .args(a_out)
             .args(["-f", "hls"]);
 
         if low_latency {
@@ -390,6 +658,7 @@ impl FfmpegSubprocess {
             shutting_down.clone(),
             name.to_string(),
         );
+        let audio = finalize_audio(prepared, name.to_string())?;
 
         Ok(Self {
             child,
@@ -401,6 +670,8 @@ impl FfmpegSubprocess {
             label: name.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
+            audio,
+            graceful_shutdown: false,
         })
     }
 
@@ -411,7 +682,15 @@ impl FfmpegSubprocess {
         width: u32,
         height: u32,
         fps: u32,
+        audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
+        // Streaming target: normalize audio to 48k (Decision 5).
+        let prepared = prepare_audio(audio, true)?;
+        let empty: Vec<String> = Vec::new();
+        let (a_in, a_out) = match &prepared {
+            Some(p) => (&p.in_args, &p.out_args),
+            None => (&empty, &empty),
+        };
         let (encoder, extra): (&str, Vec<&str>) = match codec {
             super::context::StreamingCodec::H264 => (
                 "libx264",
@@ -433,6 +712,7 @@ impl FfmpegSubprocess {
             .args(["-s", &format!("{}x{}", width, height)])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
+            .args(a_in)
             .args(["-c:v", encoder])
             .args(&extra)
             .args(["-pix_fmt", "yuv420p"])
@@ -440,6 +720,7 @@ impl FfmpegSubprocess {
             .args(["-maxrate", &format!("{}k", maxrate)])
             .args(["-bufsize", &format!("{}k", bufsize)])
             .args(["-g", &gop.to_string()])
+            .args(a_out)
             .args(["-f", "flv"])
             .arg(url)
             .stdin(Stdio::piped())
@@ -476,6 +757,7 @@ impl FfmpegSubprocess {
             shutting_down.clone(),
             label.clone(),
         );
+        let audio = finalize_audio(prepared, label.clone())?;
 
         Ok(Self {
             child,
@@ -487,6 +769,8 @@ impl FfmpegSubprocess {
             label,
             start_time: std::time::Instant::now(),
             stopped: false,
+            audio,
+            graceful_shutdown: false,
         })
     }
 
@@ -498,7 +782,15 @@ impl FfmpegSubprocess {
         width: u32,
         height: u32,
         fps: u32,
+        audio: Option<AudioInput>,
     ) -> anyhow::Result<Self> {
+        // Streaming target: normalize audio to 48k (Decision 5).
+        let prepared = prepare_audio(audio, true)?;
+        let empty: Vec<String> = Vec::new();
+        let (a_in, a_out) = match &prepared {
+            Some(p) => (&p.in_args, &p.out_args),
+            None => (&empty, &empty),
+        };
         let dir = format!(".varda/streams/{}", name);
         std::fs::create_dir_all(&dir)
             .map_err(|e| anyhow::anyhow!("Failed to create DASH output dir '{}': {}", dir, e))?;
@@ -521,9 +813,11 @@ impl FfmpegSubprocess {
             .args(["-s", &format!("{}x{}", width, height)])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
+            .args(a_in)
             .args(["-c:v", encoder])
             .args(&extra)
             .args(["-pix_fmt", "yuv420p"])
+            .args(a_out)
             .args(["-f", "dash"])
             .args(["-seg_duration", "2"])
             .args(["-window_size", "30"])
@@ -561,6 +855,7 @@ impl FfmpegSubprocess {
             shutting_down.clone(),
             name.to_string(),
         );
+        let audio = finalize_audio(prepared, name.to_string())?;
 
         Ok(Self {
             child,
@@ -572,6 +867,8 @@ impl FfmpegSubprocess {
             label: name.to_string(),
             start_time: std::time::Instant::now(),
             stopped: false,
+            audio,
+            graceful_shutdown: false,
         })
     }
 
@@ -618,29 +915,36 @@ impl FfmpegSubprocess {
     /// Each line is classified individually: lines containing error indicators
     /// are logged at ERROR, everything else (version info, codec config) at DEBUG.
     fn drain_stderr(&mut self) {
+        if let Some(mut stderr) = self.child.stderr.take() {
+            Self::drain_stderr_pipe(&mut stderr, &self.label);
+        }
+    }
+
+    /// Static helper: drain an ffmpeg stderr pipe and log each line.
+    fn drain_stderr_pipe(stderr: &mut std::process::ChildStderr, label: &str) {
         use std::io::Read;
-        if let Some(ref mut stderr) = self.child.stderr {
-            let mut buf = String::new();
-            let _ = stderr.read_to_string(&mut buf);
-            if !buf.is_empty() {
-                for line in buf.lines().take(30) {
-                    let lower = line.to_ascii_lowercase();
-                    if lower.contains("error")
-                        || lower.contains("failed")
-                        || lower.contains("invalid")
-                        || lower.contains("fatal")
-                    {
-                        log::error!("ffmpeg [{}]: {}", self.label, line);
-                    } else {
-                        log::debug!("ffmpeg [{}]: {}", self.label, line);
-                    }
+        let mut buf = String::new();
+        let _ = stderr.read_to_string(&mut buf);
+        if !buf.is_empty() {
+            for line in buf.lines().take(30) {
+                let lower = line.to_ascii_lowercase();
+                if lower.contains("error")
+                    || lower.contains("failed")
+                    || lower.contains("invalid")
+                    || lower.contains("fatal")
+                {
+                    log::error!("ffmpeg [{}]: {}", label, line);
+                } else {
+                    log::debug!("ffmpeg [{}]: {}", label, line);
                 }
             }
         }
     }
 
-    /// Stop the subprocess. Closes the frame channel, joins the writer thread,
-    /// then kills ffmpeg if it doesn't exit promptly.
+    /// Stop the subprocess. For recordings (`graceful_shutdown`), the heavy
+    /// work (joining threads, waiting for ffmpeg to write the moov atom) runs
+    /// on a detached background thread so the caller (UI / main thread) returns
+    /// immediately. For streams, kills ffmpeg inline (fast).
     /// Idempotent — safe to call multiple times.
     pub fn stop(&mut self) {
         if self.stopped {
@@ -650,39 +954,119 @@ impl FfmpegSubprocess {
 
         let duration = self.start_time.elapsed();
 
-        // 1. Signal shutdown so the writer thread knows a broken pipe is expected
+        // 1. Signal shutdown so writer threads know a broken pipe is expected
         self.shutting_down.store(true, Ordering::SeqCst);
 
         // 2. Drop the sender to close the channel — no more frames queued
         drop(self.frame_tx.take());
 
-        // 3. Kill ffmpeg BEFORE joining the writer thread. The writer thread
-        //    may be blocked on stdin.write_all() (e.g. SRT listener with a
-        //    full pipe buffer). Killing the child breaks the pipe, which
-        //    unblocks the write and lets the thread exit.
-        let _ = self.child.kill();
+        if self.graceful_shutdown {
+            // --- Recording path: finalize on a background thread ---
+            // Move all owned resources out of `self` so the thread owns them.
+            let mut audio = self.audio.take();
+            let writer_thread = self.writer_thread.take();
+            let mut child = std::mem::replace(
+                &mut self.child,
+                // Placeholder — never used again (stopped == true).
+                Command::new("true")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("failed to spawn placeholder"),
+            );
+            let label = self.label.clone();
+            let frames_written = self.frames_written.clone();
+            let stderr = child.stderr.take();
 
-        // 4. Now safe to join — the writer thread will see a broken pipe or
-        //    a closed channel and exit promptly.
-        if let Some(handle) = self.writer_thread.take() {
-            let _ = handle.join();
-        }
+            std::thread::Builder::new()
+                .name(format!("ffmpeg-finalize-{}", label))
+                .spawn(move || {
+                    // 3a. Tear down the audio FIFO so ffmpeg sees EOF on both
+                    //     inputs.
+                    if let Some(ref mut a) = audio {
+                        a.stop();
+                    }
 
-        // 5. Reap the child process
-        let frames = self.frames_written.load(Ordering::Relaxed);
-        match self.child.wait() {
-            Ok(_status) => {
-                self.drain_stderr();
-                log::info!(
-                    "ffmpeg finished: {} ({} frames, {:.1}s)",
-                    self.label,
-                    frames,
-                    duration.as_secs_f32()
-                );
+                    // 3b. Join the video writer thread — drains remaining ≤2
+                    //     frames, flushes & drops stdin → ffmpeg sees video EOF.
+                    if let Some(handle) = writer_thread {
+                        let _ = handle.join();
+                    }
+
+                    // 4. Wait for ffmpeg to finalize the container (moov atom).
+                    const FINALIZE_TIMEOUT: std::time::Duration =
+                        std::time::Duration::from_secs(30);
+                    let deadline = std::time::Instant::now() + FINALIZE_TIMEOUT;
+                    loop {
+                        match child.try_wait() {
+                            Ok(Some(_status)) => break,
+                            Ok(None) => {
+                                if std::time::Instant::now() >= deadline {
+                                    log::warn!(
+                                        "ffmpeg did not exit within {}s for '{}', killing",
+                                        FINALIZE_TIMEOUT.as_secs(),
+                                        label
+                                    );
+                                    let _ = child.kill();
+                                    let _ = child.wait();
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                            }
+                            Err(e) => {
+                                log::error!("Failed to wait for ffmpeg '{}': {}", label, e);
+                                break;
+                            }
+                        }
+                    }
+
+                    // 5. Log completion
+                    if let Some(mut pipe) = stderr {
+                        Self::drain_stderr_pipe(&mut pipe, &label);
+                    }
+                    let frames = frames_written.load(Ordering::Relaxed);
+                    log::info!(
+                        "ffmpeg finished: {} ({} frames, {:.1}s)",
+                        label,
+                        frames,
+                        duration.as_secs_f32()
+                    );
+                })
+                .expect("failed to spawn ffmpeg finalize thread");
+        } else {
+            // --- Streaming path: kill immediately (inline, fast) ---
+
+            // 3. Kill ffmpeg BEFORE joining the writer thread. The writer
+            //    thread may be blocked on stdin.write_all() (e.g. SRT listener
+            //    with a full pipe buffer). Killing the child breaks the pipe,
+            //    which unblocks the write and lets the thread exit.
+            let _ = self.child.kill();
+
+            // 3b. Tear down the audio side-channel (FIFO + writer thread).
+            //     Done after the kill so a writer blocked on a full FIFO sees
+            //     EPIPE.
+            if let Some(audio) = self.audio.as_mut() {
+                audio.stop();
             }
-            Err(e) => {
-                log::error!("Failed to wait for ffmpeg '{}': {}", self.label, e);
+
+            // 4. Now safe to join — the writer thread will see a broken pipe
+            //    or a closed channel and exit promptly.
+            if let Some(handle) = self.writer_thread.take() {
+                let _ = handle.join();
             }
+
+            // 5. Reap the child process
+            let _ = self.child.wait();
+
+            let frames = self.frames_written.load(Ordering::Relaxed);
+            self.drain_stderr();
+            log::info!(
+                "ffmpeg finished: {} ({} frames, {:.1}s)",
+                self.label,
+                frames,
+                duration.as_secs_f32()
+            );
         }
     }
 
@@ -694,6 +1078,12 @@ impl FfmpegSubprocess {
     /// Number of frames written so far.
     pub fn frames_written(&self) -> u64 {
         self.frames_written.load(Ordering::Relaxed)
+    }
+
+    /// Number of audio PCM chunks written to the FIFO so far, or `None` for a
+    /// video-only output (no audio passthrough).
+    pub fn audio_frames_written(&self) -> Option<u64> {
+        self.audio.as_ref().map(|a| a.frames_written())
     }
 
     /// The label (path or URL) for this subprocess.
@@ -790,7 +1180,7 @@ mod tests {
         let path_str = path.to_str().unwrap();
 
         let mut sub =
-            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30)
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30, None)
                 .expect("failed to spawn recording");
 
         assert_eq!(sub.label(), path_str);
@@ -823,9 +1213,8 @@ mod tests {
         let path_str = path.to_str().unwrap();
 
         let mut sub =
-            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30).unwrap();
-
-        // Stop twice — should not panic
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30, None)
+                .unwrap();
         sub.stop();
         sub.stop();
 
@@ -840,9 +1229,15 @@ mod tests {
         }
         // Use a high port unlikely to conflict
         let url = "srt://127.0.0.1:19876";
-        let mut sub =
-            FfmpegSubprocess::spawn_srt(url, &crate::renderer::context::SrtCodec::H264, 64, 64, 30)
-                .expect("failed to spawn SRT");
+        let mut sub = FfmpegSubprocess::spawn_srt(
+            url,
+            &crate::renderer::context::SrtCodec::H264,
+            64,
+            64,
+            30,
+            None,
+        )
+        .expect("failed to spawn SRT");
 
         assert_eq!(sub.label(), url);
         assert_eq!(sub.frames_written(), 0);
@@ -866,7 +1261,8 @@ mod tests {
         let path_str = path.to_str().unwrap();
 
         let mut sub =
-            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30).unwrap();
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::H264, 64, 64, 30, None)
+                .unwrap();
 
         sub.stop();
 
@@ -888,7 +1284,7 @@ mod tests {
         let path_str = path.to_str().unwrap();
 
         let mut sub =
-            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::ProRes, 64, 64, 30)
+            FfmpegSubprocess::spawn_recording(path_str, &RecordingCodec::ProRes, 64, 64, 30, None)
                 .expect("failed to spawn ProRes recording");
 
         let frame = vec![0u8; 64 * 64 * 4];
@@ -905,6 +1301,72 @@ mod tests {
     fn frame_channel_capacity_is_bounded() {
         // Verify the channel capacity constant
         assert_eq!(FRAME_CHANNEL_CAPACITY, 2);
+    }
+
+    // ── Phase 19b: audio passthrough arg construction ──────────────
+
+    fn dummy_audio(sample_rate: u32, channels: u16) -> AudioInput {
+        let (_tx, rx) = crossbeam_channel::bounded::<PcmChunk>(4);
+        AudioInput {
+            rx,
+            sample_rate,
+            channels,
+        }
+    }
+
+    fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
+        args.windows(2).any(|w| w[0] == flag && w[1] == value)
+    }
+
+    #[test]
+    fn prepare_audio_none_is_video_only() {
+        // No audio input → no FIFO, no args: the video-only path is unchanged.
+        let prepared = prepare_audio(None, false).unwrap();
+        assert!(prepared.is_none());
+    }
+
+    #[test]
+    fn prepare_audio_recording_uses_native_rate() {
+        let p = prepare_audio(Some(dummy_audio(44100, 2)), false)
+            .unwrap()
+            .expect("audio prepared");
+        // Input: raw f32le at the device's native rate + channel count.
+        assert!(has_pair(&p.in_args, "-f", "f32le"));
+        assert!(has_pair(&p.in_args, "-ar", "44100"));
+        assert!(has_pair(&p.in_args, "-ac", "2"));
+        assert!(p.in_args.contains(&"-i".to_string()));
+        assert!(p
+            .in_args
+            .contains(&"-use_wallclock_as_timestamps".to_string()));
+        // Output: AAC, stereo downmix, async resample, explicit mapping.
+        assert!(has_pair(&p.out_args, "-c:a", "aac"));
+        assert!(has_pair(&p.out_args, "-ac", "2"));
+        assert!(has_pair(&p.out_args, "-map", "0:v:0"));
+        assert!(has_pair(&p.out_args, "-map", "1:a:0"));
+        // Recording must NOT force 48k — native rate is preserved (Decision 5).
+        assert!(!has_pair(&p.out_args, "-ar", "48000"));
+        let _ = std::fs::remove_file(&p.fifo_path);
+    }
+
+    #[test]
+    fn prepare_audio_stream_forces_48k() {
+        let p = prepare_audio(Some(dummy_audio(44100, 2)), true)
+            .unwrap()
+            .expect("audio prepared");
+        // Stream targets normalize to 48k (Decision 5).
+        assert!(has_pair(&p.out_args, "-ar", "48000"));
+        let _ = std::fs::remove_file(&p.fifo_path);
+    }
+
+    #[test]
+    fn prepare_audio_creates_fifo_node() {
+        let p = prepare_audio(Some(dummy_audio(48000, 1)), false)
+            .unwrap()
+            .expect("audio prepared");
+        assert!(p.fifo_path.exists(), "mkfifo should create the FIFO node");
+        // Mono device still reported faithfully on the input side.
+        assert!(has_pair(&p.in_args, "-ac", "1"));
+        let _ = std::fs::remove_file(&p.fifo_path);
     }
 
     #[test]
