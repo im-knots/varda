@@ -695,6 +695,13 @@ pub struct RtmpLibraryEntry {
     pub connected: bool,
 }
 
+/// HTML source entry for the library panel
+#[derive(Clone)]
+pub struct HtmlLibraryEntry {
+    pub url: String,
+    pub active: bool,
+}
+
 /// All collected data needed to render the UI
 pub struct UIData {
     pub generators: Vec<(String, usize)>,
@@ -807,6 +814,8 @@ pub struct UIData {
     pub dash_library_configs: Vec<DashLibraryEntry>,
     /// RTMP library source configs
     pub rtmp_library_configs: Vec<RtmpLibraryEntry>,
+    /// HTML library source configs
+    pub html_library_configs: Vec<HtmlLibraryEntry>,
     // Recording/SRT state is now per-output (see OutputUI.is_active, active_duration)
     /// Transition sequences (multiple named sequences)
     pub sequences: Vec<SequenceUIData>,
@@ -1342,6 +1351,12 @@ pub struct UIActions {
     pub rtmp_library_add: Option<(String, crate::stream::RtmpMode)>,
     /// RTMP URL to remove from library
     pub rtmp_library_remove: Option<String>,
+    /// (ch_idx, url) — add an HTML source as a new deck to channel
+    pub html_to_add: Option<(usize, String)>,
+    /// HTML URL to add to library
+    pub html_library_add: Option<String>,
+    /// HTML URL to remove from library
+    pub html_library_remove: Option<String>,
     // Recording/SRT start/stop is now via OutputAction::Start/Stop per output
     /// Rescan for audio input devices
     pub audio_rescan: bool,
@@ -1588,6 +1603,9 @@ impl UIActions {
             rtmp_to_add: None,
             rtmp_library_add: None,
             rtmp_library_remove: None,
+            html_to_add: None,
+            html_library_add: None,
+            html_library_remove: None,
             audio_rescan: false,
             audio_source_toggles: Vec::new(),
             video_actions: Vec::new(),
@@ -1643,6 +1661,7 @@ impl UIActions {
             || self.hls_to_add.is_some()
             || self.dash_to_add.is_some()
             || self.rtmp_to_add.is_some()
+            || self.html_to_add.is_some()
             || !self.auto_transition_actions.is_empty()
             || !self.sequence_actions.is_empty()
             || self.deck_preset_to_add.is_some()
@@ -1671,6 +1690,8 @@ pub enum LibraryDrag {
     Dash(String),
     /// RTMP stream source (url, mode)
     Rtmp(String, crate::stream::RtmpMode),
+    /// HTML content source (url)
+    Html(String),
     /// Deck preset from library (index into preset_library.deck_presets)
     DeckPreset(usize),
     /// Channel preset from library (index into preset_library.channel_presets)
@@ -1975,6 +1996,7 @@ impl UIData {
             hls_library_configs: vec![],
             dash_library_configs: vec![],
             rtmp_library_configs: vec![],
+            html_library_configs: vec![],
 
             sequences: vec![],
             channel_count: 2,

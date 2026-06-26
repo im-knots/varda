@@ -87,6 +87,14 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/shader \
   -d '{"shader_name": "Sine"}'
 ```
 
+### Add an HTML deck to a channel
+
+```sh
+curl -X POST http://localhost:8080/api/channels/<ch_idx>/decks/html \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/overlay.html"}'
+```
+
 ### Start an auto-crossfade
 
 ```sh
@@ -150,7 +158,7 @@ The API is organized into 15 OpenAPI tags:
 | **System** | `GET /api/health`, `POST /api/shutdown` |
 | **Mixer** | `PUT /api/mixer/crossfader`, `POST /api/mixer/auto-crossfade`, `PUT /api/mixer/tonemap`, `PUT /api/mixer/lut`, `DELETE /api/mixer/lut` |
 | **Channels** | `POST /api/channels`, `PUT /api/channels/:uuid/opacity` |
-| **Decks** | `POST /api/channels/:uuid/decks/shader`, `PUT /api/decks/:uuid/opacity` |
+| **Decks** | `POST /api/channels/:uuid/decks/shader`, `POST /api/channels/:idx/decks/html`, `PUT /api/decks/:uuid/opacity` |
 | **Video** | `POST /api/decks/:uuid/video/toggle-play`, `PUT /api/decks/:uuid/video/speed` |
 | **Effects** | `POST /api/effects`, `POST /api/effects/toggle` |
 | **Modulation** | `POST /api/modulation/lfo`, `POST /api/modulation/assign` |

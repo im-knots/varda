@@ -80,13 +80,32 @@ arc-swap = "1.9.1"
 # feature (CPU build). No dylib to locate, bundle, or version-match.
 ort = { version = "2.0.0-rc.12", optional = true }
 ndarray = { version = "0.17.2", optional = true }
+servo = { version = "0.1.0", optional = true }
+url = { version = "2.5", optional = true }
+euclid = { version = "0.22", optional = true }
 
 [features]
-default = ["face-detection"]
+default = ["face-detection", "html"]
 # ML-backed analyzers (ONNX Runtime + ndarray). Disabled for the x86_64 macOS
 # slice to keep the Intel build ort-free. See spec/plugin-architecture.md (decision 5).
 face-detection = ["dep:ort", "dep:ndarray"]
+# HTML deck source (Servo offscreen render → wgpu). See spec/html-source.md.
+# Only the servo_backend module is gated — the HtmlManager integration surface
+# always compiles, so all integration/persistence/UI/API code and tests build
+# without this feature.
+#
+# ON BY DEFAULT: the backend uses Servo's built-in SoftwareRenderingContext and
+# CPU readback (read_to_image) rather than zero-copy GPU interop. This avoids the
+# grafting/servo-wgpu-interop-adapter dependency (which does not compile on macOS
+# against wgpu 29), so the backend builds cleanly on every target. The tradeoff is
+# software GL rasterization (slower than GPU); zero-copy GPU import is a follow-up.
+# Servo is heavy to build but the feature is stable, so it ships in the default
+# profile. Disable with `--no-default-features` (re-add `face-detection` as needed).
+# See spec/html-source.md "Decision: html on by default".
+html = ["dep:servo", "dep:url", "dep:euclid"]
 test-fixtures = []
+url = ["dep:url"]
+euclid = ["dep:euclid"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -109,6 +128,10 @@ harness = false
 
 [[bench]]
 name = "polygon_render"
+harness = false
+
+[[bench]]
+name = "html_render"
 harness = false
 
 

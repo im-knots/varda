@@ -168,6 +168,7 @@ impl VardaApp {
                         &mut self.camera_manager,
                         &mut self.external_io.ndi_manager,
                         &mut self.external_io.stream_manager,
+                        &mut self.external_io.html_manager,
                         self.render_width,
                         self.render_height,
                     ) {
@@ -357,6 +358,7 @@ impl VardaApp {
                         &mut self.camera_manager,
                         &mut self.external_io.ndi_manager,
                         &mut self.external_io.stream_manager,
+                        &mut self.external_io.html_manager,
                         rw,
                         rh,
                     ) {
@@ -397,6 +399,7 @@ impl VardaApp {
                     &mut self.camera_manager,
                     &mut self.external_io.ndi_manager,
                     &mut self.external_io.stream_manager,
+                    &mut self.external_io.html_manager,
                     rw,
                     rh,
                 ) {
@@ -451,6 +454,7 @@ impl VardaApp {
                             &mut self.camera_manager,
                             &mut self.external_io.ndi_manager,
                             &mut self.external_io.stream_manager,
+                            &mut self.external_io.html_manager,
                             rw,
                             rh,
                         ) {
