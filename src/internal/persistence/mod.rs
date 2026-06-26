@@ -850,6 +850,9 @@ pub fn restore_scene(
     render_height: u32,
 ) -> Result<RestoreResult> {
     let mut warnings = Vec::new();
+    // Only pushed to under #[cfg(target_os = "macos")]; on other platforms it
+    // stays empty, so `mut` would be flagged as unused there.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut pending_syphon: Vec<PendingSyphonDeck> = Vec::new();
     let mut mixer = Mixer::new(context, render_width, render_height)?;
 
