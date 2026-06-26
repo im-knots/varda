@@ -56,6 +56,25 @@ impl VardaApp {
     ) -> CommandResult {
         #[cfg(target_os = "macos")]
         {
+            // Idempotency: if this channel already carries a Syphon deck for this
+            // server, do nothing. An external controller may re-subscribe on every
+            // reconnect, and our own reconcile may also bind it — both must
+            // converge to a single deck, not stack duplicates.
+            let display_name = format!("🔗 {}", server_name);
+            if let Some(ch) = self.mixer.channels().get(channel_idx) {
+                if ch
+                    .decks
+                    .iter()
+                    .any(|s| s.deck.source_name() == display_name)
+                {
+                    log::debug!(
+                        "Syphon deck '{}' already present on channel {}; add is a no-op",
+                        server_name,
+                        channel_idx
+                    );
+                    return CommandResult::Ok;
+                }
+            }
             match self
                 .external_io
                 .syphon_manager
@@ -363,5 +382,98 @@ impl VardaApp {
     pub fn cmd_remove_rtmp_library_entry(&mut self, url: String) -> CommandResult {
         self.external_io.rtmp_library.retain(|(u, _)| u != &url);
         CommandResult::Ok
+    }
+
+    /// Render-thread Syphon maintenance, called ~1×/sec (see `render_mixer_frame`).
+    ///
+    /// Two jobs, both removing the start/stop-ordering fragility that used to
+    /// require coordinated launch and manual re-probes:
+    ///   1. **Auto-rediscover** — re-scan `SyphonServerDirectory` so a producer
+    ///      that starts, restarts, or republishes *after* Varda is noticed
+    ///      without an external rescan poke. Keeps the snapshot/library list
+    ///      fresh for the UI and any external controller's GET fallback.
+    ///   2. **Late-bind pending decks** — any Syphon deck deferred at restore
+    ///      time (`persistence::PendingSyphonDeck`) is attached the moment its
+    ///      named server appears. No black_hole placeholder, no failed-restore.
+    #[cfg(target_os = "macos")]
+    pub fn reconcile_syphon(&mut self) {
+        const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        if self.external_io.last_syphon_scan.elapsed() < SCAN_INTERVAL {
+            return;
+        }
+        self.external_io.last_syphon_scan = std::time::Instant::now();
+
+        // (1) Re-scan. Cheap directory query; safe to run every tick-second.
+        self.external_io.syphon_manager.discover();
+
+        if self.external_io.pending_syphon.is_empty() {
+            return;
+        }
+
+        // (2) Bind any pending deck whose server is now available.
+        let available: std::collections::HashSet<String> = self
+            .external_io
+            .syphon_manager
+            .sources()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+
+        // Pull the ready ones out; leave the rest pending for the next pass.
+        let mut ready: Vec<crate::persistence::PendingSyphonDeck> = Vec::new();
+        self.external_io
+            .pending_syphon
+            .retain(|p| match &p.config.source {
+                crate::scene::SourceConfig::Syphon { name } if available.contains(name) => {
+                    ready.push(p.clone());
+                    false
+                }
+                _ => true,
+            });
+
+        for p in ready {
+            let crate::scene::SourceConfig::Syphon { name } = &p.config.source else {
+                continue;
+            };
+            let server_name = name.clone();
+            let ch_idx = p.channel_idx;
+            match self.cmd_add_syphon_deck(ch_idx, server_name.clone()) {
+                CommandResult::Ok
+                | CommandResult::OkWithId { .. }
+                | CommandResult::OkWithData { .. } => {
+                    // Re-apply the persisted slot props onto the deck we just bound
+                    // (matched by name so an idempotent no-op doesn't mis-target).
+                    let display_name = format!("🔗 {}", server_name);
+                    if let Some(ch) = self.mixer.channel_mut(ch_idx) {
+                        if let Some(slot) = ch
+                            .decks
+                            .iter_mut()
+                            .find(|s| s.deck.source_name() == display_name)
+                        {
+                            slot.opacity = p.config.opacity;
+                            slot.blend_mode = p.config.blend_mode.into();
+                            slot.mute = p.config.mute;
+                            slot.solo = p.config.solo;
+                            slot.z_index = p.config.z_index;
+                        }
+                    }
+                    log::info!(
+                        "Syphon deck '{}' late-bound to channel {}",
+                        server_name,
+                        ch_idx
+                    );
+                }
+                CommandResult::Err { message, .. } => {
+                    log::warn!(
+                        "Syphon late-bind for '{}' (channel {}) failed: {}; will retry",
+                        server_name,
+                        ch_idx,
+                        message
+                    );
+                    // Requeue to retry on the next reconcile.
+                    self.external_io.pending_syphon.push(p);
+                }
+            }
+        }
     }
 }

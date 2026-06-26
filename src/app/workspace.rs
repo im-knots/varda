@@ -176,6 +176,19 @@ impl VardaApp {
                             for warn in &result.warnings {
                                 self.session.notifications.warn(warn.clone());
                             }
+                            // Syphon decks that could not resolve at restore time
+                            // (producer not publishing yet) — the render thread
+                            // auto-binds them as their servers appear.
+                            #[cfg(target_os = "macos")]
+                            {
+                                if !result.pending_syphon.is_empty() {
+                                    log::info!(
+                                        "{} Syphon deck(s) deferred to late-bind",
+                                        result.pending_syphon.len()
+                                    );
+                                }
+                                self.external_io.pending_syphon = result.pending_syphon;
+                            }
 
                             // Start preprocessor analyzers for active decks restored from save.
                             // A deck is "active" when it is not muted and has non-zero opacity.

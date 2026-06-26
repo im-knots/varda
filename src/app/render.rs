@@ -262,6 +262,12 @@ impl VardaApp {
             .ndi_manager
             .update(&self.context.device, &self.context.queue);
 
+        // Periodic Syphon re-discovery + late-bind of deferred decks (~1×/sec).
+        // Removes the start/stop-ordering dependency: a producer that joins or
+        // restarts after Varda is picked up automatically.
+        #[cfg(target_os = "macos")]
+        self.reconcile_syphon();
+
         // Update Syphon client frames
         #[cfg(target_os = "macos")]
         self.external_io.syphon_manager.update(&self.context.queue);

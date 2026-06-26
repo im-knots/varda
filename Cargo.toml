@@ -81,6 +81,14 @@ arc-swap = "1.9.1"
 ort = { version = "2.0.0-rc.12", optional = true }
 ndarray = { version = "0.17.2", optional = true }
 
+# Syphon client FFI (macOS only). The syphon module is compiled unconditionally
+# on macOS; Syphon.framework itself is dlopen'd at runtime (via libloading), so
+# these crates are the only build-time additions.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2            = "0.6"
+objc2-foundation = "0.3"
+objc2-metal      = "0.3"
+
 [features]
 default = ["face-detection"]
 # ML-backed analyzers (ONNX Runtime + ndarray). Disabled for the x86_64 macOS

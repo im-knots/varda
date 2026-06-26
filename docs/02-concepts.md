@@ -51,7 +51,7 @@ Renders assigned surfaces onto a display target — a monitor/projector window, 
 | DASH | MPEG-DASH input |
 | RTMP | RTMP/RTMPS stream receive |
 | Compute Shader | GLSL compute shader (`.comp`) — particle systems, simulations, GPU-native generators |
-| Syphon | macOS inter-app texture sharing (runtime bridge pending) |
+| Syphon | macOS inter-app texture sharing (receive from other apps) |
 | Solid Color | Flat RGBA color |
 
 ---
