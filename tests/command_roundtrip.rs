@@ -249,6 +249,43 @@ fn headless_output_create_and_stop() {
     let _state = app.build_engine_state();
 }
 
+#[test]
+fn headless_output_syphon_create_and_start() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    // Create a headless output targeting a Syphon server — the same path the
+    // API takes for `POST /api/outputs/headless` with a SyphonServer target.
+    // This proves the API is co-equal with the UI's Syphon protocol dropdown.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: varda::renderer::context::OutputTarget::SyphonServer {
+                server_name: "Test Syphon".into(),
+            },
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+
+    // A fresh headless app starts with no outputs, so the created Syphon output
+    // is at index 0. Starting it activates the publisher on macOS; on other
+    // platforms it must be rejected with Unavailable, mirroring the Syphon
+    // receive deck path (cmd_add_syphon_deck).
+    let r = send_cmd(&mut app, EngineCommand::StartOutput { idx: 0 });
+    #[cfg(target_os = "macos")]
+    assert!(matches!(r, CommandResult::Ok));
+    #[cfg(not(target_os = "macos"))]
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::Unavailable,
+            ..
+        }
+    ));
+
+    let _state = app.build_engine_state();
+}
+
 // ── Stream Library Commands ─────────────────────────────────────────
 
 #[test]
