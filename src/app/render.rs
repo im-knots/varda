@@ -262,9 +262,17 @@ impl VardaApp {
             .ndi_manager
             .update(&self.context.device, &self.context.queue);
 
+        // Periodic Syphon re-discovery + late-bind of deferred decks (~1×/sec).
+        // Removes the start/stop-ordering dependency: a producer that joins or
+        // restarts after Varda is picked up automatically.
+        #[cfg(target_os = "macos")]
+        self.reconcile_syphon();
+
         // Update Syphon client frames
         #[cfg(target_os = "macos")]
-        self.external_io.syphon_manager.update(&self.context.queue);
+        self.external_io
+            .syphon_manager
+            .update(&self.context.device, &self.context.queue);
 
         // Update stream receiver frames
         self.external_io.stream_manager.update(&self.context.queue);
@@ -720,72 +728,99 @@ impl VardaApp {
                 );
             }
 
-            // Enqueue readback copy from the now-rendered texture
-            h.readback.begin_readback(&mut encoder, &h.texture);
+            // Syphon (macOS) publishes GPU-side (zero-copy): skip the CPU
+            // readback entirely and hand the rendered texture to the server.
+            #[cfg(target_os = "macos")]
+            let is_syphon = matches!(
+                &h.target,
+                crate::renderer::context::OutputTarget::SyphonServer { .. }
+            );
+            #[cfg(not(target_os = "macos"))]
+            let is_syphon = false;
+
+            if !is_syphon {
+                // Enqueue readback copy from the now-rendered texture
+                h.readback.begin_readback(&mut encoder, &h.texture);
+            }
             context.queue.submit(std::iter::once(encoder.finish()));
 
+            #[cfg(target_os = "macos")]
+            if let crate::renderer::context::OutputTarget::SyphonServer { ref server_name } =
+                h.target
+            {
+                sinks.syphon_manager.publish_frame_gpu(
+                    &context.device,
+                    &context.queue,
+                    server_name,
+                    &h.texture_view,
+                    h.width,
+                    h.height,
+                );
+            }
+
             // Deliver previous frame's readback data to target
-            if let Some(frame_data) = h.readback.try_read(&context.device) {
-                match h.deliver_frame(
-                    &frame_data,
-                    sinks.ndi_manager,
-                    #[cfg(target_os = "macos")]
-                    sinks.syphon_manager,
-                ) {
-                    crate::renderer::context::DeliveryResult::Failed(msg) => {
-                        log::error!("{}", msg);
-                        h.active = false;
-                    }
-                    crate::renderer::context::DeliveryResult::SrtNeedsRestart => {
-                        // The disconnected client's PCM tap is now stale; drop it,
-                        // then respawn the listener with a fresh audio tap so the
-                        // reconnecting client gets audio again (parity with start).
-                        if let Some(stale) = h.audio_pcm.take() {
-                            sinks
-                                .audio_manager
-                                .unsubscribe_pcm(stale.source_id, stale.token);
+            if !is_syphon {
+                if let Some(frame_data) = h.readback.try_read(&context.device) {
+                    match h.deliver_frame(&frame_data, sinks.ndi_manager) {
+                        crate::renderer::context::DeliveryResult::Failed(msg) => {
+                            log::error!("{}", msg);
+                            h.active = false;
                         }
-                        let (url, codec) = match &h.target {
-                            crate::renderer::context::OutputTarget::SrtStream {
-                                url,
-                                codec,
-                                ..
-                            } => (url.clone(), codec.clone()),
-                            _ => continue,
-                        };
-                        let device = h.target.audio_device().map(str::to_string);
-                        let name = h.name.clone();
-                        let (audio_input, passthrough) = super::state::resolve_output_audio(
-                            sinks.audio_manager,
-                            sinks.notifications,
-                            device.as_deref(),
-                            &name,
-                        );
-                        match crate::renderer::FfmpegSubprocess::spawn_srt(
-                            &url,
-                            &codec,
-                            h.width,
-                            h.height,
-                            30,
-                            audio_input,
-                        ) {
-                            Ok(new_sub) => {
-                                h.subprocess = Some(new_sub);
-                                h.audio_pcm = passthrough.map(Box::new);
-                                log::info!("SRT restarted for '{}'", name);
+                        crate::renderer::context::DeliveryResult::SrtNeedsRestart => {
+                            // The disconnected client's PCM tap is now stale; drop it,
+                            // then respawn the listener with a fresh audio tap so the
+                            // reconnecting client gets audio again (parity with start).
+                            if let Some(stale) = h.audio_pcm.take() {
+                                sinks
+                                    .audio_manager
+                                    .unsubscribe_pcm(stale.source_id, stale.token);
                             }
-                            Err(e) => {
-                                if let Some(pass) = passthrough {
-                                    sinks
-                                        .audio_manager
-                                        .unsubscribe_pcm(pass.source_id, pass.token);
+                            let (url, codec) = match &h.target {
+                                crate::renderer::context::OutputTarget::SrtStream {
+                                    url,
+                                    codec,
+                                    ..
+                                } => (url.clone(), codec.clone()),
+                                _ => continue,
+                            };
+                            let device = h.target.audio_device().map(str::to_string);
+                            let name = h.name.clone();
+                            let (audio_input, passthrough) = super::state::resolve_output_audio(
+                                sinks.audio_manager,
+                                sinks.notifications,
+                                device.as_deref(),
+                                &name,
+                            );
+                            match crate::renderer::FfmpegSubprocess::spawn_srt(
+                                &url,
+                                &codec,
+                                h.width,
+                                h.height,
+                                30,
+                                audio_input,
+                            ) {
+                                Ok(new_sub) => {
+                                    h.subprocess = Some(new_sub);
+                                    h.audio_pcm = passthrough.map(Box::new);
+                                    log::info!("SRT restarted for '{}'", name);
                                 }
-                                log::error!("Failed to restart SRT listener for '{}': {}", name, e);
-                                h.active = false;
+                                Err(e) => {
+                                    if let Some(pass) = passthrough {
+                                        sinks
+                                            .audio_manager
+                                            .unsubscribe_pcm(pass.source_id, pass.token);
+                                    }
+                                    log::error!(
+                                        "Failed to restart SRT listener for '{}': {}",
+                                        name,
+                                        e
+                                    );
+                                    h.active = false;
+                                }
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }

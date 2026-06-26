@@ -214,9 +214,48 @@ HTML is rasterized on the **CPU** (Servo's software renderer) and uploaded to a 
 
 ## Syphon (macOS)
 
-Syphon enables inter-application GPU texture sharing on macOS. Varda includes framework detection and server discovery.
+Syphon enables inter-application GPU texture sharing on macOS. Varda works both ways: as a Syphon **client** (receiving other apps' frames as live sources) and as a Syphon **server** (publishing a Varda output for other apps to consume).
 
-> **Note:** The runtime IOSurface↔wgpu Metal bridge is pending implementation. Syphon sources appear in the library but full texture sharing is not yet functional.
+**Receive (client):**
+
+1. Open the Library and look under **Syphon Sources** for discovered servers
+2. **Drag** a server into a channel to create a live deck
+
+Frames are pulled per-frame from the Syphon server's `MTLTexture` and uploaded into Varda's wgpu texture path via CPU readback — a cheap same-memory copy on Apple-silicon unified memory. A zero-copy receive path (wrapping the IOSurface texture directly as a `wgpu::Texture`) is a possible follow-on.
+
+**Publish (server):**
+
+1. In the output panel, click **+ Stream**
+2. Select **Syphon** from the protocol dropdown
+3. Enter a server name (e.g., "Varda Main")
+4. Start the output — other Syphon apps then see it in their source list
+
+Publishing is **zero-copy on the GPU**: the rendered output is converted (RGBA→BGRA) by a GPU pass and shared directly via Metal — no CPU readback.
+
+### Installing Syphon.framework
+
+Syphon support needs **nothing special at build time** — `Syphon.framework` is *not* linked, it is loaded at runtime via `dlopen`. A normal macOS build (`cargo build` / `cargo run`) works whether or not Syphon is installed; if it is missing, Syphon features simply stay disabled and the rest of Varda runs normally.
+
+To *use* Syphon, install the framework system-wide at:
+
+```
+/Library/Frameworks/Syphon.framework
+```
+
+This is the standard, verified location — it is also where other Syphon apps on the system expect to find the framework, so a single system-wide install serves all of them. To install it:
+
+1. Get `Syphon.framework` — download it from the [official Syphon-Framework releases](https://github.com/Syphon/Syphon-Framework/releases), or copy it out of any Syphon-enabled app bundle (e.g. Simple Syphon, Resolume, VDMX, MadMapper).
+2. Copy the `Syphon.framework` folder into `/Library/Frameworks/` (requires admin):
+   ```sh
+   sudo cp -R /path/to/Syphon.framework /Library/Frameworks/
+   ```
+3. Launch Varda. On startup the log shows `Syphon.framework found` when it loaded successfully, or `Syphon.framework not found — Syphon features disabled` otherwise.
+
+> Varda also checks `~/Library/Frameworks/Syphon.framework` (per-user, no admin) as a fallback. The system-wide `/Library/Frameworks/` path above is the recommended and verified one.
+
+Pass `--no-syphon` to disable Syphon explicitly even when the framework is installed.
+
+> **Note:** Varda is both a Syphon client (receive) and a Syphon server (publish a `SyphonServer` output).
 
 ---
 

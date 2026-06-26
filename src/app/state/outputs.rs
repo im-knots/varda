@@ -164,14 +164,36 @@ impl VardaApp {
                     audio_input,
                 )
             }
-            OutputTarget::NdiSend { .. } | OutputTarget::SyphonServer { .. } => {
-                // No ffmpeg subprocess; NDI/Syphon don't carry passthrough audio.
+            OutputTarget::NdiSend { .. } => {
+                // No ffmpeg subprocess; NDI doesn't carry passthrough audio.
                 self.release_passthrough(passthrough);
                 if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
                     h.active = true;
                     h.started_at = Some(std::time::Instant::now());
                 }
                 return CommandResult::Ok;
+            }
+            OutputTarget::SyphonServer { .. } => {
+                // No ffmpeg subprocess; Syphon doesn't carry passthrough audio.
+                self.release_passthrough(passthrough);
+                #[cfg(target_os = "macos")]
+                {
+                    if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
+                        h.active = true;
+                        h.started_at = Some(std::time::Instant::now());
+                    }
+                    return CommandResult::Ok;
+                }
+                // Parity with the Syphon receive path (cmd_add_syphon_deck): reject
+                // explicitly on non-macOS so an API client gets clear feedback rather
+                // than a silently inert output.
+                #[cfg(not(target_os = "macos"))]
+                {
+                    return CommandResult::Err {
+                        code: ErrorCode::Unavailable,
+                        message: "Syphon is only available on macOS".into(),
+                    };
+                }
             }
             _ => {
                 self.release_passthrough(passthrough);

@@ -1,6 +1,6 @@
 [package]
 name = "varda"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 authors = ["Varda Contributors"]
 description = "Linux and MacOS native VJ software with ISF/GLSL shader support"
@@ -83,6 +83,14 @@ ndarray = { version = "0.17.2", optional = true }
 servo = { version = "0.1.0", optional = true }
 url = { version = "2.5", optional = true }
 euclid = { version = "0.22", optional = true }
+
+# Syphon client FFI (macOS only). The syphon module is compiled unconditionally
+# on macOS; Syphon.framework itself is dlopen'd at runtime (via libloading), so
+# these crates are the only build-time additions.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2            = "0.6"
+objc2-foundation = "0.3"
+objc2-metal      = "0.3"
 
 [features]
 default = ["face-detection", "html"]

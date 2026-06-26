@@ -322,7 +322,7 @@ fn render_headless_controls(
         }
     }
 
-    // Unified stream config (SRT, HLS, DASH, NDI)
+    // Unified stream config (SRT, HLS, DASH, RTMP, NDI, Syphon)
     let is_stream = matches!(
         output.target,
         OutputTarget::SrtStream { .. }
@@ -330,6 +330,7 @@ fn render_headless_controls(
             | OutputTarget::DashStream { .. }
             | OutputTarget::RtmpStream { .. }
             | OutputTarget::NdiSend { .. }
+            | OutputTarget::SyphonServer { .. }
     );
     if is_stream {
         render_stream_config(ui, idx, output, actions);
@@ -457,7 +458,7 @@ fn render_headless_controls(
     render_edge_blend_controls(ui, idx, output, actions);
 }
 
-/// Unified stream output config with protocol dropdown (SRT, HLS, DASH, NDI).
+/// Unified stream output config with protocol dropdown (SRT, HLS, DASH, RTMP, NDI, Syphon).
 fn render_stream_config(
     ui: &mut egui::Ui,
     idx: usize,
@@ -473,6 +474,7 @@ fn render_stream_config(
         OutputTarget::DashStream { .. } => "DASH",
         OutputTarget::RtmpStream { .. } => "RTMP",
         OutputTarget::NdiSend { .. } => "NDI",
+        OutputTarget::SyphonServer { .. } => "Syphon",
         _ => return,
     };
 
@@ -484,7 +486,10 @@ fn render_stream_config(
                 .selected_text(egui::RichText::new(current_proto).small())
                 .width(80.0)
                 .show_ui(ui, |ui| {
-                    for (label, default_target) in &[
+                    // `mut` is required on macOS for the Syphon push below; on other
+                    // platforms that push is compiled out, leaving the binding unused-mut.
+                    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+                    let mut protocols: Vec<(&str, OutputTarget)> = vec![
                         (
                             "SRT",
                             OutputTarget::SrtStream {
@@ -524,7 +529,15 @@ fn render_stream_config(
                                 sender_name: "Varda NDI".to_string(),
                             },
                         ),
-                    ] {
+                    ];
+                    #[cfg(target_os = "macos")]
+                    protocols.push((
+                        "Syphon",
+                        OutputTarget::SyphonServer {
+                            server_name: "Varda".to_string(),
+                        },
+                    ));
+                    for (label, default_target) in &protocols {
                         if ui
                             .selectable_label(current_proto == *label, *label)
                             .clicked()
@@ -746,6 +759,31 @@ fn render_stream_config(
                             idx,
                             target: OutputTarget::NdiSend {
                                 sender_name: current_name,
+                            },
+                        });
+                    }
+                }
+            });
+        }
+        OutputTarget::SyphonServer { ref server_name } if !output.is_active => {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Name:").small());
+                let name_id = egui::Id::new(format!("syphon_name_{}", idx));
+                let mut current_name: String = ui
+                    .data(|d| d.get_temp(name_id))
+                    .unwrap_or_else(|| server_name.clone());
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut current_name)
+                        .desired_width(140.0)
+                        .font(egui::TextStyle::Small),
+                );
+                if response.lost_focus() || response.changed() {
+                    ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
+                    if response.lost_focus() {
+                        actions.output_actions.push(OutputAction::SetTarget {
+                            idx,
+                            target: OutputTarget::SyphonServer {
+                                server_name: current_name,
                             },
                         });
                     }
