@@ -457,4 +457,36 @@ mod smoke_tests {
             "HTML+CSS+JS deck did not render blue (CSS/JS not applied); got {px2:?}"
         );
     }
+
+    /// Idle-repaint correctness: a `setInterval` timer mutates the DOM *after*
+    /// the initial load completes — driving neither `requestAnimationFrame` nor a
+    /// CSS animation, so `animating()` stays false. This is the gating caveat
+    /// noted in `/spec/html-source.md`: the off-thread engine must still repaint
+    /// via the `frame_ready` path (`notify_new_frame_ready` + the event-loop
+    /// waker unparking the pump thread). Reaching blue proves a timer-driven
+    /// update on a settled page is not dropped.
+    #[test]
+    #[ignore = "heavy: starts a real Servo engine; run with --ignored --test-threads=1"]
+    fn html_deck_setinterval_idle_repaint() {
+        let Ok(gpu) = GpuContext::new_headless() else {
+            eprintln!("skipping: no GPU adapter available");
+            return;
+        };
+        let mut mgr = HtmlManager::new();
+
+        // Paints black at load, then a setInterval timer flips to blue on its
+        // first tick (~120ms after load) — no rAF, no CSS animation/transition.
+        let idle = "<!doctype html><html><head><style>html,body{height:100%;margin:0}\
+body{background:#000}</style></head><body><script>var done=false;\
+setInterval(function(){if(!done){document.body.style.background='rgb(0,0,255)';\
+done=true;}},120);</script></body></html>";
+        let idx = mgr
+            .start_render(&data_url(idle), W, H, &gpu.device)
+            .expect("start_render returned None with the html feature enabled");
+        let px = pump_until(&gpu, &mut mgr, idx, [0, 0, 255], Duration::from_secs(30));
+        assert!(
+            is_color(px, [0, 0, 255]),
+            "setInterval idle DOM update was not repainted; got {px:?}"
+        );
+    }
 }

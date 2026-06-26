@@ -1,19 +1,16 @@
-/// HTML deck per-frame render benchmarks (Servo software rasterization).
+/// HTML deck render-thread cost benchmark.
 ///
-///   plain_html  — static document; baseline cost of spin + paint + readback +
-///                 texture upload with no per-frame layout/script work.
-///   html_css    — gradient background plus many CSS-keyframe-animated boxes;
-///                 forces a full repaint every frame (no JS). Difference vs
-///                 plain ≈ per-frame paint/layout cost.
-///   html_css_js — requestAnimationFrame loop mutating element style each frame;
-///                 forces JS execution + style recalc + layout + paint.
-///                 Difference vs html_css ≈ per-frame scripting cost.
+/// Servo pumping (layout/script/rasterization) runs on a dedicated off-thread
+/// engine; the render thread only does `HtmlManager::update()` — a non-blocking
+/// `try_lock` + take + `queue.write_texture` per deck. This bench therefore
+/// measures the render-thread per-frame cost as a function of active HTML decks
+/// (0/1/2), not page complexity. The timed unit is `update()` followed by a
+/// queue flush so the upload is real and the staging belt is recalled each
+/// iteration; the `0_decks` case isolates the constant flush floor.
 ///
-/// All three reuse a single Servo instance via `navigate()` — engine startup is
-/// heavy and Servo multi-instance lifetime is unproven, so one instance is both
-/// faster and safer. The timed unit is `HtmlManager::update()` (the exact call
-/// the engine makes per frame) followed by a queue flush so the upload is real
-/// and the staging belt cannot grow unbounded across iterations.
+/// Decks use an animating (requestAnimationFrame) document so the off-thread
+/// engine keeps a fresh frame waiting in every slot — the worst case where each
+/// `update()` performs a real upload rather than skipping.
 ///
 /// Skips cleanly when no GPU adapter is present or the `html` feature is off.
 use std::time::{Duration, Instant};
@@ -27,36 +24,26 @@ use varda::{html::HtmlManager, renderer::context::GpuContext};
 const W: u32 = 1280;
 const H: u32 = 720;
 
-const PLAIN: &str = "<!doctype html><html><body style=\"background:#204060;color:#fff;\
-font-family:sans-serif;margin:24px\"><h1>Varda HTML deck</h1>\
-<p>Plain static HTML baseline.</p></body></html>";
-
-const JS: &str = "<!doctype html><html><head><style>html,body{margin:0;height:100%;\
-background:#000}#b{position:absolute;width:60px;height:60px;background:#0f0}</style></head>\
-<body><div id=b></div><script>var b=document.getElementById('b'),t=0;\
-function f(){t+=2;b.style.left=(t%400)+'px';b.style.top=((t*0.7)%300)+'px';\
-requestAnimationFrame(f);}requestAnimationFrame(f);</script></body></html>";
+/// An animating document: a requestAnimationFrame loop mutating element style
+/// each frame. This keeps Servo `animating()` true so the off-thread engine
+/// repaints continuously and a fresh frame is always waiting in the slot — the
+/// worst case for render-thread cost (every `update()` does a real upload).
+/// `tag` makes each deck's `data:` URL unique so `start_render` does not dedupe.
+fn animating_doc(tag: usize) -> String {
+    format!(
+        "<!doctype html><!--{tag}--><html><head><style>html,body{{margin:0;\
+height:100%;background:#000}}#b{{position:absolute;width:60px;height:60px;\
+background:#0f0}}</style></head><body><div id=b></div><script>\
+var b=document.getElementById('b'),t=0;function f(){{t+=2;\
+b.style.left=(t%400)+'px';b.style.top=((t*0.7)%300)+'px';\
+requestAnimationFrame(f);}}requestAnimationFrame(f);</script></body></html>"
+    )
+}
 
 /// Wrap an HTML document in a base64 `data:` URL (avoids percent-encoding).
 fn data_url(html: &str) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(html.as_bytes());
     format!("data:text/html;base64,{b64}")
-}
-
-/// Gradient + many CSS-keyframe-animated boxes; continuous repaint, no JS.
-fn css_doc() -> String {
-    let mut boxes = String::new();
-    for _ in 0..24 {
-        boxes.push_str("<div class=box></div>");
-    }
-    format!(
-        "<!doctype html><html><head><style>html,body{{margin:0;height:100%}}\
-body{{background:linear-gradient(45deg,#102030,#304060)}}\
-.box{{width:80px;height:80px;margin:8px;display:inline-block;background:#5af;\
-animation:spin 1s linear infinite}}\
-@keyframes spin{{from{{transform:rotate(0)}}to{{transform:rotate(360deg)}}}}\
-</style></head><body>{boxes}</body></html>"
-    )
 }
 
 fn make_context() -> Option<GpuContext> {
@@ -91,39 +78,44 @@ fn warmup(gpu: &GpuContext, mgr: &mut HtmlManager, dur: Duration) {
     }
 }
 
-fn bench_html_decks(c: &mut Criterion) {
+fn bench_render_thread(c: &mut Criterion) {
     let Some(gpu) = make_context() else {
         eprintln!("no GPU adapter — skipping html_render benchmarks");
         return;
     };
-    let mut mgr = HtmlManager::new();
-    if !mgr.is_available() {
+    if !HtmlManager::new().is_available() {
         eprintln!("html feature disabled — skipping html_render benchmarks");
         return;
     }
-    let Some(idx) = mgr.start_render(&data_url(PLAIN), W, H, &gpu.device) else {
-        eprintln!("start_render returned None — skipping html_render benchmarks");
-        return;
-    };
 
-    let mut group = c.benchmark_group("html_deck_update");
+    let mut group = c.benchmark_group("html_render_thread_update");
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(2));
 
-    let profiles: [(&str, String); 3] = [
-        ("plain_html", data_url(PLAIN)),
-        ("html_css", data_url(&css_doc())),
-        ("html_css_js", data_url(JS)),
-    ];
-
-    for (name, url) in &profiles {
-        mgr.navigate(idx, url);
-        warmup(&gpu, &mut mgr, Duration::from_secs(2));
-        group.bench_function(*name, |b| b.iter(|| frame(&gpu, &mut mgr)));
+    // Sweep the render-thread cost of update() against the number of active HTML
+    // decks. Pumping is off-thread, so this isolates try_lock + take +
+    // write_texture (+ queue flush) and is independent of page complexity. The
+    // 0_decks case is the constant flush floor; each added deck is one more
+    // upload (animating content guarantees a fresh frame every iteration).
+    //
+    // A SINGLE manager is reused and decks are added incrementally: Servo's
+    // global `Opts` can be initialized only once per process, so each deck must
+    // be a WebView on the one shared engine — spawning a second `Servo` panics
+    // ("Already initialized"). This mirrors the production design exactly.
+    let mut mgr = HtmlManager::new();
+    for decks in 0usize..=2 {
+        if decks > 0 {
+            mgr.start_render(&data_url(&animating_doc(decks - 1)), W, H, &gpu.device)
+                .expect("start_render returned None with the html feature enabled");
+            warmup(&gpu, &mut mgr, Duration::from_secs(3));
+        }
+        group.bench_function(format!("{decks}_decks"), |b| {
+            b.iter(|| frame(&gpu, &mut mgr))
+        });
     }
 
     group.finish();
 }
 
-criterion_group!(benches, bench_html_decks);
+criterion_group!(benches, bench_render_thread);
 criterion_main!(benches);
