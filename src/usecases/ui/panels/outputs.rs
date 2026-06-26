@@ -486,6 +486,9 @@ fn render_stream_config(
                 .selected_text(egui::RichText::new(current_proto).small())
                 .width(80.0)
                 .show_ui(ui, |ui| {
+                    // `mut` is required on macOS for the Syphon push below; on other
+                    // platforms that push is compiled out, leaving the binding unused-mut.
+                    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
                     let mut protocols: Vec<(&str, OutputTarget)> = vec![
                         (
                             "SRT",
