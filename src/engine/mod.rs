@@ -315,6 +315,10 @@ pub enum EngineCommand {
         url: String,
         mode: crate::stream::RtmpMode,
     },
+    AddHtmlDeck {
+        channel_idx: usize,
+        url: String,
+    },
 
     // ── Transition Sequences ───────────────────────────────────
     CreateSequence,

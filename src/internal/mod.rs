@@ -5,6 +5,7 @@ pub mod channel;
 pub mod cli_install;
 pub mod clock;
 pub mod deck;
+pub mod html;
 pub mod isf;
 pub mod keymap;
 pub mod midi;

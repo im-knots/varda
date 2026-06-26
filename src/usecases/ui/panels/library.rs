@@ -653,6 +653,82 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 ui.add_space(4.0);
             }
 
+            // === HTML SOURCES ===
+            {
+                let html_header = egui::RichText::new(format!(
+                    "🌐 HTML Sources ({})",
+                    data.html_library_configs.len()
+                ))
+                .strong();
+                egui::CollapsingHeader::new(html_header)
+                    .id_salt("lib_html")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let adding_id = ui.id().with("html_adding");
+                        let url_id = ui.id().with("html_url_input");
+                        let is_adding: bool = ui.data(|d| d.get_temp(adding_id)).unwrap_or(false);
+
+                        if is_adding {
+                            let mut url: String = ui
+                                .data(|d| d.get_temp(url_id))
+                                .unwrap_or_else(|| "https://example.com/visuals.html".to_string());
+                            ui.horizontal(|ui| {
+                                ui.label("URL:");
+                                ui.text_edit_singleline(&mut url);
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.small_button("✓ Add").clicked() && !url.is_empty() {
+                                    actions.html_library_add = Some(url.clone());
+                                    ui.data_mut(|d| d.insert_temp(adding_id, false));
+                                }
+                                if ui.small_button("✕ Cancel").clicked() {
+                                    ui.data_mut(|d| d.insert_temp(adding_id, false));
+                                }
+                            });
+                            ui.data_mut(|d| {
+                                d.insert_temp(url_id, url);
+                            });
+                        } else if ui.small_button("+ Add HTML").clicked() {
+                            ui.data_mut(|d| d.insert_temp(adding_id, true));
+                        }
+
+                        for (i, entry) in data.html_library_configs.iter().enumerate() {
+                            let item_id = egui::Id::new(("lib_html", i));
+                            let status_color = if entry.active {
+                                egui::Color32::from_rgb(100, 220, 100)
+                            } else {
+                                egui::Color32::from_rgb(180, 180, 180)
+                            };
+                            let url = entry.url.clone();
+                            ui.horizontal(|ui| {
+                                ui.dnd_drag_source(item_id, LibraryDrag::Html(url.clone()), |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("●").color(status_color));
+                                        ui.label(
+                                            egui::RichText::new(format!("🌐 {}", url)).size(12.0),
+                                        );
+                                    });
+                                });
+                                if ui
+                                    .small_button("✕")
+                                    .on_hover_text("Remove from library")
+                                    .clicked()
+                                {
+                                    actions.html_library_remove = Some(url.clone());
+                                }
+                            });
+                            if ui.ctx().is_being_dragged(item_id) {
+                                ui.ctx().memory_mut(|mem| {
+                                    mem.data
+                                        .insert_temp(egui::Id::new("__lib_dnd_html_url"), url);
+                                });
+                            }
+                        }
+                    });
+
+                ui.add_space(4.0);
+            }
+
             // === SYPHON SERVERS ===
             if data.syphon_available {
                 let syph_header = egui::RichText::new(format!(

@@ -416,6 +416,14 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                                 mode: "pull".to_string(),
                             }
                         }
+                        "html" => {
+                            let url = slot
+                                .deck
+                                .source_name()
+                                .trim_start_matches("🌐 ")
+                                .to_string();
+                            SourceConfig::Html { url }
+                        }
                         _ => return None,
                     };
 
@@ -828,6 +836,7 @@ pub fn restore_scene(
     camera_manager: &mut crate::camera::CameraManager,
     ndi_manager: &mut crate::ndi::NdiManager,
     stream_manager: &mut crate::stream::StreamManager,
+    html_manager: &mut crate::html::HtmlManager,
     render_width: u32,
     render_height: u32,
 ) -> Result<RestoreResult> {
@@ -858,6 +867,7 @@ pub fn restore_scene(
                 camera_manager,
                 ndi_manager,
                 stream_manager,
+                html_manager,
                 render_width,
                 render_height,
             ) {
@@ -1080,6 +1090,7 @@ pub(crate) fn restore_deck(
     camera_manager: &mut crate::camera::CameraManager,
     ndi_manager: &mut crate::ndi::NdiManager,
     stream_manager: &mut crate::stream::StreamManager,
+    html_manager: &mut crate::html::HtmlManager,
     render_width: u32,
     render_height: u32,
 ) -> Result<Deck> {
@@ -1295,6 +1306,30 @@ pub(crate) fn restore_deck(
                 }
             }
         }
+        SourceConfig::Html { url } => {
+            match html_manager.start_render(url, render_width, render_height, &context.device) {
+                Some(instance_idx) => {
+                    let (src_w, src_h) = html_manager
+                        .instance_dimensions(instance_idx)
+                        .unwrap_or((1920, 1080));
+                    Deck::new_from_html(
+                        context,
+                        instance_idx,
+                        url,
+                        src_w,
+                        src_h,
+                        render_width,
+                        render_height,
+                    )?
+                }
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "HTML source '{}' not available for restore",
+                        url
+                    ));
+                }
+            }
+        }
     };
 
     // Restore UUID from config
@@ -1356,6 +1391,7 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
         ("rtmp", SourceConfig::Rtmp { url, .. }) => {
             deck.source_name().trim_start_matches("📺 ") == url
         }
+        ("html", SourceConfig::Html { url }) => deck.source_name().trim_start_matches("🌐 ") == url,
         _ => false,
     }
 }

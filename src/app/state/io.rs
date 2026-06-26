@@ -204,6 +204,52 @@ impl VardaApp {
         }
     }
 
+    pub fn cmd_add_html_deck(&mut self, channel_idx: usize, url: String) -> CommandResult {
+        match self.external_io.html_manager.start_render(
+            &url,
+            self.render_width,
+            self.render_height,
+            &self.context.device,
+        ) {
+            Some(instance_idx) => {
+                let (src_w, src_h) = self
+                    .external_io
+                    .html_manager
+                    .instance_dimensions(instance_idx)
+                    .unwrap_or((1920, 1080));
+                match crate::deck::Deck::new_from_html(
+                    &self.context,
+                    instance_idx,
+                    &url,
+                    src_w,
+                    src_h,
+                    self.render_width,
+                    self.render_height,
+                ) {
+                    Ok(deck) => {
+                        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
+                            ch.add_deck(deck);
+                            CommandResult::Ok
+                        } else {
+                            CommandResult::Err {
+                                code: ErrorCode::NotFound,
+                                message: "Channel not found".into(),
+                            }
+                        }
+                    }
+                    Err(e) => CommandResult::Err {
+                        code: ErrorCode::InternalError,
+                        message: e.to_string(),
+                    },
+                }
+            }
+            None => CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: format!("Failed to start HTML render for '{}'", url),
+            },
+        }
+    }
+
     pub fn cmd_add_dash_deck(&mut self, channel_idx: usize, url: String) -> CommandResult {
         match self.external_io.stream_manager.start_receive(
             &url,
@@ -362,6 +408,19 @@ impl VardaApp {
 
     pub fn cmd_remove_rtmp_library_entry(&mut self, url: String) -> CommandResult {
         self.external_io.rtmp_library.retain(|(u, _)| u != &url);
+        CommandResult::Ok
+    }
+
+    pub fn cmd_add_html_library_entry(&mut self, url: String) -> CommandResult {
+        if !self.external_io.html_library.contains(&url) {
+            log::info!("Added HTML source to library: {}", url);
+            self.external_io.html_library.push(url);
+        }
+        CommandResult::Ok
+    }
+
+    pub fn cmd_remove_html_library_entry(&mut self, url: String) -> CommandResult {
+        self.external_io.html_library.retain(|u| u != &url);
         CommandResult::Ok
     }
 }

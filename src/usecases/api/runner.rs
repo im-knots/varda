@@ -55,6 +55,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::set_transition, routes::decks::set_param,
         routes::decks::add_ndi_deck, routes::decks::add_syphon_deck,
         routes::decks::add_srt_deck, routes::decks::add_hls_deck, routes::decks::add_dash_deck, routes::decks::add_rtmp_deck,
+        routes::decks::add_html_deck,
         routes::decks::reset_generator_params,
         // Video
         routes::decks::video_toggle_play, routes::decks::video_seek,
@@ -513,6 +514,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/channels/{ch}/decks/rtmp",
             axum::routing::post(routes::decks::add_rtmp_deck),
+        )
+        .route(
+            "/api/channels/{ch}/decks/html",
+            axum::routing::post(routes::decks::add_html_deck),
         )
         // ── Write: Modulation Updates ────────────────────────────
         .route(
