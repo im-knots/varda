@@ -157,6 +157,14 @@ pub(crate) struct ExternalIO {
     pub ndi_manager: crate::ndi::NdiManager,
     #[cfg(target_os = "macos")]
     pub syphon_manager: crate::syphon::SyphonManager,
+    /// Syphon decks restored from the workspace whose server is not yet
+    /// published. The render thread auto-binds them once the server appears
+    /// (`VardaApp::reconcile_syphon`). See `persistence::PendingSyphonDeck`.
+    #[cfg(target_os = "macos")]
+    pub pending_syphon: Vec<crate::persistence::PendingSyphonDeck>,
+    /// Throttle for periodic Syphon re-discovery on the render thread.
+    #[cfg(target_os = "macos")]
+    pub last_syphon_scan: std::time::Instant,
     pub stream_manager: crate::stream::StreamManager,
     pub stream_library: Vec<(String, crate::stream::SrtMode)>,
     pub hls_library: Vec<String>,
@@ -415,6 +423,10 @@ impl VardaApp {
                 } else {
                     crate::syphon::SyphonManager::new()
                 },
+                #[cfg(target_os = "macos")]
+                pending_syphon: Vec::new(),
+                #[cfg(target_os = "macos")]
+                last_syphon_scan: std::time::Instant::now(),
                 stream_manager: crate::stream::StreamManager::new(),
                 stream_library: Vec::new(),
                 hls_library: Vec::new(),
@@ -1690,9 +1702,25 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::RescanSyphon => {
+                // Run discovery inline on the render thread and return the fresh
+                // source list in the same response. This makes an external
+                // probe a single non-racy call: the old fire-and-forget rescan +
+                // separate snapshot GET could read a pre-discover (empty) list and
+                // spuriously "defer Syphon init".
                 #[cfg(target_os = "macos")]
-                self.external_io.syphon_manager.discover();
-                CommandResult::Ok
+                {
+                    self.external_io.syphon_manager.discover();
+                    let names = self.external_io.syphon_manager.discovered_sources();
+                    CommandResult::OkWithData {
+                        data: serde_json::json!(names),
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    CommandResult::OkWithData {
+                        data: serde_json::json!([] as [String; 0]),
+                    }
+                }
             }
             EngineCommand::RescanCameras => {
                 self.camera_manager.scan_devices();

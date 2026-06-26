@@ -214,9 +214,16 @@ HTML is rasterized on the **CPU** (Servo's software renderer) and uploaded to a 
 
 ## Syphon (macOS)
 
-Syphon enables inter-application GPU texture sharing on macOS. Varda includes framework detection and server discovery.
+Syphon enables inter-application GPU texture sharing on macOS. Varda acts as a Syphon **client**: it discovers servers published by other apps (Resolume, VDMX, MadMapper, etc.) and receives their frames as live sources.
 
-> **Note:** The runtime IOSurface↔wgpu Metal bridge is pending implementation. Syphon sources appear in the library but full texture sharing is not yet functional.
+1. Open the Library and look under **Syphon Sources** for discovered servers
+2. **Drag** a server into a channel to create a live deck
+
+Frames are pulled per-frame from the Syphon server's `MTLTexture` and uploaded into Varda's wgpu texture path via CPU readback — a cheap same-memory copy on Apple-silicon unified memory. A zero-copy path (wrapping the IOSurface texture directly as a `wgpu::Texture`) is a possible follow-on.
+
+`Syphon.framework` is loaded at runtime, so Macs without Syphon installed still run normally — Syphon features simply stay disabled. Pass `--no-syphon` to disable it explicitly.
+
+> **Note:** Varda is a Syphon client (receive only); it does not publish its output as a Syphon server.
 
 ---
 

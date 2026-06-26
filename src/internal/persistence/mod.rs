@@ -819,11 +819,29 @@ use crate::deck::{Deck, Effect};
 use crate::isf::ISFShader;
 use crate::renderer::GpuContext;
 
+/// A Syphon deck whose source could not be resolved at restore time, deferred
+/// for late binding. Varda is the *client* of externally-owned Syphon servers;
+/// on restart the producer may not be publishing yet, so the named server is not in
+/// `SyphonServerDirectory`. Rather than fail the restore (the old behaviour:
+/// "restoration not yet implemented" → black_hole placeholder), we record the
+/// intent here and let `VardaApp::reconcile_syphon` auto-attach the real deck
+/// the moment the server appears. Startup order becomes irrelevant.
+#[derive(Debug, Clone)]
+pub struct PendingSyphonDeck {
+    /// Channel index (position in the restored channel list) this deck belongs to.
+    pub channel_idx: usize,
+    /// Full persisted deck config (carries the `Syphon { name }` source plus
+    /// opacity / blend / mute / solo / z-index to re-apply on bind).
+    pub config: crate::scene::DeckConfig,
+}
+
 /// Restore result — contains reconstructed mixer.
 /// Surfaces and outputs are loaded separately from stage.json.
 pub struct RestoreResult {
     pub mixer: Mixer,
     pub warnings: Vec<String>,
+    /// Syphon decks deferred for late binding (see `PendingSyphonDeck`).
+    pub pending_syphon: Vec<PendingSyphonDeck>,
 }
 
 /// Reconstruct live state from a SceneConfig.
@@ -841,12 +859,13 @@ pub fn restore_scene(
     render_height: u32,
 ) -> Result<RestoreResult> {
     let mut warnings = Vec::new();
+    let mut pending_syphon: Vec<PendingSyphonDeck> = Vec::new();
     let mut mixer = Mixer::new(context, render_width, render_height)?;
 
     // Clear default channels — we'll create from config
     mixer.channels_mut().clear();
 
-    for ch_config in &config.channels {
+    for (ch_idx, ch_config) in config.channels.iter().enumerate() {
         let mut channel = crate::channel::Channel::new(
             ch_config.name.clone(),
             context,
@@ -860,6 +879,33 @@ pub fn restore_scene(
         channel.blend_mode = ch_config.blend_mode.into();
 
         for deck_config in &ch_config.decks {
+            // Externally-owned Syphon decks are resolved at runtime, not at
+            // restore time — the producer may not be publishing yet. Defer to a
+            // pending binding the render thread auto-attaches
+            // once the named server appears (see VardaApp::reconcile_syphon).
+            // This replaces the old hard-fail stub that dropped the channel to a
+            // black_hole placeholder and spammed "restoration not yet implemented".
+            if let SourceConfig::Syphon { name } = &deck_config.source {
+                #[cfg(target_os = "macos")]
+                {
+                    log::info!(
+                        "Syphon deck '{}' on channel {} deferred to late-bind \
+                         (auto-attaches when the server appears)",
+                        name,
+                        ch_idx
+                    );
+                    pending_syphon.push(PendingSyphonDeck {
+                        channel_idx: ch_idx,
+                        config: deck_config.clone(),
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = ch_idx;
+                    log::debug!("Skipping Syphon deck '{}' on non-macOS restore", name);
+                }
+                continue;
+            }
             match restore_deck(
                 deck_config,
                 context,
@@ -1077,7 +1123,11 @@ pub fn restore_scene(
         }
     }
 
-    Ok(RestoreResult { mixer, warnings })
+    Ok(RestoreResult {
+        mixer,
+        warnings,
+        pending_syphon,
+    })
 }
 
 /// Restore a single deck from config.
