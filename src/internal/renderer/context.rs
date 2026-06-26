@@ -1384,7 +1384,6 @@ impl HeadlessOutput {
         &mut self,
         frame_data: &[u8],
         ndi_manager: &mut crate::ndi::NdiManager,
-        #[cfg(target_os = "macos")] syphon_manager: &mut crate::syphon::SyphonManager,
     ) -> DeliveryResult {
         match &mut self.target {
             OutputTarget::Recording { .. }
@@ -1422,11 +1421,8 @@ impl HeadlessOutput {
                 ndi_manager.send_frame(sender_name, frame_data, self.width, self.height);
                 DeliveryResult::Ok
             }
-            #[cfg(target_os = "macos")]
-            OutputTarget::SyphonServer { .. } => {
-                syphon_manager.publish_frame(frame_data, self.width, self.height);
-                DeliveryResult::Ok
-            }
+            // Syphon output is published GPU-side (zero-copy) in the headless
+            // render loop before this point, so on macOS it never reaches here.
             #[cfg(not(target_os = "macos"))]
             OutputTarget::SyphonServer { .. } => {
                 log::warn!("Syphon output not supported on this platform");
