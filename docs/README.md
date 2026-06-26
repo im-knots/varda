@@ -1,6 +1,6 @@
 # Varda
 
-Varda is a free, open-source live visual mixer and broadcast router for Linux, macOS, and Windows, written in Rust. It routes video sources — shaders, video files, cameras, NDI, SRT, HLS/DASH streams — through a broadcast-style signal matrix (Deck → Channel → Mixer → Surface → Output), composites them with per-parameter modulation and ISF effect chains, and delivers the result to projectors, network streams, recordings, and the web.
+Varda is a free, open-source live visual mixer and broadcast router for Linux, macOS, and Windows, written in Rust. It routes video sources — shaders, video files, cameras, NDI, SRT, HLS/DASH streams, HTML/web pages — through a broadcast-style signal matrix (Deck → Channel → Mixer → Surface → Output), composites them with per-parameter modulation and ISF effect chains, and delivers the result to projectors, network streams, recordings, and the web.
 
 Varda is built for live VJ performance, dome projection, multi-projector installations, and headless media serving — controlled via MIDI, OSC, keyboard shortcuts, or a full REST/WebSocket API.
 
@@ -22,7 +22,7 @@ Varda is built for live VJ performance, dome projection, multi-projector install
   - [CLI Flags](01-getting-started.md#cli-flags)
 - **2. [Core Concepts](02-concepts.md)**
   - [The Signal Flow](02-concepts.md#the-signal-flow) — Deck, Channel, Mixer, Surface, Output
-  - [Source Types](02-concepts.md#source-types) — ISF shaders, video, camera, NDI, SRT, HLS, DASH, RTMP, compute, Syphon
+  - [Source Types](02-concepts.md#source-types) — ISF shaders, video, camera, NDI, SRT, HLS, DASH, RTMP, compute, Syphon, HTML
   - [Blend Modes](02-concepts.md#blend-modes) — 15 compositing modes
   - [Effect Chains](02-concepts.md#effect-chains) — deck, channel, and master FX levels
   - [Modulation](02-concepts.md#modulation) — LFO, audio bands, ADSR, step sequencer, analyzer
@@ -31,9 +31,10 @@ Varda is built for live VJ performance, dome projection, multi-projector install
 ### Part II — Performing
 
 - **3. [Library Panel](03-library-panel.md)** — content browser
-  - [Sections](03-library-panel.md#sections) — generators, effects, images, video, cameras, streams, presets
+  - [Sections](03-library-panel.md#sections) — generators, effects, images, video, cameras, streams, HTML, presets
   - [Drag-and-Drop](03-library-panel.md#drag-and-drop) — drop onto a channel to create a deck
   - [Stream Sources](03-library-panel.md#stream-sources) — NDI/SRT/HLS/DASH/RTMP grouping, status indicators
+  - [HTML Sources](03-library-panel.md#html-sources) — add web page URLs, drag-to-channel
   - [Cameras](03-library-panel.md#cameras) — rescan, resolution selector
 - **4. [Performance & Automation](04-performance.md)**
   - [Video Playback](04-performance.md#video-playback) — loop modes, speed, scrub, HAP codecs, ping-pong cache
@@ -73,6 +74,7 @@ Varda is built for live VJ performance, dome projection, multi-projector install
   - [HLS & DASH](09-streaming-and-io.md#hls--dash)
   - [Recording](09-streaming-and-io.md#recording)
   - [Stream Input Reliability](09-streaming-and-io.md#stream-input-reliability) — dedup, stall detection, reconnect
+  - [HTML / Web Content](09-streaming-and-io.md#html--web-content)
   - [Syphon](09-streaming-and-io.md#syphon-macos)
 - **10. [Resolution, Settings & Monitoring](10-resolution-and-monitoring.md)**
   - [Render Resolution](10-resolution-and-monitoring.md#render-resolution) — presets, custom sizes

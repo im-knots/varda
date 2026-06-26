@@ -52,6 +52,7 @@ Renders assigned surfaces onto a display target — a monitor/projector window, 
 | RTMP | RTMP/RTMPS stream receive |
 | Compute Shader | GLSL compute shader (`.comp`) — particle systems, simulations, GPU-native generators |
 | Syphon | macOS inter-app texture sharing (runtime bridge pending) |
+| HTML | Web page (HTML/CSS/JS) rendered by the embedded Servo browser engine |
 | Solid Color | Flat RGBA color |
 
 ---

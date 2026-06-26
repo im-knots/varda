@@ -57,10 +57,12 @@ fi
 
 # Cargo feature flags for a given target. The face-detection feature pulls in
 # ONNX Runtime, which has no x86_64 macOS dylib, so disable it on that slice
-# (see spec/plugin-architecture.md, decision 5).
+# (see spec/plugin-architecture.md, decision 5). The html feature uses Servo's
+# software RenderingContext (no per-arch/OS interop code), so it builds on the
+# x86_64 slice and is re-enabled explicitly there — see spec/html-source.md.
 cargo_features_for() {
   case "$1" in
-    x86_64-apple-darwin) echo "--no-default-features" ;;
+    x86_64-apple-darwin) echo "--no-default-features --features html" ;;
     *) echo "" ;;
   esac
 }

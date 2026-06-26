@@ -179,6 +179,39 @@ Stream sources are grouped under a single **Stream Sources** header in the Libra
 
 ---
 
+## HTML / Web Content
+
+Render live web pages — dashboards, SVG/Canvas/WebGL, lyric and lower-third overlays, animated HTML/CSS — as a deck source. Pages are rendered by an embedded [Servo](https://servo.org) browser engine and composite alongside every other source.
+
+### Usage
+
+1. In the Library, open the **🌐 HTML Sources** section and click **+ Add HTML**
+2. Enter a source in the **URL:** field:
+   - a remote URL — `https://example.com/overlay.html`
+   - a local file — `file:///Users/you/show/lyrics.html`
+   - an inline document — `data:text/html,<h1>Hello</h1>`
+3. Click **✓ Add**, then **drag** the entry onto a channel to create a live HTML deck
+
+You can also add one directly over the HTTP API:
+
+```sh
+curl -X POST http://localhost:8080/api/channels/0/decks/html \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/overlay.html"}'
+```
+
+HTML decks are persisted in `scene.json` by URL and reload automatically. The source is **render-only** in this release — mouse, scroll, and keyboard input are not forwarded into the page, and engine state (audio/clock/modulation) is not yet exposed to page JavaScript.
+
+### Rendering & performance
+
+HTML is rasterized on the **CPU** (Servo's software renderer) and uploaded to a GPU texture each frame. This keeps the feature portable across every platform and architecture, but it is heavier than the GPU-native deck types. It comfortably handles HTML/CSS/SVG, dashboards, and text overlays; heavy WebGL or full-screen Canvas animation at high resolution may not sustain 60 fps. Profile your pages with the `html_render` benchmark (see [Benchmarking](14-benchmarking.md)) if frame rate matters.
+
+> **Non-blocking, like the stream sources.** HTML rendering runs on a dedicated background thread (a shared Servo engine), the same way NDI/SRT/HLS/DASH/RTMP decode off the render loop. Finished frames are handed to the render thread and uploaded without blocking, so even a heavy page can't stall the 60 fps loop — it simply updates at whatever rate it can render.
+
+> **Feature flag.** HTML decks require the `html` build feature, which is **on by default**. Disable rendering for a session with `--no-html`, or build without it via `--no-default-features`.
+
+---
+
 ## Syphon (macOS)
 
 Syphon enables inter-application GPU texture sharing on macOS. Varda includes framework detection and server discovery.

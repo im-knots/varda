@@ -188,6 +188,7 @@ varda [OPTIONS]
     --no-osc                Disable OSC input
     --no-ndi                Disable NDI discovery and sending
     --no-syphon             Disable Syphon (macOS only)
+    --no-html               Disable HTML deck sources (skips Servo rendering)
 ```
 
 CLI flags override persisted config for that session without modifying the saved files.

@@ -11,9 +11,26 @@
 #[cfg(feature = "html")]
 mod servo_backend;
 
+use std::sync::{Arc, Mutex};
+
 /// Default render resolution for an HTML instance when none is supplied.
 const DEFAULT_WIDTH: u32 = 1920;
 const DEFAULT_HEIGHT: u32 = 1080;
+
+/// Stable opaque identifier for an HTML render instance. Addresses the owning
+/// servo thread's WebViews independently of render-side `Vec` ordering.
+type HtmlId = u64;
+
+/// A finished RGBA frame (`width*height*4`) published from the servo thread.
+struct HtmlFrame {
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+/// Latest-frame slot shared between the servo thread (writer) and the render
+/// thread (reader), mirroring the NDI/stream `Arc<Mutex<Option<…>>>` pattern.
+type FrameSlot = Arc<Mutex<Option<HtmlFrame>>>;
 
 /// Manages offscreen HTML render instances and their destination GPU textures.
 ///
@@ -23,10 +40,14 @@ const DEFAULT_HEIGHT: u32 = 1080;
 pub struct HtmlManager {
     instances: Vec<HtmlInstance>,
     disabled: bool,
+    next_id: HtmlId,
+    /// The single shared servo pump thread, spawned lazily on first render.
+    #[cfg(feature = "html")]
+    engine: Option<servo_backend::ServoEngine>,
 }
 
-/// A single HTML render target: a Servo WebView (when enabled) paired with the
-/// wgpu texture its frames are uploaded into.
+/// A single HTML render target: the wgpu texture frames are uploaded into, plus
+/// the shared slot the servo thread publishes finished frames to.
 struct HtmlInstance {
     url: String,
     width: u32,
@@ -35,8 +56,12 @@ struct HtmlInstance {
     view: wgpu::TextureView,
     /// True once at least one frame (or the placeholder) has been written.
     initialized: bool,
-    #[cfg(feature = "html")]
-    backend: Option<servo_backend::ServoInstance>,
+    /// Stable id addressing this instance on the servo thread.
+    #[cfg_attr(not(feature = "html"), allow(dead_code))]
+    id: HtmlId,
+    /// Latest frame published by the servo thread (never filled when the `html`
+    /// feature is off → placeholder is shown).
+    frame: FrameSlot,
 }
 
 impl Default for HtmlManager {
@@ -51,6 +76,9 @@ impl HtmlManager {
         Self {
             instances: Vec::new(),
             disabled: false,
+            next_id: 0,
+            #[cfg(feature = "html")]
+            engine: None,
         }
     }
 
@@ -61,6 +89,9 @@ impl HtmlManager {
         Self {
             instances: Vec::new(),
             disabled: true,
+            next_id: 0,
+            #[cfg(feature = "html")]
+            engine: None,
         }
     }
 
@@ -112,10 +143,18 @@ impl HtmlManager {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let id = self.next_id;
+        self.next_id += 1;
+        let frame: FrameSlot = Arc::new(Mutex::new(None));
+
+        // Spawn the shared servo thread on first use, then start this instance.
         #[cfg(feature = "html")]
-        let backend = servo_backend::ServoInstance::new(url, width, height)
-            .map_err(|e| log::error!("Servo init failed for '{}': {}", url, e))
-            .ok();
+        {
+            let engine = self
+                .engine
+                .get_or_insert_with(servo_backend::ServoEngine::new);
+            engine.start(id, url, width, height, frame.clone());
+        }
 
         self.instances.push(HtmlInstance {
             url: url.to_string(),
@@ -124,8 +163,8 @@ impl HtmlManager {
             texture,
             view,
             initialized: false,
-            #[cfg(feature = "html")]
-            backend,
+            id,
+            frame,
         });
         log::info!(
             "HTML instance {} started for '{}' ({}x{})",
@@ -142,16 +181,15 @@ impl HtmlManager {
     /// not invisible.
     pub fn update(&mut self, _device: &wgpu::Device, queue: &wgpu::Queue) {
         for instance in &mut self.instances {
-            // Pull the latest frame (owned) first so the backend borrow is
-            // released before we re-borrow `instance` for the upload.
-            #[cfg(feature = "html")]
-            let frame = instance.backend.as_mut().and_then(|b| b.pump_and_read());
-            #[cfg(not(feature = "html"))]
-            let frame: Option<Vec<u8>> = None;
+            // Non-blocking poll of the latest frame published by the servo thread
+            // (latest-wins, identical to the NDI/stream sources).
+            let frame = instance.frame.try_lock().ok().and_then(|mut g| g.take());
 
             if let Some(frame) = frame {
-                Self::upload(queue, instance, &frame);
-                instance.initialized = true;
+                if frame.width == instance.width && frame.height == instance.height {
+                    Self::upload(queue, instance, &frame.data);
+                    instance.initialized = true;
+                }
             } else if !instance.initialized {
                 let placeholder = placeholder_frame(instance.width, instance.height);
                 Self::upload(queue, instance, &placeholder);
@@ -213,8 +251,8 @@ impl HtmlManager {
             instance.url = url.to_string();
             instance.initialized = false;
             #[cfg(feature = "html")]
-            if let Some(backend) = instance.backend.as_mut() {
-                backend.navigate(url);
+            if let Some(engine) = self.engine.as_ref() {
+                engine.navigate(instance.id, url);
             }
         }
     }
@@ -223,6 +261,13 @@ impl HtmlManager {
     /// not preserved — callers that hold indices should treat this as teardown.
     pub fn stop_render(&mut self, idx: usize) {
         if idx < self.instances.len() {
+            #[cfg(feature = "html")]
+            {
+                let id = self.instances[idx].id;
+                if let Some(engine) = self.engine.as_ref() {
+                    engine.stop(id);
+                }
+            }
             self.instances.remove(idx);
         }
     }
