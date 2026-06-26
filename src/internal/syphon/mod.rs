@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, OnceLock,
+    Arc, Mutex, OnceLock,
 };
 use std::thread::JoinHandle;
 
@@ -75,47 +75,6 @@ extern_class!(
 const KEY_NAME: &str = "SyphonServerDescriptionNameKey";
 const KEY_APP: &str = "SyphonServerDescriptionAppNameKey";
 
-use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{extern_class, msg_send, AnyThread, ClassType};
-use objc2_foundation::{NSArray, NSDictionary, NSString};
-use objc2_metal::{
-    MTLCreateSystemDefaultDevice, MTLDevice, MTLOrigin, MTLRegion, MTLSize, MTLTexture,
-};
-
-// ---------------------------------------------------------------------------
-// Syphon.framework FFI. These classes are vended by Syphon.framework (loaded at
-// runtime via dlopen), declared here as opaque NSObject subclasses.
-//
-// SyphonServerDirectory.h:
-//   + (SyphonServerDirectory *)sharedDirectory;
-//   - (NSArray<NSDictionary *> *)serversMatchingName:(NSString *)name
-//                                              appName:(NSString *)appName;
-// SyphonMetalClient.h:
-//   - initWithServerDescription:(NSDictionary *)desc device:(id<MTLDevice>)dev
-//                       options:(NSDictionary *)opts
-//               newFrameHandler:(void (^)(SyphonMetalClient *))handler;
-//   - (id<MTLTexture>)newFrameImage;
-//   - (void)stop;
-// ---------------------------------------------------------------------------
-extern_class!(
-    #[unsafe(super(objc2::runtime::NSObject))]
-    #[name = "SyphonServerDirectory"]
-    pub struct SyphonServerDirectory;
-);
-
-extern_class!(
-    #[unsafe(super(objc2::runtime::NSObject))]
-    #[name = "SyphonMetalClient"]
-    pub struct SyphonMetalClient;
-);
-
-// Syphon server-description dictionary keys. The framework exports these as
-// extern NSString constants; we reconstruct them from their documented values
-// to avoid an extern-static binding.
-const KEY_NAME: &str = "SyphonServerDescriptionNameKey";
-const KEY_APP: &str = "SyphonServerDescriptionAppNameKey";
-
 /// Discovered Syphon server.
 #[derive(Debug, Clone)]
 pub struct SyphonSource {
@@ -125,38 +84,13 @@ pub struct SyphonSource {
     pub app_name: String,
 }
 
-<<<<<<< HEAD
 /// Latest decoded frame handed from a receive thread to the render thread.
 struct SyphonFrame {
     data: Vec<u8>,
-=======
-/// Manages Syphon server discovery and client connections.
-pub struct SyphonManager {
-    available: bool,
-    sources: Vec<SyphonSource>,
-    /// Server-description dicts kept alongside `sources` by name, needed to init
-    /// a `SyphonMetalClient`.
-    descriptions: Vec<(String, Retained<NSDictionary<NSString, AnyObject>>)>,
-    clients: Vec<SyphonClient>,
-    textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
-    /// Our own Metal device for the clients (one GPU on M-series). Lazily created.
-    metal_device: Option<Retained<ProtocolObject<dyn MTLDevice>>>,
-    /// wgpu device clone, captured at first `start_receive`, so `update()` can
-    /// (re)create textures when a server's frame size becomes known/changes.
-    device: Option<wgpu::Device>,
-}
-
-struct SyphonClient {
-    #[allow(dead_code)]
-    server_name: String,
-    client: Retained<SyphonMetalClient>,
-    stop_flag: Arc<AtomicBool>,
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
     width: u32,
     height: u32,
 }
 
-<<<<<<< HEAD
 /// Manages Syphon server discovery, client receivers, and server publishers.
 pub struct SyphonManager {
     available: bool,
@@ -282,10 +216,6 @@ impl PublishScheduler {
 // the retained server descriptions are render-thread-only; receiver Metal
 // clients live on their own threads and are never stored here. Nothing is shared
 // across threads, so asserting Send is sound.
-=======
-// Single-threaded ownership: the manager lives on (and is only touched from)
-// varda's render thread. Metal objects aren't Sync but are never shared.
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
 unsafe impl Send for SyphonManager {}
 
 impl Default for SyphonManager {
@@ -306,7 +236,6 @@ impl SyphonManager {
             available,
             sources: Vec::new(),
             descriptions: Vec::new(),
-<<<<<<< HEAD
             receivers: Vec::new(),
             textures: Vec::new(),
             metal_device: None,
@@ -314,12 +243,6 @@ impl SyphonManager {
             publish_queue: None,
             convert_pipeline: None,
             servers: HashMap::new(),
-=======
-            clients: Vec::new(),
-            textures: Vec::new(),
-            metal_device: None,
-            device: None,
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
         }
     }
 
@@ -386,22 +309,16 @@ impl SyphonManager {
         log::debug!("Syphon discover: {} server(s)", self.sources.len());
     }
 
-<<<<<<< HEAD
     /// Start receiving from a named Syphon server. Spawns a dedicated receive
     /// thread (`syphon-recv-{name}`) that owns the `SyphonMetalClient`, polls
     /// `newFrameImage`, performs the `getBytes` CPU readback off the render
     /// thread, and publishes RGBA into `frame_data`. Returns a client index used
     /// by `texture_view()` / `client_dimensions()`.
-=======
-    /// Start receiving from a named Syphon server. Returns a client index used by
-    /// `texture_view()` / `client_dimensions()`.
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
     pub fn start_receive(&mut self, server_name: &str, device: &wgpu::Device) -> Option<usize> {
         if !self.available {
             log::warn!("Cannot receive Syphon: framework not available");
             return None;
         }
-<<<<<<< HEAD
 
         // The description must be resolved here (render thread): SyphonServerDirectory
         // observes distributed notifications on the render-thread run loop.
@@ -445,40 +362,6 @@ impl SyphonManager {
         let stop_clone = Arc::clone(&stop_flag);
         let connected_clone = Arc::clone(&connected);
         let name_log = server_name.to_string();
-=======
-        if self.device.is_none() {
-            self.device = Some(device.clone());
-        }
-
-        let desc = self
-            .descriptions
-            .iter()
-            .find(|(n, _)| n == server_name)
-            .map(|(_, d)| d.clone());
-        let Some(desc) = desc else {
-            log::warn!("Syphon: no discovered server named '{}'", server_name);
-            return None;
-        };
-
-        let metal = self.metal_device()?.clone();
-        let client: Retained<SyphonMetalClient> = unsafe {
-            let alloc = SyphonMetalClient::alloc();
-            let nil_opts: *const NSDictionary<NSString, AnyObject> = std::ptr::null();
-            // newFrameHandler: nil — we poll in update() instead of using the block.
-            let handler: *const AnyObject = std::ptr::null();
-            msg_send![
-                alloc,
-                initWithServerDescription: &*desc,
-                device: &*metal,
-                options: nil_opts,
-                newFrameHandler: handler,
-            ]
-        };
-
-        // Placeholder size; corrected on the first frame in update().
-        let (width, height) = (1920u32, 1080u32);
-        let (texture, view) = make_texture(device, server_name, width, height);
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
 
         let thread = std::thread::Builder::new()
             .name(format!("syphon-recv-{}", server_name))
@@ -508,15 +391,10 @@ impl SyphonManager {
         let idx = self.receivers.len();
         self.receivers.push(SyphonReceiver {
             server_name: server_name.to_string(),
-<<<<<<< HEAD
             frame_data,
             stop_flag,
             connected,
             thread,
-=======
-            client,
-            stop_flag: Arc::new(AtomicBool::new(false)),
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
             width,
             height,
         });
@@ -525,7 +403,6 @@ impl SyphonManager {
         Some(idx)
     }
 
-<<<<<<< HEAD
     /// Pull the newest frame from each receive thread and upload it to its wgpu
     /// texture. Render-thread, upload-only: non-blocking `try_lock` + `take` +
     /// `write_texture`, recreating the texture when the server's frame size changes.
@@ -536,34 +413,6 @@ impl SyphonManager {
                     guard.take()
                 } else {
                     None
-=======
-    /// Pull the newest frame from each client and upload it to its wgpu texture.
-    /// Runs on the render thread (callers already hold `&mut self`).
-    pub fn update(&mut self, queue: &wgpu::Queue) {
-        for i in 0..self.clients.len() {
-            if self.clients[i].stop_flag.load(Ordering::Relaxed) {
-                continue;
-            }
-            // Latest completed frame, or None if nothing new.
-            let tex: Option<Retained<ProtocolObject<dyn MTLTexture>>> =
-                unsafe { msg_send![&self.clients[i].client, newFrameImage] };
-            let Some(tex) = tex else { continue };
-
-            let w = tex.width() as u32;
-            let h = tex.height() as u32;
-            if w == 0 || h == 0 {
-                continue;
-            }
-
-            // Resize the wgpu texture if the server's frame size changed.
-            if w != self.clients[i].width || h != self.clients[i].height {
-                if let Some(dev) = self.device.clone() {
-                    let name = self.clients[i].server_name.clone();
-                    let (t, v) = make_texture(&dev, &name, w, h);
-                    self.textures[i] = (t, v);
-                    self.clients[i].width = w;
-                    self.clients[i].height = h;
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
                 }
             };
             let Some(frame) = new_frame else { continue };
@@ -572,7 +421,6 @@ impl SyphonManager {
                 continue;
             }
 
-<<<<<<< HEAD
             // Recreate the wgpu texture if the server's frame size changed.
             if w != self.receivers[i].width || h != self.receivers[i].height {
                 let name = self.receivers[i].server_name.clone();
@@ -586,29 +434,6 @@ impl SyphonManager {
             if frame.data.len() < expected {
                 continue;
             }
-=======
-            // CPU readback from the IOSurface-backed Metal texture.
-            // NOTE: requires the source texture to be Shared/Managed storage
-            // (Syphon's surface textures are Shared on Apple silicon).
-            let mut buf = vec![0u8; (w * h * 4) as usize];
-            let region = MTLRegion {
-                origin: MTLOrigin { x: 0, y: 0, z: 0 },
-                size: MTLSize {
-                    width: w as usize,
-                    height: h as usize,
-                    depth: 1,
-                },
-            };
-            unsafe {
-                tex.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                    std::ptr::NonNull::new(buf.as_mut_ptr() as *mut std::ffi::c_void).unwrap(),
-                    (w * 4) as usize,
-                    region,
-                    0,
-                );
-            }
-
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.textures[i].0,
@@ -616,11 +441,7 @@ impl SyphonManager {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-<<<<<<< HEAD
                 &frame.data[..expected],
-=======
-                &buf,
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(w * 4),
@@ -643,7 +464,6 @@ impl SyphonManager {
         self.receivers.get(idx).map(|c| (c.width, c.height))
     }
 
-<<<<<<< HEAD
     /// Whether the receive thread for `idx` is currently getting frames.
     pub fn is_connected(&self, idx: usize) -> bool {
         self.receivers
@@ -896,16 +716,6 @@ impl SyphonManager {
             r.stop_flag.store(true, Ordering::SeqCst);
             if let Some(t) = r.thread.take() {
                 let _ = t.join();
-=======
-    /// Publishing from varda is out of scope here (varda is the client).
-    pub fn publish_frame(&mut self, _rgba: &[u8], _width: u32, _height: u32) {}
-
-    pub fn stop_receive(&mut self, idx: usize) {
-        if let Some(c) = self.clients.get_mut(idx) {
-            c.stop_flag.store(true, Ordering::SeqCst);
-            unsafe {
-                let _: () = msg_send![&c.client, stop];
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
             }
         }
     }
@@ -915,7 +725,6 @@ impl SyphonManager {
     }
 }
 
-<<<<<<< HEAD
 /// Receive loop body, run on a dedicated `syphon-recv-*` thread. Polls the
 /// client for new frames, performs the CPU readback, and swaps RGBA into
 /// `frame_data`. Tracks a `connected` flag: a producer that stops publishing is
@@ -985,8 +794,6 @@ fn syphon_receive_loop(
     }
 }
 
-=======
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
 /// dlopen Syphon.framework once and keep it loaded for the process lifetime.
 ///
 /// We load at runtime (via libloading, already a varda dep) rather than linking
@@ -1058,17 +865,10 @@ fn make_texture(
 
 impl Drop for SyphonManager {
     fn drop(&mut self) {
-<<<<<<< HEAD
         for r in &mut self.receivers {
             r.stop_flag.store(true, Ordering::SeqCst);
             if let Some(t) = r.thread.take() {
                 let _ = t.join();
-=======
-        for c in &mut self.clients {
-            c.stop_flag.store(true, Ordering::SeqCst);
-            unsafe {
-                let _: () = msg_send![&c.client, stop];
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
             }
         }
         for h in self.servers.values() {
@@ -1184,58 +984,5 @@ mod tests {
         assert_eq!(s.poll_write(), None);
         assert_eq!(s.poll_publish(&[true, false]), Some(0));
         assert_eq!(s.poll_write(), Some(1));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // These exercise the host-independent paths only: a fresh manager holds no
-    // clients/sources, so none of these touch Syphon.framework or Metal. They
-    // pass whether or not Syphon is installed on the test machine.
-
-    #[test]
-    fn syphon_manager_new_no_crash() {
-        // new() probes for Syphon.framework; on machines without it, `available`
-        // is simply false. Just verify construction and the query don't panic.
-        let mgr = SyphonManager::new();
-        let _ = mgr.is_available();
-    }
-
-    #[test]
-    fn syphon_manager_disabled_is_unavailable() {
-        let mgr = SyphonManager::new_disabled();
-        assert!(!mgr.is_available());
-    }
-
-    #[test]
-    fn syphon_manager_sources_empty() {
-        let mgr = SyphonManager::new();
-        assert!(mgr.sources().is_empty());
-        assert!(mgr.discovered_sources().is_empty());
-    }
-
-    #[test]
-    fn syphon_manager_texture_view_out_of_bounds() {
-        let mgr = SyphonManager::new();
-        assert!(mgr.texture_view(0).is_none());
-        assert!(mgr.texture_view(999).is_none());
-    }
-
-    #[test]
-    fn syphon_manager_client_dimensions_out_of_bounds() {
-        let mgr = SyphonManager::new();
-        assert!(mgr.client_dimensions(0).is_none());
-        assert!(mgr.client_dimensions(999).is_none());
-    }
-
-    #[test]
-    fn syphon_manager_discover_noop_when_unavailable() {
-        // discover() early-returns when the framework is absent; on a machine
-        // with Syphon it may populate sources, but must never panic either way.
-        let mut mgr = SyphonManager::new_disabled();
-        mgr.discover();
-        assert!(mgr.sources().is_empty());
     }
 }

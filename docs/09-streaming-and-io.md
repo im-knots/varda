@@ -214,7 +214,6 @@ HTML is rasterized on the **CPU** (Servo's software renderer) and uploaded to a 
 
 ## Syphon (macOS)
 
-<<<<<<< HEAD
 Syphon enables inter-application GPU texture sharing on macOS. Varda works both ways: as a Syphon **client** (receiving other apps' frames as live sources) and as a Syphon **server** (publishing a Varda output for other apps to consume).
 
 **Receive (client):**
@@ -232,14 +231,6 @@ Frames are pulled per-frame from the Syphon server's `MTLTexture` and uploaded i
 4. Start the output — other Syphon apps then see it in their source list
 
 Publishing is **zero-copy on the GPU**: the rendered output is converted (RGBA→BGRA) by a GPU pass and shared directly via Metal — no CPU readback.
-=======
-Syphon enables inter-application GPU texture sharing on macOS. Varda acts as a Syphon **client**: it discovers servers published by other apps (Resolume, VDMX, MadMapper, etc.) and receives their frames as live sources.
-
-1. Open the Library and look under **Syphon Sources** for discovered servers
-2. **Drag** a server into a channel to create a live deck
-
-Frames are pulled per-frame from the Syphon server's `MTLTexture` and uploaded into Varda's wgpu texture path via CPU readback — a cheap same-memory copy on Apple-silicon unified memory. A zero-copy path (wrapping the IOSurface texture directly as a `wgpu::Texture`) is a possible follow-on.
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
 
 ### Installing Syphon.framework
 
@@ -264,11 +255,7 @@ This is the standard, verified location — it is also where other Syphon apps o
 
 Pass `--no-syphon` to disable Syphon explicitly even when the framework is installed.
 
-<<<<<<< HEAD
 > **Note:** Varda is both a Syphon client (receive) and a Syphon server (publish a `SyphonServer` output).
-=======
-> **Note:** Varda is a Syphon client (receive only); it does not publish its output as a Syphon server.
->>>>>>> refs/remotes/dancemore/pr/syphon-receiver
 
 ---
 
