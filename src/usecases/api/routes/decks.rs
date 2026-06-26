@@ -830,6 +830,29 @@ pub async fn add_rtmp_deck(
     }
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct HtmlSourceBody {
+    /// HTML content URL or local file path.
+    pub url: String,
+}
+#[utoipa::path(post, path = "/api/channels/{ch}/decks/html", params(("ch" = usize, Path, description = "Channel index")), request_body = HtmlSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn add_html_deck(
+    State(s): State<SharedState>,
+    Path(ch): Path<usize>,
+    Json(b): Json<HtmlSourceBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::AddHtmlDeck {
+            channel_idx: ch,
+            url: b.url,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
 // ── Missing Parity Routes ─────────────────────────────────────────
 
 #[derive(Deserialize, ToSchema)]

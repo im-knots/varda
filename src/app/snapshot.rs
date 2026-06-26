@@ -1052,6 +1052,16 @@ pub(crate) fn build_ui_data(
                 }),
             })
             .collect(),
+        html_library_configs: app
+            .external_io
+            .html_library
+            .iter()
+            .map(|url| crate::usecases::ui::HtmlLibraryEntry {
+                url: url.clone(),
+                active: (0..app.external_io.html_manager.instance_count())
+                    .any(|i| app.external_io.html_manager.instance_url(i) == Some(url.as_str())),
+            })
+            .collect(),
 
         sequences,
         channel_count: engine.mixer.channels.len(),

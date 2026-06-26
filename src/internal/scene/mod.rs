@@ -356,6 +356,8 @@ pub enum SourceConfig {
     Dash { url: String },
     /// RTMP stream source (reconnected on restore)
     Rtmp { url: String, mode: String },
+    /// HTML content source (URL or file path, rendered via Servo)
+    Html { url: String },
 }
 
 // ── Effect ─────────────────────────────────────────────────────────
@@ -632,6 +634,11 @@ impl SourceConfig {
             SourceConfig::Rtmp { url, .. } => {
                 if url.trim().is_empty() {
                     errors.push(format!("{}: RTMP url is empty", prefix));
+                }
+            }
+            SourceConfig::Html { url } => {
+                if url.trim().is_empty() {
+                    errors.push(format!("{}: HTML url is empty", prefix));
                 }
             }
         }
@@ -1243,6 +1250,21 @@ mod tests {
                 assert_eq!(mode, "pull");
             }
             _ => panic!("Expected Rtmp source"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_html_source() {
+        let source = SourceConfig::Html {
+            url: "https://example.com/visuals.html".to_string(),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Html { url } => {
+                assert_eq!(url, "https://example.com/visuals.html");
+            }
+            _ => panic!("Expected Html source"),
         }
     }
 

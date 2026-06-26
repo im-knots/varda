@@ -303,6 +303,7 @@ pub enum ExternalSourceKind {
     Hls(usize),
     Dash(usize),
     Rtmp(usize),
+    Html(usize),
 }
 
 impl ExternalSourceKind {
@@ -316,6 +317,7 @@ impl ExternalSourceKind {
             Self::Hls(_) => "hls",
             Self::Dash(_) => "dash",
             Self::Rtmp(_) => "rtmp",
+            Self::Html(_) => "html",
         }
     }
 
@@ -326,6 +328,7 @@ impl ExternalSourceKind {
             Self::Ndi(_) => "NDI",
             Self::Syphon(_) => "Syphon",
             Self::Srt(_) | Self::Hls(_) | Self::Dash(_) | Self::Rtmp(_) => "Stream",
+            Self::Html(_) => "HTML",
         }
     }
 }

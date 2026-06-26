@@ -1288,6 +1288,18 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
+    #[tokio::test]
+    async fn test_add_html_deck() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/channels/0/decks/html",
+            serde_json::json!({"url": "https://example.com/visuals.html"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
     // ── Write: Effects extras ───────────────────────────────────
 
     #[tokio::test]

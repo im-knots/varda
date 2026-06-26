@@ -632,6 +632,12 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     actions.rtmp_to_add = Some((ch_idx, url, mode));
                 }
 
+                let html_key = egui::Id::new("__lib_dnd_html_url");
+                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(html_key)) {
+                    log::info!("Library drop (deferred): HTML '{}' -> ch{}", url, ch_idx);
+                    actions.html_to_add = Some((ch_idx, url));
+                }
+
                 // Deck preset dropped on a channel
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
                 let deck_preset_idx: Option<usize> =
@@ -739,6 +745,16 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     actions.rtmp_to_add = Some((new_ch_idx, url, mode));
                 }
 
+                let html_key = egui::Id::new("__lib_dnd_html_url");
+                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(html_key)) {
+                    log::info!(
+                        "Library drop (deferred): HTML '{}' -> new ch{}",
+                        url,
+                        new_ch_idx
+                    );
+                    actions.html_to_add = Some((new_ch_idx, url));
+                }
+
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
                 if let Some(preset_idx) =
                     ctx.memory(|mem| mem.data.get_temp::<usize>(deck_preset_key))
@@ -832,6 +848,8 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     .remove::<(String, crate::stream::RtmpMode)>(egui::Id::new(
                         "__lib_dnd_rtmp_config",
                     ));
+                mem.data
+                    .remove::<String>(egui::Id::new("__lib_dnd_html_url"));
                 mem.data
                     .remove::<usize>(egui::Id::new("__lib_dnd_deck_preset_idx"));
                 mem.data

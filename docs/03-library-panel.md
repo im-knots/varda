@@ -14,6 +14,7 @@ The panel is a stack of collapsible sections, in this order:
 | **🎬 Video** | Per-channel **📁 Load to [Channel]** button (opens a file dialog). |
 | **📹 Cameras** | Detected camera devices, with a **🔄 Rescan** button. |
 | **📡 Stream Sources** | NDI, SRT, HLS, DASH, and RTMP sources (see below). |
+| **🌐 HTML Sources** | Web pages (HTML/CSS/JS) rendered by Servo (see below). |
 | **💾 Deck Presets** | Saved deck presets (shown only when presets exist). |
 | **💾 Channel Presets** | Saved channel presets (shown only when presets exist). |
 
@@ -30,6 +31,7 @@ The Library is built around drag-and-drop. The core gesture is **drag an item on
 | **Camera** | `📹` | Drag onto a channel → new camera deck. |
 | **NDI** | `📡` | Drag onto a channel → new NDI deck. |
 | **SRT / HLS / DASH / RTMP** | `📺` / `📡` | Drag onto a channel → new stream deck. |
+| **HTML** | `🌐` | Drag onto a channel → new HTML deck. |
 | **Deck Preset** | — | Drag onto a channel (or double-click → Channel 0) to load it. |
 | **Channel Preset** | — | Drag (or double-click) to add a channel to the mixer. |
 
@@ -55,6 +57,16 @@ The **📡 Stream Sources** section groups all live network inputs. Its header c
 Each entry has a small **✕** button to remove it from the list.
 
 > **Library entries vs. decks.** The stream URLs you add to the sidebar are session-only quick-access entries — they are *not* written to disk. Once you drag a stream onto a channel, the resulting **deck** is persisted in `scene.json` with its protocol, URL, and mode. See [Streaming & I/O](09-streaming-and-io.md) for adding and configuring stream sources.
+
+## HTML Sources
+
+The **🌐 HTML Sources** section holds web pages — any URL or local HTML file — rendered live by the embedded [Servo](https://servo.org) browser engine and usable as a deck.
+
+- Click **+ Add HTML**, type a URL into the **URL:** field (default `https://example.com/visuals.html`), then **✓ Add**.
+- Each entry shows a colored bullet (`●`): **green** when a deck is actively rendering it, **gray** otherwise. The **✕** button removes it from the list.
+- **Drag** an entry onto a channel to create an HTML deck.
+
+Like stream library entries, the URLs you add here are session-only quick-access entries — they are *not* written to disk. The **deck** you create by dragging is persisted in `scene.json` by URL. See [HTML / Web Content](09-streaming-and-io.md#html--web-content) for rendering details and performance notes.
 
 ## Cameras
 

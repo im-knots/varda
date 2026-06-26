@@ -968,6 +968,27 @@ impl Deck {
         )
     }
 
+    /// Create a new deck from an HTML source (Servo offscreen render).
+    pub fn new_from_html(
+        context: &GpuContext,
+        instance_idx: usize,
+        url: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        Self::new_from_external(
+            context,
+            ExternalSourceKind::Html(instance_idx),
+            format!("🌐 {}", url),
+            source_width,
+            source_height,
+            width,
+            height,
+        )
+    }
+
     /// Create a new deck from a GLSL compute shader (.comp file)
     pub fn new_from_compute_shader(
         context: &GpuContext,

@@ -275,6 +275,11 @@ impl VardaApp {
         // Update stream receiver frames
         self.external_io.stream_manager.update(&self.context.queue);
 
+        // Pump HTML (Servo) instances and upload their frames
+        self.external_io
+            .html_manager
+            .update(&self.context.device, &self.context.queue);
+
         for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
                 if let Some(kind) = slot.deck.external_source_kind() {
@@ -297,6 +302,9 @@ impl VardaApp {
                         | ExternalSourceKind::Dash(idx)
                         | ExternalSourceKind::Rtmp(idx) => {
                             self.external_io.stream_manager.texture_view(idx).cloned()
+                        }
+                        ExternalSourceKind::Html(idx) => {
+                            self.external_io.html_manager.texture_view(idx).cloned()
                         }
                     };
                 }

@@ -69,6 +69,10 @@ pub struct AppConfig {
     /// Disable Syphon (macOS only)
     #[arg(long = "no-syphon")]
     pub syphon_disabled: bool,
+
+    /// Disable HTML deck sources (skips Servo rendering)
+    #[arg(long = "no-html")]
+    pub html_disabled: bool,
 }
 
 impl AppConfig {
@@ -166,6 +170,8 @@ pub(crate) struct ExternalIO {
     pub hls_library: Vec<String>,
     pub dash_library: Vec<String>,
     pub rtmp_library: Vec<(String, crate::stream::RtmpMode)>,
+    pub html_manager: crate::html::HtmlManager,
+    pub html_library: Vec<String>,
 }
 
 /// Frame timing and system monitoring.
@@ -426,6 +432,12 @@ impl VardaApp {
                 hls_library: Vec::new(),
                 dash_library: Vec::new(),
                 rtmp_library: Vec::new(),
+                html_manager: if config.html_disabled {
+                    crate::html::HtmlManager::new_disabled()
+                } else {
+                    crate::html::HtmlManager::new()
+                },
+                html_library: Vec::new(),
             },
             frame_stats: FrameStats {
                 last_frame_instant: std::time::Instant::now(),
@@ -1219,6 +1231,9 @@ impl VardaApp {
                 url,
                 mode,
             } => self.cmd_add_rtmp_deck(channel_idx, url, mode),
+            EngineCommand::AddHtmlDeck { channel_idx, url } => {
+                self.cmd_add_html_deck(channel_idx, url)
+            }
 
             // ── Transition Sequences ──────────────────────────
             EngineCommand::CreateSequence => self.cmd_create_sequence(),

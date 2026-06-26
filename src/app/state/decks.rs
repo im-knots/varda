@@ -549,6 +549,68 @@ impl VardaApp {
             }
         }
 
+        // Add HTML deck if requested
+        if let Some((ch_idx, url)) = actions.html_to_add.take() {
+            match self.external_io.html_manager.start_render(
+                &url,
+                self.render_width,
+                self.render_height,
+                &context.device,
+            ) {
+                Some(instance_idx) => {
+                    let (src_w, src_h) = self
+                        .external_io
+                        .html_manager
+                        .instance_dimensions(instance_idx)
+                        .unwrap_or((1920, 1080));
+                    match Deck::new_from_html(
+                        context,
+                        instance_idx,
+                        &url,
+                        src_w,
+                        src_h,
+                        self.render_width,
+                        self.render_height,
+                    ) {
+                        Ok(deck) => {
+                            if let Some(ch) = mixer.channel_mut(ch_idx) {
+                                let idx = ch.add_deck(deck);
+                                log::info!(
+                                    "Added HTML deck {} to channel {}: {}",
+                                    idx,
+                                    ch_idx,
+                                    url
+                                );
+                                let texture_id = egui_renderer.register_native_texture(
+                                    &context.device,
+                                    &ch.decks[idx].deck.texture_view,
+                                    wgpu::FilterMode::Linear,
+                                );
+                                deck_preview_textures.insert((ch_idx, idx), texture_id);
+                                self.session.notifications.info(format!(
+                                    "🌐 HTML '{}' added to Ch {}",
+                                    url,
+                                    ch_idx + 1
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create HTML deck: {}", e);
+                            self.session
+                                .notifications
+                                .error(format!("Failed to create HTML deck: {}", e));
+                        }
+                    }
+                }
+                None => {
+                    log::error!("Failed to start HTML render for '{}'", url);
+                    self.session
+                        .notifications
+                        .error(format!("Failed to render HTML source '{}'", url));
+                }
+            }
+        }
+
         // Add/remove HLS library entries
         if let Some(url) = actions.hls_library_add.take() {
             if !self.external_io.hls_library.contains(&url) {
@@ -583,6 +645,18 @@ impl VardaApp {
         if let Some(url) = actions.rtmp_library_remove.take() {
             self.external_io.rtmp_library.retain(|(u, _)| u != &url);
             log::info!("Removed RTMP source from library: {}", url);
+        }
+
+        // Add/remove HTML library entries
+        if let Some(url) = actions.html_library_add.take() {
+            if !self.external_io.html_library.contains(&url) {
+                log::info!("Added HTML source to library: {}", url);
+                self.external_io.html_library.push(url);
+            }
+        }
+        if let Some(url) = actions.html_library_remove.take() {
+            self.external_io.html_library.retain(|u| u != &url);
+            log::info!("Removed HTML source from library: {}", url);
         }
 
         // Add Syphon server deck if requested
@@ -659,6 +733,7 @@ impl VardaApp {
                     &mut self.camera_manager,
                     &mut self.external_io.ndi_manager,
                     &mut self.external_io.stream_manager,
+                    &mut self.external_io.html_manager,
                     self.render_width,
                     self.render_height,
                     mixer,
@@ -764,6 +839,7 @@ impl VardaApp {
                             &mut self.camera_manager,
                             &mut self.external_io.ndi_manager,
                             &mut self.external_io.stream_manager,
+                            &mut self.external_io.html_manager,
                             self.render_width,
                             self.render_height,
                             mixer,
@@ -1213,6 +1289,7 @@ impl VardaApp {
         camera_manager: &mut crate::camera::CameraManager,
         ndi_manager: &mut crate::ndi::NdiManager,
         stream_manager: &mut crate::stream::StreamManager,
+        html_manager: &mut crate::html::HtmlManager,
         render_width: u32,
         render_height: u32,
         mixer: &mut crate::mixer::Mixer,
@@ -1226,6 +1303,7 @@ impl VardaApp {
             camera_manager,
             ndi_manager,
             stream_manager,
+            html_manager,
             render_width,
             render_height,
         )?;
