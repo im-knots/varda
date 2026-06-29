@@ -5,8 +5,7 @@
 //! ffmpeg can't keep up (e.g. SRT listener waiting for client), frames are dropped.
 
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -14,14 +13,6 @@ use std::sync::Arc;
 
 use crate::audio::PcmChunk;
 use crate::renderer::context::RecordingCodec;
-
-/// `O_NONBLOCK` for opening a FIFO read end during teardown without blocking.
-/// Hardcoded per-OS (std doesn't expose it) to avoid a `libc`/`nix` dependency
-/// and the universal-dmg retest that a new native crate would trigger.
-#[cfg(target_os = "macos")]
-const O_NONBLOCK: i32 = 0x0004;
-#[cfg(target_os = "linux")]
-const O_NONBLOCK: i32 = 0o4000;
 
 /// Write a self-contained HTML player page into a stream directory.
 /// Uses hls.js for HLS streams and dash.js for DASH streams.
@@ -131,7 +122,7 @@ const STREAM_SAMPLE_RATE: &str = "48000";
 /// interleaved `f32` PCM plus the capture device's native format. Built from an
 /// `AudioManager` PCM subscription; `None` keeps the byte-for-byte video-only path.
 pub struct AudioInput {
-    /// Raw interleaved PCM, drained by the audio writer thread into the FIFO.
+    /// Raw interleaved PCM, drained by the audio writer thread into the socket.
     pub rx: crossbeam_channel::Receiver<PcmChunk>,
     /// Device native sample rate (Hz).
     pub sample_rate: u32,
@@ -139,19 +130,19 @@ pub struct AudioInput {
     pub channels: u16,
 }
 
-/// ffmpeg argument vectors + the live FIFO/receiver, computed before the
+/// ffmpeg argument vectors + the live listener/receiver, computed before the
 /// `Command` is assembled so audio input args can be interleaved after the video
 /// input and audio output args before the destination.
 struct PreparedAudio {
     in_args: Vec<String>,
     out_args: Vec<String>,
-    fifo_path: PathBuf,
+    listener: TcpListener,
     rx: crossbeam_channel::Receiver<PcmChunk>,
 }
 
-/// Build the ffmpeg audio input/output args and create the FIFO for an optional
-/// audio passthrough. `is_stream` selects the sample-rate policy: native rate
-/// for Recording, normalized 48k for streaming targets (Decision 5).
+/// Build the ffmpeg audio input/output args and bind the loopback TCP endpoint
+/// for an optional audio passthrough. `is_stream` selects the sample-rate policy:
+/// native rate for Recording, normalized 48k for streaming targets (Decision 5).
 fn prepare_audio(
     audio: Option<AudioInput>,
     is_stream: bool,
@@ -159,7 +150,7 @@ fn prepare_audio(
     let Some(audio) = audio else {
         return Ok(None);
     };
-    let fifo_path = create_audio_fifo()?;
+    let (listener, audio_url) = create_audio_endpoint()?;
     // Input opts (must precede the audio `-i`): wallclock timestamps anchor the
     // first sample near the first video frame; f32le matches the raw PCM tap.
     let in_args = vec![
@@ -172,7 +163,7 @@ fn prepare_audio(
         "-ac".into(),
         audio.channels.to_string(),
         "-i".into(),
-        fifo_path.to_string_lossy().into_owned(),
+        audio_url,
     ];
     // Output opts: AAC, stereo downmix (Decision: stereo for v1), async resample
     // to absorb A/V drift; force 48k on streams, leave native on recordings.
@@ -198,80 +189,95 @@ fn prepare_audio(
     Ok(Some(PreparedAudio {
         in_args,
         out_args,
-        fifo_path,
+        listener,
         rx: audio.rx,
     }))
 }
 
-/// Create a uniquely-named FIFO in the temp dir via the system `mkfifo` binary
-/// (no `libc`/`nix` crate, per Decision 3).
-fn create_audio_fifo() -> anyhow::Result<PathBuf> {
-    let mut path = std::env::temp_dir();
-    path.push(format!("varda-audio-{}.pcm", uuid::Uuid::new_v4()));
-    let _ = std::fs::remove_file(&path); // clear any stale node
-    let status = Command::new("mkfifo")
-        .arg(&path)
-        .status()
-        .map_err(|e| anyhow::anyhow!("Failed to run mkfifo: {}", e))?;
-    if !status.success() {
-        anyhow::bail!("mkfifo failed for '{}'", path.display());
-    }
-    Ok(path)
+/// Bind a loopback TCP listener on an ephemeral port and return it with the
+/// `tcp://127.0.0.1:<port>` URL ffmpeg connects to as the audio input. Loopback
+/// TCP is the cross-platform second-input transport (no `mkfifo`/named pipes and
+/// no new crate, per the audio-passthrough transport decision).
+fn create_audio_endpoint() -> anyhow::Result<(TcpListener, String)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| anyhow::anyhow!("Failed to bind audio TCP listener: {}", e))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| anyhow::anyhow!("Failed to read audio listener address: {}", e))?
+        .port();
+    Ok((listener, format!("tcp://127.0.0.1:{}", port)))
 }
 
 /// Start the audio writer thread for a prepared passthrough, if any. Called
-/// after the ffmpeg child is spawned so the FIFO read end exists to rendezvous.
+/// after the ffmpeg child is spawned so the writer can accept ffmpeg's connection.
 fn finalize_audio(
     prepared: Option<PreparedAudio>,
     label: String,
 ) -> anyhow::Result<Option<AudioPipe>> {
     match prepared {
-        Some(p) => Ok(Some(AudioPipe::start(p.fifo_path, p.rx, label)?)),
+        Some(p) => Ok(Some(AudioPipe::start(p.listener, p.rx, label)?)),
         None => Ok(None),
     }
 }
 
-/// Audio side-channel for an [`FfmpegSubprocess`]: a FIFO plus a writer thread
-/// that drains raw PCM into it, symmetric with the video writer thread.
+/// Audio side-channel for an [`FfmpegSubprocess`]: a loopback TCP connection plus
+/// a writer thread that drains raw PCM into it, symmetric with the video writer.
 pub struct AudioPipe {
-    fifo_path: PathBuf,
     /// Set before teardown so an expected broken pipe isn't logged as ERROR.
     shutting_down: Arc<AtomicBool>,
     writer_thread: Option<std::thread::JoinHandle<()>>,
-    /// PCM chunks written to the FIFO so far (health stat).
+    /// PCM chunks written to the socket so far (health stat).
     frames_written: Arc<AtomicU64>,
 }
 
 impl AudioPipe {
-    /// Start the audio writer thread. It opens the FIFO for writing (blocking
-    /// until ffmpeg opens the read end), then drains `rx` into it as f32le bytes.
+    /// Start the audio writer thread. It accepts ffmpeg's connection to the
+    /// loopback listener, then drains `rx` into the stream as f32le bytes.
     fn start(
-        fifo_path: PathBuf,
+        listener: TcpListener,
         rx: crossbeam_channel::Receiver<PcmChunk>,
         label: String,
     ) -> anyhow::Result<Self> {
         let shutting_down = Arc::new(AtomicBool::new(false));
         let frames_written = Arc::new(AtomicU64::new(0));
-        let fifo = fifo_path.clone();
         let sd = shutting_down.clone();
         let fw = frames_written.clone();
+        // Non-blocking accept so teardown can interrupt a wait for an ffmpeg that
+        // never connects (e.g. it died at startup) instead of a wedged thread.
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| anyhow::anyhow!("Failed to set audio listener non-blocking: {}", e))?;
         let writer_thread = std::thread::Builder::new()
             .name(format!("ffmpeg-audio-{}", label))
             .spawn(move || {
-                let mut file = match std::fs::OpenOptions::new().write(true).open(&fifo) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        if !sd.load(Ordering::SeqCst) {
-                            log::error!("audio FIFO open failed for '{}': {}", label, e);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((s, _)) => break s,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            if sd.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(20));
                         }
-                        return;
+                        Err(e) => {
+                            if !sd.load(Ordering::SeqCst) {
+                                log::error!("audio TCP accept failed for '{}': {}", label, e);
+                            }
+                            return;
+                        }
                     }
                 };
+                // Blocking writes once connected; disable Nagle to minimize latency.
+                if let Err(e) = stream.set_nonblocking(false) {
+                    log::error!("audio TCP set-blocking failed for '{}': {}", label, e);
+                    return;
+                }
+                let _ = stream.set_nodelay(true);
                 loop {
                     match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                         Ok(chunk) => {
                             let bytes: &[u8] = bytemuck::cast_slice(&chunk.samples);
-                            if let Err(e) = file.write_all(bytes) {
+                            if let Err(e) = stream.write_all(bytes) {
                                 if sd.load(Ordering::SeqCst) {
                                     log::debug!(
                                         "audio pipe closed during shutdown for '{}': {}",
@@ -287,12 +293,12 @@ impl AudioPipe {
                         }
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                             if sd.load(Ordering::SeqCst) {
-                                let _ = file.flush();
+                                let _ = stream.flush();
                                 return;
                             }
                         }
                         Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                            let _ = file.flush();
+                            let _ = stream.flush();
                             return;
                         }
                     }
@@ -301,30 +307,22 @@ impl AudioPipe {
             .map_err(|e| anyhow::anyhow!("Failed to spawn audio writer thread: {}", e))?;
 
         Ok(Self {
-            fifo_path,
             shutting_down,
             writer_thread: Some(writer_thread),
             frames_written,
         })
     }
 
-    /// Tear down the FIFO and writer thread. Idempotent.
+    /// Tear down the writer thread. Idempotent. Setting `shutting_down` unblocks
+    /// a pending accept-poll (~20ms) or `recv_timeout` drain (~100ms).
     fn stop(&mut self) {
         self.shutting_down.store(true, Ordering::SeqCst);
-        // Unblock a writer still blocked opening the FIFO for write (ffmpeg died
-        // before opening its read end): a non-blocking read-open returns at once
-        // and satisfies the pending write-open without risking our own block.
-        let _ = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(O_NONBLOCK)
-            .open(&self.fifo_path);
         if let Some(handle) = self.writer_thread.take() {
             let _ = handle.join();
         }
-        let _ = std::fs::remove_file(&self.fifo_path);
     }
 
-    /// PCM chunks written to the FIFO so far.
+    /// PCM chunks written to the socket so far.
     fn frames_written(&self) -> u64 {
         self.frames_written.load(Ordering::Relaxed)
     }
@@ -982,8 +980,8 @@ impl FfmpegSubprocess {
             std::thread::Builder::new()
                 .name(format!("ffmpeg-finalize-{}", label))
                 .spawn(move || {
-                    // 3a. Tear down the audio FIFO so ffmpeg sees EOF on both
-                    //     inputs.
+                    // 3a. Tear down the audio writer/socket so ffmpeg sees EOF on
+                    //     both inputs.
                     if let Some(ref mut a) = audio {
                         a.stop();
                     }
@@ -1043,9 +1041,9 @@ impl FfmpegSubprocess {
             //    which unblocks the write and lets the thread exit.
             let _ = self.child.kill();
 
-            // 3b. Tear down the audio side-channel (FIFO + writer thread).
-            //     Done after the kill so a writer blocked on a full FIFO sees
-            //     EPIPE.
+            // 3b. Tear down the audio side-channel (socket + writer thread).
+            //     Done after the kill so a writer blocked on a full socket sees
+            //     a broken pipe.
             if let Some(audio) = self.audio.as_mut() {
                 audio.stop();
             }
@@ -1080,7 +1078,7 @@ impl FfmpegSubprocess {
         self.frames_written.load(Ordering::Relaxed)
     }
 
-    /// Number of audio PCM chunks written to the FIFO so far, or `None` for a
+    /// Number of audio PCM chunks written to the socket so far, or `None` for a
     /// video-only output (no audio passthrough).
     pub fn audio_frames_written(&self) -> Option<u64> {
         self.audio.as_ref().map(|a| a.frames_written())
@@ -1320,7 +1318,7 @@ mod tests {
 
     #[test]
     fn prepare_audio_none_is_video_only() {
-        // No audio input → no FIFO, no args: the video-only path is unchanged.
+        // No audio input → no socket, no args: the video-only path is unchanged.
         let prepared = prepare_audio(None, false).unwrap();
         assert!(prepared.is_none());
     }
@@ -1345,7 +1343,6 @@ mod tests {
         assert!(has_pair(&p.out_args, "-map", "1:a:0"));
         // Recording must NOT force 48k — native rate is preserved (Decision 5).
         assert!(!has_pair(&p.out_args, "-ar", "48000"));
-        let _ = std::fs::remove_file(&p.fifo_path);
     }
 
     #[test]
@@ -1355,18 +1352,22 @@ mod tests {
             .expect("audio prepared");
         // Stream targets normalize to 48k (Decision 5).
         assert!(has_pair(&p.out_args, "-ar", "48000"));
-        let _ = std::fs::remove_file(&p.fifo_path);
     }
 
     #[test]
-    fn prepare_audio_creates_fifo_node() {
+    fn prepare_audio_binds_tcp_endpoint() {
         let p = prepare_audio(Some(dummy_audio(48000, 1)), false)
             .unwrap()
             .expect("audio prepared");
-        assert!(p.fifo_path.exists(), "mkfifo should create the FIFO node");
+        // The second input is the loopback TCP URL of the bound listener.
+        let port = p.listener.local_addr().expect("listener addr").port();
+        let expected = format!("tcp://127.0.0.1:{}", port);
+        assert!(
+            p.in_args.contains(&expected),
+            "audio input should be the bound loopback TCP URL"
+        );
         // Mono device still reported faithfully on the input side.
         assert!(has_pair(&p.in_args, "-ac", "1"));
-        let _ = std::fs::remove_file(&p.fifo_path);
     }
 
     #[test]

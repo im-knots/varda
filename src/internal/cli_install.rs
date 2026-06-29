@@ -8,6 +8,7 @@
 //!   Uses `osascript` for the admin prompt.
 //! - **Linux**: symlinks the AppImage to `~/.local/bin/varda`.
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
