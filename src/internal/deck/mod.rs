@@ -281,7 +281,13 @@ pub enum DeckSource {
     /// External live source (camera, NDI, Syphon, SRT, HLS, DASH, RTMP)
     ExternalSource {
         kind: ExternalSourceKind,
+        /// REPLACE blit — writes the source's straight RGBA verbatim. Used when
+        /// the deck is flagged `transparent` (preserves source alpha).
         blit_pipeline: BlitPipeline,
+        /// ALPHA_BLENDING blit over an opaque black clear — flattens the source
+        /// to opaque. Used by default (unflagged), so an HTML source with alpha<1
+        /// composites over black instead of punching transparent holes.
+        blit_pipeline_over_black: BlitPipeline,
         source_width: u32,
         source_height: u32,
         scaling_mode: ScalingMode,
@@ -427,6 +433,12 @@ pub struct Deck {
 
     /// Deck opacity (0.0 - 1.0)
     pub opacity: f32,
+
+    /// When true, the deck's base texture preserves source alpha (transparent
+    /// letterbox + transparent HTML regions). When false (default), the source is
+    /// composited over opaque black, reproducing the historical opaque behavior.
+    /// See /spec/html-source.md §2 (Option A).
+    transparent: bool,
 
     /// Accumulated render time for TIME uniform (advances by fixed dt each render).
     /// Decoupled from wall clock so skipped frames don't cause animation jumps.
@@ -622,6 +634,16 @@ impl Deck {
             | DeckSource::ExternalSource { scaling_mode, .. } => *scaling_mode = mode,
             _ => {}
         }
+    }
+
+    /// Whether this deck preserves source alpha (transparent compositing).
+    pub fn transparent(&self) -> bool {
+        self.transparent
+    }
+
+    /// Set whether this deck preserves source alpha (transparent compositing).
+    pub fn set_transparent(&mut self, transparent: bool) {
+        self.transparent = transparent;
     }
 
     /// Get the external source kind (if source is external)

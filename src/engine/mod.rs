@@ -129,6 +129,11 @@ pub enum EngineCommand {
         deck_idx: usize,
         mode: ScalingMode,
     },
+    SetDeckTransparent {
+        channel_idx: usize,
+        deck_idx: usize,
+        transparent: bool,
+    },
     SetChannelOpacity {
         channel_idx: usize,
         opacity: f32,
@@ -319,6 +324,17 @@ pub enum EngineCommand {
         channel_idx: usize,
         url: String,
     },
+    ReloadHtmlDeck {
+        channel_idx: usize,
+        deck_idx: usize,
+    },
+    /// Open the interactive window for the HTML deck at `(channel_idx, deck_idx)`.
+    OpenHtmlInteractive {
+        channel_idx: usize,
+        deck_idx: usize,
+    },
+    /// Close the interactive HTML window (if any).
+    CloseHtmlInteractive,
 
     // ── Transition Sequences ───────────────────────────────────
     CreateSequence,

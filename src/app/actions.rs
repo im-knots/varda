@@ -153,6 +153,15 @@ impl VardaApp {
             });
         }
 
+        // Transparent compositing toggle — route through execute_command
+        for &(ch_idx, deck_idx, transparent) in &ui_actions.transparent_updates {
+            self.execute_command(EngineCommand::SetDeckTransparent {
+                channel_idx: ch_idx,
+                deck_idx,
+                transparent,
+            });
+        }
+
         // Render FPS updates — route through execute_command
         for &(ch_idx, deck_idx, render_fps) in &ui_actions.render_fps_updates {
             self.execute_command(EngineCommand::SetDeckRenderFps {
@@ -160,6 +169,27 @@ impl VardaApp {
                 deck_idx,
                 render_fps,
             });
+        }
+
+        // HTML deck reload — route through execute_command
+        for &(ch_idx, deck_idx) in &ui_actions.html_to_reload {
+            self.execute_command(EngineCommand::ReloadHtmlDeck {
+                channel_idx: ch_idx,
+                deck_idx,
+            });
+        }
+
+        // HTML interactive window open/close — route through execute_command
+        for &(ch_idx, deck_idx, open) in &ui_actions.html_set_interactive {
+            let cmd = if open {
+                EngineCommand::OpenHtmlInteractive {
+                    channel_idx: ch_idx,
+                    deck_idx,
+                }
+            } else {
+                EngineCommand::CloseHtmlInteractive
+            };
+            self.execute_command(cmd);
         }
 
         // Complex mutations — VardaApp methods

@@ -530,6 +530,7 @@ impl Deck {
             DeckSource::ExternalSource {
                 kind,
                 blit_pipeline,
+                blit_pipeline_over_black,
                 source_width,
                 source_height,
                 scaling_mode,
@@ -538,6 +539,8 @@ impl Deck {
                     Self::blit_external_source(
                         context,
                         blit_pipeline,
+                        blit_pipeline_over_black,
+                        self.transparent,
                         ext_view,
                         *source_width,
                         *source_height,
@@ -1071,6 +1074,8 @@ impl Deck {
     fn blit_external_source(
         context: &GpuContext,
         blit_pipeline: &BlitPipeline,
+        blit_pipeline_over_black: &BlitPipeline,
+        transparent: bool,
         source_view: &wgpu::TextureView,
         source_width: u32,
         source_height: u32,
@@ -1081,15 +1086,25 @@ impl Deck {
         label: &str,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) {
+        // Flagged transparent → REPLACE over a transparent clear, preserving the
+        // source's straight alpha (and leaving letterbox transparent). Default →
+        // ALPHA_BLENDING over an opaque black clear, flattening to opaque so an
+        // HTML source with alpha<1 doesn't punch holes (/spec/html-source.md §2).
+        let (pipeline, clear) = if transparent {
+            (blit_pipeline, wgpu::Color::TRANSPARENT)
+        } else {
+            (blit_pipeline_over_black, wgpu::Color::BLACK)
+        };
+
         let (uv_scale, uv_offset) = scaling_mode.compute_uv_transform(
             source_width,
             source_height,
             target_width,
             target_height,
         );
-        blit_pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
+        pipeline.set_uv_transform(&context.queue, 1.0, uv_scale, uv_offset);
 
-        let bind_group = blit_pipeline.create_bind_group(&context.device, source_view);
+        let bind_group = pipeline.create_bind_group(&context.device, source_view);
         let mut encoder = context
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1102,7 +1117,7 @@ impl Deck {
                     view: generator_target,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -1112,7 +1127,7 @@ impl Deck {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            blit_pipeline.render(&mut render_pass, &bind_group);
+            pipeline.render(&mut render_pass, &bind_group);
         }
         cmd_buffers.push(encoder.finish());
     }

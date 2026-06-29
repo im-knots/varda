@@ -361,6 +361,11 @@ impl ApplicationHandler for UIRunner {
                 _ => {}
             }
         } else {
+            // Interactive HTML window: forward input to the WebView and consume.
+            #[cfg(feature = "html")]
+            if varda.handle_interactive_event(window_id, &event) {
+                return;
+            }
             match event {
                 WindowEvent::CloseRequested => {
                     if let Some(name) = varda.close_output_window_by_id(window_id) {
@@ -760,6 +765,8 @@ impl UIRunner {
         // Create pending output windows (API-driven in headless)
         varda.create_pending_outputs(event_loop);
         varda.refresh_monitors(event_loop);
+        #[cfg(feature = "html")]
+        varda.create_pending_interactive(event_loop);
 
         // GPU render (mixer compositing)
         varda.render_mixer_frame();
@@ -780,6 +787,8 @@ impl UIRunner {
 
         // Render output windows + publish state
         varda.render_outputs();
+        #[cfg(feature = "html")]
+        varda.render_interactive();
         self.publish_counter += 1;
         if self.publish_counter.is_multiple_of(10) {
             varda.publish_state();
@@ -811,6 +820,8 @@ impl UIRunner {
             };
             varda.create_pending_outputs(event_loop);
             varda.refresh_monitors(event_loop);
+            #[cfg(feature = "html")]
+            varda.create_pending_interactive(event_loop);
         }
 
         // 3b. Render dome preview if open (either dome_preview_open or dome_mode_active)
@@ -1463,6 +1474,8 @@ impl UIRunner {
             let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
             varda.set_domemaster_content_rotation(c_az, c_el, c_roll);
             varda.render_outputs();
+            #[cfg(feature = "html")]
+            varda.render_interactive();
             self.publish_counter += 1;
             if self.publish_counter.is_multiple_of(10) {
                 varda.publish_state();

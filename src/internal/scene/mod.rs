@@ -125,6 +125,11 @@ pub struct DeckConfig {
     #[serde(default = "default_opacity")]
     pub opacity: f32,
 
+    /// Transparent compositing: preserve source alpha instead of flattening over
+    /// black. Defaults to false for backward compatibility with existing scenes.
+    #[serde(default)]
+    pub transparent: bool,
+
     /// Blend mode for compositing
     #[serde(default)]
     pub blend_mode: BlendModeConfig,
@@ -798,6 +803,7 @@ mod tests {
                     },
                     effects: vec![],
                     opacity: 0.8,
+                    transparent: false,
                     blend_mode: BlendModeConfig::Add,
                     mute: false,
                     solo: false,
@@ -955,6 +961,19 @@ mod tests {
         assert!(!deck.mute);
         assert!(!deck.solo);
         assert_eq!(deck.z_index, 0);
+        // Backward compatibility: scenes saved before the transparency feature
+        // omit `transparent` and must load as opaque (false). See html-source.md §2.
+        assert!(!deck.transparent);
+    }
+
+    #[test]
+    fn deck_config_transparent_roundtrip() {
+        let json = r#"{"source": {"type": "SolidColor", "color": [1,0,0,1]}, "transparent": true}"#;
+        let deck: DeckConfig = serde_json::from_str(json).unwrap();
+        assert!(deck.transparent);
+        let reser = serde_json::to_string(&deck).unwrap();
+        let back: DeckConfig = serde_json::from_str(&reser).unwrap();
+        assert!(back.transparent);
     }
 
     // ── BlendModeConfig conversion ───────────────────────────────────
@@ -1091,6 +1110,7 @@ mod tests {
                     },
                     effects: vec![],
                     opacity: 0.5,
+                    transparent: false,
                     blend_mode: BlendModeConfig::Normal,
                     mute: false,
                     solo: false,
@@ -1180,6 +1200,7 @@ mod tests {
             },
             effects: vec![],
             opacity: -0.5,
+            transparent: false,
             blend_mode: BlendModeConfig::Normal,
             mute: false,
             solo: false,

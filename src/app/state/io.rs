@@ -269,6 +269,30 @@ impl VardaApp {
         }
     }
 
+    /// Reload the HTML deck at `(channel_idx, deck_idx)`, re-fetching its URL.
+    pub fn cmd_reload_html_deck(&mut self, channel_idx: usize, deck_idx: usize) -> CommandResult {
+        let kind = self
+            .mixer
+            .channels()
+            .get(channel_idx)
+            .and_then(|ch| ch.decks.get(deck_idx))
+            .map(|slot| slot.deck.external_source_kind());
+        match kind {
+            Some(Some(crate::deck::ExternalSourceKind::Html(idx))) => {
+                self.external_io.html_manager.reload(idx);
+                CommandResult::Ok
+            }
+            Some(_) => CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: "Deck is not an HTML source".into(),
+            },
+            None => CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Deck not found".into(),
+            },
+        }
+    }
+
     pub fn cmd_add_dash_deck(&mut self, channel_idx: usize, url: String) -> CommandResult {
         match self.external_io.stream_manager.start_receive(
             &url,

@@ -1226,6 +1226,8 @@ pub enum RecordingCodec {
     AV1,
     /// ProRes 422 (-c:v prores_ks -profile:v 2)
     ProRes,
+    /// ProRes 4444 with alpha (-c:v prores_ks -profile:v 4 -pix_fmt yuva444p10le)
+    ProRes4444,
     /// HAP (-c:v hap -format hap)
     Hap,
     /// HAP Alpha (-c:v hap -format hap_alpha)
@@ -1241,6 +1243,7 @@ impl std::fmt::Display for RecordingCodec {
             RecordingCodec::H265 => write!(f, "H.265 (HEVC)"),
             RecordingCodec::AV1 => write!(f, "AV1"),
             RecordingCodec::ProRes => write!(f, "ProRes 422"),
+            RecordingCodec::ProRes4444 => write!(f, "ProRes 4444"),
             RecordingCodec::Hap => write!(f, "HAP"),
             RecordingCodec::HapAlpha => write!(f, "HAP Alpha"),
             RecordingCodec::HapQ => write!(f, "HAP Q"),

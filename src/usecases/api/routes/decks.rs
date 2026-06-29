@@ -358,6 +358,25 @@ pub async fn set_render_fps(
     }
 }
 
+#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/transparent", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckBoolBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn set_transparent(
+    State(state): State<SharedState>,
+    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Json(body): Json<DeckBoolBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetDeckTransparent {
+            channel_idx: ch_idx,
+            deck_idx,
+            transparent: body.value,
+        })
+        .await
+    {
+        Ok(result) => command_response(result),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
 #[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/scaling-mode", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckScalingModeBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
 pub async fn set_scaling_mode(
     State(state): State<SharedState>,
@@ -848,6 +867,50 @@ pub async fn add_html_deck(
         })
         .await
     {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/{deck_idx}/html/reload", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn reload_html_deck(
+    State(s): State<SharedState>,
+    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ReloadHtmlDeck {
+            channel_idx: ch_idx,
+            deck_idx,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+/// Body for opening/closing the interactive window of an HTML deck.
+#[derive(Deserialize, ToSchema)]
+pub struct HtmlInteractiveBody {
+    /// True to open the interactive window, false to close it.
+    pub open: bool,
+}
+
+#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/{deck_idx}/html/interactive", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = HtmlInteractiveBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+pub async fn set_html_interactive(
+    State(s): State<SharedState>,
+    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Json(body): Json<HtmlInteractiveBody>,
+) -> impl IntoResponse {
+    let cmd = if body.open {
+        EngineCommand::OpenHtmlInteractive {
+            channel_idx: ch_idx,
+            deck_idx,
+        }
+    } else {
+        EngineCommand::CloseHtmlInteractive
+    };
+    match s.send_command(cmd).await {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }

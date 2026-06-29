@@ -157,14 +157,17 @@ pub(crate) mod tests {
                     opacity: 1.0,
                     blend_mode: BlendMode::Normal,
                     decks: vec![DeckSnapshot {
+                        is_html_interactive: false,
                         idx: 0,
                         uuid: "dk-001".into(),
                         name: "Sine".into(),
+                        is_html: false,
                         opacity: 1.0,
                         effective_opacity: 1.0,
                         blend_mode: BlendMode::Normal,
                         solo: false,
                         mute: false,
+                        transparent: false,
                         scaling_mode: None,
                         generator: ShaderParamsSnapshot {
                             shader_name: "Sine".into(),

@@ -29,6 +29,7 @@ pub trait MixerCommands {
     fn set_deck_solo(&mut self, channel_idx: usize, deck_idx: usize, solo: bool);
     fn set_deck_mute(&mut self, channel_idx: usize, deck_idx: usize, mute: bool);
     fn set_deck_scaling_mode(&mut self, channel_idx: usize, deck_idx: usize, mode: ScalingMode);
+    fn set_deck_transparent(&mut self, channel_idx: usize, deck_idx: usize, transparent: bool);
     fn set_channel_opacity(&mut self, channel_idx: usize, opacity: f32);
     fn set_channel_blend_mode(&mut self, channel_idx: usize, mode: BlendMode);
     fn add_channel(&mut self) -> Result<usize>;

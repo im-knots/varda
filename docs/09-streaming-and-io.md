@@ -96,6 +96,7 @@ Each output can record to a video file independently. Multiple simultaneous reco
 | H.265 | Better compression, smaller files |
 | AV1 | Best compression, slower encoding |
 | ProRes 422 | Professional edit-ready |
+| ProRes 4444 | Professional edit-ready with alpha channel |
 | HAP | VJ content re-use, GPU-native playback |
 | HAP Alpha | HAP with alpha channel |
 | HAP Q | Higher quality HAP (YCoCg compression) |
@@ -204,11 +205,25 @@ HTML decks are persisted in `scene.json` by URL and reload automatically. The so
 
 ### Rendering & performance
 
-HTML is rasterized on the **CPU** (Servo's software renderer) and uploaded to a GPU texture each frame. This keeps the feature portable across every platform and architecture, but it is heavier than the GPU-native deck types. It comfortably handles HTML/CSS/SVG, dashboards, and text overlays; heavy WebGL or full-screen Canvas animation at high resolution may not sustain 60 fps. Profile your pages with the `html_render` benchmark (see [Benchmarking](14-benchmarking.md)) if frame rate matters.
+HTML is rasterized on the **CPU** (Servo's software renderer) and uploaded to a GPU texture each frame. It is heavier than the GPU-native deck types.
+
+> **Platform support.** HTML decks are available on **Apple Silicon macOS** (arm64) and **Linux** (x86_64). They are **not** available on Intel (x86_64) macOS: Servo deck-creation hangs under Rosetta, so the macOS DMG ships HTML in the Apple Silicon slice only. It comfortably handles HTML/CSS/SVG, dashboards, and text overlays; heavy WebGL or full-screen Canvas animation at high resolution may not sustain 60 fps. Profile your pages with the `html_render` benchmark (see [Benchmarking](14-benchmarking.md)) if frame rate matters.
 
 > **Non-blocking, like the stream sources.** HTML rendering runs on a dedicated background thread (a shared Servo engine), the same way NDI/SRT/HLS/DASH/RTMP decode off the render loop. Finished frames are handed to the render thread and uploaded without blocking, so even a heavy page can't stall the 60 fps loop — it simply updates at whatever rate it can render.
 
 > **Feature flag.** HTML decks require the `html` build feature, which is **on by default**. Disable rendering for a session with `--no-html`, or build without it via `--no-default-features`.
+
+### Transparency
+
+HTML decks can keep their transparent regions transparent so the page composites over lower channels and passes through to alpha-capable outputs. Enable the **Transparent BG** toggle in the HTML deck's detail panel (off by default). With it on, anything the page doesn't paint (or paints with `alpha < 1`) stays see-through instead of being filled with black.
+
+> **Where transparency reaches.** The on-screen display is always opaque — the program is composited over black, so a transparent deck shows through to whatever is behind it in the channel stack, not through the app window. Alpha reaches **Syphon** and alpha-capable **recording** codecs (**ProRes 4444**, **HAP Alpha** — see [Recording](#recording)). **NDI** output stays opaque.
+
+> **Default background is now black.** The embedded browser's page background is transparent globally. For a deck with **Transparent BG off** (the default), the page is flattened over black, so a page that set no `html`/`body` background — and previously relied on the browser's implicit **white** — now shows **black**. Set an explicit background in your page's CSS (e.g. `body { background: white; }`) to control it. Pages that already set a background are unaffected.
+
+> **Known limitations.**
+> - With multiple visible channels where a *lower* channel is transparent, colors in overlapping **semi-transparent** regions are approximate. A single transparent channel, or a transparent program sent to Syphon/recording, is exact.
+> - An active 2-channel transition **shader** won't carry alpha unless the shader itself preserves it.
 
 ---
 

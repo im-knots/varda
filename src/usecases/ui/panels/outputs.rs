@@ -276,6 +276,7 @@ fn render_headless_controls(
                             RecordingCodec::H265,
                             RecordingCodec::AV1,
                             RecordingCodec::ProRes,
+                            RecordingCodec::ProRes4444,
                             RecordingCodec::Hap,
                             RecordingCodec::HapAlpha,
                             RecordingCodec::HapQ,

@@ -175,6 +175,7 @@ mod tests {
             },
             effects: vec![],
             opacity: 0.8,
+            transparent: false,
             blend_mode: BlendModeConfig::Normal,
             mute: false,
             solo: false,

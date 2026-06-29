@@ -535,15 +535,21 @@ impl Mixer {
 
         // Fallback: opacity-based crossfade
         //
-        // For 2-channel mode the first channel is blitted onto a cleared-to-black
-        // target using ALPHA_BLENDING.  The hardware blend applies SrcAlpha to the
-        // RGB output, so if the blit shader also multiplies alpha by opacity, the
-        // effective weight becomes opacity² (double-application).
+        // For 2-channel mode the first channel is blitted onto a cleared-to-
+        // transparent target using ALPHA_BLENDING.  The hardware blend applies
+        // SrcAlpha to the RGB output, so if the blit shader also multiplies alpha
+        // by opacity, the effective weight becomes opacity² (double-application).
         //
         // To avoid this, the first channel is always blitted at full opacity and
         // the crossfader value is used solely as the second channel's composite
         // opacity.  The composite shader performs `mix(dst, src, src_a)`, which
         // yields the correct linear crossfade: (1-cf)·A + cf·B.
+        //
+        // The clear is TRANSPARENT (not BLACK) so the program output carries the
+        // channels' alpha through to alpha-capable outputs. Because the clear RGB
+        // is zero either way, RGB is byte-identical to the old over-black result
+        // (the program becomes premultiplied-alpha); opaque content (alpha=1) and
+        // the over-black display path are unchanged. See /spec/html-source.md §2.
         let opacities = self.compositing_opacities();
 
         // Batch channel compositing into command buffers for deferred submission.
@@ -581,7 +587,7 @@ impl Mixer {
                             view: &self.composite_view,
                             resolve_target: None,
                             ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                 store: wgpu::StoreOp::Store,
                             },
                             depth_slice: None,
