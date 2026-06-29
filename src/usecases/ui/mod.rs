@@ -585,12 +585,18 @@ pub struct DeckUIInfo {
     pub deck_idx: usize,
     pub uuid: String,
     pub name: String,
+    /// True when this deck's source is an HTML/Servo instance.
+    pub is_html: bool,
+    /// True when the interactive window is currently open for this deck.
+    pub is_html_interactive: bool,
     pub opacity: f32,
     /// Effective opacity accounting for auto-transition state (for visual feedback only)
     pub effective_opacity: f32,
     pub blend_mode: BlendMode,
     pub solo: bool,
     pub mute: bool,
+    /// True when this deck preserves source alpha (transparent compositing).
+    pub transparent: bool,
     pub scaling_mode: Option<ScalingMode>,
     pub generator: ShaderParamsUI,
     pub effects: Vec<EffectInfo>,
@@ -1214,6 +1220,8 @@ pub struct UIActions {
     pub deck_updates: Vec<(usize, usize, f32, BlendMode, bool, bool)>,
     /// (ch_idx, deck_idx, scaling_mode) — change scaling mode for an image deck
     pub scaling_mode_updates: Vec<(usize, usize, ScalingMode)>,
+    /// (ch_idx, deck_idx, transparent) — toggle transparent compositing for a deck
+    pub transparent_updates: Vec<(usize, usize, bool)>,
     /// (ch_idx, deck_idx, render_fps) — change render FPS for a deck
     pub render_fps_updates: Vec<(usize, usize, DeckRenderFps)>,
     /// (ch_idx, deck_idx, filter_registry_idx) — add effect to deck
@@ -1353,6 +1361,11 @@ pub struct UIActions {
     pub rtmp_library_remove: Option<String>,
     /// (ch_idx, url) — add an HTML source as a new deck to channel
     pub html_to_add: Option<(usize, String)>,
+    /// (ch_idx, deck_idx) — reload an existing HTML deck (re-fetch its URL)
+    pub html_to_reload: Vec<(usize, usize)>,
+    /// (ch_idx, deck_idx, open) — open (true) or close (false) the interactive
+    /// window for an HTML deck.
+    pub html_set_interactive: Vec<(usize, usize, bool)>,
     /// HTML URL to add to library
     pub html_library_add: Option<String>,
     /// HTML URL to remove from library
@@ -1531,6 +1544,7 @@ impl UIActions {
             deck_to_remove: None,
             deck_updates: Vec::new(),
             scaling_mode_updates: Vec::new(),
+            transparent_updates: Vec::new(),
             render_fps_updates: Vec::new(),
             effect_to_add: None,
             effect_to_remove: None,
@@ -1604,6 +1618,8 @@ impl UIActions {
             rtmp_library_add: None,
             rtmp_library_remove: None,
             html_to_add: None,
+            html_to_reload: Vec::new(),
+            html_set_interactive: Vec::new(),
             html_library_add: None,
             html_library_remove: None,
             audio_rescan: false,
@@ -1633,6 +1649,7 @@ impl UIActions {
             || self.deck_to_remove.is_some()
             || !self.deck_updates.is_empty()
             || !self.scaling_mode_updates.is_empty()
+            || !self.transparent_updates.is_empty()
             || !self.render_fps_updates.is_empty()
             || !self.param_updates.is_empty()
             || !self.modulation_actions.is_empty()
@@ -1749,11 +1766,14 @@ impl UIData {
             deck_idx: 0,
             uuid: "a0000001".to_string(),
             name: "test_generator_a".to_string(),
+            is_html: false,
+            is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: false,
+            transparent: false,
             scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_a".to_string(),
@@ -1792,11 +1812,14 @@ impl UIData {
             deck_idx: 1,
             uuid: "a0000002".to_string(),
             name: "test_generator_b".to_string(),
+            is_html: false,
+            is_html_interactive: false,
             opacity: 0.8,
             effective_opacity: 0.8,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: false,
+            transparent: false,
             scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_b".to_string(),
@@ -1833,11 +1856,14 @@ impl UIData {
             deck_idx: 0,
             uuid: "b0000001".to_string(),
             name: "test_generator_c".to_string(),
+            is_html: false,
+            is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: false,
+            transparent: false,
             scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_c".to_string(),
@@ -1856,11 +1882,14 @@ impl UIData {
             deck_idx: 1,
             uuid: "b0000002".to_string(),
             name: "test_generator_d".to_string(),
+            is_html: false,
+            is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: false,
+            transparent: false,
             scaling_mode: Some(ScalingMode::Fit),
             generator: ShaderParamsUI {
                 shader_name: "test_generator_d".to_string(),

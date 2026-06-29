@@ -385,23 +385,43 @@ impl FfmpegSubprocess {
             Some(p) => (&p.in_args, &p.out_args),
             None => (&empty, &empty),
         };
-        let (codec_args, needs_yuv420p): (Vec<&str>, bool) = match codec {
+        // (codec args, needs yuv420p output, alpha-capable). Alpha-capable codecs
+        // get an `unpremultiply` filter because the program output is
+        // premultiplied-alpha (see /spec/html-source.md §2); for fully opaque
+        // pixels unpremultiply is a no-op, so existing opaque recordings are
+        // unchanged.
+        let (codec_args, needs_yuv420p, alpha): (Vec<&str>, bool, bool) = match codec {
             RecordingCodec::H264 => (
                 vec!["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18"],
                 true,
+                false,
             ),
             RecordingCodec::H265 => (
                 vec!["-c:v", "libx265", "-preset", "ultrafast", "-crf", "20"],
                 true,
+                false,
             ),
             RecordingCodec::AV1 => (
                 vec!["-c:v", "libsvtav1", "-preset", "10", "-crf", "28"],
                 true,
+                false,
             ),
-            RecordingCodec::ProRes => (vec!["-c:v", "prores_ks", "-profile:v", "2"], true),
-            RecordingCodec::Hap => (vec!["-c:v", "hap", "-format", "hap"], false),
-            RecordingCodec::HapAlpha => (vec!["-c:v", "hap", "-format", "hap_alpha"], false),
-            RecordingCodec::HapQ => (vec!["-c:v", "hap", "-format", "hap_q"], false),
+            RecordingCodec::ProRes => (vec!["-c:v", "prores_ks", "-profile:v", "2"], true, false),
+            RecordingCodec::ProRes4444 => (
+                vec![
+                    "-c:v",
+                    "prores_ks",
+                    "-profile:v",
+                    "4",
+                    "-pix_fmt",
+                    "yuva444p10le",
+                ],
+                false,
+                true,
+            ),
+            RecordingCodec::Hap => (vec!["-c:v", "hap", "-format", "hap"], false, false),
+            RecordingCodec::HapAlpha => (vec!["-c:v", "hap", "-format", "hap_alpha"], false, true),
+            RecordingCodec::HapQ => (vec!["-c:v", "hap", "-format", "hap_q"], false, true),
         };
 
         let mut cmd = Command::new("ffmpeg");
@@ -411,8 +431,11 @@ impl FfmpegSubprocess {
             .args(["-s", &format!("{}x{}", width, height)])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
-            .args(a_in)
-            .args(&codec_args);
+            .args(a_in);
+        if alpha {
+            cmd.args(["-vf", "unpremultiply=inplace=1"]);
+        }
+        cmd.args(&codec_args);
         if needs_yuv420p {
             cmd.args(["-pix_fmt", "yuv420p"]);
         }
@@ -1155,6 +1178,7 @@ mod tests {
         assert_eq!(format!("{}", RecordingCodec::H265), "H.265 (HEVC)");
         assert_eq!(format!("{}", RecordingCodec::AV1), "AV1");
         assert_eq!(format!("{}", RecordingCodec::ProRes), "ProRes 422");
+        assert_eq!(format!("{}", RecordingCodec::ProRes4444), "ProRes 4444");
         assert_eq!(format!("{}", RecordingCodec::Hap), "HAP");
         assert_eq!(format!("{}", RecordingCodec::HapAlpha), "HAP Alpha");
         assert_eq!(format!("{}", RecordingCodec::HapQ), "HAP Q");

@@ -11446,6 +11446,7 @@ dependencies = [
  "image",
  "imageproc",
  "json-patch",
+ "keyboard-types",
  "libloading 0.9.0",
  "log",
  "midir",

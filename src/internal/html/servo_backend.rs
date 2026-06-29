@@ -22,13 +22,15 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use euclid::Box2D;
 use servo::{
-    LoadStatus, RenderingContext, Servo, ServoBuilder, SoftwareRenderingContext, WebView,
-    WebViewBuilder, WebViewDelegate,
+    DevicePoint, DeviceVector2D, ImeEvent, InputEvent, KeyboardEvent, LoadStatus, MouseButton,
+    MouseButtonAction, MouseButtonEvent, MouseMoveEvent, Preferences, RenderingContext, Scroll,
+    Servo, ServoBuilder, SoftwareRenderingContext, WebView, WebViewBuilder, WebViewDelegate,
+    WebViewPoint, WebViewVector, WheelDelta, WheelEvent, WheelMode,
 };
 use url::Url;
 use winit::dpi::PhysicalSize;
 
-use super::{FrameSlot, HtmlFrame, HtmlId};
+use super::{FrameSlot, HtmlFrame, HtmlId, HtmlInputEvent};
 
 /// Cadence when at least one WebView is loading/animating/has a new frame.
 const ACTIVE_PARK: Duration = Duration::from_millis(8);
@@ -71,6 +73,13 @@ enum HtmlCommand {
         id: HtmlId,
         url: String,
     },
+    Reload {
+        id: HtmlId,
+    },
+    Input {
+        id: HtmlId,
+        event: HtmlInputEvent,
+    },
     Stop {
         id: HtmlId,
     },
@@ -110,6 +119,17 @@ impl ServoEngine {
             id,
             url: url.to_string(),
         });
+        self.unpark();
+    }
+
+    pub fn reload(&self, id: HtmlId) {
+        let _ = self.sender.send(HtmlCommand::Reload { id });
+        self.unpark();
+    }
+
+    /// Forward an interactive-mode input event to the WebView `id`.
+    pub fn send_input(&self, id: HtmlId, event: HtmlInputEvent) {
+        let _ = self.sender.send(HtmlCommand::Input { id, event });
         self.unpark();
     }
 
@@ -213,12 +233,82 @@ fn create_entry(
     })
 }
 
+/// A WebView point in device pixels.
+fn device_point(x: f32, y: f32) -> WebViewPoint {
+    WebViewPoint::Device(DevicePoint::new(x, y))
+}
+
+/// Translate a `Send` [`HtmlInputEvent`] into the corresponding Servo input and
+/// apply it to `entry`'s WebView, flagging it for a fresh paint. The WebView is
+/// only ever touched here, on its owning thread.
+fn apply_input(entry: &Entry, event: HtmlInputEvent) {
+    let wv = &entry.webview;
+    match event {
+        HtmlInputEvent::MouseMove { x, y } => {
+            let _ = wv.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(
+                device_point(x, y),
+            )));
+        }
+        HtmlInputEvent::MouseButton {
+            x,
+            y,
+            button,
+            pressed,
+        } => {
+            let action = if pressed {
+                MouseButtonAction::Down
+            } else {
+                MouseButtonAction::Up
+            };
+            let event =
+                MouseButtonEvent::new(action, MouseButton::from(button as u64), device_point(x, y));
+            let _ = wv.notify_input_event(InputEvent::MouseButton(event));
+        }
+        HtmlInputEvent::Wheel { x, y, dx, dy } => {
+            let delta = WheelDelta {
+                x: dx,
+                y: dy,
+                z: 0.0,
+                mode: WheelMode::DeltaPixel,
+            };
+            let _ = wv.notify_input_event(InputEvent::Wheel(WheelEvent::new(
+                delta,
+                device_point(x, y),
+            )));
+        }
+        HtmlInputEvent::Scroll { x, y, dx, dy } => {
+            let vector = WebViewVector::Device(DeviceVector2D::new(dx as f32, dy as f32));
+            wv.notify_scroll_event(Scroll::Delta(vector), device_point(x, y));
+        }
+        HtmlInputEvent::Key(kt) => {
+            let _ = wv.notify_input_event(InputEvent::Keyboard(KeyboardEvent::new(kt)));
+        }
+        HtmlInputEvent::Ime(comp) => {
+            let _ = wv.notify_input_event(InputEvent::Ime(ImeEvent::Composition(comp)));
+        }
+        HtmlInputEvent::ImeDismissed => {
+            let _ = wv.notify_input_event(InputEvent::Ime(ImeEvent::Dismissed));
+        }
+        HtmlInputEvent::Focus(true) => wv.focus(),
+        HtmlInputEvent::Focus(false) => wv.blur(),
+    }
+    entry.ready.set(true);
+}
+
 /// The owning servo thread: builds Servo, applies commands, and pumps WebViews,
 /// publishing the latest frame for each into its shared slot (latest-wins).
 fn run_servo_thread(rx: Receiver<HtmlCommand>) {
     let waker = UnparkWaker(thread::current());
+    // Clear the Servo viewport to fully transparent instead of the default opaque
+    // white, so pages with a transparent html/body yield alpha=0 pixels in
+    // read_to_image. This is Blocker 1 for per-deck transparency (/spec/html-source.md §2).
+    let preferences = Preferences {
+        shell_background_color_rgba: [0.0, 0.0, 0.0, 0.0],
+        ..Preferences::default()
+    };
     let servo = ServoBuilder::default()
         .event_loop_waker(Box::new(waker))
+        .preferences(preferences)
         .build();
     let mut entries: HashMap<HtmlId, Entry> = HashMap::new();
 
@@ -248,6 +338,17 @@ fn run_servo_thread(rx: Receiver<HtmlCommand>) {
                             }
                             Err(e) => log::error!("HTML navigate: invalid URL '{url}': {e}"),
                         }
+                    }
+                }
+                Ok(HtmlCommand::Reload { id }) => {
+                    if let Some(entry) = entries.get_mut(&id) {
+                        entry.webview.reload();
+                        entry.ready.set(true);
+                    }
+                }
+                Ok(HtmlCommand::Input { id, event }) => {
+                    if let Some(entry) = entries.get(&id) {
+                        apply_input(entry, event);
                     }
                 }
                 Ok(HtmlCommand::Stop { id }) => {

@@ -156,11 +156,17 @@ pub struct DeckSnapshot {
     pub idx: usize,
     pub uuid: String,
     pub name: String,
+    /// True when this deck's source is an HTML/Servo instance.
+    pub is_html: bool,
+    /// True when the interactive window is currently open for this deck.
+    pub is_html_interactive: bool,
     pub opacity: f32,
     pub effective_opacity: f32,
     pub blend_mode: BlendMode,
     pub solo: bool,
     pub mute: bool,
+    /// True when this deck preserves source alpha (transparent compositing).
+    pub transparent: bool,
     pub scaling_mode: Option<ScalingMode>,
     pub generator: ShaderParamsSnapshot,
     pub effects: Vec<EffectSnapshot>,
@@ -744,11 +750,14 @@ mod tests {
             idx: 0,
             uuid: "test0002".into(),
             name: "Sine Wave".into(),
+            is_html: false,
+            is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 0.5,
             blend_mode: BlendMode::Normal,
             solo: false,
             mute: true,
+            transparent: false,
             scaling_mode: Some(ScalingMode::default()),
             generator: ShaderParamsSnapshot {
                 shader_name: "Sine".into(),

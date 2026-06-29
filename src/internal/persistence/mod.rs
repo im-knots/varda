@@ -466,6 +466,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                         source,
                         effects,
                         opacity: slot.opacity,
+                        transparent: slot.deck.transparent(),
                         blend_mode: slot.blend_mode.into(),
                         mute: slot.mute,
                         solo: slot.solo,
@@ -649,6 +650,7 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
             path: path.clone(),
             codec: match codec.as_str() {
                 "prores" | "ProRes" | "ProRes 422" => RecordingCodec::ProRes,
+                "prores_4444" | "ProRes4444" | "ProRes 4444" => RecordingCodec::ProRes4444,
                 "h265" | "H265" | "H.265 (HEVC)" => RecordingCodec::H265,
                 "av1" | "AV1" => RecordingCodec::AV1,
                 "hap" | "Hap" | "HAP" => RecordingCodec::Hap,
@@ -923,6 +925,7 @@ pub fn restore_scene(
                 Ok(deck) => {
                     let mut slot = crate::channel::DeckSlot::new(deck);
                     slot.opacity = deck_config.opacity;
+                    slot.deck.set_transparent(deck_config.transparent);
                     slot.blend_mode = deck_config.blend_mode.into();
                     slot.mute = deck_config.mute;
                     slot.solo = deck_config.solo;

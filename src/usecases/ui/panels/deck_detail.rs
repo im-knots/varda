@@ -189,6 +189,70 @@ pub(super) fn render_selected_deck_detail(
                 ui.separator();
             }
 
+            // Column: HTML source controls (only for HTML decks)
+            if deck.is_html {
+                egui::Frame::default()
+                    .inner_margin(6.0)
+                    .corner_radius(4.0)
+                    .fill(ui.visuals().faint_bg_color)
+                    .show(ui, |ui| {
+                        ui.set_min_width(140.0);
+                        ui.set_max_width(200.0);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            ui.label(egui::RichText::new("🌐 HTML").strong());
+                            let reload_resp = ui.button("⟳ Reload");
+                            if reload_resp.clicked() {
+                                actions.html_to_reload.push((ch_idx, deck_idx));
+                            }
+                            learn_overlay(
+                                ui,
+                                reload_resp.rect,
+                                format!("deck/{}/html/reload", deck.uuid),
+                                data,
+                                actions,
+                            );
+                            let interactive_label = if deck.is_html_interactive {
+                                "🖱 Exit Interactive"
+                            } else {
+                                "🖱 Interactive"
+                            };
+                            let interactive_resp = ui.button(interactive_label);
+                            if interactive_resp.clicked() {
+                                actions.html_set_interactive.push((
+                                    ch_idx,
+                                    deck_idx,
+                                    !deck.is_html_interactive,
+                                ));
+                            }
+                            learn_overlay(
+                                ui,
+                                interactive_resp.rect,
+                                format!("deck/{}/html/interactive", deck.uuid),
+                                data,
+                                actions,
+                            );
+                            let mut transparent = deck.transparent;
+                            let transparent_resp =
+                                ui.checkbox(&mut transparent, "Transparent BG");
+                            if transparent_resp.changed() {
+                                actions.transparent_updates.push((
+                                    ch_idx,
+                                    deck_idx,
+                                    transparent,
+                                ));
+                            }
+                            learn_overlay(
+                                ui,
+                                transparent_resp.rect,
+                                format!("deck/{}/transparent", deck.uuid),
+                                data,
+                                actions,
+                            );
+                        });
+                    });
+                ui.separator();
+            }
+
             // Column: Video playback controls (only for video decks)
             if let Some(ref vp) = deck.video_playback {
                 egui::Frame::default()

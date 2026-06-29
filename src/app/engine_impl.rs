@@ -302,6 +302,14 @@ impl MixerCommands for VardaApp {
         }
     }
 
+    fn set_deck_transparent(&mut self, channel_idx: usize, deck_idx: usize, transparent: bool) {
+        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
+            if deck_idx < ch.decks.len() {
+                ch.decks[deck_idx].deck.set_transparent(transparent);
+            }
+        }
+    }
+
     fn set_channel_opacity(&mut self, channel_idx: usize, opacity: f32) {
         let opacity = sanitize_unit(opacity, 1.0);
         if let Some(ch) = self.mixer.channel_mut(channel_idx) {

@@ -14,6 +14,21 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
+/// Create the pair of blit pipelines used by every external/live source deck:
+/// `(replace, over_black)`. The REPLACE pipeline writes the source's straight
+/// RGBA verbatim (used when the deck is flagged `transparent`, preserving alpha);
+/// the ALPHA_BLENDING pipeline flattens the source over an opaque black clear (the
+/// default, so an HTML source with alpha<1 stays opaque). See /spec/html-source.md §2.
+fn external_blit_pipelines(context: &GpuContext) -> Result<(BlitPipeline, BlitPipeline)> {
+    let replace = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+    let over_black = BlitPipeline::with_blend(
+        &context.device,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::BlendState::ALPHA_BLENDING,
+    )?;
+    Ok((replace, over_black))
+}
+
 /// Load ISF IMPORTED images from metadata and create GPU textures.
 /// Returns (name, texture, view) sorted alphabetically by name for deterministic binding order.
 ///
@@ -343,6 +358,7 @@ impl Deck {
             texture_b_view,
             effects: Vec::new(),
             opacity: 1.0,
+            transparent: false,
             render_time: 0.0,
             render_dt: 1.0 / 60.0,
             frame_count: 0,
@@ -730,11 +746,12 @@ impl Deck {
         height: u32,
     ) -> Result<Self> {
         let source_name = format!("📹 {}", camera_name);
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+        let (blit_pipeline, blit_pipeline_over_black) = external_blit_pipelines(context)?;
 
         let source = DeckSource::ExternalSource {
             kind: ExternalSourceKind::Camera(camera_id),
             blit_pipeline,
+            blit_pipeline_over_black,
             source_width,
             source_height,
             scaling_mode: ScalingMode::default(),
@@ -807,6 +824,7 @@ impl Deck {
             texture_b_view,
             effects: Vec::new(),
             opacity: 1.0,
+            transparent: false,
             render_time: 0.0,
             render_dt: 1.0 / 60.0,
             frame_count: 0,
@@ -829,11 +847,12 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+        let (blit_pipeline, blit_pipeline_over_black) = external_blit_pipelines(context)?;
 
         let source = DeckSource::ExternalSource {
             kind,
             blit_pipeline,
+            blit_pipeline_over_black,
             source_width,
             source_height,
             scaling_mode: ScalingMode::default(),
@@ -1094,6 +1113,7 @@ impl Deck {
             texture_b_view,
             effects: Vec::new(),
             opacity: 1.0,
+            transparent: false,
             render_time: 0.0,
             render_dt: 1.0 / 60.0,
             frame_count: 0,

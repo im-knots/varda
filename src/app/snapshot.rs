@@ -85,11 +85,26 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         idx: deck_idx,
                         uuid: slot.deck.uuid().to_string(),
                         name: slot.deck.source_name().to_string(),
+                        is_html: matches!(
+                            slot.deck.external_source_kind(),
+                            Some(crate::deck::ExternalSourceKind::Html(_))
+                        ),
+                        is_html_interactive: {
+                            #[cfg(feature = "html")]
+                            {
+                                app.interactive_active_deck() == Some((ch_idx, deck_idx))
+                            }
+                            #[cfg(not(feature = "html"))]
+                            {
+                                false
+                            }
+                        },
                         opacity: slot.opacity,
                         effective_opacity,
                         blend_mode: slot.blend_mode,
                         solo: slot.solo,
                         mute: slot.mute,
+                        transparent: slot.deck.transparent(),
                         scaling_mode: slot.deck.scaling_mode(),
                         generator: gen_params,
                         effects,
@@ -552,11 +567,14 @@ pub(crate) fn build_ui_data(
                         deck_idx: d.idx,
                         uuid: d.uuid.clone(),
                         name: d.name.clone(),
+                        is_html: d.is_html,
+                        is_html_interactive: d.is_html_interactive,
                         opacity: d.opacity,
                         effective_opacity: d.effective_opacity,
                         blend_mode: d.blend_mode,
                         solo: d.solo,
                         mute: d.mute,
+                        transparent: d.transparent,
                         scaling_mode: d.scaling_mode,
                         generator,
                         effects,

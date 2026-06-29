@@ -9,6 +9,9 @@ mod actions;
 mod engine_impl;
 pub(crate) mod history;
 mod inputs;
+/// Interactive mode for HTML decks (feature `html`). See /spec/html-source.md §4.
+#[cfg(feature = "html")]
+pub(crate) mod interactive;
 mod outputs;
 pub(crate) mod render;
 mod snapshot;
@@ -218,6 +221,9 @@ pub struct VardaApp {
     pub(crate) input: InputSubsystem,
     pub(crate) output: OutputSubsystem,
     pub(crate) external_io: ExternalIO,
+    /// Interactive HTML window state (feature `html`). See /spec/html-source.md §4.
+    #[cfg(feature = "html")]
+    pub(crate) interactive: interactive::InteractiveHtmlState,
     pub(crate) frame_stats: FrameStats,
     pub(crate) session: SessionState,
     pub(crate) bus: MessageBus,
@@ -458,6 +464,8 @@ impl VardaApp {
                 state_tx,
             },
             audio_textures,
+            #[cfg(feature = "html")]
+            interactive: interactive::InteractiveHtmlState::default(),
             render_width: DEFAULT_RENDER_WIDTH,
             render_height: DEFAULT_RENDER_HEIGHT,
             target_fps: config.target_fps,
@@ -689,6 +697,14 @@ impl VardaApp {
                 mode,
             } => {
                 self.set_deck_scaling_mode(channel_idx, deck_idx, mode);
+                CommandResult::Ok
+            }
+            EngineCommand::SetDeckTransparent {
+                channel_idx,
+                deck_idx,
+                transparent,
+            } => {
+                self.set_deck_transparent(channel_idx, deck_idx, transparent);
                 CommandResult::Ok
             }
             EngineCommand::SetChannelOpacity {
@@ -1231,8 +1247,39 @@ impl VardaApp {
                 url,
                 mode,
             } => self.cmd_add_rtmp_deck(channel_idx, url, mode),
+            EngineCommand::ReloadHtmlDeck {
+                channel_idx,
+                deck_idx,
+            } => self.cmd_reload_html_deck(channel_idx, deck_idx),
             EngineCommand::AddHtmlDeck { channel_idx, url } => {
                 self.cmd_add_html_deck(channel_idx, url)
+            }
+            EngineCommand::OpenHtmlInteractive {
+                channel_idx,
+                deck_idx,
+            } => {
+                #[cfg(feature = "html")]
+                {
+                    self.cmd_open_html_interactive(channel_idx, deck_idx)
+                }
+                #[cfg(not(feature = "html"))]
+                {
+                    let _ = (channel_idx, deck_idx);
+                    crate::engine::CommandResult::Err {
+                        code: crate::engine::ErrorCode::InvalidInput,
+                        message: "HTML feature not built".into(),
+                    }
+                }
+            }
+            EngineCommand::CloseHtmlInteractive => {
+                #[cfg(feature = "html")]
+                {
+                    self.cmd_close_html_interactive()
+                }
+                #[cfg(not(feature = "html"))]
+                {
+                    crate::engine::CommandResult::Ok
+                }
             }
 
             // ── Transition Sequences ──────────────────────────
