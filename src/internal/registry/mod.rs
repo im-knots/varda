@@ -25,7 +25,14 @@ pub struct ShaderRegistry {
     /// Map of file path to shader name (for hot-reload lookup)
     path_to_name: HashMap<PathBuf, String>,
 
-    /// Library paths being watched
+    /// Map of shader name to every file that provides it. Lets hot-reload and
+    /// removal re-resolve the correct winner instead of clobbering the active
+    /// shader, keeping library precedence stable across a running session, not
+    /// just at the initial scan.
+    name_to_paths: HashMap<String, Vec<PathBuf>>,
+
+    /// Library paths being watched. Order is priority: later paths win name
+    /// collisions (built-in, then workdir, then any extra override dirs).
     library_paths: Vec<PathBuf>,
 
     /// File watcher (kept alive to maintain watch)
@@ -42,21 +49,36 @@ impl ShaderRegistry {
         Self {
             shaders: HashMap::new(),
             path_to_name: HashMap::new(),
+            name_to_paths: HashMap::new(),
             library_paths: Vec::new(),
             watcher: None,
             change_receiver: None,
         }
     }
 
-    /// Add a library path to scan
+    /// Register a directory to scan for shaders.
+    ///
+    /// The path must already exist. A missing directory is an error, not
+    /// something to create: silently `mkdir -p`ing a mistyped or unmounted
+    /// directory just yields an empty library and hides the mistake, so
+    /// callers get an `Err` and decide whether to warn-and-skip. Duplicate
+    /// paths are ignored so overlapping libraries aren't scanned or watched
+    /// twice.
     pub fn add_library_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let path = path.as_ref().to_path_buf();
 
-        if !path.exists() {
-            log::warn!("Library path does not exist: {}", path.display());
-            std::fs::create_dir_all(&path)
-                .with_context(|| format!("Failed to create library path: {}", path.display()))?;
-            log::info!("Created library path: {}", path.display());
+        if !path.is_dir() {
+            anyhow::bail!("Shader library path does not exist: {}", path.display());
+        }
+
+        // Canonicalize so `./shaders`, `shaders`, and an absolute path to the
+        // same directory dedup against each other (and so watcher event paths,
+        // which arrive absolute, line up with library paths for precedence).
+        let path = path.canonicalize().unwrap_or(path);
+
+        if self.library_paths.contains(&path) {
+            log::debug!("Shader library already registered: {}", path.display());
+            return Ok(());
         }
 
         self.library_paths.push(path);
@@ -67,7 +89,7 @@ impl ShaderRegistry {
     pub fn scan(&mut self) -> Result<usize> {
         self.shaders.clear();
         self.path_to_name.clear();
-        let mut count = 0;
+        self.name_to_paths.clear();
 
         for lib_path in &self.library_paths {
             log::info!("Scanning library: {}", lib_path.display());
@@ -90,8 +112,13 @@ impl ShaderRegistry {
                         let name = shader.name();
                         log::info!("  Loaded: {} ({})", name, path.display());
                         self.path_to_name.insert(path.to_path_buf(), name.clone());
+                        // Libraries are scanned in priority order, so the last
+                        // write for a name is the highest-priority provider.
+                        self.name_to_paths
+                            .entry(name.clone())
+                            .or_default()
+                            .push(path.to_path_buf());
                         self.shaders.insert(name, shader);
-                        count += 1;
                     }
                     Err(e) => {
                         log::warn!("  ✗ Failed to load {}: {}", path.display(), e);
@@ -100,6 +127,9 @@ impl ShaderRegistry {
             }
         }
 
+        // Count unique shaders, not files loaded: a name overridden across
+        // libraries collapses to one entry, so counting files would inflate.
+        let count = self.shaders.len();
         log::info!(
             "Loaded {} shaders from {} libraries",
             count,
@@ -196,11 +226,22 @@ impl ShaderRegistry {
                         }
                     }
                     notify::EventKind::Remove(_) => {
-                        // Remove the shader
+                        // Drop this file as a provider, then re-resolve the name.
+                        // If a lower-priority file still provides it (e.g. a
+                        // built-in that was shadowed by this override), it's
+                        // promoted back instead of the shader vanishing.
                         if let Some(name) = self.path_to_name.remove(&path) {
-                            self.shaders.remove(&name);
-                            log::info!("Removed shader: {}", name);
-                            shader_events.push(ShaderEvent::Removed(path));
+                            self.forget_provider(&name, &path);
+                            if self.resolve_winner(&name) {
+                                log::info!(
+                                    "Removed {}; restored shadowed provider",
+                                    path.display()
+                                );
+                                shader_events.push(ShaderEvent::Changed(path));
+                            } else {
+                                log::info!("Removed shader: {}", name);
+                                shader_events.push(ShaderEvent::Removed(path));
+                            }
                         }
                     }
                     _ => {}
@@ -211,19 +252,121 @@ impl ShaderRegistry {
         shader_events
     }
 
-    /// Reload a single shader from disk
+    /// Reload a single shader from disk.
+    ///
+    /// Respects library precedence: a file only becomes the active shader if it
+    /// is the highest-priority provider of its name. Editing a built-in shader
+    /// that a higher-priority library currently overrides reloads it into the
+    /// registry's knowledge but does not clobber the override.
     fn reload_shader(&mut self, path: &Path) -> Result<()> {
         let shader = ISFShader::from_file(path)?;
         let name = shader.name();
 
-        // Update path mapping
-        self.path_to_name.insert(path.to_path_buf(), name.clone());
+        // If this file previously provided a different name (its NAME field was
+        // edited), stop attributing it to the old name and re-resolve that one.
+        if let Some(old_name) = self.path_to_name.get(path).cloned() {
+            if old_name != name {
+                self.forget_provider(&old_name, path);
+                self.resolve_winner(&old_name);
+            }
+        }
 
-        // Insert/update shader
-        log::info!("Hot-reloaded shader: {} ({})", name, path.display());
-        self.shaders.insert(name, shader);
+        self.path_to_name.insert(path.to_path_buf(), name.clone());
+        self.record_provider(&name, path);
+
+        if self.is_highest_priority_provider(&name, path) {
+            log::info!("Hot-reloaded shader: {} ({})", name, path.display());
+            self.shaders.insert(name, shader);
+        } else {
+            log::info!(
+                "Reloaded shadowed shader, override kept: {} ({})",
+                name,
+                path.display()
+            );
+            // The override should already be active; make sure of it.
+            if !self.shaders.contains_key(&name) {
+                self.resolve_winner(&name);
+            }
+        }
 
         Ok(())
+    }
+
+    /// Priority of a path = index of the highest-index (last-added) library path
+    /// that contains it, +1 so an unknown path is strictly lowest. Later
+    /// libraries win, matching the built-in, workdir, override-dir hierarchy.
+    fn path_priority(&self, path: &Path) -> usize {
+        self.library_paths
+            .iter()
+            .enumerate()
+            .filter(|(_, lib)| path.starts_with(lib))
+            .map(|(i, _)| i + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Record `path` as a provider of `name` (deduped).
+    fn record_provider(&mut self, name: &str, path: &Path) {
+        let providers = self.name_to_paths.entry(name.to_string()).or_default();
+        if !providers.iter().any(|p| p == path) {
+            providers.push(path.to_path_buf());
+        }
+    }
+
+    /// Drop `path` as a provider of `name`.
+    fn forget_provider(&mut self, name: &str, path: &Path) {
+        if let Some(providers) = self.name_to_paths.get_mut(name) {
+            providers.retain(|p| p != path);
+        }
+    }
+
+    /// Is `path` the highest-priority provider currently registered for `name`?
+    fn is_highest_priority_provider(&self, name: &str, path: &Path) -> bool {
+        match self.name_to_paths.get(name) {
+            Some(providers) => providers
+                .iter()
+                .max_by_key(|p| self.path_priority(p))
+                .map(|winner| winner.as_path() == path)
+                .unwrap_or(true),
+            None => true,
+        }
+    }
+
+    /// Re-pick the active shader for `name` from its remaining providers,
+    /// loading the highest-priority one. Returns whether the shader still
+    /// exists afterward. Ties resolve to the last-recorded provider.
+    fn resolve_winner(&mut self, name: &str) -> bool {
+        let providers = match self.name_to_paths.get(name) {
+            Some(p) if !p.is_empty() => p.clone(),
+            _ => {
+                self.name_to_paths.remove(name);
+                self.shaders.remove(name);
+                return false;
+            }
+        };
+
+        let winner = providers
+            .iter()
+            .max_by_key(|p| self.path_priority(p))
+            .cloned()
+            .expect("providers is non-empty");
+
+        match ISFShader::from_file(&winner) {
+            Ok(shader) => {
+                self.shaders.insert(name.to_string(), shader);
+                true
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to load fallback provider {} for shader {}: {}",
+                    winner.display(),
+                    name,
+                    e
+                );
+                self.shaders.remove(name);
+                false
+            }
+        }
     }
 
     /// Get a shader by name
@@ -581,5 +724,133 @@ void main() {}"#;
             let path_str = paths[0].to_string_lossy();
             assert!(path_str.contains("Varda\\Shaders"));
         }
+    }
+
+    /// Path a scanned shader file resolves to (library paths are canonicalized
+    /// on registration, so reconstructed paths must be too).
+    fn shader_file(dir: &Path, name: &str) -> PathBuf {
+        dir.canonicalize().unwrap().join(format!("{name}.fs"))
+    }
+
+    /// Build a builtin (generator) + user-override (filter) pair named "Glow"
+    /// across two library paths, scan, and confirm the override wins initially.
+    fn overridden_glow() -> (tempfile::TempDir, tempfile::TempDir, ShaderRegistry) {
+        let builtin = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
+        write_shader(builtin.path(), "Glow", "Generator", false);
+        write_shader(user.path(), "Glow", "Filter", true);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(builtin.path()).unwrap();
+        reg.add_library_path(user.path()).unwrap();
+        reg.scan().unwrap();
+        assert!(
+            reg.get("Glow").unwrap().metadata.is_filter(),
+            "user override should win at scan"
+        );
+        (builtin, user, reg)
+    }
+
+    #[test]
+    fn hot_reload_of_shadowed_builtin_keeps_override() {
+        let (builtin, _user, mut reg) = overridden_glow();
+        // Simulate the shadowed built-in file being touched/edited.
+        reg.reload_shader(&shader_file(builtin.path(), "Glow"))
+            .unwrap();
+        assert!(
+            reg.get("Glow").unwrap().metadata.is_filter(),
+            "editing the shadowed built-in must not clobber the override"
+        );
+    }
+
+    #[test]
+    fn hot_reload_of_override_stays_active() {
+        let (_builtin, user, mut reg) = overridden_glow();
+        // The winning override reloads as itself and stays active.
+        reg.reload_shader(&shader_file(user.path(), "Glow"))
+            .unwrap();
+        assert!(reg.get("Glow").unwrap().metadata.is_filter());
+    }
+
+    #[test]
+    fn removing_override_restores_shadowed_builtin() {
+        let (_builtin, user, mut reg) = overridden_glow();
+        let override_path = shader_file(user.path(), "Glow");
+        // Mirror what poll_changes does on a Remove event.
+        reg.path_to_name.remove(&override_path);
+        reg.forget_provider("Glow", &override_path);
+        assert!(reg.resolve_winner("Glow"), "built-in should be promoted");
+        assert!(
+            !reg.get("Glow").unwrap().metadata.is_filter(),
+            "the shadowed built-in generator should be restored"
+        );
+    }
+
+    #[test]
+    fn removing_shadowed_builtin_keeps_override() {
+        let (builtin, _user, mut reg) = overridden_glow();
+        let builtin_path = shader_file(builtin.path(), "Glow");
+        // Deleting the losing (shadowed) file must not disturb the winner.
+        reg.path_to_name.remove(&builtin_path);
+        reg.forget_provider("Glow", &builtin_path);
+        assert!(reg.resolve_winner("Glow"));
+        assert!(
+            reg.get("Glow").unwrap().metadata.is_filter(),
+            "override must survive removal of the shadowed built-in"
+        );
+    }
+
+    #[test]
+    fn removing_sole_provider_drops_shader() {
+        let dir = tempfile::tempdir().unwrap();
+        write_shader(dir.path(), "Solo", "Generator", false);
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(dir.path()).unwrap();
+        reg.scan().unwrap();
+
+        let path = shader_file(dir.path(), "Solo");
+        reg.path_to_name.remove(&path);
+        reg.forget_provider("Solo", &path);
+        assert!(!reg.resolve_winner("Solo"), "no providers left");
+        assert!(reg.get("Solo").is_none());
+    }
+
+    #[test]
+    fn scan_count_is_unique_not_files() {
+        let builtin = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
+        // Two files, same shader name across libraries, one unique shader.
+        write_shader(builtin.path(), "Glow", "Generator", false);
+        write_shader(user.path(), "Glow", "Filter", true);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(builtin.path()).unwrap();
+        reg.add_library_path(user.path()).unwrap();
+        let count = reg.scan().unwrap();
+
+        assert_eq!(count, 1, "override collapses to one shader, not two files");
+        assert_eq!(count, reg.count());
+    }
+
+    #[test]
+    fn add_library_path_does_not_create_missing_dir() {
+        let parent = tempfile::tempdir().unwrap();
+        let missing = parent.path().join("not-there");
+
+        let mut reg = ShaderRegistry::new();
+        assert!(reg.add_library_path(&missing).is_err());
+        assert!(!missing.exists(), "must not mkdir a missing library path");
+    }
+
+    #[test]
+    fn add_library_path_dedups_same_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        write_shader(dir.path(), "Once", "Generator", false);
+
+        let mut reg = ShaderRegistry::new();
+        reg.add_library_path(dir.path()).unwrap();
+        // Same directory via a different spelling should not double-register.
+        reg.add_library_path(dir.path().join(".")).unwrap();
+        assert_eq!(reg.library_paths.len(), 1);
     }
 }

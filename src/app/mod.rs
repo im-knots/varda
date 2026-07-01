@@ -76,6 +76,13 @@ pub struct AppConfig {
     /// Disable HTML deck sources (skips Servo rendering)
     #[arg(long = "no-html")]
     pub html_disabled: bool,
+
+    /// Additional shader library directory (repeatable). Scanned and
+    /// hot-reloaded alongside the built-in locations. Added last, so a
+    /// shader here overrides a built-in shader of the same name — useful
+    /// for pointing at show- or rig-specific shader folders in the field.
+    #[arg(long = "shader-dir")]
+    pub shader_dirs: Vec<std::path::PathBuf>,
 }
 
 impl AppConfig {
@@ -260,11 +267,15 @@ impl VardaApp {
         log::info!("[STARTUP]   Workspace init...");
         let workspace = Workspace::new(config.effective_workspace_root());
 
-        // Build shader registry with all library paths (order = priority for hot-reload):
+        // Build shader registry with all library paths. Order is precedence:
+        // later paths override earlier ones by shader name, and that ordering is
+        // held across the whole session (hot-reload and removal re-resolve the
+        // winner), not just at the initial scan.
         // 1. Bundled shaders (exe-relative, for packaged .app / AppImage)
         // 2. CWD shaders/ (dev builds / cargo run)
         // 3. Workspace .varda/shaders/ (per-show user shaders)
         // 4. Platform user dir (global user shader collection)
+        // 5. Any --shader-dir flags (added last, override built-ins by name)
         let mut registry = ShaderRegistry::new();
         if let Some(bundled) = crate::registry::get_bundled_shader_path() {
             if let Err(e) = registry.add_library_path(&bundled) {
@@ -289,6 +300,11 @@ impl VardaApp {
                         e
                     );
                 }
+            }
+        }
+        for path in &config.shader_dirs {
+            if let Err(e) = registry.add_library_path(path) {
+                log::warn!("Failed to add --shader-dir {}: {}", path.display(), e);
             }
         }
         match registry.scan() {
@@ -2247,6 +2263,24 @@ mod tests {
         assert!(!config.osc_disabled);
         assert!(!config.ndi_disabled);
         assert!(!config.syphon_disabled);
+        assert!(config.shader_dirs.is_empty());
+    }
+
+    #[test]
+    fn app_config_shader_dirs_repeatable() {
+        let config = parse_args(&[
+            "--shader-dir",
+            "/srv/shaders/show-a",
+            "--shader-dir",
+            "/media/usb/shaders",
+        ]);
+        assert_eq!(
+            config.shader_dirs,
+            vec![
+                std::path::PathBuf::from("/srv/shaders/show-a"),
+                std::path::PathBuf::from("/media/usb/shaders"),
+            ]
+        );
     }
 
     #[test]
