@@ -767,7 +767,8 @@ void main() {}"#;
     fn hot_reload_of_override_stays_active() {
         let (_builtin, user, mut reg) = overridden_glow();
         // The winning override reloads as itself and stays active.
-        reg.reload_shader(&shader_file(user.path(), "Glow")).unwrap();
+        reg.reload_shader(&shader_file(user.path(), "Glow"))
+            .unwrap();
         assert!(reg.get("Glow").unwrap().metadata.is_filter());
     }
 
