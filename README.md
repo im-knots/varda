@@ -158,7 +158,22 @@ varda [OPTIONS]
     --no-osc                  Disable OSC
     --no-ndi                  Disable NDI
     --no-syphon               Disable Syphon (macOS)
+    --shader-dir <DIR>        Extra shader library directory (repeatable)
 ```
+
+Varda loads shaders from a fixed hierarchy, lowest to highest precedence:
+
+1. Bundled shaders (shipped inside the `.app` / AppImage / tarball)
+2. `./shaders/` in the working directory
+3. The workspace `.varda/shaders/`
+4. The platform user shader dir (`~/.local/share/varda/shaders`, `~/Library/Application Support/Varda/Shaders`, `%APPDATA%\Varda\Shaders`)
+5. Any `--shader-dir <DIR>` flags, in the order given
+
+On a name collision the higher-precedence directory wins, so a `--shader-dir`
+shader overrides a built-in of the same name. The order holds for the whole
+session: shaders hot-reload as you edit them, and deleting an override restores
+the shadowed built-in instead of dropping the shader. A `--shader-dir` that
+doesn't exist is skipped with a warning, not created.
 
 Headless mode runs the full engine without a UI window — controlled entirely via the HTTP API. Outputs defined in `stage.json` auto-start on launch. Graceful shutdown on Ctrl-C or `POST /api/shutdown`.
 
@@ -171,6 +186,9 @@ varda --workspace /shows/festival-2026
 
 # Disable subsystems you don't need
 varda --no-ndi --no-syphon --osc-port 7000
+
+# Pull in extra shader folders (repeatable) — e.g. a USB stick + a show pack
+varda --shader-dir /media/usb/shaders --shader-dir /shows/festival-2026/shaders
 ```
 
 ## HTTP API
