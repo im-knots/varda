@@ -2,6 +2,40 @@
 
 use super::super::{LibraryDrag, UIActions, UIData};
 
+/// Render a stream/URL library entry as a single row.
+///
+/// The remove button is reserved on the right (via a right-to-left layout) and
+/// the URL label truncates to the remaining width, so a long URL can never force
+/// the library panel wider than its resized/default size. The full text is shown
+/// on hover. Returns `true` when the remove button was clicked.
+fn stream_row(
+    ui: &mut egui::Ui,
+    item_id: egui::Id,
+    payload: LibraryDrag,
+    status_color: egui::Color32,
+    text: String,
+) -> bool {
+    let mut remove = false;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            remove = ui
+                .small_button("✕")
+                .on_hover_text("Remove from library")
+                .clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.dnd_drag_source(item_id, payload, |ui| {
+                    ui.label(egui::RichText::new("●").color(status_color));
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(text.clone()).size(12.0)).truncate(),
+                    )
+                    .on_hover_text(text);
+                });
+            });
+        });
+    });
+    remove
+}
+
 pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.horizontal(|ui| {
         ui.heading("📚 Library");
@@ -284,31 +318,15 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                     };
                                     let mode = entry.mode;
                                     let url = entry.url.clone();
-                                    ui.horizontal(|ui| {
-                                        ui.dnd_drag_source(
-                                            item_id,
-                                            LibraryDrag::Srt(url.clone(), mode),
-                                            |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new("●")
-                                                            .color(status_color),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new(format!("📺 {}", url))
-                                                            .size(12.0),
-                                                    );
-                                                });
-                                            },
-                                        );
-                                        if ui
-                                            .small_button("✕")
-                                            .on_hover_text("Remove from library")
-                                            .clicked()
-                                        {
-                                            actions.srt_library_remove = Some(url.clone());
-                                        }
-                                    });
+                                    if stream_row(
+                                        ui,
+                                        item_id,
+                                        LibraryDrag::Srt(url.clone(), mode),
+                                        status_color,
+                                        format!("📺 {}", url),
+                                    ) {
+                                        actions.srt_library_remove = Some(url.clone());
+                                    }
                                     ui.label(
                                         egui::RichText::new(format!("  Mode: {}", entry.mode))
                                             .size(10.0)
@@ -375,31 +393,15 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         egui::Color32::from_rgb(180, 180, 180)
                                     };
                                     let url = entry.url.clone();
-                                    ui.horizontal(|ui| {
-                                        ui.dnd_drag_source(
-                                            item_id,
-                                            LibraryDrag::Hls(url.clone()),
-                                            |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new("●")
-                                                            .color(status_color),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new(format!("📡 {}", url))
-                                                            .size(12.0),
-                                                    );
-                                                });
-                                            },
-                                        );
-                                        if ui
-                                            .small_button("✕")
-                                            .on_hover_text("Remove from library")
-                                            .clicked()
-                                        {
-                                            actions.hls_library_remove = Some(url.clone());
-                                        }
-                                    });
+                                    if stream_row(
+                                        ui,
+                                        item_id,
+                                        LibraryDrag::Hls(url.clone()),
+                                        status_color,
+                                        format!("📡 {}", url),
+                                    ) {
+                                        actions.hls_library_remove = Some(url.clone());
+                                    }
                                     if ui.ctx().is_being_dragged(item_id) {
                                         ui.ctx().memory_mut(|mem| {
                                             mem.data.insert_temp(
@@ -461,31 +463,15 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         egui::Color32::from_rgb(180, 180, 180)
                                     };
                                     let url = entry.url.clone();
-                                    ui.horizontal(|ui| {
-                                        ui.dnd_drag_source(
-                                            item_id,
-                                            LibraryDrag::Dash(url.clone()),
-                                            |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new("●")
-                                                            .color(status_color),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new(format!("📡 {}", url))
-                                                            .size(12.0),
-                                                    );
-                                                });
-                                            },
-                                        );
-                                        if ui
-                                            .small_button("✕")
-                                            .on_hover_text("Remove from library")
-                                            .clicked()
-                                        {
-                                            actions.dash_library_remove = Some(url.clone());
-                                        }
-                                    });
+                                    if stream_row(
+                                        ui,
+                                        item_id,
+                                        LibraryDrag::Dash(url.clone()),
+                                        status_color,
+                                        format!("📡 {}", url),
+                                    ) {
+                                        actions.dash_library_remove = Some(url.clone());
+                                    }
                                     if ui.ctx().is_being_dragged(item_id) {
                                         ui.ctx().memory_mut(|mem| {
                                             mem.data.insert_temp(
@@ -610,34 +596,15 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                     };
                                     let url = entry.url.clone();
                                     let mode = entry.mode;
-                                    ui.horizontal(|ui| {
-                                        ui.dnd_drag_source(
-                                            item_id,
-                                            LibraryDrag::Rtmp(url.clone(), mode),
-                                            |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new("●")
-                                                            .color(status_color),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new(format!(
-                                                            "📺 {} ({})",
-                                                            url, mode
-                                                        ))
-                                                        .size(12.0),
-                                                    );
-                                                });
-                                            },
-                                        );
-                                        if ui
-                                            .small_button("✕")
-                                            .on_hover_text("Remove from library")
-                                            .clicked()
-                                        {
-                                            actions.rtmp_library_remove = Some(url.clone());
-                                        }
-                                    });
+                                    if stream_row(
+                                        ui,
+                                        item_id,
+                                        LibraryDrag::Rtmp(url.clone(), mode),
+                                        status_color,
+                                        format!("📺 {} ({})", url, mode),
+                                    ) {
+                                        actions.rtmp_library_remove = Some(url.clone());
+                                    }
                                     if ui.ctx().is_being_dragged(item_id) {
                                         ui.ctx().memory_mut(|mem| {
                                             mem.data.insert_temp(
@@ -700,23 +667,15 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                 egui::Color32::from_rgb(180, 180, 180)
                             };
                             let url = entry.url.clone();
-                            ui.horizontal(|ui| {
-                                ui.dnd_drag_source(item_id, LibraryDrag::Html(url.clone()), |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("●").color(status_color));
-                                        ui.label(
-                                            egui::RichText::new(format!("🌐 {}", url)).size(12.0),
-                                        );
-                                    });
-                                });
-                                if ui
-                                    .small_button("✕")
-                                    .on_hover_text("Remove from library")
-                                    .clicked()
-                                {
-                                    actions.html_library_remove = Some(url.clone());
-                                }
-                            });
+                            if stream_row(
+                                ui,
+                                item_id,
+                                LibraryDrag::Html(url.clone()),
+                                status_color,
+                                format!("🌐 {}", url),
+                            ) {
+                                actions.html_library_remove = Some(url.clone());
+                            }
                             if ui.ctx().is_being_dragged(item_id) {
                                 ui.ctx().memory_mut(|mem| {
                                     mem.data

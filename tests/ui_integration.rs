@@ -218,6 +218,90 @@ fn drag(harness: &mut Harness<'static, AccActions>, start: egui::Pos2, end: egui
     harness.run();
 }
 
+// ── Library URL rows never inflate the panel width ──────────────────
+//
+// A resizable `egui::Panel` persists its content rect every frame, so any row
+// wider than the panel's resized/default size overrides the user's drag and
+// snaps the panel back to fit the content (and reveals the mixer texture beneath
+// the UI during a resize). Long stream URLs used to do exactly this. The fix is
+// the button-first `right_to_left` + truncating-label layout in
+// `stream_row`; this test guards that layout against regressions.
+const LONG_URL: &str =
+    "https://very-long-cdn-hostname.example.com/live/premium/channel/12345/master-playlist-with-a-really-long-query.m3u8?token=abcdefghijklmnopqrstuvwxyz0123456789";
+
+const PANEL_DEFAULT_WIDTH: f32 = 220.0;
+
+fn probe_panel_width<F>(add: F) -> f32
+where
+    F: Fn(&mut egui::Ui) + 'static,
+{
+    let id = egui::Id::new("probe_panel");
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1280.0, 720.0))
+        .build_ui(move |ui| {
+            egui::Panel::left(id)
+                .min_size(180.0)
+                .default_size(PANEL_DEFAULT_WIDTH)
+                .resizable(true)
+                .show_inside(ui, |ui| add(ui));
+        });
+    // Run several frames to catch runaway growth (content-driven inflation).
+    for _ in 0..5 {
+        h.run();
+    }
+    h.ctx
+        .data_mut(|d| d.get_persisted::<egui::PanelState>(id))
+        .map(|s| s.rect.width())
+        .expect("panel state should exist")
+}
+
+/// Mirrors the production `stream_row` layout: the remove button is reserved on
+/// the right and the URL label truncates into the remaining width.
+fn url_row(ui: &mut egui::Ui, url: &str) {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let _ = ui.small_button("✕");
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.dnd_drag_source(egui::Id::new("probe_dnd"), 0u32, |ui| {
+                    ui.label(egui::RichText::new("●"));
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(format!("📡 {}", url)).size(12.0))
+                            .truncate(),
+                    )
+                    .on_hover_text(url);
+                });
+            });
+        });
+    });
+}
+
+#[test]
+fn naive_url_row_inflates_panel() {
+    // Baseline: an untruncated label in a plain `horizontal` layout forces the
+    // panel far past its default width, reproducing the reported bug.
+    let naive = probe_panel_width(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("📡 {}", LONG_URL)).size(12.0));
+            let _ = ui.small_button("✕");
+        });
+    });
+    assert!(
+        naive > PANEL_DEFAULT_WIDTH * 2.0,
+        "expected the naive layout to inflate the panel, got {naive}"
+    );
+}
+
+#[test]
+fn truncating_url_row_keeps_panel_width() {
+    // The `stream_row` layout keeps the panel pinned to its default width even
+    // with a very long URL, so user resizes are never overridden.
+    let fixed = probe_panel_width(|ui| url_row(ui, LONG_URL));
+    assert!(
+        (fixed - PANEL_DEFAULT_WIDTH).abs() < 1.0,
+        "expected the truncating layout to hold the panel at {PANEL_DEFAULT_WIDTH}, got {fixed}"
+    );
+}
+
 // ── Add Channel ─────────────────────────────────────────────────────
 
 #[test]
