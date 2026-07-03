@@ -756,7 +756,6 @@ pub(crate) fn build_ui_data(
                             SurfaceAssignmentUI {
                                 surface_uuid: a.surface_uuid.clone(),
                                 surface_name,
-                                warp_mode: a.warp_mode.clone(),
                                 enabled: a.enabled,
                                 overlap_zones: a.overlap_zones.clone(),
                             }
@@ -784,7 +783,6 @@ pub(crate) fn build_ui_data(
                                 .find_by_uuid(&a.surface_uuid)
                                 .map(|(_, s)| s.name.clone())
                                 .unwrap_or_else(|| format!("Surface {}", a.surface_uuid)),
-                            warp_mode: a.warp_mode.clone(),
                             enabled: a.enabled,
                             overlap_zones: a.overlap_zones.clone(),
                         })
@@ -796,7 +794,7 @@ pub(crate) fn build_ui_data(
                         h.active,
                         o.active_duration(),
                         sa,
-                        false,
+                        crate::renderer::context::CalibrationMode::Off,
                     )
                 }
             };
@@ -847,6 +845,9 @@ pub(crate) fn build_ui_data(
             content_mapping: s.content_mapping,
             output_type: s.output_type,
             circle_hint: s.circle_hint,
+            warp: s.warp.clone(),
+            warp_bound: s.warp_bound,
+            path: s.path.clone(),
         })
         .collect();
 

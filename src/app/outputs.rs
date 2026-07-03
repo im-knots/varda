@@ -39,27 +39,12 @@ impl VardaApp {
                     output_idx: *output_idx,
                     assignment_idx: *assignment_idx,
                 },
-                ui::OutputAction::ToggleCalibration { idx } => {
-                    EngineCommand::ToggleCalibration { idx: *idx }
+                ui::OutputAction::SetCalibrationMode { idx, mode } => {
+                    EngineCommand::SetCalibrationMode {
+                        idx: *idx,
+                        mode: *mode,
+                    }
                 }
-                ui::OutputAction::SetWarpCorner {
-                    output_idx,
-                    assignment_idx,
-                    corner_idx,
-                    position,
-                } => EngineCommand::SetWarpCorner {
-                    output_idx: *output_idx,
-                    assignment_idx: *assignment_idx,
-                    corner_idx: *corner_idx,
-                    position: *position,
-                },
-                ui::OutputAction::ResetWarp {
-                    output_idx,
-                    assignment_idx,
-                } => EngineCommand::ResetWarp {
-                    output_idx: *output_idx,
-                    assignment_idx: *assignment_idx,
-                },
                 ui::OutputAction::SetEdgeBlend { output_idx, config } => {
                     EngineCommand::SetEdgeBlend {
                         output_idx: *output_idx,
@@ -91,6 +76,22 @@ impl VardaApp {
         let pending: Vec<crate::scene::OutputConfig> =
             self.output.pending_output_creates.drain(..).collect();
         for config in pending {
+            // One-time migration: pre-8i.5 `.varda` files stored warp on the
+            // assignment. Move it onto the surface (first assignment wins; an
+            // existing surface warp — e.g. dome mesh — takes precedence).
+            for a in &config.surface_assignments {
+                if let Some(warp) = &a.legacy_warp_mode {
+                    if let Some((_, surface)) = self
+                        .output
+                        .surface_manager
+                        .find_by_uuid_mut(&a.surface_uuid)
+                    {
+                        if surface.warp.is_none() {
+                            surface.warp = Some(warp.clone());
+                        }
+                    }
+                }
+            }
             let idx = self.output.outputs.len() + 1;
             let name = if config.name.is_empty() {
                 format!("Output {}", idx)
@@ -145,7 +146,6 @@ impl VardaApp {
                                     .iter()
                                     .map(|a| SurfaceAssignment {
                                         surface_uuid: a.surface_uuid.clone(),
-                                        warp_mode: a.warp_mode.clone(),
                                         enabled: a.enabled,
                                         overlap_zones: Default::default(),
                                     })
@@ -207,7 +207,6 @@ impl VardaApp {
                     .iter()
                     .map(|a| SurfaceAssignment {
                         surface_uuid: a.surface_uuid.clone(),
-                        warp_mode: a.warp_mode.clone(),
                         enabled: a.enabled,
                         overlap_zones: Default::default(),
                     })

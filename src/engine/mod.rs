@@ -472,18 +472,70 @@ pub enum EngineCommand {
     StopOutput {
         idx: usize,
     },
-    ToggleCalibration {
+    /// Set the calibration display mode for an output (Off / Projector / Surfaces).
+    SetCalibrationMode {
         idx: usize,
+        mode: crate::renderer::context::CalibrationMode,
     },
+    /// Move one corner-pin corner of a surface's warp (per-surface).
     SetWarpCorner {
-        output_idx: usize,
-        assignment_idx: usize,
+        surface_uuid: String,
         corner_idx: usize,
         position: [f32; 2],
     },
+    /// Clear a surface's warp (back to no-warp / native position).
     ResetWarp {
-        output_idx: usize,
-        assignment_idx: usize,
+        surface_uuid: String,
+    },
+    /// Set the warp grid resolution for a surface, converting its warp to a
+    /// `cols` × `rows` mesh (preserving the current deformation). Dimensions ≥2.
+    SetWarpSubdivisions {
+        surface_uuid: String,
+        cols: u32,
+        rows: u32,
+    },
+    /// Move a single mesh grid point (row-major) of a surface's mesh warp.
+    /// No-op if the surface's warp is not currently a mesh.
+    SetWarpMeshPoint {
+        surface_uuid: String,
+        row: usize,
+        col: usize,
+        position: [f32; 2],
+    },
+    /// Bind or unbind a surface's warp from its shape (auto-warp). Binding
+    /// re-derives the warp from the outline; unbinding materialises it for
+    /// manual fine-tuning.
+    SetWarpBound {
+        surface_uuid: String,
+        bound: bool,
+    },
+    /// Convert a surface's warp into a smooth bezier patch grid (8i.6), seeding
+    /// the control cage from the current warp so the shape is preserved.
+    ConvertWarpToBezier {
+        surface_uuid: String,
+    },
+    /// Move a bezier-warp control anchor (row-major grid coords).
+    MoveWarpAnchor {
+        surface_uuid: String,
+        row: usize,
+        col: usize,
+        position: [f32; 2],
+    },
+    /// Move a bezier-warp tangent handle. `horizontal` selects a horizontal edge
+    /// (`(r,c)→(r,c+1)`) vs a vertical edge (`(r,c)→(r+1,c)`); `which` is 0/1.
+    MoveWarpHandle {
+        surface_uuid: String,
+        horizontal: bool,
+        row: usize,
+        col: usize,
+        which: usize,
+        position: [f32; 2],
+    },
+    /// Set the bezier-warp control-cage resolution (anchor `cols` × `rows`).
+    SetBezierCageSubdivisions {
+        surface_uuid: String,
+        cols: u32,
+        rows: u32,
     },
     SetEdgeBlend {
         output_idx: usize,
@@ -572,10 +624,44 @@ pub enum EngineCommand {
         dx: f32,
         dy: f32,
     },
+    RotateSurface {
+        uuid: String,
+        /// Rotation in radians (clockwise in canvas space, y-down).
+        angle: f32,
+        /// Pivot the rotation is applied around, in normalized canvas coords.
+        pivot: [f32; 2],
+    },
+    ScaleSurface {
+        uuid: String,
+        sx: f32,
+        sy: f32,
+        /// Pivot the scale is applied around, in normalized canvas coords.
+        pivot: [f32; 2],
+    },
     UpdateSurfaceContourVertices {
         uuid: String,
         contour: usize,
         vertices: Vec<[f32; 2]>,
+    },
+    /// Convert a curve-path edge to a cubic bezier (`to_cubic`) or back to a
+    /// straight line. Lazily builds a path from the polygon if absent.
+    ConvertSurfaceEdge {
+        uuid: String,
+        edge_idx: usize,
+        to_cubic: bool,
+    },
+    /// Move a curve-path anchor to `pos` (normalized coords).
+    MovePathAnchor {
+        uuid: String,
+        anchor_idx: usize,
+        pos: [f32; 2],
+    },
+    /// Move a cubic control handle of a curve-path segment to `pos`.
+    MovePathHandle {
+        uuid: String,
+        segment_idx: usize,
+        handle: CubicHandle,
+        pos: [f32; 2],
     },
     AssignSurfaceToOutput {
         output_uuid: String,

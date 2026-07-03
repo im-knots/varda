@@ -276,14 +276,34 @@ impl AudioManager {
             active: HashMap::new(),
         };
         mgr.scan_devices();
-        // Auto-open the default device if available
-        if let Some(dev) = mgr.devices.first() {
-            let id = dev.id;
+        // Auto-open the OS default input (matched by name) so we capture the
+        // user's chosen mic/interface rather than whichever device merely
+        // enumerates first (e.g. a silent BlackHole loopback).
+        let default_name = cpal::default_host()
+            .default_input_device()
+            .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+        if let Some(id) = Self::pick_default_input(default_name.as_deref(), &mgr.devices) {
             if let Err(e) = mgr.open_source(id) {
                 log::warn!("Failed to auto-open default audio device: {}", e);
             }
         }
         mgr
+    }
+
+    /// Choose which enumerated input to auto-open: the OS default input matched
+    /// by name if it is present in the scanned list, otherwise the first
+    /// enumerated device. Returns `None` when no inputs exist. Pure so it can be
+    /// unit-tested without audio hardware.
+    fn pick_default_input(
+        default_name: Option<&str>,
+        devices: &[AudioDeviceInfo],
+    ) -> Option<AudioSourceId> {
+        if let Some(name) = default_name {
+            if let Some(dev) = devices.iter().find(|d| d.name == name) {
+                return Some(dev.id);
+            }
+        }
+        devices.first().map(|d| d.id)
     }
 
     /// Scan for available audio input devices.
@@ -1113,6 +1133,48 @@ mod tests {
     fn pcm_fan_out_empty_is_noop() {
         let subs: Vec<PcmSubscriber> = Vec::new();
         fan_out_pcm(&subs, &[0.0; 4]); // must not panic
+    }
+
+    fn dev(id: AudioSourceId, name: &str) -> AudioDeviceInfo {
+        AudioDeviceInfo {
+            id,
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn pick_default_input_prefers_os_default_by_name() {
+        let devices = vec![dev(0, "BlackHole 2ch"), dev(1, "MacBook Pro Microphone")];
+        // OS default is the mic (id 1), even though BlackHole enumerates first.
+        assert_eq!(
+            AudioManager::pick_default_input(Some("MacBook Pro Microphone"), &devices),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn pick_default_input_falls_back_to_first_when_no_default() {
+        let devices = vec![dev(0, "BlackHole 2ch"), dev(1, "MacBook Pro Microphone")];
+        assert_eq!(AudioManager::pick_default_input(None, &devices), Some(0));
+    }
+
+    #[test]
+    fn pick_default_input_falls_back_to_first_when_default_absent() {
+        let devices = vec![dev(0, "BlackHole 2ch"), dev(1, "MacBook Pro Microphone")];
+        // Default reported by the OS isn't in the scanned list → first device.
+        assert_eq!(
+            AudioManager::pick_default_input(Some("USB Interface"), &devices),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn pick_default_input_none_when_no_devices() {
+        assert_eq!(
+            AudioManager::pick_default_input(Some("MacBook Pro Microphone"), &[]),
+            None
+        );
+        assert_eq!(AudioManager::pick_default_input(None, &[]), None);
     }
 
     #[test]

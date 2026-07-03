@@ -16,7 +16,7 @@ pub use crate::modulation::{
 };
 pub use crate::params::ParamValue;
 pub use crate::renderer::context::OutputSource;
-pub use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
+pub use crate::surface::{CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath};
 pub use crate::video::LoopMode;
 
 /// Identifies where to apply an effect in the signal chain.
@@ -373,7 +373,7 @@ pub struct OutputWindowSnapshot {
     /// Whether a headless output is actively recording/streaming.
     pub is_active: bool,
     pub surface_assignments: Vec<SurfaceAssignmentSnapshot>,
-    pub calibration_mode: bool,
+    pub calibration_mode: crate::renderer::context::CalibrationMode,
     /// Live audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughSnapshot>,
 }
@@ -392,7 +392,6 @@ pub struct AudioPassthroughSnapshot {
 pub struct SurfaceAssignmentSnapshot {
     pub surface_uuid: String,
     pub surface_name: String,
-    pub warp_mode: crate::renderer::warp::WarpMode,
     pub enabled: bool,
 }
 
@@ -406,7 +405,12 @@ pub struct SurfaceSnapshot {
     pub content_mapping: ContentMapping,
     pub output_type: SurfaceOutputType,
     pub circle_hint: Option<CircleHint>,
-    pub default_warp: Option<crate::renderer::warp::WarpMode>,
+    /// Effective warp (auto-conforming to the shape while `warp_bound`).
+    pub warp: Option<crate::renderer::warp::WarpMode>,
+    /// Whether the warp auto-conforms to the surface shape (auto-warp).
+    pub warp_bound: bool,
+    /// Curve authoring path, when the surface is bezier-edited.
+    pub path: Option<SurfacePath>,
 }
 
 #[derive(Clone, Serialize)]

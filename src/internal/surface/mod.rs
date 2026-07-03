@@ -7,8 +7,11 @@
 //! coordinates [0..1]. Rectangles are just 4-vertex polygons. This supports
 //! triangles, circles (N-gon approximations), and arbitrary shapes.
 
+pub mod curve;
 pub mod detect;
 pub mod import;
+
+pub use curve::{CubicHandle, PathSegment, SurfacePath};
 
 use crate::deck::generate_short_uuid;
 use crate::renderer::context::OutputSource;
@@ -76,10 +79,23 @@ pub struct Surface {
     /// Vertices are regenerated from the hint when radius or sides change.
     #[serde(default)]
     pub circle_hint: Option<CircleHint>,
-    /// Pre-computed warp mesh for dome-generated surfaces.
-    /// When assigned to an output, this is used instead of identity corners.
+    /// Per-surface warp (corner-pin or mesh). `None` = no warp (render at the
+    /// polygon's native position). Promoted from the former `default_warp`
+    /// template; the serde `alias` keeps pre-8i.5 `.varda` files loading.
+    #[serde(default, alias = "default_warp")]
+    pub warp: Option<crate::renderer::warp::WarpMode>,
+    /// When `true` (default for surfaces created in-app), the warp auto-conforms
+    /// to this surface's outline — `effective_warp()` derives it and `warp` is
+    /// ignored. When `false`, `warp` is authoritative and manually editable.
+    /// Legacy `.varda` files (no field) load as `false`, preserving any
+    /// hand-authored `warp` untouched.
     #[serde(default)]
-    pub default_warp: Option<crate::renderer::warp::WarpMode>,
+    pub warp_bound: bool,
+    /// Optional curve authoring layer. When present, `vertices` is regenerated
+    /// from this path (flattened) whenever the path is edited — mirroring
+    /// `circle_hint`. `None` = the polygon in `vertices` is authoritative.
+    #[serde(default)]
+    pub path: Option<curve::SurfacePath>,
 }
 
 /// How content is mapped onto a surface.
@@ -130,7 +146,9 @@ impl Surface {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: None,
-            default_warp: None,
+            warp: None,
+            warp_bound: true,
+            path: None,
         }
     }
 
@@ -149,6 +167,205 @@ impl Surface {
     /// Drop circle identity, keeping current vertices as a plain polygon.
     pub fn convert_to_polygon(&mut self) {
         self.circle_hint = None;
+    }
+
+    /// The surface's warp, or an identity corner-pin seeded from its bounding
+    /// box when it has none. Used as the base for warp editing and rendering.
+    pub fn warp_or_identity(&self) -> crate::renderer::warp::WarpMode {
+        self.warp.clone().unwrap_or_else(|| {
+            let bb = self.bounding_box();
+            crate::renderer::warp::WarpMode::identity_corners([bb.x, bb.y, bb.width, bb.height])
+        })
+    }
+
+    /// Move one corner-pin corner (0..4), seeding an identity corner-pin first
+    /// when the surface has no warp. No-op if the warp is currently a mesh.
+    pub fn set_warp_corner(&mut self, corner_idx: usize, position: [f32; 2]) {
+        if corner_idx >= 4 || matches!(self.warp, Some(crate::renderer::warp::WarpMode::Mesh(_))) {
+            return;
+        }
+        let mut warp = self.warp_or_identity();
+        if let Some(corners) = warp.corners_mut() {
+            corners[corner_idx] = position;
+        }
+        self.warp = Some(warp);
+    }
+
+    /// Clear any warp (back to no-warp / native polygon position).
+    pub fn reset_warp(&mut self) {
+        self.warp = None;
+    }
+
+    /// The warp actually applied when rendering/displaying this surface. While
+    /// `warp_bound`, it is derived from the shape (`conforming_warp`); otherwise
+    /// the stored `warp`. Single choke point for render, snapshot, and editor.
+    pub fn effective_warp(&self) -> Option<crate::renderer::warp::WarpMode> {
+        if self.warp_bound {
+            Some(self.conforming_warp())
+        } else {
+            self.warp.clone()
+        }
+    }
+
+    /// A warp whose grid boundary conforms to this surface's outline (Approach
+    /// B, fill semantics): circles → elliptical disc-map mesh; quads → a 2×2
+    /// mesh at the four vertices; other polygons → a Coons-patch mesh over the
+    /// vertices nearest the bbox corners.
+    pub fn conforming_warp(&self) -> crate::renderer::warp::WarpMode {
+        use crate::renderer::warp::{self, WarpMesh, WarpMode};
+        if let Some(hint) = &self.circle_hint {
+            let n = (hint.sides / 4 + 2).clamp(3, warp::MAX_WARP_SUBDIVISIONS);
+            return WarpMode::Mesh(warp::disc_map_mesh(
+                hint.center,
+                hint.radius,
+                hint.radius * hint.aspect_ratio,
+                n,
+            ));
+        }
+        let v = &self.vertices;
+        if v.len() == 4 {
+            return WarpMode::Mesh(WarpMesh::from_corners(&[v[0], v[1], v[2], v[3]]));
+        }
+        let n = (v.len() as u32).clamp(3, 16);
+        WarpMode::Mesh(warp::coons_mesh(v, n, n))
+    }
+
+    /// Bind or unbind the warp from the surface shape. Unbinding materialises
+    /// the conforming warp into `warp` so fine-tuning starts from the shape;
+    /// binding clears `warp` (it is re-derived from the shape while bound).
+    pub fn set_warp_bound(&mut self, bound: bool) {
+        if bound {
+            self.warp_bound = true;
+            self.warp = None;
+        } else {
+            self.warp = Some(self.conforming_warp());
+            self.warp_bound = false;
+        }
+    }
+
+    /// Convert the warp to a `cols` × `rows` mesh, preserving the current
+    /// deformation. Dimensions clamp to `[2, MAX_WARP_SUBDIVISIONS]`.
+    pub fn set_warp_subdivisions(&mut self, cols: u32, rows: u32) {
+        let cols = cols.clamp(2, crate::renderer::warp::MAX_WARP_SUBDIVISIONS);
+        let rows = rows.clamp(2, crate::renderer::warp::MAX_WARP_SUBDIVISIONS);
+        let base = self.warp_or_identity();
+        self.warp = Some(crate::renderer::warp::WarpMode::Mesh(
+            base.to_mesh(cols, rows),
+        ));
+    }
+
+    /// Move a single mesh grid point (row-major). No-op if the warp is not a mesh.
+    pub fn set_warp_mesh_point(&mut self, row: usize, col: usize, position: [f32; 2]) {
+        if let Some(crate::renderer::warp::WarpMode::Mesh(mesh)) = &mut self.warp {
+            mesh.set_point(row, col, position);
+        }
+    }
+
+    /// Convert the current warp into a smooth bezier patch grid (8i.6), seeding
+    /// the control cage from the current warp's mesh (or an identity 2×2 over the
+    /// bbox), so the shape is preserved. No-op if the warp is already bezier.
+    /// Meaningful only while unbound (manual editing); the caller ensures that.
+    pub fn convert_warp_to_bezier(&mut self) {
+        use crate::renderer::warp::{BezierWarp, WarpMode, DEFAULT_BEZIER_TESS};
+        let base = self.warp_or_identity();
+        if matches!(base, WarpMode::Bezier(_)) {
+            return;
+        }
+        let (cols, rows) = match &base {
+            WarpMode::Mesh(m) => (m.cols, m.rows),
+            _ => (2, 2),
+        };
+        let mesh = base.to_mesh(cols, rows);
+        self.warp = Some(WarpMode::Bezier(BezierWarp::from_mesh(
+            &mesh,
+            DEFAULT_BEZIER_TESS,
+        )));
+    }
+
+    /// Move a bezier-warp anchor `(row, col)`. No-op if the warp is not bezier.
+    pub fn set_warp_bezier_anchor(&mut self, row: usize, col: usize, position: [f32; 2]) {
+        if let Some(crate::renderer::warp::WarpMode::Bezier(b)) = &mut self.warp {
+            b.move_anchor(row, col, position);
+        }
+    }
+
+    /// Move a bezier-warp tangent handle. `horizontal` picks a horizontal edge
+    /// (`(r,c)→(r,c+1)`) vs a vertical edge (`(r,c)→(r+1,c)`); `which` is 0/1.
+    /// No-op if the warp is not bezier.
+    pub fn set_warp_bezier_handle(
+        &mut self,
+        horizontal: bool,
+        row: usize,
+        col: usize,
+        which: usize,
+        position: [f32; 2],
+    ) {
+        if let Some(crate::renderer::warp::WarpMode::Bezier(b)) = &mut self.warp {
+            b.move_handle(horizontal, row, col, which, position);
+        }
+    }
+
+    /// Set the bezier-warp control-cage resolution (anchor `cols` × `rows`),
+    /// resampling onto the current surface. No-op if the warp is not bezier.
+    pub fn set_bezier_cage_subdivisions(&mut self, cols: u32, rows: u32) {
+        if let Some(crate::renderer::warp::WarpMode::Bezier(b)) = &mut self.warp {
+            b.set_cage_subdivisions(cols, rows);
+        }
+    }
+
+    /// Whether this surface has a curve authoring path.
+    pub fn has_path(&self) -> bool {
+        self.path.is_some()
+    }
+
+    /// Regenerate vertices from the curve path. No-op if there's no path.
+    pub fn regenerate_from_path(&mut self) {
+        if let Some(path) = &self.path {
+            self.vertices = path.flatten();
+        }
+    }
+
+    /// Ensure a curve authoring path exists, lazily building one from the current
+    /// polygon vertices. Curve editing supersedes circle regeneration, so any
+    /// `circle_hint` is dropped.
+    pub fn ensure_path(&mut self) -> &mut curve::SurfacePath {
+        if self.path.is_none() {
+            self.path = Some(curve::SurfacePath::from_polygon(&self.vertices, true));
+            self.circle_hint = None;
+        }
+        self.path.as_mut().unwrap()
+    }
+
+    /// Convert edge `edge_idx` of the curve path to a cubic bezier (`to_cubic`)
+    /// or back to a straight line, regenerating vertices. Lazily creates a path.
+    pub fn convert_edge(&mut self, edge_idx: usize, to_cubic: bool) {
+        self.ensure_path();
+        if let Some(path) = &mut self.path {
+            if to_cubic {
+                path.convert_edge_to_cubic(edge_idx);
+            } else {
+                path.convert_edge_to_line(edge_idx);
+            }
+        }
+        self.regenerate_from_path();
+    }
+
+    /// Move curve anchor `anchor_idx` to `pos`, regenerating vertices. No-op if
+    /// the surface has no curve path.
+    pub fn move_path_anchor(&mut self, anchor_idx: usize, pos: [f32; 2]) {
+        if let Some(path) = &mut self.path {
+            path.move_anchor(anchor_idx, pos);
+            self.regenerate_from_path();
+        }
+    }
+
+    /// Move cubic control `handle` of segment `segment_idx` to `pos`,
+    /// regenerating vertices. No-op if the surface has no curve path.
+    pub fn move_path_handle(&mut self, segment_idx: usize, handle: CubicHandle, pos: [f32; 2]) {
+        if let Some(path) = &mut self.path {
+            path.move_handle(segment_idx, handle, pos);
+            self.regenerate_from_path();
+        }
     }
 
     /// Axis-aligned bounding box of the polygon (including extra contours).
@@ -253,6 +470,83 @@ impl Surface {
                 v[1] += dy;
             }
         }
+        // Keep the curve authoring path in sync so path-backed surfaces move too.
+        if let Some(path) = &mut self.path {
+            path.start[0] += dx;
+            path.start[1] += dy;
+            for seg in &mut path.segments {
+                match seg {
+                    PathSegment::Line { to } => {
+                        to[0] += dx;
+                        to[1] += dy;
+                    }
+                    PathSegment::Cubic { c1, c2, to } => {
+                        for p in [c1, c2, to] {
+                            p[0] += dx;
+                            p[1] += dy;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Rotate all geometry by `angle` radians (clockwise in canvas space, y-down)
+    /// around `pivot`. The curve `path` and `circle_hint` are rotated in step so
+    /// they stay consistent with `vertices`. A circle hint's center is rotated and
+    /// its radius/aspect are left unchanged — exact for a true circle; an oriented
+    /// ellipse is approximated (axis-aligned on the next radius/side regeneration).
+    ///
+    /// Unlike [`Surface::translate`], this does not clamp to `[0..1]`: clamping
+    /// per-vertex would distort the shape, and partially off-canvas surfaces are
+    /// valid. Callers constrain interactively.
+    pub fn rotate(&mut self, angle: f32, pivot: [f32; 2]) {
+        let (s, c) = angle.sin_cos();
+        let rot = |p: [f32; 2]| -> [f32; 2] {
+            let dx = p[0] - pivot[0];
+            let dy = p[1] - pivot[1];
+            [pivot[0] + dx * c - dy * s, pivot[1] + dx * s + dy * c]
+        };
+        self.map_geometry(rot);
+    }
+
+    /// Scale all geometry by `(sx, sy)` around `pivot`. The curve `path` and
+    /// `circle_hint` are scaled in step: the hint's center scales around `pivot`,
+    /// its `radius` follows the x-scale and its `aspect_ratio` absorbs the x/y
+    /// difference. Like [`Surface::rotate`], this does not clamp to `[0..1]`.
+    pub fn scale(&mut self, sx: f32, sy: f32, pivot: [f32; 2]) {
+        let scl = |p: [f32; 2]| -> [f32; 2] {
+            [
+                pivot[0] + (p[0] - pivot[0]) * sx,
+                pivot[1] + (p[1] - pivot[1]) * sy,
+            ]
+        };
+        self.map_geometry(scl);
+        if let Some(hint) = &mut self.circle_hint {
+            hint.radius *= sx;
+            if sx != 0.0 {
+                hint.aspect_ratio *= sy / sx;
+            }
+        }
+    }
+
+    /// Apply a point transform to every geometry representation (vertices, extra
+    /// contours, curve path, circle-hint center). Shared by `rotate`/`scale`.
+    fn map_geometry(&mut self, f: impl Fn([f32; 2]) -> [f32; 2]) {
+        for v in &mut self.vertices {
+            *v = f(*v);
+        }
+        for contour in &mut self.extra_contours {
+            for v in contour.iter_mut() {
+                *v = f(*v);
+            }
+        }
+        if let Some(path) = &mut self.path {
+            path.apply_map(&f);
+        }
+        if let Some(hint) = &mut self.circle_hint {
+            hint.center = f(hint.center);
+        }
     }
 
     /// Get a mutable reference to a specific contour's vertices.
@@ -347,7 +641,36 @@ impl SurfaceManager {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: None,
-            default_warp: None,
+            warp: None,
+            warp_bound: true,
+            path: None,
+        });
+        uuid
+    }
+
+    /// Add a surface authored as an editable curve [`SurfacePath`]. Vertices are
+    /// generated by flattening the path (which stays the authoritative source for
+    /// downstream routing/warp). Returns the new surface's UUID.
+    pub fn add_path_surface(
+        &mut self,
+        name: String,
+        path: curve::SurfacePath,
+        source: OutputSource,
+    ) -> String {
+        let uuid = generate_short_uuid();
+        let vertices = path.flatten();
+        self.surfaces.push(Surface {
+            uuid: uuid.clone(),
+            name,
+            vertices,
+            extra_contours: Vec::new(),
+            source,
+            content_mapping: ContentMapping::default(),
+            output_type: SurfaceOutputType::Projection,
+            circle_hint: None,
+            warp: None,
+            warp_bound: true,
+            path: Some(path),
         });
         uuid
     }
@@ -370,7 +693,9 @@ impl SurfaceManager {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: Some(hint),
-            default_warp: None,
+            warp: None,
+            warp_bound: true,
+            path: None,
         });
         uuid
     }
@@ -519,7 +844,9 @@ impl SurfaceManager {
             content_mapping,
             output_type,
             circle_hint: None,
-            default_warp: None,
+            warp: None,
+            warp_bound: true,
+            path: None,
         };
 
         let insert_at = first_idx.min(self.surfaces.len());
@@ -604,7 +931,9 @@ mod tests {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: None,
-            default_warp: None,
+            warp: None,
+            warp_bound: false,
+            path: None,
         };
         assert_eq!(s.center(), [0.0, 0.0]);
     }
@@ -635,7 +964,9 @@ mod tests {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: None,
-            default_warp: None,
+            warp: None,
+            warp_bound: false,
+            path: None,
         };
         assert!(!s.contains(0.5, 0.5));
     }
@@ -679,6 +1010,107 @@ mod tests {
         let bb = s.bounding_box();
         assert!(bb.x >= -1e-5);
         assert!(bb.y >= -1e-5);
+    }
+
+    // ── Rotate / scale tests ─────────────────────────────────────────
+
+    #[test]
+    fn rotate_90_maps_axis_around_origin() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.rotate(std::f32::consts::FRAC_PI_2, [0.0, 0.0]);
+        // vertex (1,0) → (0,1) under clockwise (y-down) 90° rotation.
+        assert!((s.vertices[1][0] - 0.0).abs() < 1e-4);
+        assert!((s.vertices[1][1] - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn rotate_around_center_preserves_center() {
+        let mut s = Surface::new_rect("R".into(), 0.2, 0.3, 0.4, 0.2, master_source());
+        let c0 = s.center();
+        s.rotate(0.7, c0);
+        let c1 = s.center();
+        assert!((c0[0] - c1[0]).abs() < 1e-4);
+        assert!((c0[1] - c1[1]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn scale_around_origin_scales_vertices() {
+        let mut s = Surface::new_rect("R".into(), 0.1, 0.1, 0.2, 0.2, master_source());
+        s.scale(2.0, 2.0, [0.0, 0.0]);
+        assert!((s.vertices[0][0] - 0.2).abs() < 1e-4);
+        assert!((s.vertices[2][0] - 0.6).abs() < 1e-4);
+        assert!((s.vertices[2][1] - 0.6).abs() < 1e-4);
+    }
+
+    #[test]
+    fn scale_around_center_preserves_center() {
+        let mut s = Surface::new_rect("R".into(), 0.2, 0.2, 0.4, 0.4, master_source());
+        let c0 = s.center();
+        s.scale(1.5, 0.5, c0);
+        let c1 = s.center();
+        assert!((c0[0] - c1[0]).abs() < 1e-4);
+        assert!((c0[1] - c1[1]).abs() < 1e-4);
+        let bb = s.bounding_box();
+        assert!((bb.width - 0.6).abs() < 1e-4); // 0.4 * 1.5
+        assert!((bb.height - 0.2).abs() < 1e-4); // 0.4 * 0.5
+    }
+
+    #[test]
+    fn scale_updates_circle_hint_radius_and_aspect() {
+        let mut s = Surface::new_rect("C".into(), 0.0, 0.0, 0.4, 0.4, master_source());
+        s.circle_hint = Some(CircleHint {
+            center: [0.2, 0.2],
+            radius: 0.2,
+            sides: 8,
+            aspect_ratio: 1.0,
+        });
+        s.scale(2.0, 3.0, [0.0, 0.0]);
+        let h = s.circle_hint.unwrap();
+        assert!((h.radius - 0.4).abs() < 1e-4); // 0.2 * sx
+        assert!((h.aspect_ratio - 1.5).abs() < 1e-4); // 1.0 * sy/sx
+        assert!((h.center[0] - 0.4).abs() < 1e-4);
+        assert!((h.center[1] - 0.6).abs() < 1e-4);
+    }
+
+    #[test]
+    fn rotate_moves_circle_hint_center() {
+        let mut s = Surface::new_rect("C".into(), 0.0, 0.0, 0.4, 0.4, master_source());
+        s.circle_hint = Some(CircleHint {
+            center: [1.0, 0.0],
+            radius: 0.2,
+            sides: 8,
+            aspect_ratio: 1.0,
+        });
+        s.rotate(std::f32::consts::FRAC_PI_2, [0.0, 0.0]);
+        let h = s.circle_hint.unwrap();
+        assert!((h.center[0] - 0.0).abs() < 1e-4);
+        assert!((h.center[1] - 1.0).abs() < 1e-4);
+        assert!((h.radius - 0.2).abs() < 1e-4); // unchanged
+    }
+
+    #[test]
+    fn scale_transforms_path_control_points() {
+        let mut s = Surface::new_rect("P".into(), 0.0, 0.0, 0.4, 0.4, master_source());
+        s.path = Some(SurfacePath {
+            start: [0.0, 0.0],
+            segments: vec![PathSegment::Cubic {
+                c1: [1.0, 0.0],
+                c2: [2.0, 0.0],
+                to: [3.0, 0.0],
+            }],
+            closed: true,
+        });
+        s.scale(2.0, 2.0, [0.0, 0.0]);
+        let p = s.path.unwrap();
+        assert_eq!(p.start, [0.0, 0.0]);
+        match p.segments[0] {
+            PathSegment::Cubic { c1, c2, to } => {
+                assert!((c1[0] - 2.0).abs() < 1e-4);
+                assert!((c2[0] - 4.0).abs() < 1e-4);
+                assert!((to[0] - 6.0).abs() < 1e-4);
+            }
+            _ => panic!("expected cubic"),
+        }
     }
 
     // ── Nearest vertex tests ─────────────────────────────────────────
@@ -770,7 +1202,9 @@ mod tests {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: Some(hint),
-            default_warp: None,
+            warp: None,
+            warp_bound: false,
+            path: None,
         };
         s.regenerate_circle_vertices();
         assert_eq!(s.vertices.len(), 6);
@@ -793,12 +1227,135 @@ mod tests {
             content_mapping: ContentMapping::default(),
             output_type: SurfaceOutputType::Projection,
             circle_hint: Some(hint),
-            default_warp: None,
+            warp: None,
+            warp_bound: false,
+            path: None,
         };
         assert!(s.is_circle());
         s.convert_to_polygon();
         assert!(!s.is_circle());
         assert_eq!(s.vertices.len(), 6); // Vertices preserved
+    }
+
+    #[test]
+    fn surface_regenerate_from_path_flattens() {
+        let path = SurfacePath {
+            start: [0.0, 0.0],
+            segments: vec![
+                PathSegment::Line { to: [1.0, 0.0] },
+                PathSegment::Line { to: [1.0, 1.0] },
+            ],
+            closed: true,
+        };
+        let mut s = Surface::new_rect("P".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.path = Some(path);
+        assert!(s.has_path());
+        s.regenerate_from_path();
+        assert_eq!(s.vertices, vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
+    }
+
+    #[test]
+    fn surface_without_path_deserializes_from_legacy_json() {
+        // Legacy stage.json surface (no `path` field) → path defaults to None.
+        let json = r#"{
+            "uuid":"abc12345","name":"Legacy",
+            "vertices":[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]],
+            "source":"Master","content_mapping":"Fill","output_type":"Projection"
+        }"#;
+        let s: Surface = serde_json::from_str(json).unwrap();
+        assert!(s.path.is_none());
+        assert!(!s.has_path());
+        assert_eq!(s.vertices.len(), 4);
+    }
+
+    // ── Auto-warp binding (8i.5a) tests ──────────────────────────────
+
+    #[test]
+    fn new_surface_is_warp_bound_by_default() {
+        let s = Surface::new_rect("R".into(), 0.1, 0.1, 0.4, 0.4, master_source());
+        assert!(s.warp_bound);
+    }
+
+    #[test]
+    fn effective_warp_bound_rect_is_conforming_mesh() {
+        use crate::renderer::warp::WarpMode;
+        let s = Surface::new_rect("R".into(), 0.2, 0.3, 0.4, 0.2, master_source());
+        // Bound → derived conforming warp (a 2×2 mesh at the four corners),
+        // regardless of the (empty) stored `warp`.
+        match s.effective_warp() {
+            Some(WarpMode::Mesh(m)) => {
+                assert_eq!((m.cols, m.rows), (2, 2));
+                assert_eq!(m.points[0].position, [0.2, 0.3]);
+            }
+            other => panic!("expected conforming mesh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn effective_warp_unbound_returns_stored_warp() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.warp_bound = false;
+        s.warp = None;
+        assert!(s.effective_warp().is_none());
+    }
+
+    #[test]
+    fn unbind_materialises_conforming_warp() {
+        let mut s = Surface::new_rect("R".into(), 0.1, 0.1, 0.5, 0.5, master_source());
+        assert!(s.warp.is_none());
+        s.set_warp_bound(false);
+        assert!(!s.warp_bound);
+        // The shape's conforming warp is now the editable stored warp.
+        assert!(s.warp.is_some());
+    }
+
+    #[test]
+    fn rebind_clears_stored_warp() {
+        let mut s = Surface::new_rect("R".into(), 0.1, 0.1, 0.5, 0.5, master_source());
+        s.set_warp_bound(false);
+        assert!(s.warp.is_some());
+        s.set_warp_bound(true);
+        assert!(s.warp_bound);
+        assert!(s.warp.is_none());
+    }
+
+    #[test]
+    fn circle_conforming_warp_is_mesh() {
+        use crate::renderer::warp::WarpMode;
+        let hint = CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.3,
+            sides: 32,
+            aspect_ratio: 1.0,
+        };
+        let uuid = generate_short_uuid();
+        let s = Surface {
+            uuid,
+            name: "C".into(),
+            vertices: hint.generate_vertices(),
+            extra_contours: vec![],
+            source: master_source(),
+            content_mapping: ContentMapping::default(),
+            output_type: SurfaceOutputType::Projection,
+            circle_hint: Some(hint),
+            warp: None,
+            warp_bound: true,
+            path: None,
+        };
+        assert!(matches!(s.conforming_warp(), WarpMode::Mesh(_)));
+    }
+
+    #[test]
+    fn legacy_json_loads_unbound_preserving_warp() {
+        // Pre-8i.5a file: no `warp_bound`, so it must default to false so any
+        // stored warp stays authoritative.
+        let json = r#"{
+            "uuid":"abc12345","name":"Legacy",
+            "vertices":[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]],
+            "source":"Master","content_mapping":"Fill","output_type":"Projection"
+        }"#;
+        let s: Surface = serde_json::from_str(json).unwrap();
+        assert!(!s.warp_bound);
     }
 
     // ── Contour tests ────────────────────────────────────────────────
@@ -841,6 +1398,48 @@ mod tests {
         assert_eq!(s.uuid.len(), 8);
     }
 
+    // ── Bezier edge editing (8i.4) ───────────────────────────────────
+
+    #[test]
+    fn convert_edge_lazily_builds_path_and_regenerates() {
+        let mut s = Surface::new_rect("C".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        assert!(!s.has_path());
+        s.convert_edge(0, true);
+        assert!(s.has_path());
+        assert!(s.path.as_ref().unwrap().is_edge_cubic(0));
+        // Cubic edge 0 tessellates into more vertices than the original 4.
+        assert!(s.vertices.len() > 4);
+    }
+
+    #[test]
+    fn ensure_path_clears_circle_hint() {
+        let mut s = Surface::new_rect("C".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.circle_hint = Some(CircleHint {
+            center: [0.5, 0.5],
+            radius: 0.5,
+            sides: 8,
+            aspect_ratio: 1.0,
+        });
+        s.ensure_path();
+        assert!(s.circle_hint.is_none());
+    }
+
+    #[test]
+    fn move_path_anchor_updates_vertices() {
+        let mut s = Surface::new_rect("C".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.ensure_path();
+        s.move_path_anchor(0, [0.2, 0.3]);
+        assert!((s.vertices[0][0] - 0.2).abs() < 1e-5);
+        assert!((s.vertices[0][1] - 0.3).abs() < 1e-5);
+    }
+
+    #[test]
+    fn move_path_handle_noop_without_path() {
+        let mut s = Surface::new_rect("C".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.move_path_handle(0, CubicHandle::C1, [0.5, 0.5]);
+        assert!(!s.has_path());
+    }
+
     #[test]
     fn manager_add_surface() {
         let mut mgr = SurfaceManager::new();
@@ -848,6 +1447,22 @@ mod tests {
         assert_eq!(uuid.len(), 8);
         assert_eq!(mgr.surfaces.len(), 1);
         assert_eq!(mgr.surfaces[0].uuid, uuid);
+    }
+
+    #[test]
+    fn manager_add_path_surface_attaches_path_and_flattens() {
+        let mut mgr = SurfaceManager::new();
+        let mut path = curve::SurfacePath::from_polygon(
+            &[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            true,
+        );
+        path.convert_edge_to_cubic(0);
+        let uuid = mgr.add_path_surface("Curved".into(), path, master_source());
+        let s = mgr.surfaces.iter().find(|s| s.uuid == uuid).unwrap();
+        assert!(s.has_path());
+        assert!(s.path.as_ref().unwrap().has_cubic());
+        // A cubic edge flattens into more vertices than the raw 4 corners.
+        assert!(s.vertices.len() > 4);
     }
 
     #[test]
@@ -1007,5 +1622,161 @@ mod tests {
     #[test]
     fn content_mapping_default() {
         assert_eq!(ContentMapping::default(), ContentMapping::Fill);
+    }
+
+    // ── Per-surface warp editing (8i.5) ───────────────────────────────
+
+    #[test]
+    fn warp_defaults_to_none() {
+        let s = Surface::new_rect("R".into(), 0.1, 0.1, 0.4, 0.3, master_source());
+        assert!(s.warp.is_none());
+    }
+
+    #[test]
+    fn set_warp_corner_seeds_identity_then_moves() {
+        use crate::renderer::warp::WarpMode;
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_corner(0, [0.2, 0.3]);
+        match s.warp {
+            Some(WarpMode::CornerPin { corners }) => assert_eq!(corners[0], [0.2, 0.3]),
+            _ => panic!("expected corner-pin warp"),
+        }
+    }
+
+    #[test]
+    fn set_warp_corner_ignored_out_of_range() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_corner(4, [0.2, 0.3]);
+        assert!(s.warp.is_none());
+    }
+
+    #[test]
+    fn set_warp_subdivisions_makes_mesh_and_clamps() {
+        use crate::renderer::warp::{WarpMode, MAX_WARP_SUBDIVISIONS};
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_subdivisions(1, 1000);
+        match s.warp {
+            Some(WarpMode::Mesh(mesh)) => {
+                assert_eq!(mesh.cols, 2);
+                assert_eq!(mesh.rows, MAX_WARP_SUBDIVISIONS);
+            }
+            _ => panic!("expected mesh warp"),
+        }
+    }
+
+    #[test]
+    fn set_warp_corner_noop_on_mesh() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_subdivisions(3, 3);
+        let before = format!("{:?}", s.warp);
+        s.set_warp_corner(0, [0.9, 0.9]);
+        assert_eq!(before, format!("{:?}", s.warp));
+    }
+
+    #[test]
+    fn set_warp_mesh_point_moves_point() {
+        use crate::renderer::warp::WarpMode;
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_subdivisions(3, 3);
+        s.set_warp_mesh_point(1, 1, [0.55, 0.55]);
+        match s.warp {
+            Some(WarpMode::Mesh(mesh)) => {
+                let p = mesh.points[mesh.cols as usize + 1].position;
+                assert!((p[0] - 0.55).abs() < 1e-6 && (p[1] - 0.55).abs() < 1e-6);
+            }
+            _ => panic!("expected mesh warp"),
+        }
+    }
+
+    #[test]
+    fn reset_warp_clears() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_subdivisions(3, 3);
+        s.reset_warp();
+        assert!(s.warp.is_none());
+    }
+
+    // ── Bezier warp (8i.6) ───────────────────────────────────────────
+
+    #[test]
+    fn convert_warp_to_bezier_seeds_cage_from_shape() {
+        use crate::renderer::warp::WarpMode;
+        let mut s = Surface::new_rect("R".into(), 0.1, 0.2, 0.5, 0.4, master_source());
+        s.set_warp_bound(false); // manual editing
+        s.convert_warp_to_bezier();
+        match &s.warp {
+            Some(WarpMode::Bezier(b)) => {
+                // Seeded from the identity 2×2 corner-pin over the bbox.
+                assert_eq!((b.anchor_cols, b.anchor_rows), (2, 2));
+                assert_eq!(b.anchor(0, 0), [0.1, 0.2]);
+                assert_eq!(b.anchor(1, 1), [0.6, 0.6]);
+            }
+            other => panic!("expected bezier warp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn convert_warp_to_bezier_preserves_mesh_dims() {
+        use crate::renderer::warp::WarpMode;
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_bound(false);
+        s.set_warp_subdivisions(4, 3);
+        s.convert_warp_to_bezier();
+        match &s.warp {
+            Some(WarpMode::Bezier(b)) => assert_eq!((b.anchor_cols, b.anchor_rows), (4, 3)),
+            other => panic!("expected bezier warp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn convert_warp_to_bezier_noop_when_already_bezier() {
+        use crate::renderer::warp::WarpMode;
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_bound(false);
+        s.convert_warp_to_bezier();
+        s.set_bezier_cage_subdivisions(3, 3);
+        s.convert_warp_to_bezier(); // must not reset the 3×3 cage back to 2×2
+        match &s.warp {
+            Some(WarpMode::Bezier(b)) => assert_eq!((b.anchor_cols, b.anchor_rows), (3, 3)),
+            other => panic!("expected bezier warp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_warp_bezier_anchor_moves_it() {
+        use crate::renderer::warp::WarpMode;
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_bound(false);
+        s.convert_warp_to_bezier();
+        s.set_warp_bezier_anchor(0, 0, [0.2, 0.3]);
+        match &s.warp {
+            Some(WarpMode::Bezier(b)) => assert_eq!(b.anchor(0, 0), [0.2, 0.3]),
+            other => panic!("expected bezier warp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_warp_bezier_handle_and_anchor_noop_on_mesh() {
+        // On a non-bezier warp these are no-ops (don't panic / don't change type).
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_bound(false);
+        s.set_warp_subdivisions(3, 3);
+        let before = format!("{:?}", s.warp);
+        s.set_warp_bezier_anchor(0, 0, [0.9, 0.9]);
+        s.set_warp_bezier_handle(true, 0, 0, 0, [0.5, 0.5]);
+        s.set_bezier_cage_subdivisions(5, 5);
+        assert_eq!(before, format!("{:?}", s.warp));
+    }
+
+    #[test]
+    fn effective_warp_bezier_is_returned_when_unbound() {
+        use crate::renderer::warp::WarpMode;
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.set_warp_bound(false);
+        s.convert_warp_to_bezier();
+        // Effective warp hands the bezier cage through (for the editor); render
+        // sites tessellate it via WarpMode::render_mesh.
+        assert!(matches!(s.effective_warp(), Some(WarpMode::Bezier(_))));
+        assert!(s.effective_warp().unwrap().render_mesh().is_some());
     }
 }

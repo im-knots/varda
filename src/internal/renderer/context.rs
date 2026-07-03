@@ -446,18 +446,42 @@ pub struct SurfaceRenderInfo<'a> {
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
 }
 
-/// Assignment of a surface to an output, with per-surface warp calibration.
+/// Membership of a surface in an output. Warp now lives on the `Surface`
+/// itself (`Surface.warp`); an assignment only records inclusion and the
+/// per-output overlap zones used for edge blending.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SurfaceAssignment {
     /// UUID of the assigned surface
     pub surface_uuid: String,
-    /// Warp mode: corner-pin (4-point homography) or arbitrary mesh warp.
-    pub warp_mode: super::warp::WarpMode,
     /// Whether this assignment is enabled
     pub enabled: bool,
     /// Per-surface overlap zones (set by Auto mode detection).
     #[serde(default)]
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
+}
+
+/// Per-output calibration display mode.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
+pub enum CalibrationMode {
+    /// Normal content rendering.
+    #[default]
+    Off,
+    /// A single full-frame test card fills the whole output, bypassing surface
+    /// geometry and warp — for physical projector alignment.
+    Projector,
+    /// Each surface shows a colored per-surface test card through its own warp —
+    /// for verifying surface mapping and warp.
+    Surfaces,
 }
 
 /// Where an output sends its content — unified across windowed and headless outputs.
@@ -601,8 +625,8 @@ pub struct OutputWindow {
     /// Surface assignments — which surfaces this output renders, with per-surface warp.
     /// Empty = render all surfaces (fallback behavior).
     pub surface_assignments: Vec<SurfaceAssignment>,
-    /// Whether calibration mode is active (shows warp handles)
-    pub calibration_mode: bool,
+    /// Calibration display mode (Off / Projector test card / per-Surface cards).
+    pub calibration_mode: CalibrationMode,
     /// Whether edge blend is auto-computed or manually configured.
     pub edge_blend_mode: super::edge_blend::EdgeBlendMode,
     /// Edge blending configuration for multi-projector overlap zones.
@@ -693,7 +717,7 @@ impl OutputWindow {
             polygon_pipeline,
             target: OutputTarget::Windowed,
             surface_assignments: Vec::new(),
-            calibration_mode: false,
+            calibration_mode: CalibrationMode::Off,
             edge_blend_mode: super::edge_blend::EdgeBlendMode::default(),
             edge_blend: super::edge_blend::EdgeBlendConfig::default(),
             edge_blend_pipeline,
@@ -873,6 +897,10 @@ impl OutputWindow {
                     Some(super::warp::WarpMode::Mesh(mesh)) => {
                         // Mesh mode: warp baked into vertices, identity homography
                         (None, PolygonBlitPipeline::mesh_verts(mesh))
+                    }
+                    Some(super::warp::WarpMode::Bezier(b)) => {
+                        // Bezier: tessellate the control cage into a mesh, then bake.
+                        (None, PolygonBlitPipeline::mesh_verts(&b.tessellate()))
                     }
                     None => {
                         let verts = PolygonBlitPipeline::triangulate_verts(

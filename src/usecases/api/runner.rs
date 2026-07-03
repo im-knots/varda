@@ -107,7 +107,15 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::surfaces::insert_vertex, routes::surfaces::set_circle_radius,
         routes::surfaces::set_circle_sides, routes::surfaces::convert_to_polygon,
         routes::surfaces::combine, routes::surfaces::move_surface,
+        routes::surfaces::rotate_surface, routes::surfaces::scale_surface,
         routes::surfaces::update_contour_vertices,
+        routes::surfaces::convert_edge, routes::surfaces::move_path_anchor,
+        routes::surfaces::move_path_handle,
+        routes::surfaces::set_warp_corner, routes::surfaces::reset_warp,
+        routes::surfaces::set_warp_subdivisions, routes::surfaces::set_warp_mesh_point,
+        routes::surfaces::set_warp_bound,
+        routes::surfaces::convert_warp_to_bezier, routes::surfaces::move_warp_anchor,
+        routes::surfaces::move_warp_handle, routes::surfaces::set_bezier_cage_subdivisions,
         // Stage Detection
         routes::stage::detect_image, routes::stage::detect_svg,
         routes::stage::detect_dxf, routes::stage::detect_confirm, routes::stage::detect_camera,
@@ -116,8 +124,7 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::outputs::set_display, routes::outputs::assign_surface,
         routes::outputs::unassign_surface, routes::outputs::create_headless,
         routes::outputs::start, routes::outputs::stop,
-        routes::outputs::toggle_calibration, routes::outputs::set_warp,
-        routes::outputs::reset_warp, routes::outputs::set_target,
+        routes::outputs::set_calibration_mode, routes::outputs::set_target,
         routes::outputs::set_edge_blend, routes::outputs::set_edge_blend_mode,
         // Sequences
         routes::sequences::create, routes::sequences::delete,
@@ -695,8 +702,64 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::put(routes::surfaces::move_surface),
         )
         .route(
+            "/api/surfaces/{uuid}/rotate",
+            axum::routing::put(routes::surfaces::rotate_surface),
+        )
+        .route(
+            "/api/surfaces/{uuid}/scale",
+            axum::routing::put(routes::surfaces::scale_surface),
+        )
+        .route(
             "/api/surfaces/{uuid}/contour-vertices",
             axum::routing::put(routes::surfaces::update_contour_vertices),
+        )
+        .route(
+            "/api/surfaces/{uuid}/edge/convert",
+            axum::routing::put(routes::surfaces::convert_edge),
+        )
+        .route(
+            "/api/surfaces/{uuid}/path/anchor",
+            axum::routing::put(routes::surfaces::move_path_anchor),
+        )
+        .route(
+            "/api/surfaces/{uuid}/path/handle",
+            axum::routing::put(routes::surfaces::move_path_handle),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/corner",
+            axum::routing::put(routes::surfaces::set_warp_corner),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/reset",
+            axum::routing::post(routes::surfaces::reset_warp),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/subdivisions",
+            axum::routing::put(routes::surfaces::set_warp_subdivisions),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/mesh-point",
+            axum::routing::put(routes::surfaces::set_warp_mesh_point),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/bind",
+            axum::routing::post(routes::surfaces::set_warp_bound),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/bezier",
+            axum::routing::post(routes::surfaces::convert_warp_to_bezier),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/anchor",
+            axum::routing::put(routes::surfaces::move_warp_anchor),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/handle",
+            axum::routing::put(routes::surfaces::move_warp_handle),
+        )
+        .route(
+            "/api/surfaces/{uuid}/warp/cage",
+            axum::routing::put(routes::surfaces::set_bezier_cage_subdivisions),
         )
         // ── Write: Outputs extras ───────────────────────────────
         .route(
@@ -713,15 +776,7 @@ pub fn build_router(shared: SharedState) -> Router {
         )
         .route(
             "/api/outputs/{idx}/calibration",
-            axum::routing::post(routes::outputs::toggle_calibration),
-        )
-        .route(
-            "/api/outputs/{idx}/warp",
-            axum::routing::put(routes::outputs::set_warp),
-        )
-        .route(
-            "/api/outputs/{idx}/reset-warp",
-            axum::routing::post(routes::outputs::reset_warp),
+            axum::routing::put(routes::outputs::set_calibration_mode),
         )
         .route(
             "/api/outputs/{idx}/target",

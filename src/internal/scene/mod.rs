@@ -496,11 +496,16 @@ impl OutputConfig {
     }
 }
 
-/// Per-surface warp calibration in an output.
+/// Membership of a surface in an output (persisted). Warp now lives on the
+/// surface (`Surface.warp`); `legacy_warp_mode` exists only to migrate
+/// pre-8i.5 files that stored warp here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurfaceAssignmentConfig {
     pub surface_uuid: String,
-    pub warp_mode: crate::renderer::warp::WarpMode,
+    /// LEGACY (pre-8i.5): warp used to live on the assignment. Read at load for
+    /// one-time migration onto `Surface.warp`, then dropped (never re-saved).
+    #[serde(default, rename = "warp_mode", skip_serializing)]
+    pub legacy_warp_mode: Option<crate::renderer::warp::WarpMode>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -1353,5 +1358,40 @@ mod tests {
             }
             _ => panic!("Expected Recording target"),
         }
+    }
+
+    // ── Per-surface warp migration (8i.5) ────────────────────────────
+
+    /// Pre-8i.5 files stored warp on the assignment under `warp_mode`; it must
+    /// still deserialize (into `legacy_warp_mode`) so load-time migration can
+    /// move it onto the surface.
+    #[test]
+    fn assignment_config_reads_legacy_warp_mode() {
+        let json = r#"{"surface_uuid":"s1","warp_mode":{"type":"CornerPin","corners":[[0,0],[1,0],[1,1],[0,1]]},"enabled":true}"#;
+        let cfg: SurfaceAssignmentConfig = serde_json::from_str(json).unwrap();
+        assert!(
+            matches!(
+                cfg.legacy_warp_mode,
+                Some(crate::renderer::warp::WarpMode::CornerPin { .. })
+            ),
+            "legacy warp_mode should deserialize for migration"
+        );
+    }
+
+    /// New files must NOT re-serialize the legacy warp field.
+    #[test]
+    fn assignment_config_drops_legacy_warp_on_save() {
+        let cfg = SurfaceAssignmentConfig {
+            surface_uuid: "s1".into(),
+            legacy_warp_mode: Some(crate::renderer::warp::WarpMode::identity_corners([
+                0.0, 0.0, 1.0, 1.0,
+            ])),
+            enabled: true,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            !json.contains("warp_mode"),
+            "legacy warp_mode must not be re-serialized: {json}"
+        );
     }
 }

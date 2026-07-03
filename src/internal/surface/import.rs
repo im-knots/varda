@@ -4,6 +4,7 @@ use std::io::Cursor;
 
 use usvg::tiny_skia_path;
 
+use super::curve::{quad_to_cubic, PathSegment, SurfacePath};
 use super::detect::{
     check_circularity, detect_contours, shoelace_area, suggest_name, DetectedContour,
     DetectionParams, DetectionResult,
@@ -133,18 +134,25 @@ pub fn detect_from_file(
 // ── SVG import ─────────────────────────────────────────────────────
 
 /// Detect surfaces from SVG data (extracts geometric paths directly).
+///
+/// Cubic/quadratic bezier control points are preserved into a [`SurfacePath`] on
+/// each detected contour, so curved outlines import as first-class editable
+/// curves rather than pre-flattened polygons.
 pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> {
     let tree = usvg::Tree::from_data(svg_data, &usvg::Options::default())
         .map_err(|e| ImportError::SvgParse(e.to_string()))?;
 
-    let mut polylines: Vec<Vec<[f32; 2]>> = Vec::new();
-    walk_svg_group(tree.root(), &mut polylines);
+    let mut paths: Vec<SurfacePath> = Vec::new();
+    walk_svg_group(tree.root(), &mut paths);
 
-    if polylines.is_empty() {
+    if paths.is_empty() {
         return Err(ImportError::NoContours);
     }
 
-    // Compute bounding box of all points for normalization
+    // Flatten each path once for bounding-box, area, and circularity checks.
+    let polylines: Vec<Vec<[f32; 2]>> = paths.iter().map(|p| p.flatten()).collect();
+
+    // Compute bounding box of all points for normalization.
     let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
     let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
     for poly in &polylines {
@@ -157,13 +165,11 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
     }
     let width = (max_x - min_x).max(1e-6);
     let height = (max_y - min_y).max(1e-6);
+    let normalize = |pt: [f32; 2]| [(pt[0] - min_x) / width, (pt[1] - min_y) / height];
 
     let mut contours = Vec::new();
-    for (i, poly) in polylines.iter().enumerate() {
-        let normalized: Vec<[f32; 2]> = poly
-            .iter()
-            .map(|pt| [(pt[0] - min_x) / width, (pt[1] - min_y) / height])
-            .collect();
+    for (i, (poly, raw_path)) in polylines.iter().zip(paths.iter()).enumerate() {
+        let normalized: Vec<[f32; 2]> = poly.iter().map(|pt| normalize(*pt)).collect();
         if normalized.len() < 3 {
             continue;
         }
@@ -176,12 +182,17 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
         let cx: f32 = normalized.iter().map(|v| v[0]).sum::<f32>() / normalized.len() as f32;
         let cy: f32 = normalized.iter().map(|v| v[1]).sum::<f32>() / normalized.len() as f32;
         let suggested_name = suggest_name([cx, cy], i);
+        // Normalize the path's control points with the same transform as the
+        // flattened vertices so both spaces stay in sync.
+        let mut path = raw_path.clone();
+        path.apply_map(normalize);
         contours.push(DetectedContour {
             vertices: normalized,
             area,
             is_circular,
             circle_fit,
             suggested_name,
+            path: Some(path),
         });
     }
 
@@ -202,15 +213,18 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
     })
 }
 
-/// Recursively walk a usvg Group, extracting polylines from Path nodes.
-fn walk_svg_group(group: &usvg::Group, out: &mut Vec<Vec<[f32; 2]>>) {
+/// Recursively walk a usvg Group, extracting an editable [`SurfacePath`] from
+/// each Path node.
+fn walk_svg_group(group: &usvg::Group, out: &mut Vec<SurfacePath>) {
     for node in group.children() {
         match node {
             usvg::Node::Group(ref g) => walk_svg_group(g, out),
             usvg::Node::Path(ref p) => {
-                let polyline = flatten_svg_path(p.data());
-                if polyline.len() >= 3 {
-                    out.push(polyline);
+                if let Some(path) = svg_path_to_surface_path(p.data()) {
+                    // Require at least a triangle's worth of geometry.
+                    if path.flatten().len() >= 3 {
+                        out.push(path);
+                    }
                 }
             }
             _ => {}
@@ -218,62 +232,65 @@ fn walk_svg_group(group: &usvg::Group, out: &mut Vec<Vec<[f32; 2]>>) {
     }
 }
 
-/// Flatten a tiny_skia_path::Path into a polyline by sampling curve segments.
-fn flatten_svg_path(path: &tiny_skia_path::Path) -> Vec<[f32; 2]> {
-    let mut points: Vec<[f32; 2]> = Vec::new();
+/// Convert a `tiny_skia_path::Path` into a closed [`SurfacePath`], preserving
+/// bezier control points. Quadratic segments are converted losslessly to cubics
+/// (the only curved segment kind). Returns `None` if the path has no drawable
+/// segments. Subpaths after the first are joined with straight segments, matching
+/// the historical single-outline behavior.
+fn svg_path_to_surface_path(path: &tiny_skia_path::Path) -> Option<SurfacePath> {
+    let mut start: Option<[f32; 2]> = None;
+    let mut segments: Vec<PathSegment> = Vec::new();
     let mut last = [0.0f32; 2];
 
     for seg in path.segments() {
         match seg {
             tiny_skia_path::PathSegment::MoveTo(pt) => {
-                last = [pt.x, pt.y];
-                points.push(last);
+                let p = [pt.x, pt.y];
+                if start.is_none() {
+                    start = Some(p);
+                } else {
+                    segments.push(PathSegment::Line { to: p });
+                }
+                last = p;
             }
             tiny_skia_path::PathSegment::LineTo(pt) => {
-                last = [pt.x, pt.y];
-                points.push(last);
+                let p = [pt.x, pt.y];
+                segments.push(PathSegment::Line { to: p });
+                last = p;
             }
             tiny_skia_path::PathSegment::QuadTo(ctrl, pt) => {
-                // Sample quadratic Bézier at intermediate points
-                const STEPS: usize = 8;
-                for i in 1..=STEPS {
-                    let t = i as f32 / STEPS as f32;
-                    let inv = 1.0 - t;
-                    let x = inv * inv * last[0] + 2.0 * inv * t * ctrl.x + t * t * pt.x;
-                    let y = inv * inv * last[1] + 2.0 * inv * t * ctrl.y + t * t * pt.y;
-                    points.push([x, y]);
-                }
-                last = [pt.x, pt.y];
+                let p1 = [pt.x, pt.y];
+                let (c1, c2) = quad_to_cubic(last, [ctrl.x, ctrl.y], p1);
+                segments.push(PathSegment::Cubic { c1, c2, to: p1 });
+                last = p1;
             }
             tiny_skia_path::PathSegment::CubicTo(c1, c2, pt) => {
-                // Sample cubic Bézier at intermediate points
-                const STEPS: usize = 12;
-                for i in 1..=STEPS {
-                    let t = i as f32 / STEPS as f32;
-                    let inv = 1.0 - t;
-                    let x = inv * inv * inv * last[0]
-                        + 3.0 * inv * inv * t * c1.x
-                        + 3.0 * inv * t * t * c2.x
-                        + t * t * t * pt.x;
-                    let y = inv * inv * inv * last[1]
-                        + 3.0 * inv * inv * t * c1.y
-                        + 3.0 * inv * t * t * c2.y
-                        + t * t * t * pt.y;
-                    points.push([x, y]);
-                }
-                last = [pt.x, pt.y];
+                let p1 = [pt.x, pt.y];
+                segments.push(PathSegment::Cubic {
+                    c1: [c1.x, c1.y],
+                    c2: [c2.x, c2.y],
+                    to: p1,
+                });
+                last = p1;
             }
-            tiny_skia_path::PathSegment::Close => {
-                // Close the path by connecting back to the first point
-                if let Some(&first) = points.first() {
-                    if (last[0] - first[0]).abs() > 1e-4 || (last[1] - first[1]).abs() > 1e-4 {
-                        points.push(first);
-                    }
-                }
-            }
+            tiny_skia_path::PathSegment::Close => {}
         }
     }
-    points
+
+    let start = start?;
+    if segments.is_empty() {
+        return None;
+    }
+    // Detected outlines are filled regions: close with an explicit segment back
+    // to the start unless the last point already coincides with it.
+    if (last[0] - start[0]).abs() > 1e-4 || (last[1] - start[1]).abs() > 1e-4 {
+        segments.push(PathSegment::Line { to: start });
+    }
+    Some(SurfacePath {
+        start,
+        segments,
+        closed: true,
+    })
 }
 
 // ── DXF import ─────────────────────────────────────────────────────
@@ -385,6 +402,7 @@ pub fn detect_from_dxf(dxf_data: &[u8]) -> Result<DetectionResult, ImportError> 
             is_circular,
             circle_fit,
             suggested_name,
+            path: None,
         });
     }
 
@@ -538,6 +556,34 @@ mod tests {
         assert!(result.is_ok());
         let det = result.unwrap();
         assert!(!det.contours.is_empty());
+    }
+
+    #[test]
+    fn detect_from_svg_preserves_cubic_control_points() {
+        // A path whose top edge is a cubic bezier; the rest are straight lines.
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <path d="M10,10 C 30,-10 70,-10 90,10 L 90,90 L 10,90 Z" fill="black"/>
+        </svg>"#;
+        let det = detect_from_svg(svg).expect("cubic SVG should detect");
+        let contour = det.contours.first().expect("one contour");
+        let path = contour.path.as_ref().expect("path captured for SVG import");
+        assert!(
+            path.has_cubic(),
+            "expected at least one cubic segment from the C command"
+        );
+    }
+
+    #[test]
+    fn detect_from_svg_rect_path_has_no_cubic() {
+        // A purely straight-line outline keeps a path but with no curvature, so
+        // it is created as a plain editable polygon (path dropped at confirm).
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect x="10" y="10" width="80" height="80" fill="black"/>
+        </svg>"#;
+        let det = detect_from_svg(svg).expect("rect SVG should detect");
+        let contour = det.contours.first().expect("one contour");
+        let path = contour.path.as_ref().expect("path captured for SVG import");
+        assert!(!path.has_cubic(), "a rect has no cubic segments");
     }
 
     #[test]

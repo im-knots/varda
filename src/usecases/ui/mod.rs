@@ -14,7 +14,7 @@ use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::{DomeGeometry, DomePreset, DomeSetup};
 use crate::surface::detect::{DetectedContour, DetectionParams};
-use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
+use crate::surface::{CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
 // Re-export default render resolution constants from the engine layer
@@ -993,19 +993,10 @@ pub enum OutputAction {
         output_idx: usize,
         assignment_idx: usize,
     },
-    /// Toggle calibration mode on an output (windowed only)
-    ToggleCalibration { idx: usize },
-    /// Update a warp corner for a surface assignment
-    SetWarpCorner {
-        output_idx: usize,
-        assignment_idx: usize,
-        corner_idx: usize,
-        position: [f32; 2],
-    },
-    /// Reset warp to identity for a surface assignment
-    ResetWarp {
-        output_idx: usize,
-        assignment_idx: usize,
+    /// Set the calibration display mode on an output (windowed only)
+    SetCalibrationMode {
+        idx: usize,
+        mode: crate::renderer::context::CalibrationMode,
     },
     /// Set edge blending configuration for an output
     SetEdgeBlend {
@@ -1029,7 +1020,6 @@ pub enum OutputAction {
 pub struct SurfaceAssignmentUI {
     pub surface_uuid: String,
     pub surface_name: String,
-    pub warp_mode: crate::renderer::warp::WarpMode,
     pub enabled: bool,
     /// Per-surface overlap zones (Auto mode). Empty when Manual or no overlaps.
     pub overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones,
@@ -1051,7 +1041,7 @@ pub struct OutputUI {
     /// Duration of active recording/streaming
     pub active_duration: std::time::Duration,
     pub surface_assignments: Vec<SurfaceAssignmentUI>,
-    pub calibration_mode: bool,
+    pub calibration_mode: crate::renderer::context::CalibrationMode,
     /// Edge blend mode (Auto / Manual)
     pub edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode,
     /// Edge blending configuration
@@ -1093,6 +1083,38 @@ pub enum SurfaceAction {
     },
     /// Move a surface by a delta (moves all contours)
     MoveDelta { uuid: String, dx: f32, dy: f32 },
+    /// Rotate a surface by `angle` radians around `pivot` (normalized coords)
+    Rotate {
+        uuid: String,
+        angle: f32,
+        pivot: [f32; 2],
+    },
+    /// Scale a surface by `(sx, sy)` around `pivot` (normalized coords)
+    Scale {
+        uuid: String,
+        sx: f32,
+        sy: f32,
+        pivot: [f32; 2],
+    },
+    /// Convert a curve-path edge to a cubic bezier or back to a straight line
+    ConvertEdge {
+        uuid: String,
+        edge_idx: usize,
+        to_cubic: bool,
+    },
+    /// Move a curve-path anchor to a new position (normalized coords)
+    MoveAnchor {
+        uuid: String,
+        anchor_idx: usize,
+        pos: [f32; 2],
+    },
+    /// Move a cubic control handle of a curve-path segment (normalized coords)
+    MoveHandle {
+        uuid: String,
+        segment_idx: usize,
+        handle: CubicHandle,
+        pos: [f32; 2],
+    },
     /// Change the content source for a surface
     SetSource { uuid: String, source: OutputSource },
     /// Change the output type for a surface
@@ -1113,6 +1135,45 @@ pub enum SurfaceAction {
     FlipHorizontal { uuid: String },
     /// Flip a surface vertically (mirror around its bounding box center Y)
     FlipVertical { uuid: String },
+    /// Move one corner-pin corner of a surface's warp (per-surface)
+    SetWarpCorner {
+        uuid: String,
+        corner_idx: usize,
+        position: [f32; 2],
+    },
+    /// Clear a surface's warp (back to no-warp / native position)
+    ResetWarp { uuid: String },
+    /// Convert a surface's warp into a `cols` × `rows` mesh (preserving deformation)
+    SetWarpSubdivisions { uuid: String, cols: u32, rows: u32 },
+    /// Move a single mesh grid point of a surface's mesh warp
+    SetWarpMeshPoint {
+        uuid: String,
+        row: usize,
+        col: usize,
+        position: [f32; 2],
+    },
+    /// Bind/unbind a surface's warp from its shape (auto-warp)
+    SetWarpBound { uuid: String, bound: bool },
+    /// Convert a surface's warp into a smooth bezier patch grid (8i.6)
+    ConvertWarpToBezier { uuid: String },
+    /// Move a bezier-warp control anchor
+    MoveWarpAnchor {
+        uuid: String,
+        row: usize,
+        col: usize,
+        position: [f32; 2],
+    },
+    /// Move a bezier-warp tangent handle (`horizontal` edge vs vertical; `which` 0/1)
+    MoveWarpHandle {
+        uuid: String,
+        horizontal: bool,
+        row: usize,
+        col: usize,
+        which: usize,
+        position: [f32; 2],
+    },
+    /// Set the bezier-warp control-cage resolution (anchor `cols` × `rows`)
+    SetBezierCageSubdivisions { uuid: String, cols: u32, rows: u32 },
     /// Insert a vertex on an edge (after vertex at `after_vert_idx`)
     InsertVertex {
         uuid: String,
@@ -1181,6 +1242,16 @@ pub struct SurfaceUI {
     pub content_mapping: ContentMapping,
     pub output_type: SurfaceOutputType,
     pub circle_hint: Option<CircleHint>,
+    /// Effective per-surface warp (corner-pin or mesh); `None` = no warp. While
+    /// `warp_bound`, this is the shape-conforming warp. Drives the stage
+    /// bottom-bar warp editor.
+    pub warp: Option<crate::renderer::warp::WarpMode>,
+    /// Whether the warp auto-conforms to the surface shape. When `true` the
+    /// bottom-bar warp controls are locked (read-only).
+    pub warp_bound: bool,
+    /// Curve authoring path, when the surface is bezier-edited. Drives the
+    /// anchor/handle overlay and edge hit-testing in the stage editor.
+    pub path: Option<SurfacePath>,
 }
 
 /// Crossfader action from UI

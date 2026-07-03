@@ -818,6 +818,13 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AddAudioBand { preset, source_id } => {
+                // A band bound to a specific device must open it for capture;
+                // `None` uses the auto-opened default (primary) source.
+                if let Some(id) = source_id {
+                    if let Err(e) = self.audio_manager.open_source(id) {
+                        log::warn!("Failed to open audio source {} for new band: {}", id, e);
+                    }
+                }
                 self.add_audio_band(preset, source_id);
                 CommandResult::Ok
             }
@@ -935,11 +942,36 @@ impl VardaApp {
             }
             EngineCommand::CombineSurfaces { uuids } => self.cmd_combine_surfaces(&uuids),
             EngineCommand::MoveSurface { uuid, dx, dy } => self.cmd_move_surface(&uuid, dx, dy),
+            EngineCommand::RotateSurface { uuid, angle, pivot } => {
+                self.cmd_rotate_surface(&uuid, angle, pivot)
+            }
+            EngineCommand::ScaleSurface {
+                uuid,
+                sx,
+                sy,
+                pivot,
+            } => self.cmd_scale_surface(&uuid, sx, sy, pivot),
             EngineCommand::UpdateSurfaceContourVertices {
                 uuid,
                 contour,
                 vertices,
             } => self.cmd_update_surface_contour_vertices(&uuid, contour, vertices),
+            EngineCommand::ConvertSurfaceEdge {
+                uuid,
+                edge_idx,
+                to_cubic,
+            } => self.cmd_convert_surface_edge(&uuid, edge_idx, to_cubic),
+            EngineCommand::MovePathAnchor {
+                uuid,
+                anchor_idx,
+                pos,
+            } => self.cmd_move_path_anchor(&uuid, anchor_idx, pos),
+            EngineCommand::MovePathHandle {
+                uuid,
+                segment_idx,
+                handle,
+                pos,
+            } => self.cmd_move_path_handle(&uuid, segment_idx, handle, pos),
             EngineCommand::AssignSurfaceToOutput {
                 output_uuid,
                 surface_uuid,
@@ -1394,17 +1426,52 @@ impl VardaApp {
             }
             EngineCommand::StartOutput { idx } => self.cmd_start_output(idx),
             EngineCommand::StopOutput { idx } => self.cmd_stop_output(idx),
-            EngineCommand::ToggleCalibration { idx } => self.cmd_toggle_calibration(idx),
+            EngineCommand::SetCalibrationMode { idx, mode } => {
+                self.cmd_set_calibration_mode(idx, mode)
+            }
             EngineCommand::SetWarpCorner {
-                output_idx,
-                assignment_idx,
+                surface_uuid,
                 corner_idx,
                 position,
-            } => self.cmd_set_warp_corner(output_idx, assignment_idx, corner_idx, position),
-            EngineCommand::ResetWarp {
-                output_idx,
-                assignment_idx,
-            } => self.cmd_reset_warp(output_idx, assignment_idx),
+            } => self.cmd_set_warp_corner(&surface_uuid, corner_idx, position),
+            EngineCommand::ResetWarp { surface_uuid } => self.cmd_reset_warp(&surface_uuid),
+            EngineCommand::SetWarpSubdivisions {
+                surface_uuid,
+                cols,
+                rows,
+            } => self.cmd_set_warp_subdivisions(&surface_uuid, cols, rows),
+            EngineCommand::SetWarpMeshPoint {
+                surface_uuid,
+                row,
+                col,
+                position,
+            } => self.cmd_set_warp_mesh_point(&surface_uuid, row, col, position),
+            EngineCommand::SetWarpBound {
+                surface_uuid,
+                bound,
+            } => self.cmd_set_warp_bound(&surface_uuid, bound),
+            EngineCommand::ConvertWarpToBezier { surface_uuid } => {
+                self.cmd_convert_warp_to_bezier(&surface_uuid)
+            }
+            EngineCommand::MoveWarpAnchor {
+                surface_uuid,
+                row,
+                col,
+                position,
+            } => self.cmd_move_warp_anchor(&surface_uuid, row, col, position),
+            EngineCommand::MoveWarpHandle {
+                surface_uuid,
+                horizontal,
+                row,
+                col,
+                which,
+                position,
+            } => self.cmd_move_warp_handle(&surface_uuid, horizontal, row, col, which, position),
+            EngineCommand::SetBezierCageSubdivisions {
+                surface_uuid,
+                cols,
+                rows,
+            } => self.cmd_set_bezier_cage_subdivisions(&surface_uuid, cols, rows),
             EngineCommand::SetEdgeBlend { output_idx, config } => {
                 self.cmd_set_edge_blend(output_idx, config)
             }
@@ -1662,6 +1729,18 @@ impl VardaApp {
                 })
             }
             EngineCommand::UpdateAudioSource { uuid, source_id } => {
+                // Selecting a specific device must actually open it for capture;
+                // otherwise the modulator reads a source that was never started.
+                if let Some(id) = source_id {
+                    if let Err(e) = self.audio_manager.open_source(id) {
+                        log::warn!(
+                            "Failed to open audio source {} for modulator {}: {}",
+                            id,
+                            uuid,
+                            e
+                        );
+                    }
+                }
                 self.exec_modulation_update(&uuid, |s| {
                     if let ModulationSource::AudioBand {
                         source_id: ref mut sid,

@@ -1,13 +1,13 @@
 //! Surface editor and stage editor panels.
 
 use super::super::{
-    CameraDetectAction, CameraDetectMode, DomeAction, SurfaceAction, UIActions, UIData,
+    CameraDetectAction, CameraDetectMode, DomeAction, SurfaceAction, SurfaceUI, UIActions, UIData,
 };
 use super::geometry::polygon_shape;
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::DomePreset;
 use crate::surface::detect::{DetectionMethod, HullMode};
-use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType};
+use crate::surface::{CircleHint, ContentMapping, CubicHandle, PathSegment, SurfaceOutputType};
 
 /// Drag state for edge dragging:
 /// (surface_uuid, contour_idx, edge_start_idx, original_v0, original_v1, grab_point_on_edge)
@@ -21,6 +21,147 @@ type HitEdge = (String, usize, usize, [f32; 2]);
 type HitSurface = (String, f32, f32);
 /// Combined hit-test result: (vertex, edge, surface)
 type HitTestResult = (Option<HitVertex>, Option<HitEdge>, Option<HitSurface>);
+
+/// Pixel margin between the content bounding box and the transform gizmo box.
+/// Kept wide enough that the corner scale handles clear the surface's own
+/// corner vertices, so vertex editing and gizmo scaling don't fight over the
+/// same clicks.
+const GIZMO_MARGIN_PX: f32 = 20.0;
+/// Pixel offset of the rotation knob above the gizmo box's top edge.
+const GIZMO_ROTATE_OFFSET_PX: f32 = 28.0;
+/// Hit-test radius (pixels) for gizmo scale/rotate handles.
+const GIZMO_HANDLE_HIT_PX: f32 = 14.0;
+
+/// Active scale-drag on the transform gizmo. `last_sx`/`last_sy` track the total
+/// scale so far so each frame can emit only the incremental delta.
+#[derive(Debug, Clone, Copy)]
+struct ScaleDrag {
+    pivot: [f32; 2],
+    start_handle: [f32; 2],
+    last_sx: f32,
+    last_sy: f32,
+    axis_x: bool,
+    axis_y: bool,
+}
+
+/// Active rotate-drag on the transform gizmo. `last_angle` tracks the previous
+/// frame's pointer angle so each frame emits only the incremental delta.
+#[derive(Debug, Clone, Copy)]
+struct RotateDrag {
+    center: [f32; 2],
+    last_angle: f32,
+}
+
+/// Union bounding box `(x, y, w, h)` in normalized coords of the selected
+/// surfaces, or `None` when the selection is empty.
+fn selection_bounds(
+    surfaces: &[SurfaceUI],
+    selected: &std::collections::BTreeSet<String>,
+) -> Option<(f32, f32, f32, f32)> {
+    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+    let mut any = false;
+    for s in surfaces.iter().filter(|s| selected.contains(&s.uuid)) {
+        for v in s.vertices.iter().chain(s.extra_contours.iter().flatten()) {
+            min_x = min_x.min(v[0]);
+            min_y = min_y.min(v[1]);
+            max_x = max_x.max(v[0]);
+            max_y = max_y.max(v[1]);
+            any = true;
+        }
+    }
+    if any {
+        Some((min_x, min_y, max_x - min_x, max_y - min_y))
+    } else {
+        None
+    }
+}
+
+/// The gizmo's eight scale handles as `(handle, pivot, scales_x, scales_y)` in
+/// normalized coords for the given box. The pivot is always the opposite handle.
+fn gizmo_scale_handles(x: f32, y: f32, w: f32, h: f32) -> [([f32; 2], [f32; 2], bool, bool); 8] {
+    let (l, t, r, b) = (x, y, x + w, y + h);
+    let (mx, my) = (x + w * 0.5, y + h * 0.5);
+    [
+        ([l, t], [r, b], true, true),    // top-left ↔ bottom-right
+        ([r, t], [l, b], true, true),    // top-right ↔ bottom-left
+        ([r, b], [l, t], true, true),    // bottom-right ↔ top-left
+        ([l, b], [r, t], true, true),    // bottom-left ↔ top-right
+        ([mx, t], [mx, b], false, true), // top ↔ bottom
+        ([mx, b], [mx, t], false, true), // bottom ↔ top
+        ([r, my], [l, my], true, false), // right ↔ left
+        ([l, my], [r, my], true, false), // left ↔ right
+    ]
+}
+
+/// If the pointer began on a transform-gizmo handle for the current selection,
+/// start the matching scale/rotate drag and return `true`, clearing any other
+/// drag state. Returns `false` when no gizmo handle was hit.
+#[allow(clippy::too_many_arguments)]
+fn try_begin_gizmo_drag(
+    state: &mut StageEditorState,
+    surfaces: &[SurfaceUI],
+    pos: egui::Pos2,
+    nx: f32,
+    ny: f32,
+    canvas_rect: egui::Rect,
+    canvas_width: f32,
+    canvas_height: f32,
+) -> bool {
+    let Some((bx, by, bw, bh)) = selection_bounds(surfaces, &state.selected_surfaces) else {
+        return false;
+    };
+    let mx = GIZMO_MARGIN_PX / canvas_width;
+    let my = GIZMO_MARGIN_PX / canvas_height;
+    let (gx, gy, gw, gh) = (bx - mx, by - my, bw + 2.0 * mx, bh + 2.0 * my);
+    let to_px = |p: [f32; 2]| {
+        egui::pos2(
+            canvas_rect.left() + p[0] * canvas_width,
+            canvas_rect.top() + p[1] * canvas_height,
+        )
+    };
+    let center = [gx + gw * 0.5, gy + gh * 0.5];
+
+    // Rotation knob first (it sits outside the box, so it can't clash).
+    let top_mid = to_px([gx + gw * 0.5, gy]);
+    let knob = egui::pos2(top_mid.x, top_mid.y - GIZMO_ROTATE_OFFSET_PX);
+    if pos.distance(knob) < GIZMO_HANDLE_HIT_PX {
+        let angle = (ny - center[1]).atan2(nx - center[0]);
+        clear_all_drag(state);
+        state.dragging_rotate = Some(RotateDrag {
+            center,
+            last_angle: angle,
+        });
+        return true;
+    }
+
+    for (handle, pivot, axis_x, axis_y) in gizmo_scale_handles(gx, gy, gw, gh) {
+        if pos.distance(to_px(handle)) < GIZMO_HANDLE_HIT_PX {
+            clear_all_drag(state);
+            state.dragging_scale = Some(ScaleDrag {
+                pivot,
+                start_handle: handle,
+                last_sx: 1.0,
+                last_sy: 1.0,
+                axis_x,
+                axis_y,
+            });
+            return true;
+        }
+    }
+    false
+}
+
+/// Clear every drag-in-progress field on the stage editor state.
+fn clear_all_drag(state: &mut StageEditorState) {
+    state.dragging_vertex = None;
+    state.moving_surface = None;
+    state.selection_rect_start = None;
+    state.dragging_radius = None;
+    state.dragging_edge = None;
+    state.dragging_scale = None;
+    state.dragging_rotate = None;
+}
 
 /// Stage editor mode: 2D polygon editing or 3D dome mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -493,6 +634,57 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                             }
                         });
                 });
+
+                // Precision transform: bounds of the primary contour (X/Y = position,
+                // W/H = size). Editing emits Move/Scale so it stays in sync with the gizmo.
+                {
+                    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+                    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+                    for v in &surface.vertices {
+                        min_x = min_x.min(v[0]);
+                        min_y = min_y.min(v[1]);
+                        max_x = max_x.max(v[0]);
+                        max_y = max_y.max(v[1]);
+                    }
+                    if min_x <= max_x {
+                        let (x0, y0, w0, h0) = (min_x, min_y, max_x - min_x, max_y - min_y);
+                        let (mut xv, mut yv) = (x0, y0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("X").weak().size(10.0));
+                            let rx =
+                                ui.add(egui::DragValue::new(&mut xv).speed(0.002).max_decimals(3));
+                            ui.label(egui::RichText::new("Y").weak().size(10.0));
+                            let ry =
+                                ui.add(egui::DragValue::new(&mut yv).speed(0.002).max_decimals(3));
+                            if rx.changed() || ry.changed() {
+                                actions.surface_actions.push(SurfaceAction::MoveDelta {
+                                    uuid: surface.uuid.clone(),
+                                    dx: xv - x0,
+                                    dy: yv - y0,
+                                });
+                            }
+                        });
+                        let (mut wv, mut hv) = (w0, h0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("W").weak().size(10.0));
+                            let rw =
+                                ui.add(egui::DragValue::new(&mut wv).speed(0.002).max_decimals(3));
+                            ui.label(egui::RichText::new("H").weak().size(10.0));
+                            let rh =
+                                ui.add(egui::DragValue::new(&mut hv).speed(0.002).max_decimals(3));
+                            if rw.changed() || rh.changed() {
+                                let sx = if w0 > 1e-5 { wv.max(0.001) / w0 } else { 1.0 };
+                                let sy = if h0 > 1e-5 { hv.max(0.001) / h0 } else { 1.0 };
+                                actions.surface_actions.push(SurfaceAction::Scale {
+                                    uuid: surface.uuid.clone(),
+                                    sx,
+                                    sy,
+                                    pivot: [x0, y0],
+                                });
+                            }
+                        });
+                    }
+                }
             });
         ui.add_space(2.0);
     }
@@ -530,6 +722,7 @@ enum DrawingTool {
     Rectangle,
     Polygon,
     Circle,
+    Bezier,
 }
 
 /// State for active drawing operations in the stage editor
@@ -557,6 +750,14 @@ struct StageEditorState {
     /// Drag state for edge dragging: (surface_uuid, contour_idx, edge_start_idx,
     /// original_v0, original_v1, grab_point_on_edge)
     dragging_edge: Option<DraggingEdge>,
+    /// Drag state for the transform gizmo's scale handles.
+    dragging_scale: Option<ScaleDrag>,
+    /// Drag state for the transform gizmo's rotation knob.
+    dragging_rotate: Option<RotateDrag>,
+    /// Drag state for a curve anchor: (surface_uuid, anchor_idx)
+    dragging_anchor: Option<(String, usize)>,
+    /// Drag state for a cubic control handle: (surface_uuid, segment_idx, handle)
+    dragging_handle: Option<(String, usize, CubicHandle)>,
 }
 
 /// Full-screen stage editor — replaces the deck view
@@ -594,6 +795,11 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 DrawingTool::Circle,
                 "⬤ Circle",
                 "Draw circle/N-gon surfaces (C)",
+            ),
+            (
+                DrawingTool::Bezier,
+                "✒ Bezier",
+                "Bezier edit — click an edge to curve/straighten it, drag anchors & handles",
             ),
         ];
         for (tool, label, tooltip) in &tools {
@@ -1141,8 +1347,51 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             egui::Color32::WHITE,
         );
 
-        // For circles: render radius handle instead of vertex handles
-        if is_selected && surface.circle_hint.is_some() {
+        // For path-backed (bezier) surfaces: draw the anchor/handle overlay
+        // instead of the dense flattened-vertex handles.
+        if let Some(path) = &surface.path {
+            let to_px = |p: [f32; 2]| {
+                egui::pos2(
+                    canvas_rect.left() + p[0] * canvas_width,
+                    canvas_rect.top() + p[1] * canvas_height,
+                )
+            };
+            let anchor_color = egui::Color32::from_rgb(90, 220, 220);
+            let handle_color = egui::Color32::from_rgb(255, 180, 60);
+            // Control handles + connector lines (Bezier tool only).
+            if state.tool == DrawingTool::Bezier {
+                for (si, seg) in path.segments.iter().enumerate() {
+                    if let PathSegment::Cubic { c1, c2, .. } = seg {
+                        let s_px = to_px(path.segment_start(si));
+                        let e_px = to_px(seg.end());
+                        let (c1_px, c2_px) = (to_px(*c1), to_px(*c2));
+                        let line = egui::Stroke::new(1.0, egui::Color32::GRAY);
+                        painter.line_segment([s_px, c1_px], line);
+                        painter.line_segment([e_px, c2_px], line);
+                        for cp in [c1_px, c2_px] {
+                            painter.circle_filled(cp, 5.0, handle_color);
+                            painter.circle_stroke(
+                                cp,
+                                5.0,
+                                egui::Stroke::new(1.0, egui::Color32::BLACK),
+                            );
+                        }
+                    }
+                }
+            }
+            // Anchors (always shown for path surfaces).
+            for ai in 0..path.anchor_count() {
+                let a_px = to_px(path.anchor_pos(ai));
+                let r = egui::Rect::from_center_size(a_px, egui::vec2(9.0, 9.0));
+                painter.rect_filled(r, 2.0, anchor_color);
+                painter.rect_stroke(
+                    r,
+                    2.0,
+                    egui::Stroke::new(1.0, egui::Color32::BLACK),
+                    egui::StrokeKind::Outside,
+                );
+            }
+        } else if is_selected && surface.circle_hint.is_some() {
             let Some(hint) = surface.circle_hint else {
                 continue;
             };
@@ -1203,6 +1452,44 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     .collect();
                 draw_handles(&ec_px);
             }
+        }
+    }
+
+    // ── Transform gizmo (Select tool, non-empty selection) ───────────
+    if state.tool == DrawingTool::Select {
+        if let Some((bx, by, bw, bh)) = selection_bounds(&data.surfaces, &state.selected_surfaces) {
+            let mx = GIZMO_MARGIN_PX / canvas_width;
+            let my = GIZMO_MARGIN_PX / canvas_height;
+            let (gx, gy, gw, gh) = (bx - mx, by - my, bw + 2.0 * mx, bh + 2.0 * my);
+            let to_px = |p: [f32; 2]| {
+                egui::pos2(
+                    canvas_rect.left() + p[0] * canvas_width,
+                    canvas_rect.top() + p[1] * canvas_height,
+                )
+            };
+            let gcolor = egui::Color32::from_rgb(90, 200, 255);
+            let box_rect = egui::Rect::from_two_pos(to_px([gx, gy]), to_px([gx + gw, gy + gh]));
+            painter.rect_stroke(
+                box_rect,
+                0.0,
+                egui::Stroke::new(1.0, gcolor),
+                egui::StrokeKind::Outside,
+            );
+            for (handle, _pivot, _ax, _ay) in gizmo_scale_handles(gx, gy, gw, gh) {
+                let hr = egui::Rect::from_center_size(to_px(handle), egui::vec2(8.0, 8.0));
+                painter.rect_filled(hr, 1.0, gcolor);
+                painter.rect_stroke(
+                    hr,
+                    1.0,
+                    egui::Stroke::new(1.0, egui::Color32::BLACK),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            let top_mid = to_px([gx + gw * 0.5, gy]);
+            let knob = egui::pos2(top_mid.x, top_mid.y - GIZMO_ROTATE_OFFSET_PX);
+            painter.line_segment([top_mid, knob], egui::Stroke::new(1.0, gcolor));
+            painter.circle_filled(knob, 5.0, gcolor);
+            painter.circle_stroke(knob, 5.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
         }
     }
 
@@ -1300,6 +1587,15 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         [snap(nx), snap(ny)]
     };
 
+    // Raw (un-snapped) normalized cursor position. Bezier handle/anchor editing
+    // needs sub-grid precision: hit-testing against off-grid control points and
+    // dragging them must not snap-jump to the grid.
+    let to_norm_raw = |pos: egui::Pos2| -> [f32; 2] {
+        let nx = ((pos.x - canvas_rect.left()) / canvas_width).clamp(0.0, 1.0);
+        let ny = ((pos.y - canvas_rect.top()) / canvas_height).clamp(0.0, 1.0);
+        [nx, ny]
+    };
+
     // Helper: check if a point is inside any existing surface (returns surface UUID)
     let point_in_any_surface = |nx: f32, ny: f32| -> Option<String> {
         for surface in data.surfaces.iter().rev() {
@@ -1386,13 +1682,16 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
                 for surface in data.surfaces.iter().rev() {
                     let uid = &surface.uuid;
+                    // Path-backed surfaces edit via the Bezier tool; their
+                    // flattened vertices/edges are not directly grabbable here.
+                    let is_path = surface.path.is_some();
                     // Check all contours for vertex/edge hits
                     let contours: Vec<&Vec<[f32; 2]>> = std::iter::once(&surface.vertices)
                         .chain(surface.extra_contours.iter())
                         .collect();
                     for (ci, verts) in contours.iter().enumerate() {
                         for (vi, v) in verts.iter().enumerate() {
-                            if pixel_dist(nx, ny, v[0], v[1]) < vertex_threshold_px {
+                            if !is_path && pixel_dist(nx, ny, v[0], v[1]) < vertex_threshold_px {
                                 found_vertex = Some((uid.clone(), ci, vi));
                                 return (found_vertex, None, None);
                             }
@@ -1400,7 +1699,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     }
 
                     // Standard edge detection (narrow threshold, works from outside)
-                    if found_edge.is_none() {
+                    if !is_path && found_edge.is_none() {
                         if let Some((ci, ei, proj, _d)) =
                             find_closest_edge(nx, ny, surface, edge_threshold_px)
                         {
@@ -1435,7 +1734,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             found_surface = Some((uid.clone(), nx, ny));
                             // If cursor is inside the surface but no edge found yet,
                             // try again with a wider threshold to catch edges from inside.
-                            if found_edge.is_none() {
+                            if !is_path && found_edge.is_none() {
                                 if let Some((ci, ei, proj, _d)) =
                                     find_closest_edge(nx, ny, surface, edge_inner_threshold_px)
                                 {
@@ -1448,9 +1747,11 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 (found_vertex, found_edge, found_surface)
             };
 
-            // Hover feedback: change cursor when over interactive elements
+            // Hover feedback: change cursor when over interactive elements.
+            // Hit-testing uses the raw (un-snapped) cursor so off-grid vertices
+            // and edges remain grabbable; snapping applies only to placement.
             if let Some(pos) = canvas_response.hover_pos() {
-                let [nx, ny] = to_norm(pos);
+                let [nx, ny] = to_norm_raw(pos);
                 let (found_vertex, found_edge, found_surface) = hit_test(nx, ny);
                 if found_vertex.is_some() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -1466,7 +1767,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // Click to select (without drag)
             if canvas_response.clicked() {
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
-                    let [nx, ny] = to_norm(pos);
+                    let [nx, ny] = to_norm_raw(pos);
                     let (found_vertex, _found_edge, found_surface) = hit_test(nx, ny);
                     if let Some((si, _ci, _vi)) = found_vertex {
                         if shift_held {
@@ -1496,7 +1797,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // Double-click on edge to insert vertex
             if canvas_response.double_clicked() {
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
-                    let [nx, ny] = to_norm(pos);
+                    let [nx, ny] = to_norm_raw(pos);
                     let (_found_vertex, found_edge, _found_surface) = hit_test(nx, ny);
                     if let Some((uuid, _ci, ei, snap_pos)) = found_edge {
                         let snapped = [snap(snap_pos[0]), snap(snap_pos[1])];
@@ -1515,64 +1816,60 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             if canvas_response.drag_started() {
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
+                    // Raw cursor for hit-testing; off-grid vertices/edges (e.g.
+                    // after a gizmo scale/rotate) stay grabbable. Placement and
+                    // drag-reference math below stay in snapped space.
+                    let [rnx, rny] = to_norm_raw(pos);
 
-                    // Check for radius handle hit on selected circles first
-                    let mut found_radius_handle = None;
-                    for sel_uuid in &state.selected_surfaces {
-                        if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *sel_uuid) {
-                            if let Some(hint) = &surface.circle_hint {
-                                let hx = hint.center[0] + hint.radius;
-                                let hy = hint.center[1];
-                                if pixel_dist(nx, ny, hx, hy) < 14.0 {
-                                    found_radius_handle = Some(sel_uuid.clone());
-                                    break;
+                    // Transform gizmo handles take priority over vertex/edge/body.
+                    // The gizmo hit-tests in raw pixels; nx,ny only seed the
+                    // rotate start angle (kept snapped to match the drag loop).
+                    let gizmo_consumed = try_begin_gizmo_drag(
+                        &mut state,
+                        &data.surfaces,
+                        pos,
+                        nx,
+                        ny,
+                        canvas_rect,
+                        canvas_width,
+                        canvas_height,
+                    );
+
+                    if !gizmo_consumed {
+                        // Check for radius handle hit on selected circles first
+                        let mut found_radius_handle = None;
+                        for sel_uuid in &state.selected_surfaces {
+                            if let Some(surface) =
+                                data.surfaces.iter().find(|s| s.uuid == *sel_uuid)
+                            {
+                                if let Some(hint) = &surface.circle_hint {
+                                    let hx = hint.center[0] + hint.radius;
+                                    let hy = hint.center[1];
+                                    if pixel_dist(rnx, rny, hx, hy) < 14.0 {
+                                        found_radius_handle = Some(sel_uuid.clone());
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    if let Some(uuid) = found_radius_handle {
-                        state.dragging_radius = Some(uuid);
-                        state.dragging_vertex = None;
-                        state.moving_surface = None;
-                        state.selection_rect_start = None;
-                        state.dragging_edge = None;
-                    } else {
-                        let (found_vertex, found_edge, found_surface) = hit_test(nx, ny);
-
-                        if let Some((uuid, ci, vi)) = found_vertex {
-                            // If vertex drag on a circle, auto-convert to polygon first
-                            if data
-                                .surfaces
-                                .iter()
-                                .find(|s| s.uuid == uuid)
-                                .is_some_and(|s| s.circle_hint.is_some())
-                            {
-                                actions
-                                    .surface_actions
-                                    .push(SurfaceAction::ConvertToPolygon { uuid: uuid.clone() });
-                            }
-                            if !shift_held {
-                                state.selected_surfaces.clear();
-                            }
-                            state.selected_surfaces.insert(uuid.clone());
-                            state.dragging_vertex = Some((uuid, ci, vi));
+                        if let Some(uuid) = found_radius_handle {
+                            state.dragging_radius = Some(uuid);
+                            state.dragging_vertex = None;
                             state.moving_surface = None;
                             state.selection_rect_start = None;
                             state.dragging_edge = None;
-                        } else if let Some((uuid, ci, ei, grab_pt)) = found_edge {
-                            // Edge drag: store original edge endpoints + grab point
-                            if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == uuid) {
-                                let verts = if ci == 0 {
-                                    &surface.vertices
-                                } else {
-                                    &surface.extra_contours[ci - 1]
-                                };
-                                let ej = (ei + 1) % verts.len();
-                                let v0 = verts[ei];
-                                let v1 = verts[ej];
-                                // Auto-convert circle to polygon before edge drag
-                                if surface.circle_hint.is_some() {
+                        } else {
+                            let (found_vertex, found_edge, found_surface) = hit_test(rnx, rny);
+
+                            if let Some((uuid, ci, vi)) = found_vertex {
+                                // If vertex drag on a circle, auto-convert to polygon first
+                                if data
+                                    .surfaces
+                                    .iter()
+                                    .find(|s| s.uuid == uuid)
+                                    .is_some_and(|s| s.circle_hint.is_some())
+                                {
                                     actions
                                         .surface_actions
                                         .push(SurfaceAction::ConvertToPolygon {
@@ -1583,28 +1880,59 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                     state.selected_surfaces.clear();
                                 }
                                 state.selected_surfaces.insert(uuid.clone());
-                                state.dragging_edge = Some((uuid, ci, ei, v0, v1, grab_pt));
-                                state.dragging_vertex = None;
+                                state.dragging_vertex = Some((uuid, ci, vi));
                                 state.moving_surface = None;
                                 state.selection_rect_start = None;
+                                state.dragging_edge = None;
+                            } else if let Some((uuid, ci, ei, _proj)) = found_edge {
+                                // Edge drag: store original edge endpoints + grab point.
+                                // Grab point is the snapped cursor so the drag loop
+                                // (also snapped) starts with a zero delta — no jump.
+                                if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == uuid)
+                                {
+                                    let verts = if ci == 0 {
+                                        &surface.vertices
+                                    } else {
+                                        &surface.extra_contours[ci - 1]
+                                    };
+                                    let ej = (ei + 1) % verts.len();
+                                    let v0 = verts[ei];
+                                    let v1 = verts[ej];
+                                    // Auto-convert circle to polygon before edge drag
+                                    if surface.circle_hint.is_some() {
+                                        actions.surface_actions.push(
+                                            SurfaceAction::ConvertToPolygon { uuid: uuid.clone() },
+                                        );
+                                    }
+                                    if !shift_held {
+                                        state.selected_surfaces.clear();
+                                    }
+                                    state.selected_surfaces.insert(uuid.clone());
+                                    state.dragging_edge = Some((uuid, ci, ei, v0, v1, [nx, ny]));
+                                    state.dragging_vertex = None;
+                                    state.moving_surface = None;
+                                    state.selection_rect_start = None;
+                                }
+                            } else if let Some((uuid, _rx, _ry)) = found_surface {
+                                if !shift_held && !state.selected_surfaces.contains(&uuid) {
+                                    state.selected_surfaces.clear();
+                                }
+                                state.selected_surfaces.insert(uuid.clone());
+                                // Store the snapped grab point so the move loop
+                                // (snapped) starts with a zero delta — no jump.
+                                state.moving_surface = Some((uuid, nx, ny));
+                                state.dragging_vertex = None;
+                                state.selection_rect_start = None;
+                                state.dragging_edge = None;
+                            } else {
+                                if !shift_held {
+                                    state.selected_surfaces.clear();
+                                }
+                                state.selection_rect_start = Some([nx, ny]);
+                                state.dragging_vertex = None;
+                                state.moving_surface = None;
+                                state.dragging_edge = None;
                             }
-                        } else if let Some((uuid, lx, ly)) = found_surface {
-                            if !shift_held && !state.selected_surfaces.contains(&uuid) {
-                                state.selected_surfaces.clear();
-                            }
-                            state.selected_surfaces.insert(uuid.clone());
-                            state.moving_surface = Some((uuid, lx, ly));
-                            state.dragging_vertex = None;
-                            state.selection_rect_start = None;
-                            state.dragging_edge = None;
-                        } else {
-                            if !shift_held {
-                                state.selected_surfaces.clear();
-                            }
-                            state.selection_rect_start = Some([nx, ny]);
-                            state.dragging_vertex = None;
-                            state.moving_surface = None;
-                            state.dragging_edge = None;
                         }
                     }
                 }
@@ -1614,7 +1942,76 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
 
-                    if let Some(ref uuid) = state.dragging_radius {
+                    if let Some(rot) = state.dragging_rotate {
+                        let angle = (ny - rot.center[1]).atan2(nx - rot.center[0]);
+                        let mut delta = angle - rot.last_angle;
+                        if delta > std::f32::consts::PI {
+                            delta -= std::f32::consts::TAU;
+                        } else if delta < -std::f32::consts::PI {
+                            delta += std::f32::consts::TAU;
+                        }
+                        for surf_uuid in &state.selected_surfaces {
+                            if data.surfaces.iter().any(|s| s.uuid == *surf_uuid) {
+                                actions.surface_actions.push(SurfaceAction::Rotate {
+                                    uuid: surf_uuid.clone(),
+                                    angle: delta,
+                                    pivot: rot.center,
+                                });
+                            }
+                        }
+                        state.dragging_rotate = Some(RotateDrag {
+                            center: rot.center,
+                            last_angle: angle,
+                        });
+                    } else if let Some(sc) = state.dragging_scale {
+                        let raw_sx = if sc.axis_x {
+                            let d = sc.start_handle[0] - sc.pivot[0];
+                            if d.abs() > 1e-5 {
+                                (nx - sc.pivot[0]) / d
+                            } else {
+                                1.0
+                            }
+                        } else {
+                            1.0
+                        };
+                        let raw_sy = if sc.axis_y {
+                            let d = sc.start_handle[1] - sc.pivot[1];
+                            if d.abs() > 1e-5 {
+                                (ny - sc.pivot[1]) / d
+                            } else {
+                                1.0
+                            }
+                        } else {
+                            1.0
+                        };
+                        let total_sx = raw_sx.max(0.05);
+                        let total_sy = raw_sy.max(0.05);
+                        let dsx = if sc.last_sx.abs() > 1e-5 {
+                            total_sx / sc.last_sx
+                        } else {
+                            1.0
+                        };
+                        let dsy = if sc.last_sy.abs() > 1e-5 {
+                            total_sy / sc.last_sy
+                        } else {
+                            1.0
+                        };
+                        for surf_uuid in &state.selected_surfaces {
+                            if data.surfaces.iter().any(|s| s.uuid == *surf_uuid) {
+                                actions.surface_actions.push(SurfaceAction::Scale {
+                                    uuid: surf_uuid.clone(),
+                                    sx: dsx,
+                                    sy: dsy,
+                                    pivot: sc.pivot,
+                                });
+                            }
+                        }
+                        state.dragging_scale = Some(ScaleDrag {
+                            last_sx: total_sx,
+                            last_sy: total_sy,
+                            ..sc
+                        });
+                    } else if let Some(ref uuid) = state.dragging_radius {
                         // Compute new radius from cursor distance to circle center
                         if let Some(surface) = data.surfaces.iter().find(|s| s.uuid == *uuid) {
                             if let Some(hint) = &surface.circle_hint {
@@ -1752,6 +2149,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 state.moving_surface = None;
                 state.dragging_radius = None;
                 state.dragging_edge = None;
+                state.dragging_scale = None;
+                state.dragging_rotate = None;
             }
 
             // Delete selected surfaces (handled below via keymap)
@@ -1883,6 +2282,161 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 }
             }
         }
+
+        DrawingTool::Bezier => {
+            let pixel_dist = |nx: f32, ny: f32, vx: f32, vy: f32| -> f32 {
+                let dx_px = (nx - vx) * canvas_width;
+                let dy_px = (ny - vy) * canvas_height;
+                (dx_px * dx_px + dy_px * dy_px).sqrt()
+            };
+            let seg_dist = |nx: f32, ny: f32, a: [f32; 2], b: [f32; 2]| -> f32 {
+                let dx = (b[0] - a[0]) * canvas_width;
+                let dy = (b[1] - a[1]) * canvas_height;
+                let len_sq = dx * dx + dy * dy;
+                if len_sq < 1e-6 {
+                    return pixel_dist(nx, ny, a[0], a[1]);
+                }
+                let px = (nx - a[0]) * canvas_width;
+                let py = (ny - a[1]) * canvas_height;
+                let t = ((px * dx + py * dy) / len_sq).clamp(0.0, 1.0);
+                pixel_dist(nx, ny, a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+            };
+            let polyline_dist = |nx: f32, ny: f32, pts: &[[f32; 2]]| -> f32 {
+                pts.windows(2)
+                    .map(|w| seg_dist(nx, ny, w[0], w[1]))
+                    .fold(f32::MAX, f32::min)
+            };
+            let handle_hit_px = 16.0;
+            let anchor_hit_px = 16.0;
+            let edge_hit_px = 10.0;
+
+            let hit_handle = |nx: f32, ny: f32| -> Option<(String, usize, CubicHandle)> {
+                for surface in data.surfaces.iter().rev() {
+                    if let Some(path) = &surface.path {
+                        for (si, seg) in path.segments.iter().enumerate() {
+                            if let PathSegment::Cubic { c1, c2, .. } = seg {
+                                if pixel_dist(nx, ny, c1[0], c1[1]) < handle_hit_px {
+                                    return Some((surface.uuid.clone(), si, CubicHandle::C1));
+                                }
+                                if pixel_dist(nx, ny, c2[0], c2[1]) < handle_hit_px {
+                                    return Some((surface.uuid.clone(), si, CubicHandle::C2));
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            };
+            let hit_anchor = |nx: f32, ny: f32| -> Option<(String, usize)> {
+                for surface in data.surfaces.iter().rev() {
+                    if let Some(path) = &surface.path {
+                        for ai in 0..path.anchor_count() {
+                            let a = path.anchor_pos(ai);
+                            if pixel_dist(nx, ny, a[0], a[1]) < anchor_hit_px {
+                                return Some((surface.uuid.clone(), ai));
+                            }
+                        }
+                    }
+                }
+                None
+            };
+            let hit_edge = |nx: f32, ny: f32| -> Option<(String, usize, bool)> {
+                let mut best: Option<(String, usize, bool, f32)> = None;
+                for surface in data.surfaces.iter().rev() {
+                    if let Some(path) = &surface.path {
+                        for ei in 0..path.edge_count() {
+                            let d = polyline_dist(nx, ny, &path.sample_edge(ei, 12));
+                            if d < edge_hit_px && best.as_ref().is_none_or(|b| d < b.3) {
+                                best = Some((surface.uuid.clone(), ei, path.is_edge_cubic(ei), d));
+                            }
+                        }
+                    } else {
+                        let verts = &surface.vertices;
+                        let n = verts.len();
+                        for ei in 0..n {
+                            let ej = (ei + 1) % n;
+                            let d = seg_dist(nx, ny, verts[ei], verts[ej]);
+                            if d < edge_hit_px && best.as_ref().is_none_or(|b| d < b.3) {
+                                best = Some((surface.uuid.clone(), ei, false, d));
+                            }
+                        }
+                    }
+                }
+                best.map(|(u, e, c, _)| (u, e, c))
+            };
+
+            // Hover feedback.
+            if let Some(pos) = canvas_response.hover_pos() {
+                let [nx, ny] = to_norm_raw(pos);
+                if hit_handle(nx, ny).is_some() || hit_anchor(nx, ny).is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                } else if hit_edge(nx, ny).is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+            }
+
+            // Click an edge to toggle line <-> cubic.
+            if canvas_response.clicked() {
+                if let Some(pos) = canvas_response.interact_pointer_pos() {
+                    let [nx, ny] = to_norm_raw(pos);
+                    if hit_handle(nx, ny).is_none() && hit_anchor(nx, ny).is_none() {
+                        if let Some((uuid, edge_idx, is_cubic)) = hit_edge(nx, ny) {
+                            actions.surface_actions.push(SurfaceAction::ConvertEdge {
+                                uuid: uuid.clone(),
+                                edge_idx,
+                                to_cubic: !is_cubic,
+                            });
+                            state.selected_surfaces.clear();
+                            state.selected_surfaces.insert(uuid);
+                        }
+                    }
+                }
+            }
+
+            // Begin dragging a control handle or an anchor.
+            if canvas_response.drag_started() {
+                if let Some(pos) = canvas_response.interact_pointer_pos() {
+                    let [nx, ny] = to_norm_raw(pos);
+                    if let Some((uuid, si, handle)) = hit_handle(nx, ny) {
+                        state.selected_surfaces.clear();
+                        state.selected_surfaces.insert(uuid.clone());
+                        state.dragging_handle = Some((uuid, si, handle));
+                        state.dragging_anchor = None;
+                    } else if let Some((uuid, ai)) = hit_anchor(nx, ny) {
+                        state.selected_surfaces.clear();
+                        state.selected_surfaces.insert(uuid.clone());
+                        state.dragging_anchor = Some((uuid, ai));
+                        state.dragging_handle = None;
+                    }
+                }
+            }
+
+            // Apply the active drag.
+            if canvas_response.dragged() {
+                if let Some(pos) = canvas_response.interact_pointer_pos() {
+                    let [nx, ny] = to_norm_raw(pos);
+                    if let Some((ref uuid, si, handle)) = state.dragging_handle {
+                        actions.surface_actions.push(SurfaceAction::MoveHandle {
+                            uuid: uuid.clone(),
+                            segment_idx: si,
+                            handle,
+                            pos: [nx, ny],
+                        });
+                    } else if let Some((ref uuid, ai)) = state.dragging_anchor {
+                        actions.surface_actions.push(SurfaceAction::MoveAnchor {
+                            uuid: uuid.clone(),
+                            anchor_idx: ai,
+                            pos: [nx, ny],
+                        });
+                    }
+                }
+            }
+
+            if canvas_response.drag_stopped() {
+                state.dragging_handle = None;
+                state.dragging_anchor = None;
+            }
+        }
     }
 
     // Keyboard shortcuts (data-driven via keymap)
@@ -1949,6 +2503,14 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             }
         }
     }
+
+    // Publish the current selection so the bottom detail bar can edit the
+    // selected surface's warp (8i.5).
+    let published: Vec<String> = state.selected_surfaces.iter().cloned().collect();
+    ui.ctx().memory_mut(|mem| {
+        mem.data
+            .insert_temp(super::deck_detail::stage_selection_id(), published)
+    });
 
     // Persist state
     ui.memory_mut(|mem| mem.data.insert_temp(state_id, state));

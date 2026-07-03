@@ -22,6 +22,7 @@ Surfaces let you place content in specific regions of the output. Use them when 
    - **▭ Rectangle** (R) — drag out a rectangle
    - **⬠ Polygon** (P) — click to place vertices, double-click to finish
    - **⬤ Circle** (C) — circle / N-gon with an interactive radius handle
+   - **✒ Bezier** — curve or straighten a surface edge, and drag bezier anchors/handles
 3. Set each surface's **content source**:
    - **Master** — the full mixer output
    - **Channel** — a single channel's output
@@ -41,20 +42,99 @@ Surfaces let you place content in specific regions of the output. Use them when 
 - **H / V** — Flip horizontal / vertical
 - **🔗 Combine** (G) — merge selected surfaces into one
 
+Hit-testing uses the raw cursor position, so vertices and edges stay grabbable even after they have been moved off the grid (e.g. by a gizmo scale or rotate). Snap-to-grid still applies to where a dragged vertex is placed.
+
+### Transform Gizmo
+
+Selecting one or more surfaces in **Select** mode shows a transform gizmo around the selection:
+
+- **Corner / edge handles** — scale the selection (the opposite handle acts as the pivot)
+- **Rotation knob** (above the top edge) — rotate the selection around its centre
+
+The gizmo box is inset from the surface's own corner vertices, so scaling/rotating and vertex editing don't fight over the same clicks.
+
+### Bezier Curve Editing
+
+Switch to the **✒ Bezier** tool to author curved surface edges:
+
+- **Click an edge** to toggle it between a straight line and a cubic bezier (click again to straighten)
+- **Drag an anchor** (an edge endpoint) to reshape the outline; adjacent handles follow to preserve curvature
+- **Drag a control handle** (the small dots on the connector lines of a curved edge) for fine curve control
+
+Bezier edits work in raw, un-snapped coordinates so handles move with full sub-grid precision. The curve is flattened back into the surface's polygon vertices, which remain the single source of truth for routing and warp. Once a surface has an active curve path, edit its geometry with the Bezier tool rather than by dragging flattened vertices in Select mode.
+
 ### Combining Surfaces (Multi-Contour)
 
 Select two or more surfaces and click **🔗 Combine** (G) to merge them into a single surface. Varda computes a polygon union: overlapping regions fuse into one outline, while disjoint regions are kept as **extra contours** on the combined surface. All contours share the same content source, color, and warp — useful for treating several separate shapes (e.g. a row of panels) as one routing target.
 
-### Corner-Pin Warp
+### Warp Calibration
 
-Each surface assigned to an output gets independent corner-pin warp calibration:
+Warp is a property of the **surface** — one surface owns one warp. Edit it in the
+**stage editor's bottom detail bar**: open the Stage Editor and select a single
+surface; the bottom bar shows that surface's warp editor.
 
-1. On the output, click **🔧 Calibrate** to enter calibration mode (the output shows test cards instead of live content — one color per surface)
-2. Drag the 4 corner handles (TL, TR, BR, BL) in the warp canvas to align the projected image with the physical surface
-3. Varda computes a perspective-correct homography (DLT 3×3) for accurate UV mapping
-4. Click **🔧 Done** to exit. Use **↺** to reset a surface's warp to identity.
+By default the warp is **🔗 bound to the surface shape** (auto-warp): the grid
+conforms to the surface's polygon or circle outline and follows it as you edit
+the shape. Uncheck **🔗 Bind to shape** to unbind — this freezes the current
+shape-conforming grid as an editable starting point and unlocks the manual
+controls below for fine-tuning. Re-checking it re-derives the grid from the
+shape (discarding manual edits).
 
-Test cards include colored grids, crosshairs, and corner/edge markers for alignment.
+1. Uncheck **🔗 Bind to shape** to enable manual editing
+2. Select a surface on the stage; the bottom bar shows its warp grid
+3. Drag the 4 corner handles (TL, TR, BR, BL) to align the projected image with
+   the physical surface
+4. Varda computes a perspective-correct homography (DLT 3×3) for accurate UV mapping
+5. Click **↺ Reset** to clear the surface's warp (back to native position)
+
+To align the projectors themselves, use the per-output **🔧 Calibrate** selector:
+
+- **Off** — normal content
+- **Projector** — one full-frame test card fills the whole output, bypassing
+  surface geometry, for physical projector alignment (focus, lens, keystone)
+- **Surfaces** — each surface shows a colored test card through its own warp, for
+  verifying surface mapping. Test cards include colored grids, crosshairs, and
+  corner/edge markers.
+
+#### Mesh warp (interior control points)
+
+A 4-corner pin is linear — it can keystone a flat surface but cannot correct a
+bulge in the middle (a cylinder, a bowed wall, a draped cloth). For that, raise
+the surface's grid resolution above 2×2 using the **grid − / +** steppers in the
+bottom-bar warp editor. This promotes the corner-pin into an N×M mesh, preserving
+the current shape, and adds draggable interior points:
+
+1. Set the grid columns and rows with the steppers (each starts at 2×2; the UI
+   allows up to 16×16, the engine up to 64×64)
+2. Drag any grid point — corner, edge, or interior — to warp the image locally
+3. Interior points let you pull the texture to match non-flat geometry
+4. Use **↺ Reset** to clear the warp
+
+#### Bezier (curved) warp
+
+A straight mesh grid approximates a curve with many small facets. For genuinely
+smooth deformation (a cylinder, a bowed wall, a draped cloth) click **〰 Curve**
+in the bottom-bar warp editor (available while unbound). This converts the warp
+into a **bezier patch grid** — the same control layout, but each cell edge is a
+cubic bezier with tangent handles:
+
+1. Click **〰 Curve** — the current warp becomes a bezier cage of the same shape
+2. Drag an **anchor** (cyan dot) to move a grid point; its tangent handles follow
+   so the local curvature is preserved
+3. Drag a **handle** (yellow square) to bend the adjacent edges smoothly
+4. Use the **cage − / +** steppers to add or remove control points (anchor rows
+   and columns); the surface resamples onto the new cage
+5. The faint grid shows the tessellated result the projector actually renders
+6. Click **⊞ Grid** to convert back to a straight mesh warp, or **↺ Reset** to clear
+
+Under the hood the bezier cage is tessellated into a dense warp mesh, so the GPU
+pipeline is unchanged. Fine handles let a few control points describe a curve
+that would otherwise need a very dense mesh.
+
+Because warp is per-surface, to correct the same content differently on two
+projectors, author two surfaces (the dome slicer already creates one surface per
+projector). Legacy `.varda` files that stored warp per assignment are migrated to
+the surface automatically on load.
 
 ---
 
@@ -91,7 +171,7 @@ This enables independent visual zones — a club might have a main screen, side 
 
 For complex surface geometry beyond 4-point corner-pin, surfaces support **arbitrary UV mesh warp** — a dense grid of XY+UV control points with GPU hardware interpolation. Mesh warp is a strict superset of corner-pin (corner-pin is a 2×2 mesh).
 
-Mesh warp is used automatically by the dome slicer and can be loaded from external calibration tools.
+Mesh warp can be hand-edited on-canvas in the stage editor's bottom-bar warp editor (see [Mesh warp](#mesh-warp-interior-control-points) above), is used automatically by the dome slicer, and can be loaded from external calibration tools.
 
 ---
 

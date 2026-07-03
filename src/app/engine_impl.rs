@@ -828,7 +828,6 @@ impl OutputQueries for VardaApp {
                             SurfaceAssignmentSnapshot {
                                 surface_uuid: a.surface_uuid.clone(),
                                 surface_name,
-                                warp_mode: a.warp_mode.clone(),
                                 enabled: a.enabled,
                             }
                         })
@@ -859,7 +858,13 @@ impl OutputQueries for VardaApp {
                                             .dropped
                                             .load(std::sync::atomic::Ordering::Relaxed),
                                     });
-                                (h.target.clone(), false, h.active, false, audio)
+                                (
+                                    h.target.clone(),
+                                    false,
+                                    h.active,
+                                    crate::renderer::context::CalibrationMode::Off,
+                                    audio,
+                                )
                             }
                         };
                     OutputWindowSnapshot {
@@ -889,7 +894,9 @@ impl OutputQueries for VardaApp {
                     content_mapping: s.content_mapping,
                     output_type: s.output_type,
                     circle_hint: s.circle_hint,
-                    default_warp: s.default_warp.clone(),
+                    warp: s.effective_warp(),
+                    warp_bound: s.warp_bound,
+                    path: s.path.clone(),
                 })
                 .collect(),
             monitors: self
@@ -1010,22 +1017,19 @@ impl SurfaceCommands for VardaApp {
             .find(|o| o.uuid() == output_uuid)
         {
             let assignments = output.surface_assignments_mut();
-            if !assignments.iter().any(|a| a.surface_uuid == surface_uuid) {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(surface_uuid) {
-                    // Use pre-computed warp mesh if available (dome surfaces), otherwise identity corners
-                    let warp_mode = surface.default_warp.clone().unwrap_or_else(|| {
-                        let bb = surface.bounding_box();
-                        crate::renderer::warp::WarpMode::identity_corners([
-                            bb.x, bb.y, bb.width, bb.height,
-                        ])
-                    });
-                    assignments.push(crate::renderer::context::SurfaceAssignment {
-                        surface_uuid: surface_uuid.to_string(),
-                        warp_mode,
-                        enabled: true,
-                        overlap_zones: Default::default(),
-                    });
-                }
+            // Warp lives on the surface now — the assignment is membership only.
+            if !assignments.iter().any(|a| a.surface_uuid == surface_uuid)
+                && self
+                    .output
+                    .surface_manager
+                    .find_by_uuid(surface_uuid)
+                    .is_some()
+            {
+                assignments.push(crate::renderer::context::SurfaceAssignment {
+                    surface_uuid: surface_uuid.to_string(),
+                    enabled: true,
+                    overlap_zones: Default::default(),
+                });
             }
         }
     }
@@ -1137,6 +1141,13 @@ impl DetectCommands for VardaApp {
                         OutputSource::Master,
                     )
                 }
+            } else if let Some(path) = contour.path.as_ref().filter(|p| p.has_cubic()) {
+                // SVG import captured curvature: create an editable curve surface.
+                self.output.surface_manager.add_path_surface(
+                    contour.suggested_name.clone(),
+                    path.clone(),
+                    OutputSource::Master,
+                )
             } else {
                 self.output.surface_manager.add_polygon_surface(
                     contour.suggested_name.clone(),
@@ -1170,7 +1181,9 @@ impl SurfaceQueries for VardaApp {
                 content_mapping: s.content_mapping,
                 output_type: s.output_type,
                 circle_hint: s.circle_hint,
-                default_warp: s.default_warp.clone(),
+                warp: s.effective_warp(),
+                warp_bound: s.warp_bound,
+                path: s.path.clone(),
             })
             .collect()
     }
