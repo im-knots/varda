@@ -182,17 +182,24 @@ fn render_windowed_controls(
             });
     });
 
-    // Calibration toggle
+    // Calibration mode selector (Off / Projector test card / per-Surface cards).
+    // Warp editing itself now lives in the stage editor's bottom detail bar.
     ui.horizontal(|ui| {
-        let cal_label = if output.calibration_mode {
-            "🔧 Done"
-        } else {
-            "🔧 Calibrate"
-        };
-        if ui.button(egui::RichText::new(cal_label).small()).clicked() {
-            actions
-                .output_actions
-                .push(OutputAction::ToggleCalibration { idx });
+        use crate::renderer::context::CalibrationMode;
+        ui.label(egui::RichText::new("🔧 Calibrate:").small());
+        for (label, mode) in [
+            ("Off", CalibrationMode::Off),
+            ("Projector", CalibrationMode::Projector),
+            ("Surfaces", CalibrationMode::Surfaces),
+        ] {
+            if ui
+                .selectable_label(output.calibration_mode == mode, label)
+                .clicked()
+            {
+                actions
+                    .output_actions
+                    .push(OutputAction::SetCalibrationMode { idx, mode });
+            }
         }
     });
 
@@ -222,12 +229,6 @@ fn render_windowed_controls(
     for (ai, assignment) in output.surface_assignments.iter().enumerate() {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
-            if ui.small_button("↺").on_hover_text("Reset warp").clicked() {
-                actions.output_actions.push(OutputAction::ResetWarp {
-                    output_idx: idx,
-                    assignment_idx: ai,
-                });
-            }
             if ui.small_button("x").on_hover_text("Unassign").clicked() {
                 actions.output_actions.push(OutputAction::UnassignSurface {
                     output_idx: idx,
@@ -235,10 +236,6 @@ fn render_windowed_controls(
                 });
             }
         });
-    }
-
-    if output.calibration_mode && !output.surface_assignments.is_empty() {
-        render_warp_calibration(ui, idx, output, actions);
     }
 
     // Edge blending
@@ -423,12 +420,6 @@ fn render_headless_controls(
     for (ai, assignment) in output.surface_assignments.iter().enumerate() {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
-            if ui.small_button("↺").on_hover_text("Reset warp").clicked() {
-                actions.output_actions.push(OutputAction::ResetWarp {
-                    output_idx: idx,
-                    assignment_idx: ai,
-                });
-            }
             if ui.small_button("x").on_hover_text("Unassign").clicked() {
                 actions.output_actions.push(OutputAction::UnassignSurface {
                     output_idx: idx,
@@ -1034,158 +1025,6 @@ fn render_edge_blend_controls(
         });
 }
 
-/// Render the warp calibration mini-canvas for an output.
-/// Shows surface assignments as quads with draggable corner handles.
-pub(super) fn render_warp_calibration(
-    ui: &mut egui::Ui,
-    output_idx: usize,
-    output: &super::super::OutputUI,
-    actions: &mut UIActions,
-) {
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new("⊞ Drag corners to warp")
-            .small()
-            .color(egui::Color32::YELLOW),
-    );
-
-    let canvas_width = ui.available_width() - 4.0;
-    let canvas_height = canvas_width * 0.5625; // 16:9
-    let (canvas_rect, canvas_response) = ui.allocate_exact_size(
-        egui::vec2(canvas_width, canvas_height),
-        egui::Sense::click_and_drag(),
-    );
-
-    let painter = ui.painter_at(canvas_rect);
-
-    // Dark background
-    painter.rect_filled(canvas_rect, 2.0, egui::Color32::from_rgb(15, 15, 25));
-
-    // Convert normalized [0..1] to canvas pixel position
-    let to_screen = |nx: f32, ny: f32| -> egui::Pos2 {
-        egui::pos2(
-            canvas_rect.left() + nx * canvas_width,
-            canvas_rect.top() + ny * canvas_height,
-        )
-    };
-    let from_screen = |pos: egui::Pos2| -> [f32; 2] {
-        [
-            ((pos.x - canvas_rect.left()) / canvas_width).clamp(0.0, 1.0),
-            ((pos.y - canvas_rect.top()) / canvas_height).clamp(0.0, 1.0),
-        ]
-    };
-
-    let corner_colors = [
-        egui::Color32::from_rgb(255, 100, 100), // TL - red
-        egui::Color32::from_rgb(100, 255, 100), // TR - green
-        egui::Color32::from_rgb(100, 100, 255), // BR - blue
-        egui::Color32::from_rgb(255, 255, 100), // BL - yellow
-    ];
-    let corner_labels = ["TL", "TR", "BR", "BL"];
-
-    // State for dragging — store as Option<(usize, usize)> consistently
-    let state_id = ui.id().with("warp_cal").with(output_idx);
-    let mut dragging: Option<(usize, usize)> = ui.memory(|mem| {
-        mem.data
-            .get_temp::<Option<(usize, usize)>>(state_id)
-            .flatten()
-    });
-
-    // Draw each assigned surface's warp quad and handles (corner-pin only)
-    for (ai, assignment) in output.surface_assignments.iter().enumerate() {
-        let corners = match &assignment.warp_mode {
-            crate::renderer::warp::WarpMode::CornerPin { corners } => corners,
-            crate::renderer::warp::WarpMode::Mesh(_) => continue, // Mesh warp not editable via corner handles
-        };
-
-        // Draw the warp quad outline
-        let screen_corners: Vec<egui::Pos2> =
-            corners.iter().map(|c| to_screen(c[0], c[1])).collect();
-        for i in 0..4 {
-            let j = (i + 1) % 4;
-            painter.line_segment(
-                [screen_corners[i], screen_corners[j]],
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(200, 200, 200)),
-            );
-        }
-
-        // Draw surface name at center
-        let cx = corners.iter().map(|c| c[0]).sum::<f32>() / 4.0;
-        let cy = corners.iter().map(|c| c[1]).sum::<f32>() / 4.0;
-        painter.text(
-            to_screen(cx, cy),
-            egui::Align2::CENTER_CENTER,
-            &assignment.surface_name,
-            egui::FontId::proportional(11.0),
-            egui::Color32::WHITE,
-        );
-
-        // Draw corner handles
-        let handle_radius = 8.0;
-        for (ci, corner) in corners.iter().enumerate() {
-            let pos = to_screen(corner[0], corner[1]);
-            let is_dragging = dragging == Some((ai, ci));
-            let r = if is_dragging {
-                handle_radius + 2.0
-            } else {
-                handle_radius
-            };
-            painter.circle_filled(pos, r, corner_colors[ci]);
-            painter.text(
-                pos,
-                egui::Align2::CENTER_CENTER,
-                corner_labels[ci],
-                egui::FontId::proportional(9.0),
-                egui::Color32::BLACK,
-            );
-        }
-    }
-
-    // Handle dragging (corner-pin only)
-    if canvas_response.drag_started() {
-        if let Some(pos) = canvas_response.interact_pointer_pos() {
-            // Find nearest corner
-            let mut best: Option<(usize, usize, f32)> = None;
-            for (ai, assignment) in output.surface_assignments.iter().enumerate() {
-                let corners = match &assignment.warp_mode {
-                    crate::renderer::warp::WarpMode::CornerPin { corners } => corners,
-                    crate::renderer::warp::WarpMode::Mesh(_) => continue,
-                };
-                for (ci, corner) in corners.iter().enumerate() {
-                    let screen_pos = to_screen(corner[0], corner[1]);
-                    let dist = pos.distance(screen_pos);
-                    if dist < 20.0 && best.is_none_or(|(_, _, d)| dist < d) {
-                        best = Some((ai, ci, dist));
-                    }
-                }
-            }
-            if let Some((ai, ci, _)) = best {
-                dragging = Some((ai, ci));
-            }
-        }
-    }
-
-    if let Some((ai, ci)) = dragging {
-        if canvas_response.dragged() {
-            if let Some(pos) = canvas_response.interact_pointer_pos() {
-                let new_pos = from_screen(pos);
-                actions.output_actions.push(OutputAction::SetWarpCorner {
-                    output_idx,
-                    assignment_idx: ai,
-                    corner_idx: ci,
-                    position: new_pos,
-                });
-            }
-        }
-    }
-
-    if canvas_response.drag_stopped() {
-        dragging = None;
-    }
-
-    ui.memory_mut(|mem| mem.data.insert_temp(state_id, dragging));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1211,7 +1050,7 @@ mod tests {
             is_active: true,
             active_duration: std::time::Duration::ZERO,
             surface_assignments: vec![],
-            calibration_mode: false,
+            calibration_mode: crate::renderer::context::CalibrationMode::Off,
             edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
             rotation: crate::renderer::context::OutputRotation::default(),

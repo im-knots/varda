@@ -125,67 +125,20 @@ pub async fn stop(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl 
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(post, path = "/api/outputs/{idx}/calibration", params(("idx" = usize, Path, description = "Output index")), responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn toggle_calibration(
-    State(s): State<SharedState>,
-    Path(idx): Path<usize>,
-) -> impl IntoResponse {
-    match s
-        .send_command(EngineCommand::ToggleCalibration { idx })
-        .await
-    {
-        Ok(r) => command_response(r),
-        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
-    }
-}
-
 #[derive(Deserialize, ToSchema)]
-pub struct SetWarpBody {
-    /// Index of the surface assignment to warp.
-    pub assignment_idx: usize,
-    /// Corner index (0–3).
-    pub corner_idx: usize,
-    /// New [x, y] position for the corner in normalised coordinates.
-    pub position: [f32; 2],
+pub struct SetCalibrationModeBody {
+    /// Calibration display mode (Off / Projector / Surfaces).
+    pub mode: crate::renderer::context::CalibrationMode,
 }
 
-#[utoipa::path(put, path = "/api/outputs/{idx}/warp", params(("idx" = usize, Path, description = "Output index")), request_body = SetWarpBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn set_warp(
+#[utoipa::path(put, path = "/api/outputs/{idx}/calibration", params(("idx" = usize, Path, description = "Output index")), request_body = SetCalibrationModeBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
+pub async fn set_calibration_mode(
     State(s): State<SharedState>,
     Path(idx): Path<usize>,
-    Json(b): Json<SetWarpBody>,
+    Json(b): Json<SetCalibrationModeBody>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::SetWarpCorner {
-            output_idx: idx,
-            assignment_idx: b.assignment_idx,
-            corner_idx: b.corner_idx,
-            position: b.position,
-        })
-        .await
-    {
-        Ok(r) => command_response(r),
-        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
-    }
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct ResetWarpBody {
-    /// Index of the surface assignment whose warp to reset.
-    pub assignment_idx: usize,
-}
-
-#[utoipa::path(post, path = "/api/outputs/{idx}/reset-warp", params(("idx" = usize, Path, description = "Output index")), request_body = ResetWarpBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn reset_warp(
-    State(s): State<SharedState>,
-    Path(idx): Path<usize>,
-    Json(b): Json<ResetWarpBody>,
-) -> impl IntoResponse {
-    match s
-        .send_command(EngineCommand::ResetWarp {
-            output_idx: idx,
-            assignment_idx: b.assignment_idx,
-        })
+        .send_command(EngineCommand::SetCalibrationMode { idx, mode: b.mode })
         .await
     {
         Ok(r) => command_response(r),

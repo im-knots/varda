@@ -226,7 +226,7 @@ pub(crate) mod tests {
                     is_on_display: true,
                     is_active: false,
                     surface_assignments: vec![],
-                    calibration_mode: false,
+                    calibration_mode: crate::renderer::context::CalibrationMode::Off,
                     audio_passthrough: None,
                 }],
                 surfaces: vec![SurfaceSnapshot {
@@ -238,7 +238,9 @@ pub(crate) mod tests {
                     content_mapping: ContentMapping::Fill,
                     output_type: SurfaceOutputType::Projection,
                     circle_hint: None,
-                    default_warp: None,
+                    warp: None,
+                    warp_bound: false,
+                    path: None,
                 }],
                 monitors: vec![MonitorSnapshot {
                     name: "HDMI-1".into(),
@@ -368,7 +370,7 @@ pub(crate) mod tests {
             is_on_display: false,
             is_active: true,
             surface_assignments: vec![],
-            calibration_mode: false,
+            calibration_mode: crate::renderer::context::CalibrationMode::Off,
             audio_passthrough: Some(AudioPassthroughSnapshot {
                 device: "Scarlett 2i2".into(),
                 frames_written: 42,

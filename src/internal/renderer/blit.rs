@@ -1234,23 +1234,25 @@ impl PolygonBlitPipeline {
                 let bl = &mesh.points[(r + 1) * cols + c];
                 let br = &mesh.points[(r + 1) * cols + c + 1];
 
-                // Convert positions from [0..1] to NDC [-1..1] for the vertex shader
-                let to_ndc = |p: &super::warp::MeshPoint| -> PolygonVertex {
+                // Positions stay in output space [0..1]; the vertex shader
+                // (with identity homography for mesh warp) converts to NDC,
+                // matching the corner-pin path in `triangulate_verts`.
+                let to_vert = |p: &super::warp::MeshPoint| -> PolygonVertex {
                     PolygonVertex {
-                        position: [p.position[0] * 2.0 - 1.0, p.position[1] * 2.0 - 1.0],
+                        position: p.position,
                         uv: p.uv,
                     }
                 };
 
                 // Triangle 1: TL, TR, BL
-                verts.push(to_ndc(tl));
-                verts.push(to_ndc(tr));
-                verts.push(to_ndc(bl));
+                verts.push(to_vert(tl));
+                verts.push(to_vert(tr));
+                verts.push(to_vert(bl));
 
                 // Triangle 2: TR, BR, BL
-                verts.push(to_ndc(tr));
-                verts.push(to_ndc(br));
-                verts.push(to_ndc(bl));
+                verts.push(to_vert(tr));
+                verts.push(to_vert(br));
+                verts.push(to_vert(bl));
             }
         }
         verts
@@ -1378,6 +1380,27 @@ mod tests {
             points: vec![],
         };
         assert!(PolygonBlitPipeline::mesh_verts(&mesh).is_empty());
+    }
+
+    /// Mesh positions must be emitted in output space [0..1] (NOT pre-converted
+    /// to NDC): the shader does the single [0..1]→NDC conversion, so an identity
+    /// mesh must produce positions within [0..1], matching the corner-pin path.
+    /// Regression guard against the double-NDC bug that clipped surfaces.
+    #[test]
+    fn mesh_verts_positions_stay_in_output_space() {
+        let mesh = super::super::warp::WarpMesh::identity(2, 2);
+        let verts = PolygonBlitPipeline::mesh_verts(&mesh);
+        assert_eq!(verts.len(), 6);
+        for v in &verts {
+            assert!(
+                (0.0..=1.0).contains(&v.position[0]) && (0.0..=1.0).contains(&v.position[1]),
+                "identity mesh vertex must be in [0..1] output space, got {:?}",
+                v.position
+            );
+        }
+        // The grid must span the full unit square (TL=[0,0], BR=[1,1]).
+        assert!(verts.iter().any(|v| v.position == [0.0, 0.0]));
+        assert!(verts.iter().any(|v| v.position == [1.0, 1.0]));
     }
 
     /// prepare must reuse persistent pools and grow them when the surface count

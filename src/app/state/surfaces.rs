@@ -3,6 +3,7 @@
 use super::super::VardaApp;
 use crate::engine::traits::SurfaceCommands;
 use crate::engine::{CommandResult, ErrorCode};
+use crate::surface::CubicHandle;
 
 impl VardaApp {
     pub fn cmd_remove_surface(&mut self, uuid: &str) -> CommandResult {
@@ -174,6 +175,101 @@ impl VardaApp {
         }
     }
 
+    /// Rotate a surface by `angle` radians around `pivot` (normalized coords).
+    /// Vertices, extra contours, curve path and circle hint are rotated in step.
+    pub fn cmd_rotate_surface(&mut self, uuid: &str, angle: f32, pivot: [f32; 2]) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(uuid) {
+            surface.rotate(angle, pivot);
+            self.recompute_auto_edge_blend();
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Surface {} not found", uuid),
+            }
+        }
+    }
+
+    /// Scale a surface by `(sx, sy)` around `pivot` (normalized coords).
+    /// Vertices, extra contours, curve path and circle hint are scaled in step.
+    pub fn cmd_scale_surface(
+        &mut self,
+        uuid: &str,
+        sx: f32,
+        sy: f32,
+        pivot: [f32; 2],
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(uuid) {
+            surface.scale(sx, sy, pivot);
+            self.recompute_auto_edge_blend();
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Surface {} not found", uuid),
+            }
+        }
+    }
+
+    /// Convert edge `edge_idx` of a surface's curve path to a cubic bezier or
+    /// back to a straight line. Lazily builds a path from the polygon if needed.
+    pub fn cmd_convert_surface_edge(
+        &mut self,
+        uuid: &str,
+        edge_idx: usize,
+        to_cubic: bool,
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(uuid) {
+            surface.convert_edge(edge_idx, to_cubic);
+            self.recompute_auto_edge_blend();
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Surface {} not found", uuid),
+            }
+        }
+    }
+
+    /// Move a curve-path anchor to `pos` (normalized coords), regenerating verts.
+    pub fn cmd_move_path_anchor(
+        &mut self,
+        uuid: &str,
+        anchor_idx: usize,
+        pos: [f32; 2],
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(uuid) {
+            surface.move_path_anchor(anchor_idx, pos);
+            self.recompute_auto_edge_blend();
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Surface {} not found", uuid),
+            }
+        }
+    }
+
+    /// Move a cubic control handle of segment `segment_idx` to `pos`.
+    pub fn cmd_move_path_handle(
+        &mut self,
+        uuid: &str,
+        segment_idx: usize,
+        handle: CubicHandle,
+        pos: [f32; 2],
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(uuid) {
+            surface.move_path_handle(segment_idx, handle, pos);
+            self.recompute_auto_edge_blend();
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Surface {} not found", uuid),
+            }
+        }
+    }
+
     pub fn cmd_update_surface_contour_vertices(
         &mut self,
         uuid: &str,
@@ -209,19 +305,18 @@ impl VardaApp {
     ) -> CommandResult {
         if let Some(output) = self.output.outputs.get_mut(output_idx) {
             let assignments = output.surface_assignments_mut();
-            if !assignments.iter().any(|a| a.surface_uuid == surface_uuid) {
-                if let Some((_, surface)) = self.output.surface_manager.find_by_uuid(surface_uuid) {
-                    let bb = surface.bounding_box();
-                    let assignment = crate::renderer::context::SurfaceAssignment {
-                        surface_uuid: surface_uuid.to_string(),
-                        warp_mode: crate::renderer::warp::WarpMode::identity_corners([
-                            bb.x, bb.y, bb.width, bb.height,
-                        ]),
-                        enabled: true,
-                        overlap_zones: Default::default(),
-                    };
-                    assignments.push(assignment);
-                }
+            if !assignments.iter().any(|a| a.surface_uuid == surface_uuid)
+                && self
+                    .output
+                    .surface_manager
+                    .find_by_uuid(surface_uuid)
+                    .is_some()
+            {
+                assignments.push(crate::renderer::context::SurfaceAssignment {
+                    surface_uuid: surface_uuid.to_string(),
+                    enabled: true,
+                    overlap_zones: Default::default(),
+                });
             }
             self.recompute_auto_edge_blend();
             CommandResult::Ok

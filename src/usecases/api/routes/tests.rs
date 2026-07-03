@@ -910,6 +910,66 @@ mod tests {
         assert_eq!(json["status"], "ok");
     }
 
+    #[tokio::test]
+    async fn test_rotate_surface() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/srf-001/rotate",
+            serde_json::json!({"angle": 0.5, "pivot": [0.5, 0.5]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_scale_surface() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/srf-001/scale",
+            serde_json::json!({"sx": 1.5, "sy": 0.5, "pivot": [0.0, 0.0]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_convert_edge() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/srf-001/edge/convert",
+            serde_json::json!({"edge_idx": 0, "to_cubic": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_move_path_anchor() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/srf-001/path/anchor",
+            serde_json::json!({"anchor_idx": 1, "pos": [0.3, 0.4]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_move_path_handle() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/srf-001/path/handle",
+            serde_json::json!({"segment_idx": 0, "handle": "C1", "pos": [0.6, 0.7]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
     // ── Write: Output routes ────────────────────────────────────
 
     #[tokio::test]
@@ -1001,11 +1061,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_toggle_calibration() {
-        let (status, json) = post_json(
+    async fn test_set_calibration_mode() {
+        let (status, json) = put_json(
             router_with_mock_engine(),
             "/api/outputs/0/calibration",
-            serde_json::json!({}),
+            serde_json::json!({"mode": "Projector"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1016,8 +1076,8 @@ mod tests {
     async fn test_set_warp_corner() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/outputs/0/warp",
-            serde_json::json!({"assignment_idx": 0, "corner_idx": 0, "position": [0.1, 0.1]}),
+            "/api/surfaces/s1/warp/corner",
+            serde_json::json!({"corner_idx": 0, "position": [0.1, 0.1]}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1028,8 +1088,92 @@ mod tests {
     async fn test_reset_warp() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/outputs/0/reset-warp",
-            serde_json::json!({"assignment_idx": 0}),
+            "/api/surfaces/s1/warp/reset",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_warp_subdivisions() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/s1/warp/subdivisions",
+            serde_json::json!({"cols": 3, "rows": 3}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_warp_mesh_point() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/s1/warp/mesh-point",
+            serde_json::json!({"row": 1, "col": 1, "position": [0.6, 0.4]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_warp_bound() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/surfaces/s1/warp/bind",
+            serde_json::json!({"bound": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_convert_warp_to_bezier() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/surfaces/s1/warp/bezier",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_move_warp_anchor() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/s1/warp/anchor",
+            serde_json::json!({"row": 0, "col": 0, "position": [0.2, 0.3]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_move_warp_handle() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/s1/warp/handle",
+            serde_json::json!({"horizontal": true, "row": 0, "col": 0, "which": 0, "position": [0.3, 0.1]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_bezier_cage_subdivisions() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/surfaces/s1/warp/cage",
+            serde_json::json!({"cols": 3, "rows": 3}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);

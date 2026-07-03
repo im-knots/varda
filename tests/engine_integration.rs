@@ -1,7 +1,7 @@
 //! Engine integration tests — multi-step command workflows through real headless VardaApp.
 
 use varda::app::{AppConfig, VardaApp};
-use varda::engine::{BlendMode, CommandResult, EngineCommand};
+use varda::engine::{BlendMode, CommandResult, EngineCommand, ErrorCode};
 use varda::modulation::LFOWaveform;
 
 use clap::Parser;
@@ -1279,4 +1279,238 @@ fn chaos_state_consistency_after_storm() {
         assert_eq!(ch.decks.len(), 2);
     }
     assert!((state.mixer.crossfader - 0.75).abs() < 1e-4);
+}
+
+// ── Mesh-warp editing (8i.5) ─────────────────────────────────────────
+
+/// Full pipeline: add a surface, create a headless output, assign the surface,
+/// then subdivide its warp into a mesh and drag an interior point — verifying
+/// each step through the engine snapshot. Mirrors how the UI and API both drive
+/// per-assignment mesh warp.
+#[test]
+fn mesh_warp_subdivide_and_drag_point() {
+    use varda::renderer::context::{OutputSource, OutputTarget};
+    use varda::renderer::warp::WarpMode;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+
+    // Surface + output + assignment.
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSurface {
+            name: "Warp Target".into(),
+            source: OutputSource::Master,
+        },
+    );
+    let surface_uuid = app
+        .build_engine_state()
+        .outputs
+        .surfaces
+        .iter()
+        .find(|s| s.name == "Warp Target")
+        .unwrap()
+        .uuid
+        .clone();
+    send_cmd(
+        &mut app,
+        EngineCommand::CreateHeadlessOutput {
+            target: OutputTarget::NdiSend {
+                sender_name: "Warp Out".into(),
+            },
+        },
+    );
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AssignSurfaceToOutputByIdx {
+            output_idx: 0,
+            surface_uuid: surface_uuid.clone(),
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok), "{r:?}");
+
+    let surface_warp = |app: &mut VardaApp| {
+        app.build_engine_state()
+            .outputs
+            .surfaces
+            .iter()
+            .find(|s| s.uuid == surface_uuid)
+            .unwrap()
+            .warp
+            .clone()
+    };
+
+    // Auto-warp: a fresh surface is shape-bound, so its *effective* warp is the
+    // conforming mesh (never `None`). Unbind to enable manual mesh editing.
+    assert!(surface_warp(&mut app).is_some());
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::SetWarpBound {
+            surface_uuid: surface_uuid.clone(),
+            bound: false,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok), "{r:?}");
+
+    // Subdivide → 3×3 mesh, preserving the (identity) deformation.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::SetWarpSubdivisions {
+            surface_uuid: surface_uuid.clone(),
+            cols: 3,
+            rows: 3,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok), "{r:?}");
+    let Some(WarpMode::Mesh(mesh)) = surface_warp(&mut app) else {
+        panic!("expected mesh warp after subdivision");
+    };
+    assert_eq!(mesh.cols, 3);
+    assert_eq!(mesh.rows, 3);
+    assert_eq!(mesh.points.len(), 9);
+
+    // Drag the centre point (row 1, col 1 → index 4).
+    fire(
+        &mut app,
+        EngineCommand::SetWarpMeshPoint {
+            surface_uuid: surface_uuid.clone(),
+            row: 1,
+            col: 1,
+            position: [0.6, 0.4],
+        },
+    );
+    let Some(WarpMode::Mesh(mesh)) = surface_warp(&mut app) else {
+        panic!("expected mesh warp");
+    };
+    assert!((mesh.points[4].position[0] - 0.6).abs() < 1e-6);
+    assert!((mesh.points[4].position[1] - 0.4).abs() < 1e-6);
+}
+
+/// Bezier warp (8i.6): convert an unbound surface's warp into a bezier cage,
+/// edit an anchor and a tangent handle, and resize the cage — all through the
+/// engine command path.
+#[test]
+fn bezier_warp_convert_and_edit() {
+    use varda::renderer::context::OutputSource;
+    use varda::renderer::warp::WarpMode;
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSurface {
+            name: "Bez".into(),
+            source: OutputSource::Master,
+        },
+    );
+    let uuid = app
+        .build_engine_state()
+        .outputs
+        .surfaces
+        .iter()
+        .find(|s| s.name == "Bez")
+        .unwrap()
+        .uuid
+        .clone();
+
+    let warp = |app: &mut VardaApp| {
+        app.build_engine_state()
+            .outputs
+            .surfaces
+            .iter()
+            .find(|s| s.uuid == uuid)
+            .unwrap()
+            .warp
+            .clone()
+    };
+
+    // New surfaces are shape-bound; unbind to enable manual editing, then curve.
+    send_cmd(
+        &mut app,
+        EngineCommand::SetWarpBound {
+            surface_uuid: uuid.clone(),
+            bound: false,
+        },
+    );
+    send_cmd(
+        &mut app,
+        EngineCommand::ConvertWarpToBezier {
+            surface_uuid: uuid.clone(),
+        },
+    );
+    let Some(WarpMode::Bezier(b)) = warp(&mut app) else {
+        panic!("expected bezier warp after convert");
+    };
+    assert_eq!((b.anchor_cols, b.anchor_rows), (2, 2));
+
+    // Move a corner anchor.
+    fire(
+        &mut app,
+        EngineCommand::MoveWarpAnchor {
+            surface_uuid: uuid.clone(),
+            row: 0,
+            col: 0,
+            position: [0.15, 0.25],
+        },
+    );
+    let Some(WarpMode::Bezier(b)) = warp(&mut app) else {
+        panic!("expected bezier warp");
+    };
+    assert!((b.anchor(0, 0)[0] - 0.15).abs() < 1e-6 && (b.anchor(0, 0)[1] - 0.25).abs() < 1e-6);
+
+    // Curve the top edge by pulling its near-left tangent handle.
+    fire(
+        &mut app,
+        EngineCommand::MoveWarpHandle {
+            surface_uuid: uuid.clone(),
+            horizontal: true,
+            row: 0,
+            col: 0,
+            which: 0,
+            position: [0.33, 0.05],
+        },
+    );
+    let Some(WarpMode::Bezier(b)) = warp(&mut app) else {
+        panic!("expected bezier warp");
+    };
+    assert!((b.h_horiz[0][0][1] - 0.05).abs() < 1e-6);
+
+    // Resize the control cage to 3×3.
+    send_cmd(
+        &mut app,
+        EngineCommand::SetBezierCageSubdivisions {
+            surface_uuid: uuid.clone(),
+            cols: 3,
+            rows: 3,
+        },
+    );
+    let Some(WarpMode::Bezier(b)) = warp(&mut app) else {
+        panic!("expected bezier warp");
+    };
+    assert_eq!((b.anchor_cols, b.anchor_rows), (3, 3));
+}
+
+/// Setting subdivisions on a non-existent surface surfaces NotFound rather than
+/// silently succeeding.
+#[test]
+fn mesh_warp_subdivisions_bad_index_errs() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::SetWarpSubdivisions {
+            surface_uuid: "does-not-exist".into(),
+            cols: 3,
+            rows: 3,
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
 }

@@ -3,10 +3,9 @@
 use super::super::VardaApp;
 use crate::engine::{CommandResult, ErrorCode};
 use crate::renderer::context::{
-    AudioPassthrough, HeadlessOutput, OutputSource, OutputTarget, UnifiedOutput,
+    AudioPassthrough, CalibrationMode, HeadlessOutput, OutputSource, OutputTarget, UnifiedOutput,
 };
 use crate::renderer::edge_blend::EdgeBlendMode;
-use crate::renderer::warp::WarpMode;
 
 impl VardaApp {
     /// Set the output target for a windowed or headless output.
@@ -259,10 +258,10 @@ impl VardaApp {
         }
     }
 
-    /// Toggle calibration mode on a windowed output.
-    pub fn cmd_toggle_calibration(&mut self, idx: usize) -> CommandResult {
+    /// Set the calibration display mode on a windowed output.
+    pub fn cmd_set_calibration_mode(&mut self, idx: usize, mode: CalibrationMode) -> CommandResult {
         if let Some(UnifiedOutput::Window(w)) = self.output.outputs.get_mut(idx) {
-            w.calibration_mode = !w.calibration_mode;
+            w.calibration_mode = mode;
             CommandResult::Ok
         } else {
             CommandResult::Err {
@@ -272,58 +271,162 @@ impl VardaApp {
         }
     }
 
-    /// Set a warp corner position for a surface assignment on a windowed output.
+    /// Move one corner-pin corner of a surface's warp (per-surface).
     pub fn cmd_set_warp_corner(
         &mut self,
-        output_idx: usize,
-        assignment_idx: usize,
+        surface_uuid: &str,
         corner_idx: usize,
         position: [f32; 2],
     ) -> CommandResult {
-        if let Some(UnifiedOutput::Window(w)) = self.output.outputs.get_mut(output_idx) {
-            if let Some(a) = w.surface_assignments.get_mut(assignment_idx) {
-                if let Some(corners) = a.warp_mode.corners_mut() {
-                    if corner_idx < 4 {
-                        corners[corner_idx] = position;
-                    }
-                }
-                CommandResult::Ok
-            } else {
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Assignment not found".into(),
-                }
-            }
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.set_warp_corner(corner_idx, position);
+            CommandResult::Ok
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: "Output not found".into(),
+                message: "Surface not found".into(),
             }
         }
     }
 
-    /// Reset warp to identity corners based on the surface bounding box.
-    pub fn cmd_reset_warp(&mut self, output_idx: usize, assignment_idx: usize) -> CommandResult {
-        if let Some(output) = self.output.outputs.get_mut(output_idx) {
-            let assignments = output.surface_assignments_mut();
-            if let Some(a) = assignments.get_mut(assignment_idx) {
-                if let Some((_, surface)) =
-                    self.output.surface_manager.find_by_uuid(&a.surface_uuid)
-                {
-                    let bb = surface.bounding_box();
-                    a.warp_mode = WarpMode::identity_corners([bb.x, bb.y, bb.width, bb.height]);
-                }
-                CommandResult::Ok
-            } else {
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Assignment not found".into(),
-                }
-            }
+    /// Clear a surface's warp (back to no-warp / native position).
+    pub fn cmd_reset_warp(&mut self, surface_uuid: &str) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.reset_warp();
+            CommandResult::Ok
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: "Output not found".into(),
+                message: "Surface not found".into(),
+            }
+        }
+    }
+
+    /// Set the warp grid resolution for a surface, converting its warp into a
+    /// `cols` × `rows` mesh while preserving the current deformation. Dimensions
+    /// are clamped to `[2, MAX_WARP_SUBDIVISIONS]` in the domain method.
+    pub fn cmd_set_warp_subdivisions(
+        &mut self,
+        surface_uuid: &str,
+        cols: u32,
+        rows: u32,
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.set_warp_subdivisions(cols, rows);
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Surface not found".into(),
+            }
+        }
+    }
+
+    /// Move a single mesh grid point (row-major) of a surface's mesh warp.
+    /// No-op on the geometry if the surface's warp is not a mesh; still returns
+    /// `Ok` so callers can treat it uniformly.
+    pub fn cmd_set_warp_mesh_point(
+        &mut self,
+        surface_uuid: &str,
+        row: usize,
+        col: usize,
+        position: [f32; 2],
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.set_warp_mesh_point(row, col, position);
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Surface not found".into(),
+            }
+        }
+    }
+
+    /// Bind/unbind a surface's warp from its shape (auto-warp). Unbinding
+    /// materialises the conforming warp for manual editing.
+    pub fn cmd_set_warp_bound(&mut self, surface_uuid: &str, bound: bool) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.set_warp_bound(bound);
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Surface not found".into(),
+            }
+        }
+    }
+
+    /// Convert a surface's warp into a smooth bezier patch grid (8i.6).
+    pub fn cmd_convert_warp_to_bezier(&mut self, surface_uuid: &str) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.convert_warp_to_bezier();
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Surface not found".into(),
+            }
+        }
+    }
+
+    /// Move a bezier-warp control anchor. No-op on the geometry if the warp is
+    /// not bezier; still returns `Ok` so callers can treat it uniformly.
+    pub fn cmd_move_warp_anchor(
+        &mut self,
+        surface_uuid: &str,
+        row: usize,
+        col: usize,
+        position: [f32; 2],
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.set_warp_bezier_anchor(row, col, position);
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Surface not found".into(),
+            }
+        }
+    }
+
+    /// Move a bezier-warp tangent handle. No-op on the geometry if the warp is
+    /// not bezier; still returns `Ok`.
+    pub fn cmd_move_warp_handle(
+        &mut self,
+        surface_uuid: &str,
+        horizontal: bool,
+        row: usize,
+        col: usize,
+        which: usize,
+        position: [f32; 2],
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.set_warp_bezier_handle(horizontal, row, col, which, position);
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Surface not found".into(),
+            }
+        }
+    }
+
+    /// Set the bezier-warp control-cage resolution. No-op on the geometry if the
+    /// warp is not bezier; still returns `Ok`.
+    pub fn cmd_set_bezier_cage_subdivisions(
+        &mut self,
+        surface_uuid: &str,
+        cols: u32,
+        rows: u32,
+    ) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(surface_uuid) {
+            surface.set_bezier_cage_subdivisions(cols, rows);
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: "Surface not found".into(),
             }
         }
     }

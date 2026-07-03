@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
 use crate::internal::renderer::context::OutputSource;
-use crate::internal::surface::{ContentMapping, SurfaceOutputType};
+use crate::internal::surface::{ContentMapping, CubicHandle, SurfaceOutputType};
 use crate::usecases::api::{command_response, SharedState};
 
 #[derive(Deserialize, ToSchema)]
@@ -313,11 +313,50 @@ pub struct MoveBody {
     pub dy: f32,
 }
 #[derive(Deserialize, ToSchema)]
+pub struct RotateBody {
+    /// Rotation in radians (clockwise in canvas space, y-down).
+    pub angle: f32,
+    /// Pivot point [x, y] in normalised coordinates.
+    pub pivot: [f32; 2],
+}
+#[derive(Deserialize, ToSchema)]
+pub struct ScaleBody {
+    /// Horizontal scale factor.
+    pub sx: f32,
+    /// Vertical scale factor.
+    pub sy: f32,
+    /// Pivot point [x, y] in normalised coordinates.
+    pub pivot: [f32; 2],
+}
+#[derive(Deserialize, ToSchema)]
 pub struct ContourVerticesBody {
     /// Contour index within the surface.
     pub contour: usize,
     /// Updated vertex positions as [x, y] pairs.
     pub vertices: Vec<[f32; 2]>,
+}
+#[derive(Deserialize, ToSchema)]
+pub struct ConvertEdgeBody {
+    /// Index of the curve-path edge to convert.
+    pub edge_idx: usize,
+    /// `true` converts the edge to a cubic bezier; `false` back to a line.
+    pub to_cubic: bool,
+}
+#[derive(Deserialize, ToSchema)]
+pub struct MovePathAnchorBody {
+    /// Index of the curve-path anchor to move.
+    pub anchor_idx: usize,
+    /// New anchor position [x, y] in normalised coordinates.
+    pub pos: [f32; 2],
+}
+#[derive(Deserialize, ToSchema)]
+pub struct MovePathHandleBody {
+    /// Index of the cubic segment whose control handle is being moved.
+    pub segment_idx: usize,
+    /// Which control handle of the cubic segment (C1 or C2).
+    pub handle: CubicHandle,
+    /// New handle position [x, y] in normalised coordinates.
+    pub pos: [f32; 2],
 }
 
 #[utoipa::path(post, path = "/api/surfaces/{uuid}/vertices/insert", params(("uuid" = String, Path, description = "Surface UUID")), request_body = InsertVertexBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
@@ -365,6 +404,43 @@ pub async fn set_circle_sides(
         .send_command(EngineCommand::SetCircleSides {
             uuid,
             sides: b.sides,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/rotate", params(("uuid" = String, Path, description = "Surface UUID")), request_body = RotateBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn rotate_surface(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<RotateBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::RotateSurface {
+            uuid,
+            angle: b.angle,
+            pivot: b.pivot,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/scale", params(("uuid" = String, Path, description = "Surface UUID")), request_body = ScaleBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn scale_surface(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<ScaleBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ScaleSurface {
+            uuid,
+            sx: b.sx,
+            sy: b.sy,
+            pivot: b.pivot,
         })
         .await
     {
@@ -446,6 +522,297 @@ pub async fn update_contour_vertices(
             uuid,
             contour: b.contour,
             vertices: b.vertices,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/edge/convert", params(("uuid" = String, Path, description = "Surface UUID")), request_body = ConvertEdgeBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn convert_edge(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<ConvertEdgeBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ConvertSurfaceEdge {
+            uuid,
+            edge_idx: b.edge_idx,
+            to_cubic: b.to_cubic,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/path/anchor", params(("uuid" = String, Path, description = "Surface UUID")), request_body = MovePathAnchorBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn move_path_anchor(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<MovePathAnchorBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::MovePathAnchor {
+            uuid,
+            anchor_idx: b.anchor_idx,
+            pos: b.pos,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/path/handle", params(("uuid" = String, Path, description = "Surface UUID")), request_body = MovePathHandleBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn move_path_handle(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<MovePathHandleBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::MovePathHandle {
+            uuid,
+            segment_idx: b.segment_idx,
+            handle: b.handle,
+            pos: b.pos,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+// ── Per-surface warp (8i.5) ───────────────────────────────────────
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetWarpCornerBody {
+    /// Corner index (0–3, TL/TR/BR/BL).
+    pub corner_idx: usize,
+    /// New [x, y] position for the corner in normalised coordinates.
+    pub position: [f32; 2],
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/warp/corner", params(("uuid" = String, Path, description = "Surface UUID")), request_body = SetWarpCornerBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn set_warp_corner(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<SetWarpCornerBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetWarpCorner {
+            surface_uuid: uuid,
+            corner_idx: b.corner_idx,
+            position: b.position,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[utoipa::path(post, path = "/api/surfaces/{uuid}/warp/reset", params(("uuid" = String, Path, description = "Surface UUID")), responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn reset_warp(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ResetWarp { surface_uuid: uuid })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetWarpSubdivisionsBody {
+    /// Number of grid columns (clamped to [2, 64]).
+    pub cols: u32,
+    /// Number of grid rows (clamped to [2, 64]).
+    pub rows: u32,
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/warp/subdivisions", params(("uuid" = String, Path, description = "Surface UUID")), request_body = SetWarpSubdivisionsBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn set_warp_subdivisions(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<SetWarpSubdivisionsBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetWarpSubdivisions {
+            surface_uuid: uuid,
+            cols: b.cols,
+            rows: b.rows,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetWarpMeshPointBody {
+    /// Grid row of the point (0-based).
+    pub row: usize,
+    /// Grid column of the point (0-based).
+    pub col: usize,
+    /// New [x, y] position in normalised coordinates.
+    pub position: [f32; 2],
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/warp/mesh-point", params(("uuid" = String, Path, description = "Surface UUID")), request_body = SetWarpMeshPointBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn set_warp_mesh_point(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<SetWarpMeshPointBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetWarpMeshPoint {
+            surface_uuid: uuid,
+            row: b.row,
+            col: b.col,
+            position: b.position,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetWarpBoundBody {
+    /// `true` = auto-conform the warp to the surface shape; `false` = unbind for
+    /// manual fine-tuning (materialises the conforming warp).
+    pub bound: bool,
+}
+
+#[utoipa::path(post, path = "/api/surfaces/{uuid}/warp/bind", params(("uuid" = String, Path, description = "Surface UUID")), request_body = SetWarpBoundBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn set_warp_bound(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<SetWarpBoundBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetWarpBound {
+            surface_uuid: uuid,
+            bound: b.bound,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[utoipa::path(post, path = "/api/surfaces/{uuid}/warp/bezier", params(("uuid" = String, Path, description = "Surface UUID")), responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn convert_warp_to_bezier(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ConvertWarpToBezier { surface_uuid: uuid })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct MoveWarpAnchorBody {
+    /// Anchor grid row (0-based).
+    pub row: usize,
+    /// Anchor grid column (0-based).
+    pub col: usize,
+    /// New [x, y] position in normalised coordinates.
+    pub position: [f32; 2],
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/warp/anchor", params(("uuid" = String, Path, description = "Surface UUID")), request_body = MoveWarpAnchorBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn move_warp_anchor(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<MoveWarpAnchorBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::MoveWarpAnchor {
+            surface_uuid: uuid,
+            row: b.row,
+            col: b.col,
+            position: b.position,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct MoveWarpHandleBody {
+    /// `true` = a horizontal edge ((r,c)→(r,c+1)); `false` = a vertical edge
+    /// ((r,c)→(r+1,c)).
+    pub horizontal: bool,
+    /// Edge start-anchor grid row (0-based).
+    pub row: usize,
+    /// Edge start-anchor grid column (0-based).
+    pub col: usize,
+    /// Which handle of the edge: 0 (near start anchor) or 1 (near end anchor).
+    pub which: usize,
+    /// New [x, y] position in normalised coordinates.
+    pub position: [f32; 2],
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/warp/handle", params(("uuid" = String, Path, description = "Surface UUID")), request_body = MoveWarpHandleBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn move_warp_handle(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<MoveWarpHandleBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::MoveWarpHandle {
+            surface_uuid: uuid,
+            horizontal: b.horizontal,
+            row: b.row,
+            col: b.col,
+            which: b.which,
+            position: b.position,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetBezierCageBody {
+    /// Number of anchor columns (clamped to [2, 64]).
+    pub cols: u32,
+    /// Number of anchor rows (clamped to [2, 64]).
+    pub rows: u32,
+}
+
+#[utoipa::path(put, path = "/api/surfaces/{uuid}/warp/cage", params(("uuid" = String, Path, description = "Surface UUID")), request_body = SetBezierCageBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn set_bezier_cage_subdivisions(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<SetBezierCageBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::SetBezierCageSubdivisions {
+            surface_uuid: uuid,
+            cols: b.cols,
+            rows: b.rows,
         })
         .await
     {

@@ -61,6 +61,61 @@ impl VardaApp {
                         dy: *dy,
                     });
                 }
+                ui::SurfaceAction::Rotate { uuid, angle, pivot } => {
+                    self.execute_command(EngineCommand::RotateSurface {
+                        uuid: uuid.clone(),
+                        angle: *angle,
+                        pivot: *pivot,
+                    });
+                }
+                ui::SurfaceAction::Scale {
+                    uuid,
+                    sx,
+                    sy,
+                    pivot,
+                } => {
+                    self.execute_command(EngineCommand::ScaleSurface {
+                        uuid: uuid.clone(),
+                        sx: *sx,
+                        sy: *sy,
+                        pivot: *pivot,
+                    });
+                }
+                ui::SurfaceAction::ConvertEdge {
+                    uuid,
+                    edge_idx,
+                    to_cubic,
+                } => {
+                    self.execute_command(EngineCommand::ConvertSurfaceEdge {
+                        uuid: uuid.clone(),
+                        edge_idx: *edge_idx,
+                        to_cubic: *to_cubic,
+                    });
+                }
+                ui::SurfaceAction::MoveAnchor {
+                    uuid,
+                    anchor_idx,
+                    pos,
+                } => {
+                    self.execute_command(EngineCommand::MovePathAnchor {
+                        uuid: uuid.clone(),
+                        anchor_idx: *anchor_idx,
+                        pos: *pos,
+                    });
+                }
+                ui::SurfaceAction::MoveHandle {
+                    uuid,
+                    segment_idx,
+                    handle,
+                    pos,
+                } => {
+                    self.execute_command(EngineCommand::MovePathHandle {
+                        uuid: uuid.clone(),
+                        segment_idx: *segment_idx,
+                        handle: *handle,
+                        pos: *pos,
+                    });
+                }
                 ui::SurfaceAction::SetSource { uuid, source } => {
                     self.execute_command(EngineCommand::SetSurfaceSource {
                         uuid: uuid.clone(),
@@ -107,6 +162,90 @@ impl VardaApp {
                 }
                 ui::SurfaceAction::FlipVertical { uuid } => {
                     self.execute_command(EngineCommand::FlipSurfaceVertical { uuid: uuid.clone() });
+                }
+                ui::SurfaceAction::SetWarpCorner {
+                    uuid,
+                    corner_idx,
+                    position,
+                } => {
+                    self.execute_command(EngineCommand::SetWarpCorner {
+                        surface_uuid: uuid.clone(),
+                        corner_idx: *corner_idx,
+                        position: *position,
+                    });
+                }
+                ui::SurfaceAction::ResetWarp { uuid } => {
+                    self.execute_command(EngineCommand::ResetWarp {
+                        surface_uuid: uuid.clone(),
+                    });
+                }
+                ui::SurfaceAction::SetWarpSubdivisions { uuid, cols, rows } => {
+                    self.execute_command(EngineCommand::SetWarpSubdivisions {
+                        surface_uuid: uuid.clone(),
+                        cols: *cols,
+                        rows: *rows,
+                    });
+                }
+                ui::SurfaceAction::SetWarpMeshPoint {
+                    uuid,
+                    row,
+                    col,
+                    position,
+                } => {
+                    self.execute_command(EngineCommand::SetWarpMeshPoint {
+                        surface_uuid: uuid.clone(),
+                        row: *row,
+                        col: *col,
+                        position: *position,
+                    });
+                }
+                ui::SurfaceAction::SetWarpBound { uuid, bound } => {
+                    self.execute_command(EngineCommand::SetWarpBound {
+                        surface_uuid: uuid.clone(),
+                        bound: *bound,
+                    });
+                }
+                ui::SurfaceAction::ConvertWarpToBezier { uuid } => {
+                    self.execute_command(EngineCommand::ConvertWarpToBezier {
+                        surface_uuid: uuid.clone(),
+                    });
+                }
+                ui::SurfaceAction::MoveWarpAnchor {
+                    uuid,
+                    row,
+                    col,
+                    position,
+                } => {
+                    self.execute_command(EngineCommand::MoveWarpAnchor {
+                        surface_uuid: uuid.clone(),
+                        row: *row,
+                        col: *col,
+                        position: *position,
+                    });
+                }
+                ui::SurfaceAction::MoveWarpHandle {
+                    uuid,
+                    horizontal,
+                    row,
+                    col,
+                    which,
+                    position,
+                } => {
+                    self.execute_command(EngineCommand::MoveWarpHandle {
+                        surface_uuid: uuid.clone(),
+                        horizontal: *horizontal,
+                        row: *row,
+                        col: *col,
+                        which: *which,
+                        position: *position,
+                    });
+                }
+                ui::SurfaceAction::SetBezierCageSubdivisions { uuid, cols, rows } => {
+                    self.execute_command(EngineCommand::SetBezierCageSubdivisions {
+                        surface_uuid: uuid.clone(),
+                        cols: *cols,
+                        rows: *rows,
+                    });
                 }
                 ui::SurfaceAction::InsertVertex {
                     uuid,
@@ -195,9 +334,11 @@ impl VardaApp {
                 vertices,
                 OutputSource::Domemaster,
             );
-            // Store the default warp mesh on the surface for auto-assignment
+            // Store the pre-computed warp mesh on the surface (per-surface warp).
+            // Unbind from auto-warp so the dome's mesh is authoritative.
             if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(&uuid) {
-                surface.default_warp = Some(WarpMode::Mesh(mesh.clone()));
+                surface.warp = Some(WarpMode::Mesh(mesh.clone()));
+                surface.warp_bound = false;
             }
             log::info!(
                 "Created dome surface '{}' (uuid {}) with {}x{} warp mesh",

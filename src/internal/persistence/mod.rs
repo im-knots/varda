@@ -102,16 +102,17 @@ impl StagePrefs {
             if output.name.trim().is_empty() {
                 errors.push(format!("{}: name is empty", prefix));
             }
-            for (j, sa) in output.surface_assignments.iter().enumerate() {
-                if let crate::renderer::warp::WarpMode::CornerPin { corners } = &sa.warp_mode {
-                    for (c, corner) in corners.iter().enumerate() {
-                        for (k, v) in corner.iter().enumerate() {
-                            if !v.is_finite() {
-                                errors.push(format!(
-                                    "{}/surface_assignments[{}]: warp corner[{}][{}] is not finite",
-                                    prefix, j, c, k
-                                ));
-                            }
+        }
+        // Warp now lives on surfaces — validate their corner-pin finiteness.
+        for (i, surface) in self.surfaces.surfaces.iter().enumerate() {
+            if let Some(crate::renderer::warp::WarpMode::CornerPin { corners }) = &surface.warp {
+                for (c, corner) in corners.iter().enumerate() {
+                    for (k, v) in corner.iter().enumerate() {
+                        if !v.is_finite() {
+                            errors.push(format!(
+                                "surfaces[{}]: warp corner[{}][{}] is not finite",
+                                i, c, k
+                            ));
                         }
                     }
                 }
@@ -760,7 +761,7 @@ pub fn snapshot_stage(
                             .iter()
                             .map(|a| SurfaceAssignmentConfig {
                                 surface_uuid: a.surface_uuid.clone(),
-                                warp_mode: a.warp_mode.clone(),
+                                legacy_warp_mode: None,
                                 enabled: a.enabled,
                             })
                             .collect(),
@@ -775,7 +776,7 @@ pub fn snapshot_stage(
                         .iter()
                         .map(|a| SurfaceAssignmentConfig {
                             surface_uuid: a.surface_uuid.clone(),
-                            warp_mode: a.warp_mode.clone(),
+                            legacy_warp_mode: None,
                             enabled: a.enabled,
                         })
                         .collect(),
@@ -1580,25 +1581,17 @@ mod tests {
 
     #[test]
     fn validate_stage_prefs_warp_corners_non_finite() {
+        // Warp is per-surface now — a non-finite corner on a surface's warp
+        // must be reported by validation.
         let mut prefs = StagePrefs::default();
-        prefs.outputs.push(crate::scene::OutputConfig {
-            uuid: "test0001".into(),
-            name: "test".into(),
-            target: crate::scene::OutputTargetConfig::Windowed,
-            target_display: None,
-            surface_assignments: vec![crate::scene::SurfaceAssignmentConfig {
-                surface_uuid: "abcd1234".into(),
-                warp_mode: crate::renderer::warp::WarpMode::CornerPin {
-                    corners: [[0.0, 0.0], [1.0, 0.0], [f32::INFINITY, 1.0], [0.0, 1.0]],
-                },
-                enabled: true,
-            }],
-            window_position: None,
-            window_size: None,
-            edge_blend_mode: crate::renderer::edge_blend::EdgeBlendMode::default(),
-            edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
-            rotation: crate::renderer::context::OutputRotation::default(),
-        });
+        let uuid = prefs
+            .surfaces
+            .add_surface("s".into(), crate::renderer::context::OutputSource::Master);
+        if let Some((_, s)) = prefs.surfaces.find_by_uuid_mut(&uuid) {
+            s.warp = Some(crate::renderer::warp::WarpMode::CornerPin {
+                corners: [[0.0, 0.0], [1.0, 0.0], [f32::INFINITY, 1.0], [0.0, 1.0]],
+            });
+        }
         let errors = prefs.validate();
         assert!(errors.iter().any(|e| e.contains("warp corner")));
     }

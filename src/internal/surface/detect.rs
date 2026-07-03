@@ -16,6 +16,10 @@ pub struct DetectedContour {
     pub circle_fit: Option<([f32; 2], f32)>,
     /// Auto-generated name based on position (e.g. "top-left-1").
     pub suggested_name: String,
+    /// Editable curve outline captured during SVG import (control points
+    /// preserved). `None` for raster/DXF detection, which produce polylines only.
+    #[serde(default)]
+    pub path: Option<super::curve::SurfacePath>,
 }
 
 /// Method used to produce the binary image for contour detection.
@@ -193,6 +197,7 @@ pub fn detect_contours(img: &image::GrayImage, params: &DetectionParams) -> Dete
             is_circular,
             circle_fit,
             suggested_name,
+            path: None,
         });
     }
 

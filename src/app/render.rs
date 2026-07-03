@@ -456,12 +456,18 @@ impl VardaApp {
         calibration_textures: &[(wgpu::Texture, wgpu::TextureView)],
         domemaster_view: Option<&wgpu::TextureView>,
     ) {
-        if output.calibration_mode
-            && !calibration_textures.is_empty()
-            && surface_manager.surfaces.is_empty()
+        use crate::renderer::context::CalibrationMode;
+        // Projector calibration: one full-frame test card over the whole output,
+        // bypassing surface geometry/warp (physical projector alignment).
+        if output.calibration_mode == CalibrationMode::Projector && !calibration_textures.is_empty()
         {
             output.render(context, &calibration_textures[0].1);
-        } else if surface_manager.surfaces.is_empty() {
+            output.window.request_redraw();
+            return;
+        }
+        // Surfaces calibration: each surface shows a colored test card through its warp.
+        let surfaces_cal = output.calibration_mode == CalibrationMode::Surfaces;
+        if surface_manager.surfaces.is_empty() {
             output.render(context, mixer.composite_view());
         } else if !output.surface_assignments.is_empty() {
             let render_infos: Vec<SurfaceRenderInfo<'_>> = output
@@ -472,13 +478,12 @@ impl VardaApp {
                 .filter_map(|(ai, assignment)| {
                     let (_, surface) = surface_manager.find_by_uuid(&assignment.surface_uuid)?;
                     let bb = surface.bounding_box();
-                    let content_view =
-                        if output.calibration_mode && !calibration_textures.is_empty() {
-                            &calibration_textures[ai % calibration_textures.len()].1
-                        } else {
-                            Self::resolve_source(mixer, &surface.source, domemaster_view)?
-                        };
-                    let (uv_scale, uv_offset) = if output.calibration_mode {
+                    let content_view = if surfaces_cal && !calibration_textures.is_empty() {
+                        &calibration_textures[ai % calibration_textures.len()].1
+                    } else {
+                        Self::resolve_source(mixer, &surface.source, domemaster_view)?
+                    };
+                    let (uv_scale, uv_offset) = if surfaces_cal {
                         ([1.0, 1.0], [0.0, 0.0])
                     } else {
                         Self::compute_uv(surface.content_mapping, &bb)
@@ -489,7 +494,7 @@ impl VardaApp {
                         bounding_box: [bb.x, bb.y, bb.width, bb.height],
                         uv_scale,
                         uv_offset,
-                        warp_mode: Some(assignment.warp_mode.clone()),
+                        warp_mode: surface.effective_warp(),
                         overlap_zones: assignment.overlap_zones.clone(),
                     })
                 })
@@ -502,13 +507,12 @@ impl VardaApp {
                 .enumerate()
                 .filter_map(|(si, surface)| {
                     let bb = surface.bounding_box();
-                    let content_view =
-                        if output.calibration_mode && !calibration_textures.is_empty() {
-                            &calibration_textures[si % calibration_textures.len()].1
-                        } else {
-                            Self::resolve_source(mixer, &surface.source, domemaster_view)?
-                        };
-                    let (uv_scale, uv_offset) = if output.calibration_mode {
+                    let content_view = if surfaces_cal && !calibration_textures.is_empty() {
+                        &calibration_textures[si % calibration_textures.len()].1
+                    } else {
+                        Self::resolve_source(mixer, &surface.source, domemaster_view)?
+                    };
+                    let (uv_scale, uv_offset) = if surfaces_cal {
                         ([1.0, 1.0], [0.0, 0.0])
                     } else {
                         Self::compute_uv(surface.content_mapping, &bb)
@@ -519,7 +523,7 @@ impl VardaApp {
                         bounding_box: [bb.x, bb.y, bb.width, bb.height],
                         uv_scale,
                         uv_offset,
-                        warp_mode: None,
+                        warp_mode: surface.effective_warp(),
                         overlap_zones: Default::default(),
                     })
                 })
@@ -623,8 +627,11 @@ impl VardaApp {
                         let content_view =
                             Self::resolve_source(mixer, &surface.source, domemaster_view)?;
                         let (uv_scale, uv_offset) = Self::compute_uv(surface.content_mapping, &bb);
-                        let (homography, vertices) = match &assignment.warp_mode {
-                            crate::renderer::warp::WarpMode::CornerPin { corners } => {
+                        // Warp is per-surface now; `None` = no warp (native
+                        // position). `effective_warp` applies auto-warp binding.
+                        let eff_warp = surface.effective_warp();
+                        let (homography, vertices) = match eff_warp.as_ref() {
+                            Some(crate::renderer::warp::WarpMode::CornerPin { corners }) => {
                                 let src_corners = [
                                     [bb.x, bb.y],
                                     [bb.x + bb.width, bb.y],
@@ -645,9 +652,27 @@ impl VardaApp {
                                     );
                                 (Some(homography), verts)
                             }
-                            crate::renderer::warp::WarpMode::Mesh(mesh) => (
+                            Some(crate::renderer::warp::WarpMode::Mesh(mesh)) => (
                                 None,
                                 crate::renderer::blit::PolygonBlitPipeline::mesh_verts(mesh),
+                            ),
+                            // Bezier: tessellate the control cage into a mesh,
+                            // then bake to verts (identity homography).
+                            Some(crate::renderer::warp::WarpMode::Bezier(b)) => (
+                                None,
+                                crate::renderer::blit::PolygonBlitPipeline::mesh_verts(
+                                    &b.tessellate(),
+                                ),
+                            ),
+                            None => (
+                                None,
+                                crate::renderer::blit::PolygonBlitPipeline::triangulate_verts(
+                                    &surface.vertices,
+                                    bb.x,
+                                    bb.y,
+                                    bb.width,
+                                    bb.height,
+                                ),
                             ),
                         };
                         Some(crate::renderer::blit::PolygonDrawDesc {

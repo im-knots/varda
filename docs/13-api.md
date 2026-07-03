@@ -149,6 +149,122 @@ curl -X POST http://localhost:8080/api/scene/save
 curl -X POST http://localhost:8080/api/shutdown
 ```
 
+### Curve a surface edge (Bezier)
+
+Toggle an edge between a straight line and a cubic bezier (`to_cubic: false` straightens it again):
+
+```sh
+curl -X PUT http://localhost:8080/api/surfaces/<uuid>/edge/convert \
+  -H "Content-Type: application/json" \
+  -d '{"edge_idx": 0, "to_cubic": true}'
+```
+
+### Move a curve-path anchor
+
+```sh
+curl -X PUT http://localhost:8080/api/surfaces/<uuid>/path/anchor \
+  -H "Content-Type: application/json" \
+  -d '{"anchor_idx": 1, "pos": [0.3, 0.4]}'
+```
+
+### Move a cubic control handle
+
+`handle` is `C1` or `C2` (the two control points of the cubic segment):
+
+```sh
+curl -X PUT http://localhost:8080/api/surfaces/<uuid>/path/handle \
+  -H "Content-Type: application/json" \
+  -d '{"segment_idx": 0, "handle": "C1", "pos": [0.6, 0.7]}'
+```
+
+### Warp a surface (per-surface)
+
+Warp is a property of the surface, keyed by its UUID. Move a corner-pin corner:
+
+```sh
+curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/corner \
+  -H "Content-Type: application/json" \
+  -d '{"corner_idx": 0, "position": [0.1, 0.1]}'
+```
+
+Clear a surface's warp (back to native position):
+
+```sh
+curl -X POST http://localhost:8080/api/surfaces/{uuid}/warp/reset
+```
+
+### Subdivide a surface's warp into a mesh
+
+Converts the surface's warp to a `cols` × `rows` grid, preserving the current
+deformation (a corner-pin becomes a bilinear grid). Dimensions clamp to `[2, 64]`.
+
+```sh
+curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/subdivisions \
+  -H "Content-Type: application/json" \
+  -d '{"cols": 3, "rows": 3}'
+```
+
+### Move a mesh warp point
+
+Moves a single grid point (row-major) of the surface's mesh warp. No-op if the
+surface's warp is not currently a mesh.
+
+```sh
+curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/mesh-point \
+  -H "Content-Type: application/json" \
+  -d '{"row": 1, "col": 1, "position": [0.6, 0.4]}'
+```
+
+### Bind/unbind the warp to the surface shape (auto-warp)
+
+When `bound` is `true` the warp auto-conforms to the surface outline; setting it
+`false` unbinds and materialises the conforming warp for manual fine-tuning.
+
+```sh
+curl -X POST http://localhost:8080/api/surfaces/{uuid}/warp/bind \
+  -H "Content-Type: application/json" \
+  -d '{"bound": false}'
+```
+
+### Bezier (curved) warp
+
+Convert the surface's warp into a smooth bezier patch grid (seeded from the
+current warp so the shape is preserved), then edit anchors and tangent handles or
+resize the control cage. Bezier editing is meaningful only while the warp is
+unbound.
+
+```sh
+# Convert to a bezier patch grid
+curl -X POST http://localhost:8080/api/surfaces/{uuid}/warp/bezier
+
+# Move a control anchor (row-major grid coords)
+curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/anchor \
+  -H "Content-Type: application/json" \
+  -d '{"row": 0, "col": 0, "position": [0.15, 0.25]}'
+
+# Move a tangent handle. horizontal=true → edge (r,c)→(r,c+1); false → (r,c)→(r+1,c).
+# which=0 near the start anchor, 1 near the end anchor.
+curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/handle \
+  -H "Content-Type: application/json" \
+  -d '{"horizontal": true, "row": 0, "col": 0, "which": 0, "position": [0.33, 0.05]}'
+
+# Resize the anchor cage (adds/removes control points; dims clamp to [2, 64])
+curl -X PUT http://localhost:8080/api/surfaces/{uuid}/warp/cage \
+  -H "Content-Type: application/json" \
+  -d '{"cols": 3, "rows": 3}'
+```
+
+### Set an output's calibration mode
+
+Switches an output between `Off`, `Projector` (full-frame test card), and
+`Surfaces` (per-surface test cards through each warp).
+
+```sh
+curl -X PUT http://localhost:8080/api/outputs/0/calibration \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "Projector"}'
+```
+
 ## Route Groups
 
 The API is organized into 15 OpenAPI tags:
@@ -163,8 +279,8 @@ The API is organized into 15 OpenAPI tags:
 | **Effects** | `POST /api/effects`, `POST /api/effects/toggle` |
 | **Modulation** | `POST /api/modulation/lfo`, `POST /api/modulation/assign` |
 | **Params** | `PUT /api/params` (set any parameter by path) |
-| **Surfaces** | `POST /api/surfaces/rect`, `PUT /api/surfaces/:uuid/source` |
-| **Outputs** | `POST /api/outputs/windowed`, `POST /api/outputs/headless` |
+| **Surfaces** | `POST /api/surfaces/rect`, `PUT /api/surfaces/:uuid/source`, `PUT /api/surfaces/:uuid/path/handle`, `PUT /api/surfaces/:uuid/warp/corner`, `POST /api/surfaces/:uuid/warp/reset`, `PUT /api/surfaces/:uuid/warp/subdivisions`, `PUT /api/surfaces/:uuid/warp/mesh-point`, `POST /api/surfaces/:uuid/warp/bind`, `POST /api/surfaces/:uuid/warp/bezier`, `PUT /api/surfaces/:uuid/warp/anchor`, `PUT /api/surfaces/:uuid/warp/handle`, `PUT /api/surfaces/:uuid/warp/cage` |
+| **Outputs** | `POST /api/outputs/windowed`, `POST /api/outputs/headless`, `PUT /api/outputs/:idx/calibration` |
 | **Sequences** | `POST /api/sequences`, `POST /api/sequences/:idx/play` |
 | **Audio** | `POST /api/audio/scan`, `POST /api/audio/open` |
 | **Streams** | `POST /api/streams/library` |
