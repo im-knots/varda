@@ -79,7 +79,7 @@ fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
     let analyzer_values = AnalyzerValues::default();
     for _ in 0..3 {
         mixer
-            .render(ctx, &audio, &audio_values, &analyzer_values, 60)
+            .render(ctx, &audio, &audio_values, &analyzer_values, 60, &[])
             .expect("warmup");
         poll(ctx);
     }
@@ -87,7 +87,7 @@ fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
     for _ in 0..samples {
         let t0 = Instant::now();
         mixer
-            .render(ctx, &audio, &audio_values, &analyzer_values, 60)
+            .render(ctx, &audio, &audio_values, &analyzer_values, 60, &[])
             .expect("render");
         poll(ctx);
         times.push(t0.elapsed().as_micros());
@@ -134,7 +134,7 @@ fn bench_channel_composite_solid(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("decks", n_decks), &n_decks, |b, _| {
             b.iter(|| {
                 mixer
-                    .render(&ctx, &audio, &audio_values, &analyzer_values, 60)
+                    .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
                     .expect("render");
                 poll(&ctx);
             });
@@ -164,7 +164,7 @@ fn bench_channel_composite_shader(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("decks", n_decks), &n_decks, |b, _| {
             b.iter(|| {
                 mixer
-                    .render(&ctx, &audio, &audio_values, &analyzer_values, 60)
+                    .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
                     .expect("render");
                 poll(&ctx);
             });
@@ -197,7 +197,7 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
     group.bench_function("2ch_50pct", |b| {
         b.iter(|| {
             mixer
-                .render(&ctx, &audio, &audio_values, &analyzer_values, 60)
+                .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
                 .expect("render");
             poll(&ctx);
         });

@@ -240,10 +240,13 @@ impl VardaApp {
             &n_ch_buf
         };
 
-        // Collect camera IDs needed by visible channels
+        // Collect camera IDs needed by visible channels. Cued (previewed)
+        // channels are included even at zero opacity so their live camera inputs
+        // keep advancing while off-air. See /spec/channel-preview.md.
         let mut needed_camera_ids = std::collections::HashSet::new();
         for (ch_idx, channel) in self.mixer.channels().iter().enumerate() {
-            if effective_opacities.get(ch_idx).copied().unwrap_or(0.0) <= 0.0 {
+            let visible = effective_opacities.get(ch_idx).copied().unwrap_or(0.0) > 0.0;
+            if !visible && !self.preview_channels.contains(&ch_idx) {
                 continue;
             }
             for slot in &channel.decks {
@@ -350,6 +353,7 @@ impl VardaApp {
             &audio_values,
             &analyzer_values,
             target_fps,
+            &self.preview_channels,
         ) {
             log::error!("Failed to render mixer: {}", e);
         }

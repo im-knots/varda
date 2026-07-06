@@ -246,7 +246,7 @@ The **usecases layer** is the only place that touches egui or windowed rendering
 
 This means you can drive the same engine from the GUI, the HTTP API, or a test harness without changing engine code.
 
-External I/O (NDI, SRT, HLS/DASH, RTMP, and recording) uses non-blocking subprocess architecture with bounded channels to keep the render thread fast. GPU work is batched into minimal command buffer submissions. The render pass culls zero-opacity decks and channels so you only pay for what's live.
+External I/O (NDI, SRT, HLS/DASH, RTMP, and recording) uses non-blocking subprocess architecture with bounded channels to keep the render thread fast. GPU work is batched into minimal command buffer submissions. The render pass culls zero-opacity decks and channels so you only pay for what's live — with one exception: the channel you currently have selected is force-rendered even when off-air, so you can cue and build a composition on it and watch its preview update live without it touching the output.
 
 ### Entity Identity & Address Scheme
 

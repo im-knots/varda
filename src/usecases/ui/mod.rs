@@ -195,6 +195,21 @@ impl UILayoutState {
         }
     }
 
+    /// Channels to force-render for preview, derived from the current selection.
+    ///
+    /// Selecting a deck or a channel cues that channel so its off-air preview
+    /// updates live (see /spec/channel-preview.md). Master or no selection cues
+    /// nothing. Returned as a set (0 or 1 today) to leave room for multi-cue.
+    pub fn preview_channels(&self) -> Vec<usize> {
+        if let Some((ch, _)) = self.selected_deck {
+            vec![ch]
+        } else if let Some(ch) = self.selected_channel {
+            vec![ch]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Fix up selection indices after a channel is removed.
     pub fn fixup_channel_removal(&mut self, removed_ch: usize) {
         if let Some((sel_ch, _)) = self.selected_deck {
@@ -2145,5 +2160,55 @@ impl UIData {
             deck_presets: vec![],
             channel_presets: vec![],
         }
+    }
+}
+
+#[cfg(test)]
+mod preview_channel_tests {
+    use super::*;
+
+    #[test]
+    fn selected_deck_cues_its_channel() {
+        let layout = UILayoutState {
+            selected_deck: Some((1, 3)),
+            ..Default::default()
+        };
+        assert_eq!(layout.preview_channels(), vec![1]);
+    }
+
+    #[test]
+    fn selected_channel_cues_itself() {
+        let layout = UILayoutState {
+            selected_channel: Some(2),
+            ..Default::default()
+        };
+        assert_eq!(layout.preview_channels(), vec![2]);
+    }
+
+    #[test]
+    fn selected_master_cues_nothing() {
+        let layout = UILayoutState {
+            selected_master: true,
+            ..Default::default()
+        };
+        assert!(layout.preview_channels().is_empty());
+    }
+
+    #[test]
+    fn no_selection_cues_nothing() {
+        let layout = UILayoutState::default();
+        assert!(layout.preview_channels().is_empty());
+    }
+
+    #[test]
+    fn deck_takes_precedence_over_channel() {
+        // apply_selections keeps these mutually exclusive, but the derivation
+        // must be deterministic even if both happen to be set.
+        let layout = UILayoutState {
+            selected_deck: Some((0, 0)),
+            selected_channel: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(layout.preview_channels(), vec![0]);
     }
 }

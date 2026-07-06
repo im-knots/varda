@@ -797,4 +797,70 @@ mod tests {
         let result = crossfader * opacity;
         assert!(result.is_nan());
     }
+
+    // ── Channel preview / cue tests (issue #72) ──────────────────────
+
+    fn add_solid_deck_to(mixer: &mut Mixer, gpu: &GpuContext, ch_idx: usize, color: [f32; 4]) {
+        let deck = crate::deck::Deck::new_solid_color(gpu, color, 64, 64).expect("solid deck");
+        mixer
+            .channel_mut(ch_idx)
+            .expect("channel exists")
+            .add_deck(deck);
+    }
+
+    fn render_once(mixer: &mut Mixer, gpu: &GpuContext, preview: &[usize]) {
+        let audio = crate::audio::AudioData::default();
+        let audio_values = crate::modulation::AudioValues::default();
+        let analyzer_values = crate::modulation::AnalyzerValues::default();
+        mixer
+            .render(gpu, &audio, &audio_values, &analyzer_values, 60, preview)
+            .expect("mixer render");
+    }
+
+    #[test]
+    fn culled_channel_not_rendered_with_empty_preview() {
+        // crossfader defaults to 0.0 → Ch 1 effective opacity is 0 → culled.
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        add_solid_deck_to(&mut mixer, &gpu, 1, [1.0, 0.0, 0.0, 1.0]);
+
+        render_once(&mut mixer, &gpu, &[]);
+
+        assert_eq!(
+            mixer.channel(1).unwrap().active_deck_count,
+            0,
+            "off-air channel must be culled when not cued"
+        );
+    }
+
+    #[test]
+    fn cued_channel_force_rendered_at_zero_opacity() {
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        add_solid_deck_to(&mut mixer, &gpu, 1, [1.0, 0.0, 0.0, 1.0]);
+
+        // Same effective-0 state, but Ch 1 is cued → force-rendered.
+        render_once(&mut mixer, &gpu, &[1]);
+
+        assert_eq!(
+            mixer.channel(1).unwrap().active_deck_count,
+            1,
+            "cued off-air channel must be force-rendered"
+        );
+    }
+
+    #[test]
+    fn empty_preview_matches_baseline() {
+        // The live channel (Ch 0, effective opacity 1.0) renders regardless of
+        // preview, guarding that the preview set only ever adds renders.
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        add_solid_deck_to(&mut mixer, &gpu, 0, [0.0, 1.0, 0.0, 1.0]);
+        add_solid_deck_to(&mut mixer, &gpu, 1, [1.0, 0.0, 0.0, 1.0]);
+
+        render_once(&mut mixer, &gpu, &[]);
+
+        assert_eq!(mixer.channel(0).unwrap().active_deck_count, 1);
+        assert_eq!(mixer.channel(1).unwrap().active_deck_count, 0);
+    }
 }

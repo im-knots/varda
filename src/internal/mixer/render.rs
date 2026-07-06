@@ -38,6 +38,9 @@ impl Mixer {
 
     /// Render all channels and composite them via crossfader, then apply master effects.
     /// `target_fps` is used for adaptive deck render skipping budget calculation.
+    /// `preview_channels` are force-rendered even when culled by opacity, so their
+    /// off-air previews update live — without affecting the compositor (see
+    /// /spec/channel-preview.md).
     pub fn render(
         &mut self,
         context: &GpuContext,
@@ -45,6 +48,7 @@ impl Mixer {
         audio_values: &crate::modulation::AudioValues,
         analyzer_values: &crate::modulation::AnalyzerValues,
         target_fps: u32,
+        preview_channels: &[usize],
     ) -> Result<()> {
         let now = std::time::Instant::now();
         let dt = (now - self.last_render_time).as_secs_f32();
@@ -214,7 +218,10 @@ impl Mixer {
         let mut rendered_channels: u32 = 0;
         let mut per_ch_gpu_us: Vec<(String, u128)> = Vec::new();
         for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
-            if effective_opacities.get(ch_idx).copied().unwrap_or(0.0) < 0.001 {
+            let culled = effective_opacities.get(ch_idx).copied().unwrap_or(0.0) < 0.001;
+            // Cued channels are force-rendered so their off-air previews update
+            // live; the compositor stays opacity-gated so they never leak to output.
+            if culled && !preview_channels.contains(&ch_idx) {
                 // Reset stats so culled channels don't show stale render metrics
                 channel.render_time_ms = 0.0;
                 channel.active_deck_count = 0;

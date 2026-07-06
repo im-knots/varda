@@ -245,6 +245,11 @@ pub struct VardaApp {
     // ── Frame pacing (global, runtime-mutable) ──────────
     target_fps: u32,
 
+    // ── Channel preview / cue (ephemeral, published by UI each frame) ──
+    // Channels force-rendered for off-air preview. Never persisted; affects the
+    // render gate only, never the compositor. See /spec/channel-preview.md.
+    preview_channels: Vec<usize>,
+
     // ── Pending MIDI-triggered actions (consumed by runner) ──
     pub(crate) midi_pending_undo: bool,
     pub(crate) midi_pending_redo: bool,
@@ -485,6 +490,7 @@ impl VardaApp {
             render_width: DEFAULT_RENDER_WIDTH,
             render_height: DEFAULT_RENDER_HEIGHT,
             target_fps: config.target_fps,
+            preview_channels: Vec::new(),
             midi_pending_undo: false,
             midi_pending_redo: false,
             midi_pending_save: false,
@@ -2203,6 +2209,13 @@ impl VardaApp {
         if let Some(dome) = &mut self.output.domemaster {
             dome.set_content_rotation(az, el, roll);
         }
+    }
+
+    /// Publish the set of channels to force-render for off-air preview.
+    /// Called by the runner each frame from the UI selection. Ephemeral — never
+    /// persisted; affects the render gate only. See /spec/channel-preview.md.
+    pub fn set_preview_channels(&mut self, channels: Vec<usize>) {
+        self.preview_channels = channels;
     }
 
     /// Number of loaded shaders.
