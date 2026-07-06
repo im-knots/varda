@@ -768,6 +768,9 @@ impl UIRunner {
         #[cfg(feature = "html")]
         varda.create_pending_interactive(event_loop);
 
+        // Publish the cued channel(s) so off-air previews render live (issue #72).
+        varda.set_preview_channels(self.layout.preview_channels());
+
         // GPU render (mixer compositing)
         varda.render_mixer_frame();
 
@@ -1448,6 +1451,8 @@ impl UIRunner {
             let Some(varda) = self.varda.as_mut() else {
                 return;
             };
+            // Publish the cued channel(s) so off-air previews render live (issue #72).
+            varda.set_preview_channels(self.layout.preview_channels());
             varda.render_mixer_frame();
         }
         let mixer_us = t_mixer.elapsed().as_micros();
