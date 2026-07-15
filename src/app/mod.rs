@@ -824,13 +824,8 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AddAudioBand { preset, source_id } => {
-                // A band bound to a specific device must open it for capture;
-                // `None` uses the auto-opened default (primary) source.
-                if let Some(id) = source_id {
-                    if let Err(e) = self.audio_manager.open_source(id) {
-                        log::warn!("Failed to open audio source {} for new band: {}", id, e);
-                    }
-                }
+                // Capture is reconciled per-frame from modulator demand
+                // (see /spec/audio-capture-lifecycle.md); adding the band is enough.
                 self.add_audio_band(preset, source_id);
                 CommandResult::Ok
             }
@@ -1735,18 +1730,9 @@ impl VardaApp {
                 })
             }
             EngineCommand::UpdateAudioSource { uuid, source_id } => {
-                // Selecting a specific device must actually open it for capture;
-                // otherwise the modulator reads a source that was never started.
-                if let Some(id) = source_id {
-                    if let Err(e) = self.audio_manager.open_source(id) {
-                        log::warn!(
-                            "Failed to open audio source {} for modulator {}: {}",
-                            id,
-                            uuid,
-                            e
-                        );
-                    }
-                }
+                // Switching device just updates the modulator; the per-frame
+                // reconcile opens the new device and closes the old one when it is
+                // no longer referenced (see /spec/audio-capture-lifecycle.md).
                 self.exec_modulation_update(&uuid, |s| {
                     if let ModulationSource::AudioBand {
                         source_id: ref mut sid,

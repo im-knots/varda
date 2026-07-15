@@ -45,6 +45,18 @@ impl VardaApp {
             }
         }
 
+        // Reconcile audio capture with modulator demand: capture a device only
+        // while an AudioBand modulator references it (issue #76). Derived from
+        // mixer state each frame, so add/remove/device-switch/scene-load are all
+        // handled here with no per-handler bookkeeping.
+        // See /spec/audio-capture-lifecycle.md.
+        {
+            let bands = self.mixer.modulation().audio_band_source_ids();
+            let default = self.audio_manager.default_source_id();
+            let needed = crate::audio::AudioManager::needed_from_bands(&bands, default);
+            self.audio_manager.set_modulation_refs(&needed);
+        }
+
         // Poll all audio sources
         self.audio_manager.poll();
 
