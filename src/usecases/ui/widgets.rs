@@ -160,7 +160,7 @@ pub fn render_params(
                                     egui::pos2(x, slider_rect.top()),
                                     egui::pos2(x, slider_rect.bottom()),
                                 ],
-                                egui::Stroke::new(2.0, color),
+                                egui::Stroke::new(2.0_f32, color),
                             );
                         }
                     }
@@ -359,7 +359,7 @@ pub fn render_effect_params(
                                     egui::pos2(x, slider_rect.top()),
                                     egui::pos2(x, slider_rect.bottom()),
                                 ],
-                                egui::Stroke::new(2.0, color),
+                                egui::Stroke::new(2.0_f32, color),
                             );
                         }
                     }
@@ -488,7 +488,7 @@ pub fn draw_midi_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
     painter.rect_stroke(
         expanded,
         3.0,
-        egui::Stroke::new(2.0, glow_color),
+        egui::Stroke::new(2.0_f32, glow_color),
         egui::StrokeKind::Outside,
     );
 }
@@ -501,7 +501,7 @@ pub fn draw_midi_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     painter.rect_stroke(
         expanded,
         3.0,
-        egui::Stroke::new(3.0, glow_color),
+        egui::Stroke::new(3.0_f32, glow_color),
         egui::StrokeKind::Outside,
     );
 }
@@ -514,7 +514,7 @@ pub fn draw_keyboard_learn_glow(ui: &egui::Ui, rect: egui::Rect) {
     painter.rect_stroke(
         expanded,
         3.0,
-        egui::Stroke::new(2.0, glow_color),
+        egui::Stroke::new(2.0_f32, glow_color),
         egui::StrokeKind::Outside,
     );
 }
@@ -527,7 +527,7 @@ pub fn draw_keyboard_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
     painter.rect_stroke(
         expanded,
         3.0,
-        egui::Stroke::new(3.0, glow_color),
+        egui::Stroke::new(3.0_f32, glow_color),
         egui::StrokeKind::Outside,
     );
 }

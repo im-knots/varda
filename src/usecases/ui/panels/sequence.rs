@@ -58,7 +58,11 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
             } else {
                 egui::Color32::from_rgb(50, 50, 70)
             };
-            let border_width = if is_selected || seq.playing { 1.5 } else { 1.0 };
+            let border_width = if is_selected || seq.playing {
+                1.5_f32
+            } else {
+                1.0_f32
+            };
             egui::Frame::default()
                 .inner_margin(4.0)
                 .corner_radius(4.0)
@@ -273,7 +277,7 @@ pub(super) fn render_timeline_strip(
             painter.rect_stroke(
                 block_rect,
                 0.0,
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 80)),
+                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 200, 80)),
                 egui::StrokeKind::Outside,
             );
         }
@@ -284,7 +288,7 @@ pub(super) fn render_timeline_strip(
             painter.rect_stroke(
                 block_rect,
                 0.0,
-                egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 255, 100)),
+                egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(100, 255, 100)),
                 egui::StrokeKind::Outside,
             );
         }
@@ -301,7 +305,7 @@ pub(super) fn render_timeline_strip(
         painter.rect_stroke(
             block_rect,
             0.0,
-            egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 80)),
+            egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(60, 60, 80)),
             egui::StrokeKind::Outside,
         );
 

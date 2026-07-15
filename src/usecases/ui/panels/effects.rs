@@ -170,7 +170,7 @@ pub(super) fn render_master_effect_detail(
                     let remaining_w = ui.available_width().max(80.0);
                     let remaining_h = ui.available_height().max(40.0);
                     let stroke = if has_fx_drag {
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255))
+                        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 200, 255))
                     } else {
                         egui::Stroke::NONE
                     };
@@ -443,7 +443,7 @@ pub(super) fn render_channel_effect_detail(
                     let remaining_w = ui.available_width().max(80.0);
                     let remaining_h = ui.available_height().max(40.0);
                     let stroke = if has_fx_drag {
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255))
+                        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 200, 255))
                     } else {
                         egui::Stroke::NONE
                     };

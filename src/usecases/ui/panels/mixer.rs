@@ -184,7 +184,10 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
         .inner_margin(6.0)
         .corner_radius(4.0)
         .fill(egui::Color32::from_rgb(20, 20, 30))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 80)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(60, 60, 80),
+        ))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("🎚 Mixer").strong().size(13.0));
@@ -498,24 +501,27 @@ pub(super) fn render_channel_column(
             // Direct hover — strong highlight
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.15))
-                .stroke(egui::Stroke::new(2.0, accent))
+                .stroke(egui::Stroke::new(2.0_f32, accent))
                 .corner_radius(4.0)
                 .inner_margin(2.0)
         } else if has_relevant_drag {
             // Drag active but not hovering this channel — subtle glow
             egui::Frame::default()
                 .fill(accent.linear_multiply(0.08))
-                .stroke(egui::Stroke::new(1.5, accent.linear_multiply(0.5)))
+                .stroke(egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)))
                 .corner_radius(4.0)
                 .inner_margin(2.0)
         } else if is_ch_selected {
             egui::Frame::default()
-                .stroke(egui::Stroke::new(2.0, accent.linear_multiply(0.6)))
+                .stroke(egui::Stroke::new(2.0_f32, accent.linear_multiply(0.6)))
                 .corner_radius(4.0)
                 .inner_margin(2.0)
         } else {
             egui::Frame::default()
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 60)))
+                .stroke(egui::Stroke::new(
+                    1.0_f32,
+                    egui::Color32::from_rgb(50, 50, 60),
+                ))
                 .corner_radius(4.0)
                 .inner_margin(2.0)
         };
@@ -766,7 +772,7 @@ fn render_new_channel_drop_zone(
     let (stroke, fill, label_text, label_color) = if is_hovering {
         // Direct hover — strong highlight (matches channel hover intensity)
         (
-            egui::Stroke::new(2.0, accent),
+            egui::Stroke::new(2.0_f32, accent),
             accent.linear_multiply(0.15),
             "➕ Drop to create channel",
             accent,
@@ -774,7 +780,7 @@ fn render_new_channel_drop_zone(
     } else if relevant_drag {
         // Drag active, not hovering — subtle glow (matches channel ambient glow)
         (
-            egui::Stroke::new(1.5, accent.linear_multiply(0.5)),
+            egui::Stroke::new(1.5_f32, accent.linear_multiply(0.5)),
             accent.linear_multiply(0.08),
             "➕ Drop to create channel",
             accent.linear_multiply(0.5),
@@ -782,7 +788,7 @@ fn render_new_channel_drop_zone(
     } else {
         // Idle
         (
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 80)),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 60, 80)),
             egui::Color32::TRANSPARENT,
             "➕ Drop here to add channel",
             egui::Color32::from_rgb(100, 100, 120),
@@ -858,7 +864,7 @@ pub(super) fn render_deck_thumbnail(
         } else {
             accent.linear_multiply(0.3)
         };
-        let border_width = if is_selected { 2.0 } else { 1.0 };
+        let border_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
 
         // Use manual rect-based painting to avoid egui layout overlap issues.
         // Total card height = preview_height + name_row(16) + button_row(20) + spacing(8) + padding(8)
