@@ -458,6 +458,21 @@ impl ModulationEngine {
         self.sources.len()
     }
 
+    /// Device selection of every `AudioBand` modulator (`None` = default input).
+    ///
+    /// Drives the per-frame audio-capture reconcile so a device is captured only
+    /// while at least one modulator references it. See
+    /// [/spec/audio-capture-lifecycle.md](/spec/audio-capture-lifecycle.md).
+    pub fn audio_band_source_ids(&self) -> Vec<Option<crate::audio::AudioSourceId>> {
+        self.sources
+            .iter()
+            .filter_map(|e| match &e.source {
+                ModulationSource::AudioBand { source_id, .. } => Some(*source_id),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Get current computed values for all sources (for UI visualization)
     pub fn current_values(&self) -> &[f32] {
         &self.current_values

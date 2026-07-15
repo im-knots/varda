@@ -481,6 +481,28 @@ mod tests {
     }
 
     #[test]
+    fn engine_audio_band_source_ids_lists_only_audio_bands() {
+        // audio_band_source_ids drives the capture reconcile (issue #76): it must
+        // report every AudioBand's device selection and ignore other source kinds.
+        let mut engine = ModulationEngine::new();
+        engine.add_source(ModulationSource::sine_lfo(1.0));
+        let band = |source_id| ModulationSource::AudioBand {
+            source_id,
+            freq_low: 20.0,
+            freq_high: 200.0,
+            gain: 1.0,
+            smoothing: 0.6,
+            mode: AudioReactMode::Direct,
+            noise_gate: 0.1,
+        };
+        engine.add_source(band(None));
+        engine.add_source(band(Some(2)));
+        let mut ids = engine.audio_band_source_ids();
+        ids.sort();
+        assert_eq!(ids, vec![None, Some(2)]);
+    }
+
+    #[test]
     fn engine_remove_source_cleans_assignments() {
         let mut engine = ModulationEngine::new();
         let uuid0 = engine.add_source(ModulationSource::sine_lfo(1.0));

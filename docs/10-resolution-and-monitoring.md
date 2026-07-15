@@ -7,7 +7,7 @@ Varda has **no settings menu**. Every configurable aspect of the app is exposed 
 | Setting | Where | How |
 |---------|-------|-----|
 | Render resolution | Top bar (📐 W×H) | Click to pick a preset or enter a custom size |
-| Audio input device | Library → Audio | Enable/disable per device |
+| Audio input device | Audio modulator → device dropdown | Selected per modulator; capture is automatic (a device runs only while referenced) |
 | MIDI devices | Library → MIDI | Enable/disable, rescan |
 | MIDI mappings | Right-click → MIDI learn | Visual mapping (purple glow) |
 | Keyboard shortcuts | Right-click → Keyboard learn | Visual mapping (orange glow) |

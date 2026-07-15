@@ -100,6 +100,7 @@ Shaders are classified automatically by type:
 | `outline.fs` | Edge detection with filled or outline rendering |
 | `pinch_bulge.fs` | Radial pinch or bulge distortion |
 | `pixelate.fs` | Pixelation / mosaic |
+| `point_cloud.fs` | Reprojects the image into a pseudo-3D cloud of soft splats (brightness = depth) with parallax orbit, depth fade, and Source/Depth/Thermal/Mono color modes; a persistent motion-reactive disturbance field lets live camera/video motion (wave a hand, Kinect/TouchDesigner style) scatter and recolor the points |
 | `polkadot.fs` | Circular dot pattern overlay |
 | `posterize.fs` | Reduces color count for a graphic poster look |
 | `rgb_shift.fs` | Chromatic aberration / RGB shift |

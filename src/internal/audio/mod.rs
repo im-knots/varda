@@ -6,7 +6,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Sample;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rustfft::{num_complex::Complex, FftPlanner};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -256,11 +256,27 @@ struct ActiveAudioSource {
 }
 
 /// Manages audio device enumeration and multiple simultaneous audio input streams.
+///
+/// Capture is **lazy and derived from state**: a device is open only while it has
+/// at least one *holder*. Holders come in three kinds (see
+/// [/spec/audio-capture-lifecycle.md](/spec/audio-capture-lifecycle.md)):
+/// modulation references (`mod_refs`, reconciled per-frame via
+/// [`set_modulation_refs`](Self::set_modulation_refs)), PCM passthrough
+/// subscribers (`pcm_subs` on each source), and manual pins (`manual_pins`, via
+/// [`open_source`](Self::open_source)). A device with none of these is orphaned
+/// and closed.
 pub struct AudioManager {
     /// Detected audio input devices (refreshed on scan).
     devices: Vec<AudioDeviceInfo>,
     /// Active audio sources keyed by AudioSourceId.
     active: HashMap<AudioSourceId, ActiveAudioSource>,
+    /// Resolved default input id (OS default matched by name, else first),
+    /// cached at scan time. Used to resolve `AudioBand { source_id: None }`.
+    default_source_id: Option<AudioSourceId>,
+    /// Devices explicitly pinned open by a consumer (`open_source`).
+    manual_pins: HashSet<AudioSourceId>,
+    /// Devices referenced by AudioBand modulators (last reconciled set).
+    mod_refs: HashSet<AudioSourceId>,
 }
 
 impl Default for AudioManager {
@@ -274,23 +290,17 @@ impl AudioManager {
         let mut mgr = Self {
             devices: Vec::new(),
             active: HashMap::new(),
+            default_source_id: None,
+            manual_pins: HashSet::new(),
+            mod_refs: HashSet::new(),
         };
+        // Enumerate devices and cache the default input, but open nothing —
+        // capture starts only when a holder appears (issue #76).
         mgr.scan_devices();
-        // Auto-open the OS default input (matched by name) so we capture the
-        // user's chosen mic/interface rather than whichever device merely
-        // enumerates first (e.g. a silent BlackHole loopback).
-        let default_name = cpal::default_host()
-            .default_input_device()
-            .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
-        if let Some(id) = Self::pick_default_input(default_name.as_deref(), &mgr.devices) {
-            if let Err(e) = mgr.open_source(id) {
-                log::warn!("Failed to auto-open default audio device: {}", e);
-            }
-        }
         mgr
     }
 
-    /// Choose which enumerated input to auto-open: the OS default input matched
+    /// Choose which enumerated input is the default: the OS default input matched
     /// by name if it is present in the scanned list, otherwise the first
     /// enumerated device. Returns `None` when no inputs exist. Pure so it can be
     /// unit-tested without audio hardware.
@@ -306,7 +316,7 @@ impl AudioManager {
         devices.first().map(|d| d.id)
     }
 
-    /// Scan for available audio input devices.
+    /// Scan for available audio input devices and cache the resolved default.
     pub fn scan_devices(&mut self) {
         let host = cpal::default_host();
         self.devices = host
@@ -326,6 +336,13 @@ impl AudioManager {
                     .collect()
             })
             .unwrap_or_default();
+        // Cache the default input (matched by OS-default name so we prefer the
+        // user's mic/interface over a silent BlackHole loopback that merely
+        // enumerates first). Queried here, off the per-frame hot path.
+        let default_name = host
+            .default_input_device()
+            .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
+        self.default_source_id = Self::pick_default_input(default_name.as_deref(), &self.devices);
         log::info!("Audio scan: found {} input device(s)", self.devices.len());
         for dev in &self.devices {
             log::info!("  Audio {}: {}", dev.id, dev.name);
@@ -337,8 +354,25 @@ impl AudioManager {
         &self.devices
     }
 
-    /// Open an audio source and start capturing.
+    /// Resolved default input id, used to resolve `AudioBand { source_id: None }`.
+    pub fn default_source_id(&self) -> Option<AudioSourceId> {
+        self.default_source_id
+    }
+
+    /// Manually pin a source open (a co-equal-consumer holder).
+    ///
+    /// Pins the device so it stays open regardless of modulation/passthrough
+    /// holders, and starts capture if it isn't already running. Used by the HTTP
+    /// API (`POST /audio/sources/{id}/open`) and `ToggleAudioSource`. Release
+    /// with [`close_source`](Self::close_source).
     pub fn open_source(&mut self, id: AudioSourceId) -> Result<()> {
+        self.manual_pins.insert(id);
+        self.ensure_open(id)
+    }
+
+    /// Start capture for a source if it isn't already active. Idempotent.
+    /// Does not register any holder — callers manage holder sets themselves.
+    fn ensure_open(&mut self, id: AudioSourceId) -> Result<()> {
         if self.active.contains_key(&id) {
             return Ok(()); // Already open
         }
@@ -421,7 +455,7 @@ impl AudioManager {
     /// source can't be opened.
     pub fn subscribe_pcm(&mut self, id: AudioSourceId) -> Option<PcmSubscription> {
         if !self.active.contains_key(&id) {
-            if let Err(e) = self.open_source(id) {
+            if let Err(e) = self.ensure_open(id) {
                 log::warn!("subscribe_pcm: failed to open audio source {}: {}", id, e);
                 return None;
             }
@@ -459,6 +493,9 @@ impl AudioManager {
     }
 
     /// Remove a PCM passthrough subscriber when its output stops.
+    ///
+    /// Dropping the last passthrough subscriber releases that holder; the device
+    /// is closed if no modulation ref or manual pin still needs it.
     pub fn unsubscribe_pcm(&mut self, id: AudioSourceId, token: PcmToken) {
         if let Some(source) = self.active.get(&id) {
             source.pcm_subs.rcu(|cur| {
@@ -473,13 +510,81 @@ impl AudioManager {
                 id
             );
         }
+        self.close_if_orphaned(id);
     }
 
-    /// Close an audio source.
+    /// Release a manual pin (`open_source`) and close the device if orphaned.
     pub fn close_source(&mut self, id: AudioSourceId) {
-        if self.active.remove(&id).is_some() {
-            log::info!("Closed audio source {}", id);
+        self.manual_pins.remove(&id);
+        self.close_if_orphaned(id);
+    }
+
+    /// Whether a source still has any holder: a manual pin, a modulation ref,
+    /// or at least one PCM passthrough subscriber.
+    fn has_holder(&self, id: AudioSourceId) -> bool {
+        self.manual_pins.contains(&id)
+            || self.mod_refs.contains(&id)
+            || self
+                .active
+                .get(&id)
+                .map(|s| !s.pcm_subs.load().is_empty())
+                .unwrap_or(false)
+    }
+
+    /// Close and stop the `cpal` stream for a source if it has no remaining
+    /// holder. No-op if the source is not open or is still held.
+    fn close_if_orphaned(&mut self, id: AudioSourceId) {
+        if self.has_holder(id) {
+            return;
         }
+        if self.active.remove(&id).is_some() {
+            log::info!("Closed audio source {} (no remaining holders)", id);
+        }
+    }
+
+    /// Reconcile the set of devices referenced by AudioBand modulators.
+    ///
+    /// Declarative per-frame entry point: `needed` is the resolved set of device
+    /// ids that modulators currently require (with `None` already resolved to the
+    /// default input). Opens newly-needed devices and closes devices that dropped
+    /// out of the set and are no longer held by a pin or passthrough subscriber.
+    /// See [/spec/audio-capture-lifecycle.md](/spec/audio-capture-lifecycle.md).
+    pub fn set_modulation_refs(&mut self, needed: &BTreeSet<AudioSourceId>) {
+        // Devices leaving the modulation set: drop the ref, then close if orphaned.
+        let dropped: Vec<AudioSourceId> = self
+            .mod_refs
+            .iter()
+            .filter(|id| !needed.contains(id))
+            .copied()
+            .collect();
+        for id in dropped {
+            self.mod_refs.remove(&id);
+            self.close_if_orphaned(id);
+        }
+        // Devices entering the modulation set: register the ref, then ensure open.
+        for &id in needed {
+            if self.mod_refs.insert(id) || !self.active.contains_key(&id) {
+                if let Err(e) = self.ensure_open(id) {
+                    log::warn!(
+                        "set_modulation_refs: failed to open audio source {}: {}",
+                        id,
+                        e
+                    );
+                    self.mod_refs.remove(&id);
+                }
+            }
+        }
+    }
+
+    /// Resolve a list of AudioBand device selections into the concrete set of
+    /// device ids that must be open. `None` selections resolve to `default` (and
+    /// are dropped when no default input exists). Pure so it can be unit-tested
+    /// without audio hardware.
+    pub fn needed_from_bands(
+        bands: &[Option<AudioSourceId>],
+        default: Option<AudioSourceId>,
+    ) -> BTreeSet<AudioSourceId> {
+        bands.iter().filter_map(|sel| sel.or(default)).collect()
     }
 
     /// Poll all active sources for latest data. Call once per frame.
@@ -1175,6 +1280,39 @@ mod tests {
             None
         );
         assert_eq!(AudioManager::pick_default_input(None, &[]), None);
+    }
+
+    #[test]
+    fn needed_from_bands_resolves_none_to_default() {
+        // A `None` band resolves to the default input; an explicit device is kept.
+        let bands = vec![None, Some(3)];
+        let needed = AudioManager::needed_from_bands(&bands, Some(1));
+        assert!(needed.contains(&1), "None must resolve to default (1)");
+        assert!(needed.contains(&3), "explicit device 3 must be kept");
+        assert_eq!(needed.len(), 2);
+    }
+
+    #[test]
+    fn needed_from_bands_dedups_shared_device() {
+        // Two bands on the same device collapse to one capture.
+        let bands = vec![Some(2), Some(2), None];
+        let needed = AudioManager::needed_from_bands(&bands, Some(2));
+        assert_eq!(needed.len(), 1);
+        assert!(needed.contains(&2));
+    }
+
+    #[test]
+    fn needed_from_bands_drops_none_without_default() {
+        // No default input available → `None` bands demand nothing.
+        let bands = vec![None, None];
+        let needed = AudioManager::needed_from_bands(&bands, None);
+        assert!(needed.is_empty());
+    }
+
+    #[test]
+    fn needed_from_bands_empty_is_empty() {
+        let needed = AudioManager::needed_from_bands(&[], Some(0));
+        assert!(needed.is_empty(), "no bands → capture nothing (issue #76)");
     }
 
     #[test]
