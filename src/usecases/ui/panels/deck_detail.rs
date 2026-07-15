@@ -347,8 +347,8 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
         }
     }
 
-    let grid_stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 160, 200));
-    let outline_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(200, 200, 200));
+    let grid_stroke = egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(120, 160, 200));
+    let outline_stroke = egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(200, 200, 200));
     if let Some(WarpMode::Mesh(mesh)) = &surface.warp {
         let cc = mesh.cols as usize;
         let rr = mesh.rows as usize;
@@ -512,7 +512,7 @@ fn render_bezier_canvas(
     // 1. Faint tessellated grid — shows the actual smooth warped surface.
     let mesh = b.tessellate();
     let (cc, rr) = (mesh.cols as usize, mesh.rows as usize);
-    let grid = egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 90, 120));
+    let grid = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(70, 90, 120));
     let mat = |r: usize, c: usize| to_screen(mesh.points[r * cc + c].position);
     for r in 0..rr {
         for c in 0..cc {
@@ -575,7 +575,7 @@ fn render_bezier_canvas(
     }
 
     // 3. Connector lines (anchor → its tangent handles).
-    let hstroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(150, 150, 90));
+    let hstroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(150, 150, 90));
     for r in 0..ar {
         for c in 0..ac - 1 {
             let h = b.h_horiz[r * (ac - 1) + c];
@@ -1433,7 +1433,7 @@ pub(super) fn render_selected_deck_detail(
                     .map(|p| matches!(&*p, LibraryDrag::Effect(_))).unwrap_or(false);
                 let remaining_w = ui.available_width().max(80.0);
                 let remaining_h = ui.available_height().max(40.0);
-                let stroke = if has_fx_drag { egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255)) } else { egui::Stroke::NONE };
+                let stroke = if has_fx_drag { egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 200, 255)) } else { egui::Stroke::NONE };
                 let fill = if has_fx_drag { egui::Color32::from_rgba_unmultiplied(100, 200, 255, 20) } else { egui::Color32::TRANSPARENT };
                 egui::Frame::default()
                     .inner_margin(8.0)
@@ -1631,7 +1631,7 @@ fn render_sequence_detail(
                             ui.painter().rect_stroke(
                                 gap_rect,
                                 2.0,
-                                egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 200, 80)),
+                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(255, 200, 80)),
                                 egui::StrokeKind::Outside,
                             );
                         }
@@ -1748,7 +1748,7 @@ fn render_sequence_detail(
                         ui.painter().rect_stroke(
                             gap_rect,
                             2.0,
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 200, 80)),
+                            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(255, 200, 80)),
                             egui::StrokeKind::Outside,
                         );
                     }

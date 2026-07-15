@@ -129,7 +129,7 @@ pub(super) fn render_effect_drag_ghost(
                         .corner_radius(4.0)
                         .fill(egui::Color32::from_rgba_premultiplied(40, 40, 55, 220))
                         .stroke(egui::Stroke::new(
-                            1.0,
+                            1.0_f32,
                             egui::Color32::from_rgb(100, 180, 255),
                         ))
                         .show(ui, |ui| {

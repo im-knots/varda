@@ -201,7 +201,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
     painter.rect_stroke(
         canvas_rect,
         4.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 80)),
+        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 60, 80)),
         egui::StrokeKind::Outside,
     );
 
@@ -213,7 +213,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                 egui::pos2(x, canvas_rect.top()),
                 egui::pos2(x, canvas_rect.bottom()),
             ],
-            egui::Stroke::new(0.5, egui::Color32::from_rgb(30, 30, 45)),
+            egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(30, 30, 45)),
         );
     }
     for i in 1..3 {
@@ -223,7 +223,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                 egui::pos2(canvas_rect.left(), y),
                 egui::pos2(canvas_rect.right(), y),
             ],
-            egui::Stroke::new(0.5, egui::Color32::from_rgb(30, 30, 45)),
+            egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(30, 30, 45)),
         );
     }
 
@@ -262,12 +262,12 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             painter.add(polygon_shape(
                 &pixel_verts,
                 fill,
-                egui::Stroke::new(1.5, color),
+                egui::Stroke::new(1.5_f32, color),
             ));
         } else if pixel_verts.len() == 2 {
             painter.line_segment(
                 [pixel_verts[0], pixel_verts[1]],
-                egui::Stroke::new(1.5, color),
+                egui::Stroke::new(1.5_f32, color),
             );
         }
         // Draw extra contours (combined non-overlapping surfaces)
@@ -285,7 +285,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                 painter.add(polygon_shape(
                     &ec_verts,
                     fill,
-                    egui::Stroke::new(1.5, color),
+                    egui::Stroke::new(1.5_f32, color),
                 ));
             }
         }
@@ -481,7 +481,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
         egui::Frame::default()
             .inner_margin(4.0)
             .corner_radius(3.0)
-            .stroke(egui::Stroke::new(1.0, color.linear_multiply(0.5)))
+            .stroke(egui::Stroke::new(1.0_f32, color.linear_multiply(0.5)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Color swatch
@@ -1255,7 +1255,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         egui::pos2(x, canvas_rect.top()),
                         egui::pos2(x, canvas_rect.bottom()),
                     ],
-                    egui::Stroke::new(0.5, egui::Color32::from_rgb(25, 25, 38)),
+                    egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(25, 25, 38)),
                 );
             }
             if y < canvas_rect.bottom() {
@@ -1264,7 +1264,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         egui::pos2(canvas_rect.left(), y),
                         egui::pos2(canvas_rect.right(), y),
                     ],
-                    egui::Stroke::new(0.5, egui::Color32::from_rgb(25, 25, 38)),
+                    egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(25, 25, 38)),
                 );
             }
         }
@@ -1290,7 +1290,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             color.b() / 3,
             fill_alpha,
         );
-        let stroke_width = if is_selected { 2.5 } else { 1.5 };
+        let stroke_width = if is_selected { 2.5_f32 } else { 1.5_f32 };
 
         let pixel_verts: Vec<egui::Pos2> = surface
             .vertices
@@ -1365,7 +1365,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         let s_px = to_px(path.segment_start(si));
                         let e_px = to_px(seg.end());
                         let (c1_px, c2_px) = (to_px(*c1), to_px(*c2));
-                        let line = egui::Stroke::new(1.0, egui::Color32::GRAY);
+                        let line = egui::Stroke::new(1.0_f32, egui::Color32::GRAY);
                         painter.line_segment([s_px, c1_px], line);
                         painter.line_segment([e_px, c2_px], line);
                         for cp in [c1_px, c2_px] {
@@ -1373,7 +1373,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             painter.circle_stroke(
                                 cp,
                                 5.0,
-                                egui::Stroke::new(1.0, egui::Color32::BLACK),
+                                egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
                             );
                         }
                     }
@@ -1387,7 +1387,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 painter.rect_stroke(
                     r,
                     2.0,
-                    egui::Stroke::new(1.0, egui::Color32::BLACK),
+                    egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -1408,7 +1408,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             painter.circle_stroke(
                 center_pos,
                 avg_radius_px,
-                egui::Stroke::new(1.0, egui::Color32::YELLOW),
+                egui::Stroke::new(1.0_f32, egui::Color32::YELLOW),
             );
             // Radius handle at angle=0 (yellow dot on the right)
             let handle_pos = egui::pos2(cx_px + radius_px_x, cy_px);
@@ -1416,7 +1416,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             painter.circle_stroke(
                 handle_pos,
                 6.0,
-                egui::Stroke::new(1.0, egui::Color32::BLACK),
+                egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
             );
         } else {
             // Regular vertex handles (primary + extra contours)
@@ -1434,7 +1434,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     painter.rect_stroke(
                         handle_rect,
                         2.0,
-                        egui::Stroke::new(1.0, egui::Color32::BLACK),
+                        egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
                         egui::StrokeKind::Outside,
                     );
                 }
@@ -1472,7 +1472,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             painter.rect_stroke(
                 box_rect,
                 0.0,
-                egui::Stroke::new(1.0, gcolor),
+                egui::Stroke::new(1.0_f32, gcolor),
                 egui::StrokeKind::Outside,
             );
             for (handle, _pivot, _ax, _ay) in gizmo_scale_handles(gx, gy, gw, gh) {
@@ -1481,15 +1481,15 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 painter.rect_stroke(
                     hr,
                     1.0,
-                    egui::Stroke::new(1.0, egui::Color32::BLACK),
+                    egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
                     egui::StrokeKind::Outside,
                 );
             }
             let top_mid = to_px([gx + gw * 0.5, gy]);
             let knob = egui::pos2(top_mid.x, top_mid.y - GIZMO_ROTATE_OFFSET_PX);
-            painter.line_segment([top_mid, knob], egui::Stroke::new(1.0, gcolor));
+            painter.line_segment([top_mid, knob], egui::Stroke::new(1.0_f32, gcolor));
             painter.circle_filled(knob, 5.0, gcolor);
-            painter.circle_stroke(knob, 5.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+            painter.circle_stroke(knob, 5.0, egui::Stroke::new(1.0_f32, egui::Color32::BLACK));
         }
     }
 
@@ -1508,7 +1508,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         for i in 0..pixel_verts.len() - 1 {
             painter.line_segment(
                 [pixel_verts[i], pixel_verts[i + 1]],
-                egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
             );
         }
         // Draw line from last vertex to cursor
@@ -1517,7 +1517,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 painter.line_segment(
                     [*last, pos],
                     egui::Stroke::new(
-                        1.0,
+                        1.0_f32,
                         egui::Color32::from_rgba_premultiplied(255, 255, 0, 128),
                     ),
                 );
@@ -1549,7 +1549,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 painter.rect_stroke(
                     preview_rect,
                     0.0,
-                    egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                    egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -1566,7 +1566,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 painter.circle_stroke(
                     egui::pos2(cx_px, cy_px),
                     radius,
-                    egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                    egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
                 );
             }
         }
@@ -2106,7 +2106,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         painter.rect_stroke(
                             sel_rect,
                             0.0,
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 255)),
+                            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(80, 130, 255)),
                             egui::StrokeKind::Outside,
                         );
                     }
@@ -2887,7 +2887,7 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
             closed_points.push(points[0]);
             painter.add(egui::Shape::line(
                 closed_points,
-                egui::Stroke::new(2.0, color),
+                egui::Stroke::new(2.0_f32, color),
             ));
         }
     }
@@ -2985,7 +2985,7 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
         } else {
             egui::Color32::from_gray(100)
         };
-        let stroke_width = if is_selected { 2.5 } else { 1.5 };
+        let stroke_width = if is_selected { 2.5_f32 } else { 1.5_f32 };
         let points: Vec<egui::Pos2> = contour
             .vertices
             .iter()

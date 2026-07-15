@@ -414,7 +414,7 @@ impl CameraManager {
 
     /// Upload frames for all active cameras.
     fn update_all(&mut self, queue: &wgpu::Queue) {
-        for (_id, active) in self.active.iter_mut() {
+        for active in self.active.values_mut() {
             Self::upload_frame(active, queue);
         }
     }

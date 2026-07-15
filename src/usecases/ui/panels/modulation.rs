@@ -74,7 +74,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                     .inner_margin(4.0)
                     .corner_radius(4.0)
                     .fill(dim_color)
-                    .stroke(egui::Stroke::new(1.0, mod_color))
+                    .stroke(egui::Stroke::new(1.0_f32, mod_color))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.set_min_height(160.0);
@@ -169,7 +169,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let y = rect.center().y - raw * *amplitude * rect.height() * 0.4;
                                     egui::pos2(rect.left() + t * rect.width(), y)
                                 }).collect();
-                                painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, mod_color)));
+                                painter.add(egui::Shape::line(points, egui::Stroke::new(1.5_f32, mod_color)));
                                 // Current value indicator
                                 if let Some(&cur_val) = data.modulation_current_values.get(sid) {
                                     let y = rect.center().y - cur_val * rect.height() * 0.4;
@@ -416,7 +416,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     egui::pos2(sx, sus_y),         // sustain hold
                                     egui::pos2(rx, bot),           // release to 0
                                 ];
-                                painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, mod_color)));
+                                painter.add(egui::Shape::line(points, egui::Stroke::new(1.5_f32, mod_color)));
                                 // Current value indicator
                                 if let Some(&cur_val) = data.modulation_current_values.get(sid) {
                                     let y = bot - cur_val * (bot - top);
@@ -581,7 +581,7 @@ fn render_step_sequencer_controls(
     painter.rect_stroke(
         rect,
         3.0,
-        egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
+        egui::Stroke::new(1.0_f32, egui::Color32::from_gray(40)),
         egui::StrokeKind::Outside,
     );
 
@@ -597,7 +597,7 @@ fn render_step_sequencer_controls(
         let y = rect.top() + rect.height() * (1.0 - frac);
         painter.line_segment(
             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-            egui::Stroke::new(0.5, egui::Color32::from_gray(35)),
+            egui::Stroke::new(0.5_f32, egui::Color32::from_gray(35)),
         );
     }
     // Vertical step dividers
@@ -605,7 +605,7 @@ fn render_step_sequencer_controls(
         let x = rect.left() + i as f32 * step_w;
         painter.line_segment(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            egui::Stroke::new(0.5, egui::Color32::from_gray(30)),
+            egui::Stroke::new(0.5_f32, egui::Color32::from_gray(30)),
         );
     }
 
@@ -655,7 +655,7 @@ fn render_step_sequencer_controls(
         let y = rect.bottom() - display_val.clamp(0.0, 1.0) * rect.height();
         painter.line_segment(
             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-            egui::Stroke::new(1.5, egui::Color32::WHITE.linear_multiply(0.6)),
+            egui::Stroke::new(1.5_f32, egui::Color32::WHITE.linear_multiply(0.6)),
         );
     }
 
