@@ -111,6 +111,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::surfaces::update_contour_vertices,
         routes::surfaces::convert_edge, routes::surfaces::move_path_anchor,
         routes::surfaces::move_path_handle,
+        routes::surfaces::add_hole, routes::surfaces::remove_hole,
+        routes::surfaces::punch_hole, routes::surfaces::reorder,
         routes::surfaces::set_warp_corner, routes::surfaces::reset_warp,
         routes::surfaces::set_warp_subdivisions, routes::surfaces::set_warp_mesh_point,
         routes::surfaces::set_warp_bound,
@@ -724,6 +726,22 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/surfaces/{uuid}/path/handle",
             axum::routing::put(routes::surfaces::move_path_handle),
+        )
+        .route(
+            "/api/surfaces/{uuid}/holes",
+            axum::routing::post(routes::surfaces::add_hole),
+        )
+        .route(
+            "/api/surfaces/{uuid}/holes/{index}",
+            axum::routing::delete(routes::surfaces::remove_hole),
+        )
+        .route(
+            "/api/surfaces/{uuid}/punch",
+            axum::routing::post(routes::surfaces::punch_hole),
+        )
+        .route(
+            "/api/surfaces/{uuid}/reorder",
+            axum::routing::post(routes::surfaces::reorder),
         )
         .route(
             "/api/surfaces/{uuid}/warp/corner",

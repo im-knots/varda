@@ -241,6 +241,8 @@ pub(crate) mod tests {
                     warp: None,
                     warp_bound: false,
                     path: None,
+                    holes: Vec::new(),
+                    hole_contours: Vec::new(),
                 }],
                 monitors: vec![MonitorSnapshot {
                     name: "HDMI-1".into(),

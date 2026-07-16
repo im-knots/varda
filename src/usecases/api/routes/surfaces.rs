@@ -8,7 +8,9 @@ use utoipa::ToSchema;
 
 use crate::engine::{CommandResult, EngineCommand};
 use crate::internal::renderer::context::OutputSource;
-use crate::internal::surface::{ContentMapping, CubicHandle, SurfaceOutputType};
+use crate::internal::surface::{
+    ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
+};
 use crate::usecases::api::{command_response, SharedState};
 
 #[derive(Deserialize, ToSchema)]
@@ -814,6 +816,85 @@ pub async fn set_bezier_cage_subdivisions(
             cols: b.cols,
             rows: b.rows,
         })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+// ── Subtractive holes (8i.7) ──────────────────────────────────────
+
+#[derive(Deserialize, ToSchema)]
+pub struct AddHoleBody {
+    /// Closed curve path defining the cut-out, in normalised canvas coordinates.
+    pub hole: SurfacePath,
+}
+
+#[utoipa::path(post, path = "/api/surfaces/{uuid}/holes", params(("uuid" = String, Path, description = "Surface UUID")), request_body = AddHoleBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn add_hole(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<AddHoleBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::AddSurfaceHole { uuid, hole: b.hole })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[utoipa::path(delete, path = "/api/surfaces/{uuid}/holes/{index}", params(("uuid" = String, Path, description = "Surface UUID"), ("index" = usize, Path, description = "Hole index")), responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn remove_hole(
+    State(s): State<SharedState>,
+    Path((uuid, index)): Path<(String, usize)>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::RemoveSurfaceHole {
+            uuid,
+            hole_index: index,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+/// "Make Hole" (8i.7): convert the surface identified by `uuid` into a cut-out
+/// hole in the topmost other surface under its centroid, consuming the source.
+#[utoipa::path(post, path = "/api/surfaces/{uuid}/punch", params(("uuid" = String, Path, description = "Source surface UUID")), responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn punch_hole(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::PunchSurfaceHole { source_uuid: uuid })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct ReorderBody {
+    /// The stacking-order move to apply.
+    pub op: SurfaceReorderOp,
+}
+
+/// Change a surface's global stacking order (8i.12): move it front/back/up/down
+/// within the authoritative surface order (index 0 = bottom, last = top).
+#[utoipa::path(post, path = "/api/surfaces/{uuid}/reorder", params(("uuid" = String, Path, description = "Surface UUID")), request_body = ReorderBody, responses((status = 200, body = CommandResult)), tag = "Surfaces")]
+pub async fn reorder(
+    State(s): State<SharedState>,
+    Path(uuid): Path<String>,
+    Json(b): Json<ReorderBody>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ReorderSurface { uuid, op: b.op })
         .await
     {
         Ok(r) => command_response(r),

@@ -141,6 +141,80 @@ fn surface_flip_and_move() {
     assert!(matches!(r, CommandResult::Ok));
 }
 
+#[test]
+fn surface_reorder_roundtrip() {
+    use varda::surface::SurfaceReorderOp;
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    for name in ["A", "B", "C"] {
+        send_cmd(
+            &mut app,
+            EngineCommand::AddSurface {
+                name: name.into(),
+                source: varda::renderer::context::OutputSource::Master,
+            },
+        );
+    }
+    let order = |app: &mut VardaApp| -> Vec<String> {
+        app.build_engine_state()
+            .outputs
+            .surfaces
+            .iter()
+            .map(|s| s.name.clone())
+            .collect()
+    };
+    assert_eq!(order(&mut app), vec!["A", "B", "C"]);
+
+    let a = app
+        .build_engine_state()
+        .outputs
+        .surfaces
+        .iter()
+        .find(|s| s.name == "A")
+        .unwrap()
+        .uuid
+        .clone();
+
+    // Index 0 = bottom, last = top. Bring A to front.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::ReorderSurface {
+            uuid: a.clone(),
+            op: SurfaceReorderOp::ToFront,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    assert_eq!(order(&mut app), vec!["B", "C", "A"]);
+
+    // Nudge A down one step (toward back).
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::ReorderSurface {
+            uuid: a,
+            op: SurfaceReorderOp::Down,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    assert_eq!(order(&mut app), vec!["B", "A", "C"]);
+
+    // Unknown surface → NotFound.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::ReorderSurface {
+            uuid: "does-not-exist".into(),
+            op: SurfaceReorderOp::ToBack,
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+}
+
 // ── Sequence Commands ───────────────────────────────────────────────
 
 #[test]

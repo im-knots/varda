@@ -3,9 +3,79 @@
 use super::super::VardaApp;
 use crate::engine::traits::SurfaceCommands;
 use crate::engine::{CommandResult, ErrorCode};
-use crate::surface::CubicHandle;
+use crate::surface::{CubicHandle, SurfacePath, SurfaceReorderOp};
 
 impl VardaApp {
+    /// Add a subtractive hole (8i.7) to a surface from a closed path.
+    pub fn cmd_add_surface_hole(&mut self, uuid: &str, hole: SurfacePath) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(uuid) {
+            surface.add_hole(hole);
+            self.recompute_auto_edge_blend();
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Surface {} not found", uuid),
+            }
+        }
+    }
+
+    /// Remove the hole at `hole_index` from a surface.
+    pub fn cmd_remove_surface_hole(&mut self, uuid: &str, hole_index: usize) -> CommandResult {
+        if let Some((_, surface)) = self.output.surface_manager.find_by_uuid_mut(uuid) {
+            if surface.remove_hole(hole_index) {
+                self.recompute_auto_edge_blend();
+                CommandResult::Ok
+            } else {
+                CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: format!("Hole index {} out of range", hole_index),
+                }
+            }
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Surface {} not found", uuid),
+            }
+        }
+    }
+
+    /// "Make Hole" (8i.7): convert `source_uuid` into a cut-out hole in the
+    /// topmost *other* surface under its centroid, then remove the source
+    /// surface (purging its output assignments). Atomic — target resolution,
+    /// hole add, and source removal happen in one command.
+    pub fn cmd_punch_surface_hole(&mut self, source_uuid: &str) -> CommandResult {
+        let hole = match self.output.surface_manager.find_by_uuid(source_uuid) {
+            Some((_, s)) => s.outline_as_path(),
+            None => {
+                return CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: format!("Surface {} not found", source_uuid),
+                }
+            }
+        };
+        let target_uuid = match self.output.surface_manager.resolve_hole_target(source_uuid) {
+            Some(t) => t,
+            None => {
+                return CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: "No surface beneath the selection to cut a hole into".into(),
+                }
+            }
+        };
+        if let Some((_, target)) = self.output.surface_manager.find_by_uuid_mut(&target_uuid) {
+            target.add_hole(hole);
+        }
+        self.remove_surface(source_uuid);
+        for output in &mut self.output.outputs {
+            output
+                .surface_assignments_mut()
+                .retain(|a| a.surface_uuid != source_uuid);
+        }
+        self.recompute_auto_edge_blend();
+        CommandResult::Ok
+    }
+
     pub fn cmd_remove_surface(&mut self, uuid: &str) -> CommandResult {
         self.remove_surface(uuid);
         // Purge dangling surface assignments from all outputs
@@ -38,6 +108,19 @@ impl VardaApp {
     pub fn cmd_duplicate_surface(&mut self, uuid: &str) -> CommandResult {
         if let Some(new_uuid) = self.output.surface_manager.duplicate_surface(uuid) {
             CommandResult::OkWithId { uuid: new_uuid }
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                message: format!("Surface {} not found", uuid),
+            }
+        }
+    }
+
+    /// Change a surface's stacking order (8i.12). Geometry is unchanged, so no
+    /// edge-blend recompute is needed.
+    pub fn cmd_reorder_surface(&mut self, uuid: &str, op: SurfaceReorderOp) -> CommandResult {
+        if self.output.surface_manager.reorder_surface(uuid, op) {
+            CommandResult::Ok
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,

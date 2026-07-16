@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1600 1600" width="1600" height="1600">
+  <style>
+    svg { background: #0b0b1e; }
+    path, polygon, circle, ellipse, rect {
+      fill: none !important; stroke-width: 3;
+      stroke-linejoin: round; stroke-linecap: round;
+    }
+    path            { stroke: #ff3ea5 !important; }
+    polygon         { stroke: #35e6ff !important; }
+    circle, ellipse { stroke: #9dff3c !important; }
+    rect            { stroke: #ffc93c !important; }
+  </style>
+  <!--
+    Varda import fixture — LEVEL 3 (complex): Flower-of-Life mandala dance floor.
+    Motif: sacred-geometry pavilion (Lost Theory / Ozora). ~42 surfaces.
+    12-, 8- and 6-fold radial rings built from single base shapes via <use rotate>.
+    Centre (800,800).
+  -->
+  <defs>
+    <!-- Flower-of-Life unit circle, offset one radius up from centre -->
+    <circle id="fol" cx="800" cy="690" r="110"/>
+    <!-- Vesica petal (almond), tip outward, spanning the outer band -->
+    <path id="petal" d="M 800,240 C 860,360 860,480 800,540
+                        C 740,480 740,360 800,240 Z"/>
+    <!-- Inner diamond, pointing out from centre -->
+    <polygon id="diamond" points="800,600 832,690 800,780 768,690"/>
+    <!-- Outer skin triangle, tip outward -->
+    <polygon id="skin" points="800,120 758,246 842,246"/>
+  </defs>
+
+  <!-- 3 concentric ring discs (largest first) -->
+  <circle cx="800" cy="800" r="700" fill="black"/>
+  <circle cx="800" cy="800" r="470" fill="black"/>
+  <circle cx="800" cy="800" r="180" fill="black"/>
+
+  <!-- Flower of Life: centre + 6 -->
+  <circle cx="800" cy="800" r="110" fill="black"/>
+  <use xlink:href="#fol" transform="rotate(0 800 800)"   fill="black"/>
+  <use xlink:href="#fol" transform="rotate(60 800 800)"  fill="black"/>
+  <use xlink:href="#fol" transform="rotate(120 800 800)" fill="black"/>
+  <use xlink:href="#fol" transform="rotate(180 800 800)" fill="black"/>
+  <use xlink:href="#fol" transform="rotate(240 800 800)" fill="black"/>
+  <use xlink:href="#fol" transform="rotate(300 800 800)" fill="black"/>
+
+  <!-- 12 vesica petals (every 30°) -->
+  <use xlink:href="#petal" transform="rotate(0 800 800)"   fill="black"/>
+  <use xlink:href="#petal" transform="rotate(30 800 800)"  fill="black"/>
+  <use xlink:href="#petal" transform="rotate(60 800 800)"  fill="black"/>
+  <use xlink:href="#petal" transform="rotate(90 800 800)"  fill="black"/>
+  <use xlink:href="#petal" transform="rotate(120 800 800)" fill="black"/>
+  <use xlink:href="#petal" transform="rotate(150 800 800)" fill="black"/>
+  <use xlink:href="#petal" transform="rotate(180 800 800)" fill="black"/>
+  <use xlink:href="#petal" transform="rotate(210 800 800)" fill="black"/>
+  <use xlink:href="#petal" transform="rotate(240 800 800)" fill="black"/>
+  <use xlink:href="#petal" transform="rotate(270 800 800)" fill="black"/>
+  <use xlink:href="#petal" transform="rotate(300 800 800)" fill="black"/>
+  <use xlink:href="#petal" transform="rotate(330 800 800)" fill="black"/>
+
+  <!-- 8 inner diamonds (every 45°) -->
+  <use xlink:href="#diamond" transform="rotate(0 800 800)"   fill="black"/>
+  <use xlink:href="#diamond" transform="rotate(45 800 800)"  fill="black"/>
+  <use xlink:href="#diamond" transform="rotate(90 800 800)"  fill="black"/>
+  <use xlink:href="#diamond" transform="rotate(135 800 800)" fill="black"/>
+  <use xlink:href="#diamond" transform="rotate(180 800 800)" fill="black"/>
+  <use xlink:href="#diamond" transform="rotate(225 800 800)" fill="black"/>
+  <use xlink:href="#diamond" transform="rotate(270 800 800)" fill="black"/>
+  <use xlink:href="#diamond" transform="rotate(315 800 800)" fill="black"/>
+
+  <!-- 12 outer skin triangles (every 30°) -->
+  <use xlink:href="#skin" transform="rotate(0 800 800)"   fill="black"/>
+  <use xlink:href="#skin" transform="rotate(30 800 800)"  fill="black"/>
+  <use xlink:href="#skin" transform="rotate(60 800 800)"  fill="black"/>
+  <use xlink:href="#skin" transform="rotate(90 800 800)"  fill="black"/>
+  <use xlink:href="#skin" transform="rotate(120 800 800)" fill="black"/>
+  <use xlink:href="#skin" transform="rotate(150 800 800)" fill="black"/>
+  <use xlink:href="#skin" transform="rotate(180 800 800)" fill="black"/>
+  <use xlink:href="#skin" transform="rotate(210 800 800)" fill="black"/>
+  <use xlink:href="#skin" transform="rotate(240 800 800)" fill="black"/>
+  <use xlink:href="#skin" transform="rotate(270 800 800)" fill="black"/>
+  <use xlink:href="#skin" transform="rotate(300 800 800)" fill="black"/>
+  <use xlink:href="#skin" transform="rotate(330 800 800)" fill="black"/>
+</svg>

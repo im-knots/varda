@@ -16,7 +16,9 @@ pub use crate::modulation::{
 };
 pub use crate::params::ParamValue;
 pub use crate::renderer::context::OutputSource;
-pub use crate::surface::{CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath};
+pub use crate::surface::{
+    CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
+};
 pub use crate::video::LoopMode;
 
 /// Identifies where to apply an effect in the signal chain.
@@ -411,6 +413,10 @@ pub struct SurfaceSnapshot {
     pub warp_bound: bool,
     /// Curve authoring path, when the surface is bezier-edited.
     pub path: Option<SurfacePath>,
+    /// Subtractive cut-out holes (8i.7).
+    pub holes: Vec<SurfacePath>,
+    /// Flattened hole contours (canvas coords), derived from `holes`.
+    pub hole_contours: Vec<Vec<[f32; 2]>>,
 }
 
 #[derive(Clone, Serialize)]

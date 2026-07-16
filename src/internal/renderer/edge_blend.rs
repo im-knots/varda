@@ -137,6 +137,9 @@ pub struct MappedRegion {
     pub vertices: Vec<[f32; 2]>,
     /// Additional contours for combined surfaces.
     pub extra_contours: Vec<Vec<[f32; 2]>>,
+    /// Subtractive hole contours in canvas coords (8i.7), attached to the
+    /// primary polygon as interior rings so overlap zones exclude them.
+    pub holes: Vec<Vec<[f32; 2]>>,
 }
 
 /// Describes one output's surface topology for auto edge-blend computation.
@@ -155,13 +158,14 @@ pub struct OutputSurfaceInfo {
 /// Compute precise polygon intersection and return its AABB.
 /// Falls back to AABB intersection when polygon data is unavailable or degenerate.
 fn polygon_intersect_aabb(a: &MappedRegion, b: &MappedRegion) -> Option<[f32; 4]> {
-    use crate::surface::verts_to_geo;
+    use crate::surface::{verts_to_geo, verts_to_geo_with_holes};
     use geo::BooleanOps;
 
-    // Build geo polygons including extra contours.
+    // Build geo polygons including extra contours; holes become interior rings
+    // on the primary polygon.
     let build_multi = |r: &MappedRegion| -> Option<geo::MultiPolygon<f64>> {
         let mut polys = Vec::new();
-        if let Some(p) = verts_to_geo(&r.vertices) {
+        if let Some(p) = verts_to_geo_with_holes(&r.vertices, &r.holes) {
             polys.push(p);
         }
         for contour in &r.extra_contours {
@@ -755,6 +759,7 @@ mod tests {
             surface_uuid: format!("surf-{}-{}", source, bbox[0]),
             vertices,
             extra_contours: vec![],
+            holes: vec![],
         }
     }
 
@@ -1117,6 +1122,7 @@ mod tests {
             surface_uuid: "a".into(),
             vertices: verts_a,
             extra_contours: vec![],
+            holes: vec![],
         };
         let region_b = MappedRegion {
             source_key: "Master".into(),
@@ -1124,6 +1130,7 @@ mod tests {
             surface_uuid: "b".into(),
             vertices: verts_b,
             extra_contours: vec![],
+            holes: vec![],
         };
 
         let poly_overlap = polygon_intersect_aabb(&region_a, &region_b);

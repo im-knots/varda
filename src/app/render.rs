@@ -474,13 +474,18 @@ impl VardaApp {
         if surface_manager.surfaces.is_empty() {
             output.render(context, mixer.composite_view());
         } else if !output.surface_assignments.is_empty() {
-            let render_infos: Vec<SurfaceRenderInfo<'_>> = output
-                .surface_assignments
+            // Draw in global stacking order (surface-manager Vec order, index 0 =
+            // bottom), not per-assignment order — see 8i.12. For each surface, find
+            // its enabled assignment on this output.
+            let render_infos: Vec<SurfaceRenderInfo<'_>> = surface_manager
+                .surfaces
                 .iter()
-                .enumerate()
-                .filter(|(_, a)| a.enabled)
-                .filter_map(|(ai, assignment)| {
-                    let (_, surface) = surface_manager.find_by_uuid(&assignment.surface_uuid)?;
+                .filter_map(|surface| {
+                    let (ai, assignment) = output
+                        .surface_assignments
+                        .iter()
+                        .enumerate()
+                        .find(|(_, a)| a.enabled && a.surface_uuid == surface.uuid)?;
                     let bb = surface.bounding_box();
                     let content_view = if surfaces_cal && !calibration_textures.is_empty() {
                         &calibration_textures[ai % calibration_textures.len()].1
@@ -493,13 +498,16 @@ impl VardaApp {
                         Self::compute_uv(surface.content_mapping, &bb)
                     };
                     Some(SurfaceRenderInfo {
+                        uuid: &surface.uuid,
                         content_view,
                         vertices: &surface.vertices,
+                        extra_contours: &surface.extra_contours,
                         bounding_box: [bb.x, bb.y, bb.width, bb.height],
                         uv_scale,
                         uv_offset,
                         warp_mode: surface.effective_warp(),
                         overlap_zones: assignment.overlap_zones.clone(),
+                        hole_uv_contours: surface.hole_uv_contours(),
                     })
                 })
                 .collect();
@@ -522,13 +530,16 @@ impl VardaApp {
                         Self::compute_uv(surface.content_mapping, &bb)
                     };
                     Some(SurfaceRenderInfo {
+                        uuid: &surface.uuid,
                         content_view,
                         vertices: &surface.vertices,
+                        extra_contours: &surface.extra_contours,
                         bounding_box: [bb.x, bb.y, bb.width, bb.height],
                         uv_scale,
                         uv_offset,
                         warp_mode: surface.effective_warp(),
                         overlap_zones: Default::default(),
+                        hole_uv_contours: surface.hole_uv_contours(),
                     })
                 })
                 .collect();
@@ -620,13 +631,16 @@ impl VardaApp {
                 // Surface-routed rendering: render assigned surfaces with warp
                 // Triangulate on the CPU, then prepare draws from the pipeline's
                 // persistent param/vertex pools (no per-frame GPU buffer alloc).
-                let draws: Vec<crate::renderer::blit::PolygonDrawDesc<'_>> = h
-                    .surface_assignments
+                // Draw in global stacking order (surface-manager Vec order, index 0
+                // = bottom), not per-assignment order — see 8i.12.
+                let draws: Vec<crate::renderer::blit::PolygonDrawDesc<'_>> = surface_manager
+                    .surfaces
                     .iter()
-                    .filter(|a| a.enabled)
-                    .filter_map(|assignment| {
-                        let (_, surface) =
-                            surface_manager.find_by_uuid(&assignment.surface_uuid)?;
+                    .filter_map(|surface| {
+                        let assignment = h
+                            .surface_assignments
+                            .iter()
+                            .find(|a| a.enabled && a.surface_uuid == surface.uuid)?;
                         let bb = surface.bounding_box();
                         let content_view =
                             Self::resolve_source(mixer, &surface.source, domemaster_view)?;
@@ -634,19 +648,36 @@ impl VardaApp {
                         // Warp is per-surface now; `None` = no warp (native
                         // position). `effective_warp` applies auto-warp binding.
                         let eff_warp = surface.effective_warp();
-                        let (homography, vertices) = match eff_warp.as_ref() {
-                            Some(crate::renderer::warp::WarpMode::CornerPin { corners }) => {
-                                let src_corners = [
-                                    [bb.x, bb.y],
-                                    [bb.x + bb.width, bb.y],
-                                    [bb.x + bb.width, bb.y + bb.height],
-                                    [bb.x, bb.y + bb.height],
-                                ];
-                                let homography = crate::renderer::warp::compute_forward_homography(
-                                    &src_corners,
-                                    corners,
-                                );
-                                let verts =
+                        // Combined (multi-contour) surface: a single warp mesh
+                        // can't represent disjoint contours, so render every
+                        // contour as a bounding-box UV fill (matches the editor).
+                        let (homography, vertices) = if !surface.extra_contours.is_empty() {
+                            (
+                                None,
+                                crate::renderer::blit::PolygonBlitPipeline::triangulate_multi(
+                                    &surface.vertices,
+                                    &surface.extra_contours,
+                                    bb.x,
+                                    bb.y,
+                                    bb.width,
+                                    bb.height,
+                                ),
+                            )
+                        } else {
+                            match eff_warp.as_ref() {
+                                Some(crate::renderer::warp::WarpMode::CornerPin { corners }) => {
+                                    let src_corners = [
+                                        [bb.x, bb.y],
+                                        [bb.x + bb.width, bb.y],
+                                        [bb.x + bb.width, bb.y + bb.height],
+                                        [bb.x, bb.y + bb.height],
+                                    ];
+                                    let homography =
+                                        crate::renderer::warp::compute_forward_homography(
+                                            &src_corners,
+                                            corners,
+                                        );
+                                    let verts =
                                     crate::renderer::blit::PolygonBlitPipeline::triangulate_verts(
                                         &surface.vertices,
                                         bb.x,
@@ -654,30 +685,31 @@ impl VardaApp {
                                         bb.width,
                                         bb.height,
                                     );
-                                (Some(homography), verts)
+                                    (Some(homography), verts)
+                                }
+                                Some(crate::renderer::warp::WarpMode::Mesh(mesh)) => (
+                                    None,
+                                    crate::renderer::blit::PolygonBlitPipeline::mesh_verts(mesh),
+                                ),
+                                // Bezier: tessellate the control cage into a mesh,
+                                // then bake to verts (identity homography).
+                                Some(crate::renderer::warp::WarpMode::Bezier(b)) => (
+                                    None,
+                                    crate::renderer::blit::PolygonBlitPipeline::mesh_verts(
+                                        &b.tessellate(),
+                                    ),
+                                ),
+                                None => (
+                                    None,
+                                    crate::renderer::blit::PolygonBlitPipeline::triangulate_verts(
+                                        &surface.vertices,
+                                        bb.x,
+                                        bb.y,
+                                        bb.width,
+                                        bb.height,
+                                    ),
+                                ),
                             }
-                            Some(crate::renderer::warp::WarpMode::Mesh(mesh)) => (
-                                None,
-                                crate::renderer::blit::PolygonBlitPipeline::mesh_verts(mesh),
-                            ),
-                            // Bezier: tessellate the control cage into a mesh,
-                            // then bake to verts (identity homography).
-                            Some(crate::renderer::warp::WarpMode::Bezier(b)) => (
-                                None,
-                                crate::renderer::blit::PolygonBlitPipeline::mesh_verts(
-                                    &b.tessellate(),
-                                ),
-                            ),
-                            None => (
-                                None,
-                                crate::renderer::blit::PolygonBlitPipeline::triangulate_verts(
-                                    &surface.vertices,
-                                    bb.x,
-                                    bb.y,
-                                    bb.width,
-                                    bb.height,
-                                ),
-                            ),
                         };
                         Some(crate::renderer::blit::PolygonDrawDesc {
                             content_view,
@@ -686,6 +718,8 @@ impl VardaApp {
                             homography,
                             overlap_zones: &assignment.overlap_zones,
                             vertices,
+                            mask_uuid: &surface.uuid,
+                            mask_uv_contours: surface.hole_uv_contours(),
                         })
                     })
                     .collect();

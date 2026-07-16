@@ -413,14 +413,24 @@ pub fn coons_mesh(verts: &[[f32; 2]], cols: u32, rows: u32) -> WarpMesh {
         return WarpMesh::identity(cols, rows);
     }
     let n = verts.len();
+    // Normalise winding so walking forward visits TL → TR → BR → BL. One
+    // reversal always suffices, so reverse the working copy in place rather than
+    // recursing. When a single vertex is the nearest to both left bbox corners
+    // (`tl == bl` — a right-pointing triangle, or the mandala's skin triangles)
+    // the winding test stays true on the reversed copy too, so a
+    // recompute-and-recurse loops forever and overflows the stack.
+    let reversed: Vec<[f32; 2]>;
+    let verts: &[[f32; 2]] = {
+        let [tl, tr, _br, bl] = detect_quad_corners(verts);
+        let fd = |a: usize, b: usize| (b + n - a) % n;
+        if fd(tl, bl) < fd(tl, tr) {
+            reversed = verts.iter().rev().copied().collect();
+            &reversed
+        } else {
+            verts
+        }
+    };
     let [tl, tr, br, bl] = detect_quad_corners(verts);
-    // Normalise winding so walking forward visits TL → TR → BR → BL.
-    let fd = |a: usize, b: usize| (b + n - a) % n;
-    if fd(tl, bl) < fd(tl, tr) {
-        let mut rv = verts.to_vec();
-        rv.reverse();
-        return coons_mesh(&rv, cols, rows);
-    }
     // Sides, each parametrised 0→1 in (s across cols, t across rows):
     let top = resample_polyline(&forward_run(verts, tl, tr), cols); // TL→TR
     let right = resample_polyline(&forward_run(verts, tr, br), rows); // TR→BR
@@ -1435,6 +1445,21 @@ mod tests {
             assert!(p.position[0].is_finite() && p.position[1].is_finite());
             assert!((0.0..=1.0).contains(&p.position[0]));
             assert!((0.0..=1.0).contains(&p.position[1]));
+        }
+    }
+
+    #[test]
+    fn coons_mesh_left_apex_triangle_terminates() {
+        // The apex vertex is the nearest to BOTH left bbox corners, so
+        // `detect_quad_corners` reports `tl == bl` and the winding test is
+        // permanently true. The old recurse-on-reverse looped forever and
+        // overflowed the stack (the mandala skin-triangle import crash). Guard:
+        // it must terminate and return a valid `cols × rows` mesh.
+        let verts = [[0.0, 0.5], [1.0, 0.0], [1.0, 1.0]];
+        let m = coons_mesh(&verts, 4, 4);
+        assert_eq!(m.points.len(), 16);
+        for p in &m.points {
+            assert!(p.position[0].is_finite() && p.position[1].is_finite());
         }
     }
 

@@ -10,6 +10,7 @@
 pub mod curve;
 pub mod detect;
 pub mod import;
+pub mod mask;
 
 pub use curve::{CubicHandle, PathSegment, SurfacePath};
 
@@ -96,6 +97,15 @@ pub struct Surface {
     /// `circle_hint`. `None` = the polygon in `vertices` is authoritative.
     #[serde(default)]
     pub path: Option<curve::SurfacePath>,
+    /// Subtractive cut-out holes (8i.7). Each hole is an editable closed
+    /// [`SurfacePath`] in canvas coords, cut out of the surface fill via a baked
+    /// coverage mask. Empty = no cut-outs.
+    #[serde(default)]
+    pub holes: Vec<curve::SurfacePath>,
+    /// Flattened cache of `holes`, regenerated on edit (mirrors `path →
+    /// vertices`). Canvas coords; the renderer bakes these into a uv-space mask.
+    #[serde(default)]
+    pub hole_contours: Vec<Vec<[f32; 2]>>,
 }
 
 /// How content is mapped onto a surface.
@@ -149,6 +159,8 @@ impl Surface {
             warp: None,
             warp_bound: true,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         }
     }
 
@@ -336,6 +348,68 @@ impl Surface {
         self.path.as_mut().unwrap()
     }
 
+    /// Regenerate the flattened `hole_contours` cache from `holes` (mirrors
+    /// `regenerate_from_path` for the outline). Call after any hole edit.
+    pub fn regenerate_holes(&mut self) {
+        self.hole_contours = self.holes.iter().map(|h| h.flatten()).collect();
+    }
+
+    /// Add a subtractive cut-out hole (8i.7) from a closed [`SurfacePath`] in
+    /// canvas coords, refreshing the flattened contour cache.
+    pub fn add_hole(&mut self, hole: curve::SurfacePath) {
+        self.holes.push(hole);
+        self.regenerate_holes();
+    }
+
+    /// Remove the hole at `index`. Returns true if a hole was removed.
+    pub fn remove_hole(&mut self, index: usize) -> bool {
+        if index < self.holes.len() {
+            self.holes.remove(index);
+            self.regenerate_holes();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether this surface has any subtractive holes.
+    pub fn has_holes(&self) -> bool {
+        !self.holes.is_empty()
+    }
+
+    /// Convert this surface's outer outline into a closed [`SurfacePath`] in
+    /// canvas coords, suitable for use as a subtractive hole in another surface
+    /// (8i.7 "Make Hole"). Clones the authoring `path` when present so
+    /// bezier/curved outlines stay curved; otherwise builds straight-line
+    /// segments from `vertices`.
+    pub fn outline_as_path(&self) -> curve::SurfacePath {
+        match &self.path {
+            Some(p) => p.clone(),
+            None => curve::SurfacePath::from_polygon(&self.vertices, true),
+        }
+    }
+
+    /// Project the flattened `hole_contours` (canvas coords) into surface uv
+    /// space (`[0..1]²`, bounding-box normalized) for mask baking. Returns empty
+    /// when there are no holes or the bounding box is degenerate.
+    pub fn hole_uv_contours(&self) -> Vec<Vec<[f32; 2]>> {
+        if self.hole_contours.is_empty() {
+            return Vec::new();
+        }
+        let bb = self.bounding_box();
+        if bb.width <= 0.0 || bb.height <= 0.0 {
+            return Vec::new();
+        }
+        self.hole_contours
+            .iter()
+            .map(|c| {
+                c.iter()
+                    .map(|p| [(p[0] - bb.x) / bb.width, (p[1] - bb.y) / bb.height])
+                    .collect()
+            })
+            .collect()
+    }
+
     /// Convert edge `edge_idx` of the curve path to a cubic bezier (`to_cubic`)
     /// or back to a straight line, regenerating vertices. Lazily creates a path.
     pub fn convert_edge(&mut self, edge_idx: usize, to_cubic: bool) {
@@ -489,6 +563,16 @@ impl Surface {
                 }
             }
         }
+        // Move subtractive holes in step with the outline.
+        let tf = |p: [f32; 2]| [p[0] + dx, p[1] + dy];
+        for hole in &mut self.holes {
+            hole.apply_map(tf);
+        }
+        for contour in &mut self.hole_contours {
+            for v in contour.iter_mut() {
+                *v = tf(*v);
+            }
+        }
     }
 
     /// Rotate all geometry by `angle` radians (clockwise in canvas space, y-down)
@@ -544,6 +628,14 @@ impl Surface {
         if let Some(path) = &mut self.path {
             path.apply_map(&f);
         }
+        for hole in &mut self.holes {
+            hole.apply_map(&f);
+        }
+        for contour in &mut self.hole_contours {
+            for v in contour.iter_mut() {
+                *v = f(*v);
+            }
+        }
         if let Some(hint) = &mut self.circle_hint {
             hint.center = f(hint.center);
         }
@@ -590,6 +682,20 @@ impl std::fmt::Display for SurfaceOutputType {
             SurfaceOutputType::LEDDirect => write!(f, "LED Direct"),
         }
     }
+}
+
+/// A stacking-order move for a surface (8i.12). The `SurfaceManager.surfaces`
+/// Vec order is authoritative (index 0 = bottom/drawn-first, last = top).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub enum SurfaceReorderOp {
+    /// Move to the top of the stack (drawn last, over everything).
+    ToFront,
+    /// Move to the bottom of the stack (drawn first, under everything).
+    ToBack,
+    /// Move one step toward the front (up in stacking order).
+    Up,
+    /// Move one step toward the back (down in stacking order).
+    Down,
 }
 
 /// Manages all surfaces in the stage layout
@@ -644,6 +750,8 @@ impl SurfaceManager {
             warp: None,
             warp_bound: true,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         });
         uuid
     }
@@ -671,6 +779,8 @@ impl SurfaceManager {
             warp: None,
             warp_bound: true,
             path: Some(path),
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         });
         uuid
     }
@@ -696,6 +806,8 @@ impl SurfaceManager {
             warp: None,
             warp_bound: true,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         });
         uuid
     }
@@ -710,6 +822,28 @@ impl SurfaceManager {
         }
     }
 
+    /// Change the stacking order of a surface (8i.12) by moving it within the
+    /// authoritative `surfaces` Vec (index 0 = bottom, last = top). Returns
+    /// `true` if the surface exists (a move at a boundary is a successful no-op),
+    /// `false` if `uuid` is unknown.
+    pub fn reorder_surface(&mut self, uuid: &str, op: SurfaceReorderOp) -> bool {
+        let Some(pos) = self.surfaces.iter().position(|s| s.uuid == uuid) else {
+            return false;
+        };
+        let last = self.surfaces.len() - 1;
+        let new_pos = match op {
+            SurfaceReorderOp::ToFront => last,
+            SurfaceReorderOp::ToBack => 0,
+            SurfaceReorderOp::Up => (pos + 1).min(last),
+            SurfaceReorderOp::Down => pos.saturating_sub(1),
+        };
+        if new_pos != pos {
+            let s = self.surfaces.remove(pos);
+            self.surfaces.insert(new_pos, s);
+        }
+        true
+    }
+
     /// Find a surface at a given canvas position (normalized coords). Returns UUID.
     pub fn surface_at(&self, px: f32, py: f32) -> Option<String> {
         // Search in reverse so topmost (last added) surfaces are found first
@@ -717,6 +851,20 @@ impl SurfaceManager {
             .iter()
             .rev()
             .find(|s| s.contains(px, py))
+            .map(|s| s.uuid.clone())
+    }
+
+    /// Resolve the target surface for a "Make Hole" punch (8i.7): the topmost
+    /// *other* surface whose polygon contains `source`'s centroid. Reverse
+    /// iteration matches draw order (last = top). Returns the target UUID, or
+    /// `None` if `source` is unknown or sits over no other surface.
+    pub fn resolve_hole_target(&self, source_uuid: &str) -> Option<String> {
+        let (_, source) = self.find_by_uuid(source_uuid)?;
+        let [cx, cy] = source.center();
+        self.surfaces
+            .iter()
+            .rev()
+            .find(|s| s.uuid != source_uuid && s.contains(cx, cy))
             .map(|s| s.uuid.clone())
     }
 
@@ -750,6 +898,20 @@ impl SurfaceManager {
         }
         self.surfaces.push(copy);
         Some(new_uuid)
+    }
+
+    /// Next sequential name for a combined surface: "Combined 1", "Combined 2",
+    /// … — the lowest integer not already used by an existing "Combined N"
+    /// surface. Keeps combined names short so they don't overflow the stage list.
+    fn next_combined_name(&self) -> String {
+        let max = self
+            .surfaces
+            .iter()
+            .filter_map(|s| s.name.strip_prefix("Combined "))
+            .filter_map(|n| n.trim().parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        format!("Combined {}", max + 1)
     }
 
     /// Combine multiple surfaces into one using polygon boolean union.
@@ -811,14 +973,7 @@ impl SurfaceManager {
             return None;
         }
 
-        // Build combined surface name and properties from first selected
-        let name = {
-            let names: Vec<&str> = indices
-                .iter()
-                .filter_map(|&i| self.surfaces.get(i).map(|s| s.name.as_str()))
-                .collect();
-            names.join(" + ")
-        };
+        // Inherit content properties from the first selected surface.
         let source = self.surfaces[first_idx].source.clone();
         let content_mapping = self.surfaces[first_idx].content_mapping;
         let output_type = self.surfaces[first_idx].output_type;
@@ -832,6 +987,9 @@ impl SurfaceManager {
                 self.surfaces.remove(idx);
             }
         }
+
+        // Short sequential name, computed against the surfaces that remain.
+        let name = self.next_combined_name();
 
         let new_uuid = generate_short_uuid();
         let primary = all_contours.remove(0);
@@ -847,6 +1005,8 @@ impl SurfaceManager {
             warp: None,
             warp_bound: true,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         };
 
         let insert_at = first_idx.min(self.surfaces.len());
@@ -868,6 +1028,31 @@ pub(crate) fn verts_to_geo(verts: &[[f32; 2]]) -> Option<geo::Polygon<f64>> {
         .collect();
     let ring = geo::LineString::new(coords);
     Some(geo::Polygon::new(ring, vec![]))
+}
+
+/// Convert exterior `verts` plus subtractive `holes` (interior rings) to a
+/// `geo::Polygon<f64>` so boolean ops exclude the cut-outs (8i.7). Holes with
+/// fewer than 3 points are skipped.
+pub(crate) fn verts_to_geo_with_holes(
+    verts: &[[f32; 2]],
+    holes: &[Vec<[f32; 2]>],
+) -> Option<geo::Polygon<f64>> {
+    if verts.len() < 3 {
+        return None;
+    }
+    let to_ring = |vs: &[[f32; 2]]| -> geo::LineString<f64> {
+        geo::LineString::new(
+            vs.iter()
+                .map(|v| geo::coord! { x: v[0] as f64, y: v[1] as f64 })
+                .collect(),
+        )
+    };
+    let interiors: Vec<geo::LineString<f64>> = holes
+        .iter()
+        .filter(|h| h.len() >= 3)
+        .map(|h| to_ring(h))
+        .collect();
+    Some(geo::Polygon::new(to_ring(verts), interiors))
 }
 
 /// Convert a `geo::LineString` exterior ring back to `Vec<[f32; 2]>`.
@@ -934,6 +1119,8 @@ mod tests {
             warp: None,
             warp_bound: false,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         };
         assert_eq!(s.center(), [0.0, 0.0]);
     }
@@ -967,6 +1154,8 @@ mod tests {
             warp: None,
             warp_bound: false,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         };
         assert!(!s.contains(0.5, 0.5));
     }
@@ -1205,6 +1394,8 @@ mod tests {
             warp: None,
             warp_bound: false,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         };
         s.regenerate_circle_vertices();
         assert_eq!(s.vertices.len(), 6);
@@ -1230,6 +1421,8 @@ mod tests {
             warp: None,
             warp_bound: false,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         };
         assert!(s.is_circle());
         s.convert_to_polygon();
@@ -1252,6 +1445,83 @@ mod tests {
         assert!(s.has_path());
         s.regenerate_from_path();
         assert_eq!(s.vertices, vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
+    }
+
+    // ── Subtractive holes (8i.7) ─────────────────────────────────────
+
+    fn square_hole(x0: f32, y0: f32, x1: f32, y1: f32) -> SurfacePath {
+        SurfacePath::from_polygon(&[[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true)
+    }
+
+    #[test]
+    fn add_and_remove_hole_regenerates_contours() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        assert!(!s.has_holes());
+        s.add_hole(square_hole(0.2, 0.2, 0.4, 0.4));
+        assert_eq!(s.holes.len(), 1);
+        assert_eq!(s.hole_contours.len(), 1);
+        assert!(!s.hole_contours[0].is_empty());
+        assert!(s.has_holes());
+        assert!(s.remove_hole(0));
+        assert!(!s.has_holes());
+        assert!(s.hole_contours.is_empty());
+        assert!(!s.remove_hole(0));
+    }
+
+    #[test]
+    fn hole_uv_contours_normalizes_to_bounding_box() {
+        // Surface bbox at (0.2,0.2) size 0.4; a hole centered inside it should
+        // map to ~0.5,0.5 in uv space.
+        let mut s = Surface::new_rect("R".into(), 0.2, 0.2, 0.4, 0.4, master_source());
+        s.add_hole(square_hole(0.35, 0.35, 0.45, 0.45));
+        let uv = s.hole_uv_contours();
+        assert_eq!(uv.len(), 1);
+        for p in &uv[0] {
+            assert!((0.3..=0.7).contains(&p[0]), "u in range: {}", p[0]);
+            assert!((0.3..=0.7).contains(&p[1]), "v in range: {}", p[1]);
+        }
+    }
+
+    #[test]
+    fn hole_uv_contours_empty_without_holes() {
+        let s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        assert!(s.hole_uv_contours().is_empty());
+    }
+
+    #[test]
+    fn translate_moves_holes_in_step() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 0.5, 0.5, master_source());
+        s.add_hole(square_hole(0.1, 0.1, 0.2, 0.2));
+        let before = s.hole_contours[0][0];
+        s.translate(0.1, 0.1);
+        let after = s.hole_contours[0][0];
+        assert!((after[0] - (before[0] + 0.1)).abs() < 1e-4);
+        assert!((after[1] - (before[1] + 0.1)).abs() < 1e-4);
+        // The hole path itself moved too.
+        assert!((s.holes[0].start[0] - (before[0] + 0.1)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn scale_maps_holes_via_map_geometry() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        s.add_hole(square_hole(0.2, 0.2, 0.4, 0.4));
+        let before = s.hole_contours[0][0];
+        s.scale(2.0, 2.0, [0.0, 0.0]);
+        let after = s.hole_contours[0][0];
+        assert!((after[0] - before[0] * 2.0).abs() < 1e-4);
+        assert!((after[1] - before[1] * 2.0).abs() < 1e-4);
+        assert!((s.holes[0].start[0] - before[0] * 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn verts_to_geo_with_holes_attaches_interiors() {
+        let sq = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let hole = vec![[0.3, 0.3], [0.6, 0.3], [0.6, 0.6], [0.3, 0.6]];
+        let poly = verts_to_geo_with_holes(&sq, &[hole]).unwrap();
+        assert_eq!(poly.interiors().len(), 1);
+        // Degenerate holes (< 3 points) are skipped.
+        let poly2 = verts_to_geo_with_holes(&sq, &[vec![[0.1, 0.1], [0.2, 0.2]]]).unwrap();
+        assert_eq!(poly2.interiors().len(), 0);
     }
 
     #[test]
@@ -1341,6 +1611,8 @@ mod tests {
             warp: None,
             warp_bound: true,
             path: None,
+            holes: Vec::new(),
+            hole_contours: Vec::new(),
         };
         assert!(matches!(s.conforming_warp(), WarpMode::Mesh(_)));
     }
@@ -1585,8 +1857,109 @@ mod tests {
         let result = mgr.combine_surfaces(&[uuid_a, uuid_b]);
         assert!(result.is_some());
         assert_eq!(mgr.surfaces.len(), 1);
-        assert!(mgr.surfaces[0].name.contains("A"));
-        assert!(mgr.surfaces[0].name.contains("B"));
+        // Combined surfaces get a short sequential name, not the joined originals.
+        assert_eq!(mgr.surfaces[0].name, "Combined 1");
+    }
+
+    #[test]
+    fn manager_combine_names_are_sequential() {
+        let mut mgr = SurfaceManager::new();
+        let rect = |n: &str, x: f32| Surface::new_rect(n.into(), x, 0.0, 0.2, 0.2, master_source());
+        // Four disjoint surfaces → two independent combines.
+        for (n, x) in [("a", 0.0), ("b", 0.3), ("c", 0.6), ("d", 0.9)] {
+            mgr.surfaces.push(rect(n, x));
+        }
+        let (u0, u1) = (mgr.surfaces[0].uuid.clone(), mgr.surfaces[1].uuid.clone());
+        mgr.combine_surfaces(&[u0, u1]);
+        assert!(mgr.surfaces.iter().any(|s| s.name == "Combined 1"));
+
+        let (u2, u3) = (
+            mgr.surfaces
+                .iter()
+                .find(|s| s.name == "c")
+                .unwrap()
+                .uuid
+                .clone(),
+            mgr.surfaces
+                .iter()
+                .find(|s| s.name == "d")
+                .unwrap()
+                .uuid
+                .clone(),
+        );
+        mgr.combine_surfaces(&[u2, u3]);
+        // Second combine must not collide with the first.
+        assert!(mgr.surfaces.iter().any(|s| s.name == "Combined 1"));
+        assert!(mgr.surfaces.iter().any(|s| s.name == "Combined 2"));
+    }
+
+    // ── Stacking order (8i.12) ───────────────────────────────────────
+
+    fn mgr_abc() -> (SurfaceManager, String, String, String) {
+        let mut mgr = SurfaceManager::new();
+        let rect = |n: &str, x: f32| Surface::new_rect(n.into(), x, 0.0, 0.2, 0.2, master_source());
+        for (n, x) in [("a", 0.0), ("b", 0.3), ("c", 0.6)] {
+            mgr.surfaces.push(rect(n, x));
+        }
+        let (a, b, c) = (
+            mgr.surfaces[0].uuid.clone(),
+            mgr.surfaces[1].uuid.clone(),
+            mgr.surfaces[2].uuid.clone(),
+        );
+        (mgr, a, b, c)
+    }
+
+    fn names(mgr: &SurfaceManager) -> Vec<String> {
+        mgr.surfaces.iter().map(|s| s.name.clone()).collect()
+    }
+
+    #[test]
+    fn reorder_to_front_moves_to_last() {
+        let (mut mgr, a, _b, _c) = mgr_abc();
+        assert!(mgr.reorder_surface(&a, SurfaceReorderOp::ToFront));
+        assert_eq!(names(&mgr), vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn reorder_to_back_moves_to_first() {
+        let (mut mgr, _a, _b, c) = mgr_abc();
+        assert!(mgr.reorder_surface(&c, SurfaceReorderOp::ToBack));
+        assert_eq!(names(&mgr), vec!["c", "a", "b"]);
+    }
+
+    #[test]
+    fn reorder_up_moves_one_step_toward_front() {
+        let (mut mgr, a, _b, _c) = mgr_abc();
+        assert!(mgr.reorder_surface(&a, SurfaceReorderOp::Up));
+        assert_eq!(names(&mgr), vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn reorder_down_moves_one_step_toward_back() {
+        let (mut mgr, _a, _b, c) = mgr_abc();
+        assert!(mgr.reorder_surface(&c, SurfaceReorderOp::Down));
+        assert_eq!(names(&mgr), vec!["a", "c", "b"]);
+    }
+
+    #[test]
+    fn reorder_up_at_top_is_noop_but_ok() {
+        let (mut mgr, _a, _b, c) = mgr_abc();
+        assert!(mgr.reorder_surface(&c, SurfaceReorderOp::Up));
+        assert_eq!(names(&mgr), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn reorder_down_at_bottom_is_noop_but_ok() {
+        let (mut mgr, a, _b, _c) = mgr_abc();
+        assert!(mgr.reorder_surface(&a, SurfaceReorderOp::Down));
+        assert_eq!(names(&mgr), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn reorder_unknown_uuid_returns_false() {
+        let (mut mgr, _a, _b, _c) = mgr_abc();
+        assert!(!mgr.reorder_surface("nope", SurfaceReorderOp::ToFront));
+        assert_eq!(names(&mgr), vec!["a", "b", "c"]);
     }
 
     #[test]
@@ -1778,5 +2151,58 @@ mod tests {
         // sites tessellate it via WarpMode::render_mesh.
         assert!(matches!(s.effective_warp(), Some(WarpMode::Bezier(_))));
         assert!(s.effective_warp().unwrap().render_mesh().is_some());
+    }
+
+    // ── Make-Hole (punch) domain tests (8i.7) ────────────────────────
+
+    #[test]
+    fn outline_as_path_falls_back_to_vertices_when_no_path() {
+        let s = Surface::new_rect("R".into(), 0.1, 0.2, 0.3, 0.4, master_source());
+        assert!(s.path.is_none());
+        // Flattened outline path matches the polygon vertices.
+        assert_eq!(s.outline_as_path().flatten(), s.vertices);
+    }
+
+    #[test]
+    fn outline_as_path_clones_existing_path() {
+        let mut s = Surface::new_rect("R".into(), 0.0, 0.0, 0.5, 0.5, master_source());
+        let p = s.ensure_path().clone();
+        assert_eq!(s.outline_as_path(), p);
+    }
+
+    fn sm(surfaces: Vec<Surface>) -> SurfaceManager {
+        SurfaceManager {
+            surfaces,
+            dome_setup: None,
+        }
+    }
+
+    #[test]
+    fn resolve_hole_target_picks_surface_under_source_centroid() {
+        let big = Surface::new_rect("Big".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        let small = Surface::new_rect("Small".into(), 0.4, 0.4, 0.2, 0.2, master_source());
+        let (big_id, small_id) = (big.uuid.clone(), small.uuid.clone());
+        let mgr = sm(vec![big, small]);
+        assert_eq!(mgr.resolve_hole_target(&small_id), Some(big_id));
+    }
+
+    #[test]
+    fn resolve_hole_target_none_when_nothing_behind() {
+        let small = Surface::new_rect("Small".into(), 0.4, 0.4, 0.2, 0.2, master_source());
+        let small_id = small.uuid.clone();
+        let mgr = sm(vec![small]);
+        assert_eq!(mgr.resolve_hole_target(&small_id), None);
+    }
+
+    #[test]
+    fn resolve_hole_target_picks_topmost_other() {
+        // Two full-canvas rects both contain the small rect's centroid; the punch
+        // must target the topmost (last in draw order), never the source itself.
+        let a = Surface::new_rect("A".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        let b = Surface::new_rect("B".into(), 0.0, 0.0, 1.0, 1.0, master_source());
+        let small = Surface::new_rect("Small".into(), 0.4, 0.4, 0.2, 0.2, master_source());
+        let (b_id, small_id) = (b.uuid.clone(), small.uuid.clone());
+        let mgr = sm(vec![a, b, small]);
+        assert_eq!(mgr.resolve_hole_target(&small_id), Some(b_id));
     }
 }

@@ -7,7 +7,9 @@ use super::geometry::polygon_shape;
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::DomePreset;
 use crate::surface::detect::{DetectionMethod, HullMode};
-use crate::surface::{CircleHint, ContentMapping, CubicHandle, PathSegment, SurfaceOutputType};
+use crate::surface::{
+    CircleHint, ContentMapping, CubicHandle, PathSegment, SurfaceOutputType, SurfaceReorderOp,
+};
 
 /// Drag state for edge dragging:
 /// (surface_uuid, contour_idx, edge_start_idx, original_v0, original_v1, grab_point_on_edge)
@@ -497,6 +499,33 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 uuid: surface.uuid.clone(),
                             });
                         }
+                        // Stacking order (8i.12): list is bottom→top (index 0 =
+                        // bottom/drawn-first). Up moves toward the front (top).
+                        let last = data.surfaces.len().saturating_sub(1);
+                        ui.add_enabled_ui(i < last, |ui| {
+                            if ui
+                                .small_button("▲")
+                                .on_hover_text("Move up (toward front)")
+                                .clicked()
+                            {
+                                actions.surface_actions.push(SurfaceAction::Reorder {
+                                    uuid: surface.uuid.clone(),
+                                    op: SurfaceReorderOp::Up,
+                                });
+                            }
+                        });
+                        ui.add_enabled_ui(i > 0, |ui| {
+                            if ui
+                                .small_button("▼")
+                                .on_hover_text("Move down (toward back)")
+                                .clicked()
+                            {
+                                actions.surface_actions.push(SurfaceAction::Reorder {
+                                    uuid: surface.uuid.clone(),
+                                    op: SurfaceReorderOp::Down,
+                                });
+                            }
+                        });
                     });
                 });
 
@@ -814,6 +843,60 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             }
         }
 
+        // Mode toggle + close stay on the tools row, pinned to the right.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("x Close Editor").clicked() {
+                actions.toggle_stage_editor = true;
+            }
+            ui.separator();
+            let mode = if data.dome_mode_active {
+                StageEditorMode::Dome3D
+            } else {
+                StageEditorMode::Polygon2D
+            };
+            if ui
+                .selectable_label(mode == StageEditorMode::Polygon2D, "⬡ 2D")
+                .on_hover_text("2D Polygon mode")
+                .clicked()
+            {
+                actions.dome_actions.push(DomeAction::SetMode(false));
+            }
+            if ui
+                .selectable_label(mode == StageEditorMode::Dome3D, "🔮 3D Dome")
+                .on_hover_text("3D Dome mode")
+                .clicked()
+            {
+                actions.dome_actions.push(DomeAction::SetMode(true));
+            }
+        });
+    });
+
+    // Second toolbar row: contextual actions (edit · order · import · detect).
+    // Wraps onto more lines on narrow windows so the controls never bunch up.
+    ui.add_space(2.0);
+    ui.horizontal_wrapped(|ui| {
+        // "Make Hole" (8i.7): turn the single selected surface into a cut-out in
+        // the surface beneath it, consuming the source. Enabled only when
+        // exactly one surface is selected.
+        let can_punch = state.selected_surfaces.len() == 1;
+        if ui
+            .add_enabled(can_punch, egui::Button::new("◌ Make Hole"))
+            .on_hover_text(
+                "Cut the selected surface out of the surface beneath it (the source is consumed)",
+            )
+            .on_disabled_hover_text(
+                "Select exactly one surface to cut it out of the one beneath it",
+            )
+            .clicked()
+        {
+            if let Some(source_uuid) = state.selected_surfaces.iter().next().cloned() {
+                actions
+                    .surface_actions
+                    .push(SurfaceAction::PunchHole { source_uuid });
+                state.selected_surfaces.clear();
+            }
+        }
+
         ui.separator();
 
         // Grid controls
@@ -966,6 +1049,31 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     .push(SurfaceAction::Combine { uuids });
                 state.selected_surfaces.clear();
             }
+            // Stacking order (8i.12): bring the selection to the very front/back.
+            if ui
+                .button("⤒ Front")
+                .on_hover_text("Bring selected to front")
+                .clicked()
+            {
+                for uuid in &state.selected_surfaces {
+                    actions.surface_actions.push(SurfaceAction::Reorder {
+                        uuid: uuid.clone(),
+                        op: SurfaceReorderOp::ToFront,
+                    });
+                }
+            }
+            if ui
+                .button("⤓ Back")
+                .on_hover_text("Send selected to back")
+                .clicked()
+            {
+                for uuid in &state.selected_surfaces {
+                    actions.surface_actions.push(SurfaceAction::Reorder {
+                        uuid: uuid.clone(),
+                        op: SurfaceReorderOp::ToBack,
+                    });
+                }
+            }
         });
 
         // Import from file
@@ -1024,33 +1132,6 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 },
             );
         }
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("x Close Editor").clicked() {
-                actions.toggle_stage_editor = true;
-            }
-            ui.separator();
-            // Mode toggle: 2D Polygon / 3D Dome
-            let mode = if data.dome_mode_active {
-                StageEditorMode::Dome3D
-            } else {
-                StageEditorMode::Polygon2D
-            };
-            if ui
-                .selectable_label(mode == StageEditorMode::Polygon2D, "⬡ 2D")
-                .on_hover_text("2D Polygon mode")
-                .clicked()
-            {
-                actions.dome_actions.push(DomeAction::SetMode(false));
-            }
-            if ui
-                .selectable_label(mode == StageEditorMode::Dome3D, "🔮 3D Dome")
-                .on_hover_text("3D Dome mode")
-                .clicked()
-            {
-                actions.dome_actions.push(DomeAction::SetMode(true));
-            }
-        });
     });
 
     // ── Camera detection mode: takes over the entire canvas ──
@@ -1526,6 +1607,31 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         for v in &pixel_verts {
             let handle_rect = egui::Rect::from_center_size(*v, egui::vec2(8.0, 8.0));
             painter.rect_filled(handle_rect, 2.0, egui::Color32::YELLOW);
+        }
+    }
+
+    // Draw subtractive holes (8i.7) as red outlines on every surface.
+    let hole_color = egui::Color32::from_rgb(255, 80, 80);
+    for surface in &data.surfaces {
+        for contour in &surface.hole_contours {
+            if contour.len() < 2 {
+                continue;
+            }
+            let pts: Vec<egui::Pos2> = contour
+                .iter()
+                .map(|v| {
+                    egui::pos2(
+                        canvas_rect.left() + v[0] * canvas_width,
+                        canvas_rect.top() + v[1] * canvas_height,
+                    )
+                })
+                .collect();
+            for i in 0..pts.len() {
+                painter.line_segment(
+                    [pts[i], pts[(i + 1) % pts.len()]],
+                    egui::Stroke::new(1.5_f32, hole_color),
+                );
+            }
         }
     }
 
