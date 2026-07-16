@@ -77,6 +77,8 @@ fn bench_prepare(c: &mut Criterion) {
                         homography: None,
                         overlap_zones: &zones,
                         vertices: PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0),
+                        mask_uuid: "",
+                        mask_uv_contours: Vec::new(),
                     })
                     .collect();
                 let prepared = pipeline.prepare(&ctx.device, &ctx.queue, &draws);
@@ -117,6 +119,8 @@ fn bench_render(c: &mut Criterion) {
                         homography: None,
                         overlap_zones: &zones,
                         vertices: PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0),
+                        mask_uuid: "",
+                        mask_uv_contours: Vec::new(),
                     })
                     .collect();
                 let (prepared, vertex_pool) = pipeline.prepare(&ctx.device, &ctx.queue, &draws);
@@ -194,6 +198,8 @@ fn bench_render_pipelined(c: &mut Criterion) {
                             vertices: PolygonBlitPipeline::triangulate_verts(
                                 &QUAD, 0.0, 0.0, 1.0, 1.0,
                             ),
+                            mask_uuid: "",
+                            mask_uv_contours: Vec::new(),
                         })
                         .collect();
                     let (prepared, vertex_pool) = pipeline.prepare(&ctx.device, &ctx.queue, &draws);

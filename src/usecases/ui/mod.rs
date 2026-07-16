@@ -14,7 +14,9 @@ use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::{DomeGeometry, DomePreset, DomeSetup};
 use crate::surface::detect::{DetectedContour, DetectionParams};
-use crate::surface::{CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath};
+use crate::surface::{
+    CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
+};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
 // Re-export default render resolution constants from the engine layer
@@ -1090,6 +1092,8 @@ pub enum SurfaceAction {
     },
     /// Remove a surface by UUID
     Remove { uuid: String },
+    /// Change a surface's global stacking order (8i.12)
+    Reorder { uuid: String, op: SurfaceReorderOp },
     /// Update the vertices of a surface (specific contour: 0=primary, 1+=extra)
     UpdateVertices {
         uuid: String,
@@ -1130,6 +1134,13 @@ pub enum SurfaceAction {
         handle: CubicHandle,
         pos: [f32; 2],
     },
+    /// Add a subtractive cut-out hole (8i.7) from a closed path (canvas coords)
+    AddHole { uuid: String, hole: SurfacePath },
+    /// Remove the hole at `hole_index` from a surface
+    RemoveHole { uuid: String, hole_index: usize },
+    /// "Make Hole" (8i.7): convert this surface into a cut-out in the surface
+    /// beneath it, consuming the source surface.
+    PunchHole { source_uuid: String },
     /// Change the content source for a surface
     SetSource { uuid: String, source: OutputSource },
     /// Change the output type for a surface
@@ -1267,6 +1278,10 @@ pub struct SurfaceUI {
     /// Curve authoring path, when the surface is bezier-edited. Drives the
     /// anchor/handle overlay and edge hit-testing in the stage editor.
     pub path: Option<SurfacePath>,
+    /// Subtractive cut-out holes (8i.7), drawn as editable overlay contours.
+    pub holes: Vec<SurfacePath>,
+    /// Flattened hole contours (canvas coords) for overlay rendering.
+    pub hole_contours: Vec<Vec<[f32; 2]>>,
 }
 
 /// Crossfader action from UI

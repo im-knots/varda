@@ -43,6 +43,12 @@ impl VardaApp {
                 ui::SurfaceAction::Remove { uuid } => {
                     self.execute_command(EngineCommand::RemoveSurface { uuid: uuid.clone() });
                 }
+                ui::SurfaceAction::Reorder { uuid, op } => {
+                    self.execute_command(EngineCommand::ReorderSurface {
+                        uuid: uuid.clone(),
+                        op: *op,
+                    });
+                }
                 ui::SurfaceAction::UpdateVertices {
                     uuid,
                     contour,
@@ -114,6 +120,23 @@ impl VardaApp {
                         segment_idx: *segment_idx,
                         handle: *handle,
                         pos: *pos,
+                    });
+                }
+                ui::SurfaceAction::AddHole { uuid, hole } => {
+                    self.execute_command(EngineCommand::AddSurfaceHole {
+                        uuid: uuid.clone(),
+                        hole: hole.clone(),
+                    });
+                }
+                ui::SurfaceAction::RemoveHole { uuid, hole_index } => {
+                    self.execute_command(EngineCommand::RemoveSurfaceHole {
+                        uuid: uuid.clone(),
+                        hole_index: *hole_index,
+                    });
+                }
+                ui::SurfaceAction::PunchHole { source_uuid } => {
+                    self.execute_command(EngineCommand::PunchSurfaceHole {
+                        source_uuid: source_uuid.clone(),
                     });
                 }
                 ui::SurfaceAction::SetSource { uuid, source } => {

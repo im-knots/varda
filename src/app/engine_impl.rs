@@ -897,6 +897,8 @@ impl OutputQueries for VardaApp {
                     warp: s.effective_warp(),
                     warp_bound: s.warp_bound,
                     path: s.path.clone(),
+                    holes: s.holes.clone(),
+                    hole_contours: s.hole_contours.clone(),
                 })
                 .collect(),
             monitors: self
@@ -1184,6 +1186,8 @@ impl SurfaceQueries for VardaApp {
                 warp: s.effective_warp(),
                 warp_bound: s.warp_bound,
                 path: s.path.clone(),
+                holes: s.holes.clone(),
+                hole_contours: s.hole_contours.clone(),
             })
             .collect()
     }

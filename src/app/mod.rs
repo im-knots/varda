@@ -901,6 +901,7 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::RemoveSurface { uuid } => self.cmd_remove_surface(&uuid),
+            EngineCommand::ReorderSurface { uuid, op } => self.cmd_reorder_surface(&uuid, op),
             EngineCommand::SetSurfaceSource { uuid, source } => {
                 self.set_surface_source(&uuid, source);
                 self.recompute_auto_edge_blend();
@@ -973,6 +974,13 @@ impl VardaApp {
                 handle,
                 pos,
             } => self.cmd_move_path_handle(&uuid, segment_idx, handle, pos),
+            EngineCommand::AddSurfaceHole { uuid, hole } => self.cmd_add_surface_hole(&uuid, hole),
+            EngineCommand::RemoveSurfaceHole { uuid, hole_index } => {
+                self.cmd_remove_surface_hole(&uuid, hole_index)
+            }
+            EngineCommand::PunchSurfaceHole { source_uuid } => {
+                self.cmd_punch_surface_hole(&source_uuid)
+            }
             EngineCommand::AssignSurfaceToOutput {
                 output_uuid,
                 surface_uuid,

@@ -571,6 +571,11 @@ pub enum EngineCommand {
     RemoveSurface {
         uuid: String,
     },
+    /// Change a surface's global stacking order (8i.12).
+    ReorderSurface {
+        uuid: String,
+        op: SurfaceReorderOp,
+    },
     SetSurfaceSource {
         uuid: String,
         source: OutputSource,
@@ -662,6 +667,22 @@ pub enum EngineCommand {
         segment_idx: usize,
         handle: CubicHandle,
         pos: [f32; 2],
+    },
+    /// Add a subtractive cut-out hole (8i.7) to a surface from a closed path.
+    AddSurfaceHole {
+        uuid: String,
+        hole: SurfacePath,
+    },
+    /// Remove the hole at `hole_index` from a surface.
+    RemoveSurfaceHole {
+        uuid: String,
+        hole_index: usize,
+    },
+    /// "Make Hole" (8i.7): convert an existing surface into a cut-out hole in the
+    /// topmost other surface under its centroid, then remove the source surface.
+    /// Atomic (single command — no half-punched state).
+    PunchSurfaceHole {
+        source_uuid: String,
     },
     AssignSurfaceToOutput {
         output_uuid: String,

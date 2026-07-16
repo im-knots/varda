@@ -848,6 +848,8 @@ pub(crate) fn build_ui_data(
             warp: s.warp.clone(),
             warp_bound: s.warp_bound,
             path: s.path.clone(),
+            holes: s.holes.clone(),
+            hole_contours: s.hole_contours.clone(),
         })
         .collect();
 

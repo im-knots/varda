@@ -1,7 +1,9 @@
 use super::edge_blend::SurfaceOverlapZones;
 /// Simple blit pipeline for copying textures to the screen
+use crate::surface::mask::{bake_hole_mask, DEFAULT_MASK_RES};
 use anyhow::Result;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
@@ -834,6 +836,11 @@ pub struct PolygonDrawDesc<'a> {
     pub homography: Option<[f32; 12]>,
     pub overlap_zones: &'a SurfaceOverlapZones,
     pub vertices: Vec<PolygonVertex>,
+    /// Surface uuid — cache key for its baked hole mask.
+    pub mask_uuid: &'a str,
+    /// Flattened hole contours in surface uv space (`[0..1]²`). Empty = no
+    /// holes (the 1×1 white default mask is bound).
+    pub mask_uv_contours: Vec<Vec<[f32; 2]>>,
 }
 
 /// Pipeline for rendering textured polygon surfaces using vertex buffers.
@@ -847,6 +854,70 @@ pub struct PolygonDrawDesc<'a> {
 /// rotates to the next set so the CPU writes the upcoming frame while the GPU
 /// still reads the previous one, avoiding the cross-frame write-after-read stall
 /// that a single rewritten-at-offset-0 pool would impose on pipelined frames.
+/// A baked hole coverage mask cached on the polygon pipeline. `hash` fingerprints
+/// the surface's uv-space hole contours; the texture rebakes only when it
+/// changes. `_texture` is retained so `view` stays valid.
+struct CachedMask {
+    hash: u64,
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// Fingerprint uv-space hole contours so a mask rebakes only when they change.
+fn hash_uv_contours(contours: &[Vec<[f32; 2]>]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for c in contours {
+        h.write_usize(c.len());
+        for p in c {
+            h.write_u32(p[0].to_bits());
+            h.write_u32(p[1].to_bits());
+        }
+    }
+    h.finish()
+}
+
+/// Upload an `R8Unorm` coverage mask, returning the texture and its view.
+fn upload_mask_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    res: u32,
+    bytes: &[u8],
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let size = wgpu::Extent3d {
+        width: res,
+        height: res,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Surface Hole Mask"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(res),
+            rows_per_image: Some(res),
+        },
+        size,
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
 pub struct PolygonBlitPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -871,6 +942,11 @@ pub struct PolygonBlitPipeline {
     /// Reusable CPU staging for a frame's concatenated vertices — coalesces all
     /// surface uploads into a single `queue.write_buffer`.
     scratch_verts: RefCell<Vec<PolygonVertex>>,
+    /// Per-surface baked hole coverage masks, keyed by surface uuid. Rebaked
+    /// only when the uv-contour hash changes (8i.7).
+    mask_cache: RefCell<HashMap<String, CachedMask>>,
+    /// Lazily-built 1×1 white mask bound for hole-less surfaces (coverage 1.0).
+    default_mask: RefCell<Option<(wgpu::Texture, wgpu::TextureView)>>,
 }
 
 impl PolygonBlitPipeline {
@@ -901,6 +977,17 @@ impl PolygonBlitPipeline {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Hole coverage mask (8i.7).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -998,7 +1085,53 @@ impl PolygonBlitPipeline {
             frame_cursor: Cell::new(0),
             scratch_params: RefCell::new(Vec::new()),
             scratch_verts: RefCell::new(Vec::new()),
+            mask_cache: RefCell::new(HashMap::new()),
+            default_mask: RefCell::new(None),
         })
+    }
+
+    /// Bake or refresh the hole coverage mask for each drawn surface that has
+    /// holes. Cached by uuid; rebakes only when the uv-contour hash changes.
+    fn ensure_masks(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        draws: &[PolygonDrawDesc<'_>],
+    ) {
+        let mut cache = self.mask_cache.borrow_mut();
+        for d in draws {
+            if d.mask_uv_contours.is_empty() {
+                continue;
+            }
+            let hash = hash_uv_contours(&d.mask_uv_contours);
+            let fresh = cache
+                .get(d.mask_uuid)
+                .map(|m| m.hash == hash)
+                .unwrap_or(false);
+            if fresh {
+                continue;
+            }
+            let res = DEFAULT_MASK_RES;
+            let bytes = bake_hole_mask(&d.mask_uv_contours, res);
+            let (texture, view) = upload_mask_texture(device, queue, res, &bytes);
+            cache.insert(
+                d.mask_uuid.to_string(),
+                CachedMask {
+                    hash,
+                    _texture: texture,
+                    view,
+                },
+            );
+        }
+    }
+
+    /// Lazily build the 1×1 white default mask (coverage 1.0) bound to hole-less
+    /// surfaces.
+    fn ensure_default_mask(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut slot = self.default_mask.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(upload_mask_texture(device, queue, 1, &[255u8]));
+        }
     }
 
     /// Grow frame `idx`'s params ring buffer so it holds at least `needed` slots.
@@ -1100,9 +1233,24 @@ impl PolygonBlitPipeline {
             queue.write_buffer(&vpool, 0, bytemuck::cast_slice(&verts_blob));
         }
 
+        // Bake/refresh per-surface hole masks (rebakes only on contour change).
+        self.ensure_masks(device, queue, draws);
+        self.ensure_default_mask(device, queue);
+        let mask_cache = self.mask_cache.borrow();
+        let default_mask = self.default_mask.borrow();
+        let default_view = &default_mask.as_ref().expect("default mask initialized").1;
+
         let param_size = param_size as u64;
         let mut prepared = Vec::with_capacity(n);
         for (slot, (d, &(v_off, v_bytes, num_tris))) in draws.iter().zip(meta.iter()).enumerate() {
+            let mask_view = if d.mask_uv_contours.is_empty() {
+                default_view
+            } else {
+                mask_cache
+                    .get(d.mask_uuid)
+                    .map(|m| &m.view)
+                    .unwrap_or(default_view)
+            };
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Polygon Blit Bind Group (ring)"),
                 layout: &self.bind_group_layout,
@@ -1122,6 +1270,10 @@ impl PolygonBlitPipeline {
                             offset: slot as u64 * self.ring_stride,
                             size: Some(NonZeroU64::new(param_size).unwrap()),
                         }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(mask_view),
                     },
                 ],
             });
@@ -1202,6 +1354,28 @@ impl PolygonBlitPipeline {
         let mut verts: Vec<PolygonVertex> = Vec::with_capacity(indices.len());
         for &idx in &indices {
             verts.push(to_vert(&canvas_verts[idx as usize]));
+        }
+        verts
+    }
+
+    /// Triangulate a combined (multi-contour) surface: ear-clip the primary
+    /// contour plus every extra contour against the *shared* bounding box, then
+    /// concatenate into a single triangle-list vertex buffer. This lets one draw
+    /// render all disjoint pieces of a combined surface (each contour showing the
+    /// content that falls over its area), matching the stage editor. A single
+    /// warp mesh cannot represent disjoint contours, so callers use this for
+    /// multi-contour surfaces instead of the warp path.
+    pub fn triangulate_multi(
+        primary: &[[f32; 2]],
+        extras: &[Vec<[f32; 2]>],
+        bb_x: f32,
+        bb_y: f32,
+        bb_w: f32,
+        bb_h: f32,
+    ) -> Vec<PolygonVertex> {
+        let mut verts = Self::triangulate_verts(primary, bb_x, bb_y, bb_w, bb_h);
+        for contour in extras {
+            verts.extend(Self::triangulate_verts(contour, bb_x, bb_y, bb_w, bb_h));
         }
         verts
     }
@@ -1373,6 +1547,21 @@ mod tests {
     }
 
     #[test]
+    fn triangulate_multi_covers_all_contours() {
+        // A combined surface: primary quad + two extra quads. All three contours
+        // must be triangulated (2 triangles = 6 verts each = 18 total), so a
+        // combined surface renders every disjoint piece, not just the primary.
+        let primary = QUAD;
+        let extras = vec![QUAD.to_vec(), QUAD.to_vec()];
+        let verts = PolygonBlitPipeline::triangulate_multi(&primary, &extras, 0.0, 0.0, 1.0, 1.0);
+        assert_eq!(verts.len(), 18);
+        // With only the primary and no extras, it matches triangulate_verts.
+        let just_primary =
+            PolygonBlitPipeline::triangulate_multi(&primary, &[], 0.0, 0.0, 1.0, 1.0);
+        assert_eq!(just_primary.len(), 6);
+    }
+
+    #[test]
     fn mesh_verts_invalid_is_empty() {
         let mesh = super::super::warp::WarpMesh {
             cols: 1,
@@ -1426,6 +1615,8 @@ mod tests {
                     homography: None,
                     overlap_zones: &zones,
                     vertices: PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0),
+                    mask_uuid: "",
+                    mask_uv_contours: Vec::new(),
                 })
                 .collect()
         };
@@ -1469,6 +1660,8 @@ mod tests {
             homography: None,
             overlap_zones: &zones,
             vertices: PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0),
+            mask_uuid: "",
+            mask_uv_contours: Vec::new(),
         };
 
         assert_eq!(pipeline.frame_cursor.get(), 0);

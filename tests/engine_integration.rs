@@ -1,8 +1,10 @@
 //! Engine integration tests — multi-step command workflows through real headless VardaApp.
 
 use varda::app::{AppConfig, VardaApp};
-use varda::engine::{BlendMode, CommandResult, EngineCommand, ErrorCode};
+use varda::engine::{BlendMode, CommandResult, EngineCommand, ErrorCode, SurfaceQueries};
 use varda::modulation::LFOWaveform;
+use varda::renderer::context::OutputSource;
+use varda::surface::SurfacePath;
 
 use clap::Parser;
 
@@ -1504,6 +1506,151 @@ fn mesh_warp_subdivisions_bad_index_errs() {
             surface_uuid: "does-not-exist".into(),
             cols: 3,
             rows: 3,
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn add_and_remove_surface_hole_workflow() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::AddSurface {
+            name: "S".into(),
+            source: OutputSource::Master,
+        },
+    );
+    let uuid = app.surface_snapshot().first().unwrap().uuid.clone();
+
+    // Add a hole → snapshot reflects it (holes + derived contours).
+    let hole = SurfacePath::from_polygon(&[[0.3, 0.3], [0.6, 0.3], [0.6, 0.6], [0.3, 0.6]], true);
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AddSurfaceHole {
+            uuid: uuid.clone(),
+            hole,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    let snap = app.surface_snapshot();
+    let s = snap.iter().find(|s| s.uuid == uuid).unwrap();
+    assert_eq!(s.holes.len(), 1);
+    assert_eq!(s.hole_contours.len(), 1);
+
+    // Remove it → snapshot clears.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveSurfaceHole {
+            uuid: uuid.clone(),
+            hole_index: 0,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    let snap = app.surface_snapshot();
+    let s = snap.iter().find(|s| s.uuid == uuid).unwrap();
+    assert!(s.holes.is_empty());
+    assert!(s.hole_contours.is_empty());
+
+    // Out-of-range removal is a validation error.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveSurfaceHole {
+            uuid,
+            hole_index: 5,
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::InvalidInput,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn punch_surface_hole_workflow() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    // Target: full-canvas polygon.
+    fire(
+        &mut app,
+        EngineCommand::AddPolygonSurface {
+            name: "Target".into(),
+            vertices: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            source: OutputSource::Master,
+        },
+    );
+    // Source: small polygon centred inside the target.
+    fire(
+        &mut app,
+        EngineCommand::AddPolygonSurface {
+            name: "Source".into(),
+            vertices: vec![[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]],
+            source: OutputSource::Master,
+        },
+    );
+    let snap = app.surface_snapshot();
+    let target_uuid = snap
+        .iter()
+        .find(|s| s.name == "Target")
+        .unwrap()
+        .uuid
+        .clone();
+    let source_uuid = snap
+        .iter()
+        .find(|s| s.name == "Source")
+        .unwrap()
+        .uuid
+        .clone();
+
+    // Punch: the source becomes a hole in the target and is consumed.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::PunchSurfaceHole {
+            source_uuid: source_uuid.clone(),
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    let snap = app.surface_snapshot();
+    assert!(
+        snap.iter().all(|s| s.uuid != source_uuid),
+        "source surface should be consumed"
+    );
+    let target = snap.iter().find(|s| s.uuid == target_uuid).unwrap();
+    assert_eq!(target.holes.len(), 1);
+    assert_eq!(target.hole_contours.len(), 1);
+
+    // Nothing beneath the remaining surface → InvalidInput (no target resolved).
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::PunchSurfaceHole {
+            source_uuid: target_uuid.clone(),
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::InvalidInput,
+            ..
+        }
+    ));
+
+    // Unknown source → NotFound.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::PunchSurfaceHole {
+            source_uuid: "does-not-exist".into(),
         },
     );
     assert!(matches!(

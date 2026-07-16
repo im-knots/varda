@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1800 1800" width="1800" height="1800">
+  <style>
+    svg { background: #0b0b1e; }
+    path, polygon, circle, ellipse, rect {
+      fill: none !important; stroke-width: 3;
+      stroke-linejoin: round; stroke-linecap: round;
+    }
+    path            { stroke: #ff3ea5 !important; }
+    polygon         { stroke: #35e6ff !important; }
+    circle, ellipse { stroke: #9dff3c !important; }
+    rect            { stroke: #ffc93c !important; }
+  </style>
+  <!--
+    Varda import fixture — LEVEL 4 (very complex): Sri Yantra grand temple.
+    Motif: maximal sacred geometry — 9 interlocking yantra triangles, bindu,
+    16-petal lotus ring, nested square/diamond bhupura, 24-truss radial halo,
+    12-circle Metatron ring. ~65 surfaces. Centre (900,900).
+  -->
+  <defs>
+    <path id="lotus" d="M 900,300 C 945,410 945,500 900,560
+                        C 855,500 855,410 900,300 Z"/>
+    <polygon id="truss" points="882,280 918,280 936,400 864,400"/>
+    <circle id="mcircle" cx="900" cy="600" r="70"/>
+  </defs>
+
+  <!-- Bhupura: outer square, 45° diamond, inner square -->
+  <polygon points="300,300 1500,300 1500,1500 300,1500" fill="black"/>
+  <polygon points="900,260 1540,900 900,1540 260,900" fill="black"/>
+  <polygon points="430,430 1370,430 1370,1370 430,1370" fill="black"/>
+
+  <!-- Sri Yantra: 4 upward triangles -->
+  <polygon points="900,420 600,1240 1200,1240" fill="black"/>
+  <polygon points="900,540 660,1150 1140,1150" fill="black"/>
+  <polygon points="900,640 710,1080 1090,1080" fill="black"/>
+  <polygon points="900,720 760,1020 1040,1020" fill="black"/>
+  <!-- Sri Yantra: 5 downward triangles -->
+  <polygon points="900,1380 600,560 1200,560" fill="black"/>
+  <polygon points="900,1260 660,660 1140,660" fill="black"/>
+  <polygon points="900,1160 710,740 1090,740" fill="black"/>
+  <polygon points="900,1080 760,820 1040,820" fill="black"/>
+  <polygon points="900,1000 800,860 1000,860" fill="black"/>
+
+  <!-- Bindu (centre) -->
+  <circle cx="900" cy="900" r="40" fill="black"/>
+
+  <!-- 16-petal lotus ring (every 22.5°) -->
+  <use xlink:href="#lotus" transform="rotate(0 900 900)"     fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(22.5 900 900)"  fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(45 900 900)"    fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(67.5 900 900)"  fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(90 900 900)"    fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(112.5 900 900)" fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(135 900 900)"   fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(157.5 900 900)" fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(180 900 900)"   fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(202.5 900 900)" fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(225 900 900)"   fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(247.5 900 900)" fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(270 900 900)"   fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(292.5 900 900)" fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(315 900 900)"   fill="black"/>
+  <use xlink:href="#lotus" transform="rotate(337.5 900 900)" fill="black"/>
+
+  <!-- 24-truss radial halo (every 15°) -->
+  <use xlink:href="#truss" transform="rotate(0 900 900)"   fill="black"/>
+  <use xlink:href="#truss" transform="rotate(15 900 900)"  fill="black"/>
+  <use xlink:href="#truss" transform="rotate(30 900 900)"  fill="black"/>
+  <use xlink:href="#truss" transform="rotate(45 900 900)"  fill="black"/>
+  <use xlink:href="#truss" transform="rotate(60 900 900)"  fill="black"/>
+  <use xlink:href="#truss" transform="rotate(75 900 900)"  fill="black"/>
+  <use xlink:href="#truss" transform="rotate(90 900 900)"  fill="black"/>
+  <use xlink:href="#truss" transform="rotate(105 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(120 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(135 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(150 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(165 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(180 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(195 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(210 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(225 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(240 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(255 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(270 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(285 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(300 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(315 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(330 900 900)" fill="black"/>
+  <use xlink:href="#truss" transform="rotate(345 900 900)" fill="black"/>
+
+  <!-- 12-circle Metatron ring (every 30°) -->
+  <use xlink:href="#mcircle" transform="rotate(0 900 900)"   fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(30 900 900)"  fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(60 900 900)"  fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(90 900 900)"  fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(120 900 900)" fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(150 900 900)" fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(180 900 900)" fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(210 900 900)" fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(240 900 900)" fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(270 900 900)" fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(300 900 900)" fill="black"/>
+  <use xlink:href="#mcircle" transform="rotate(330 900 900)" fill="black"/>
+</svg>

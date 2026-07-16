@@ -430,10 +430,15 @@ impl std::fmt::Display for OutputSource {
 
 /// Info for rendering one surface into an output window.
 pub struct SurfaceRenderInfo<'a> {
+    /// Surface uuid — cache key for its baked hole mask.
+    pub uuid: &'a str,
     /// The content texture to sample from
     pub content_view: &'a wgpu::TextureView,
-    /// Polygon vertices in normalized canvas coords [0..1]
+    /// Polygon vertices in normalized canvas coords [0..1] (primary contour)
     pub vertices: &'a [[f32; 2]],
+    /// Additional disjoint contours for combined surfaces. Empty for simple
+    /// surfaces. When non-empty, the surface renders every contour (no warp).
+    pub extra_contours: &'a [Vec<[f32; 2]>],
     /// Bounding box: [x, y, width, height] in [0..1]
     pub bounding_box: [f32; 4],
     /// UV scale for content sampling (Fill=[1,1], Mapped=[bb_w, bb_h])
@@ -444,6 +449,9 @@ pub struct SurfaceRenderInfo<'a> {
     pub warp_mode: Option<super::warp::WarpMode>,
     /// Per-surface overlap zones (Auto mode). Default = no zones.
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
+    /// Flattened subtractive hole contours in surface uv space (8i.7). Empty =
+    /// no holes.
+    pub hole_uv_contours: Vec<Vec<[f32; 2]>>,
 }
 
 /// Membership of a surface in an output. Warp now lives on the `Surface`
@@ -796,13 +804,16 @@ impl OutputWindow {
         self.render_surfaces(
             context,
             &[SurfaceRenderInfo {
+                uuid: "",
                 content_view,
                 vertices: &fullscreen_quad,
+                extra_contours: &[],
                 bounding_box: [0.0, 0.0, 1.0, 1.0],
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
                 warp_mode: None,
                 overlap_zones: Default::default(),
+                hole_uv_contours: Vec::new(),
             }],
         );
     }
@@ -875,42 +886,60 @@ impl OutputWindow {
             .map(|surf| {
                 let bb = surf.bounding_box;
 
-                // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
-                let (homography, vertices) = match &surf.warp_mode {
-                    Some(super::warp::WarpMode::CornerPin { corners }) => {
-                        let src_corners = [
-                            [bb[0], bb[1]],
-                            [bb[0] + bb[2], bb[1]],
-                            [bb[0] + bb[2], bb[1] + bb[3]],
-                            [bb[0], bb[1] + bb[3]],
-                        ];
-                        let h = super::warp::compute_forward_homography(&src_corners, corners);
-                        let verts = PolygonBlitPipeline::triangulate_verts(
+                // Combined (multi-contour) surface: a single warp mesh can't
+                // represent disjoint contours, so render every contour as a
+                // bounding-box UV fill. Matches the stage editor and fixes only
+                // the primary contour rendering (see combine_surfaces).
+                let (homography, vertices) = if !surf.extra_contours.is_empty() {
+                    (
+                        None,
+                        PolygonBlitPipeline::triangulate_multi(
                             surf.vertices,
+                            surf.extra_contours,
                             bb[0],
                             bb[1],
                             bb[2],
                             bb[3],
-                        );
-                        (Some(h), verts)
-                    }
-                    Some(super::warp::WarpMode::Mesh(mesh)) => {
-                        // Mesh mode: warp baked into vertices, identity homography
-                        (None, PolygonBlitPipeline::mesh_verts(mesh))
-                    }
-                    Some(super::warp::WarpMode::Bezier(b)) => {
-                        // Bezier: tessellate the control cage into a mesh, then bake.
-                        (None, PolygonBlitPipeline::mesh_verts(&b.tessellate()))
-                    }
-                    None => {
-                        let verts = PolygonBlitPipeline::triangulate_verts(
-                            surf.vertices,
-                            bb[0],
-                            bb[1],
-                            bb[2],
-                            bb[3],
-                        );
-                        (None, verts)
+                        ),
+                    )
+                } else {
+                    // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
+                    match &surf.warp_mode {
+                        Some(super::warp::WarpMode::CornerPin { corners }) => {
+                            let src_corners = [
+                                [bb[0], bb[1]],
+                                [bb[0] + bb[2], bb[1]],
+                                [bb[0] + bb[2], bb[1] + bb[3]],
+                                [bb[0], bb[1] + bb[3]],
+                            ];
+                            let h = super::warp::compute_forward_homography(&src_corners, corners);
+                            let verts = PolygonBlitPipeline::triangulate_verts(
+                                surf.vertices,
+                                bb[0],
+                                bb[1],
+                                bb[2],
+                                bb[3],
+                            );
+                            (Some(h), verts)
+                        }
+                        Some(super::warp::WarpMode::Mesh(mesh)) => {
+                            // Mesh mode: warp baked into vertices, identity homography
+                            (None, PolygonBlitPipeline::mesh_verts(mesh))
+                        }
+                        Some(super::warp::WarpMode::Bezier(b)) => {
+                            // Bezier: tessellate the control cage into a mesh, then bake.
+                            (None, PolygonBlitPipeline::mesh_verts(&b.tessellate()))
+                        }
+                        None => {
+                            let verts = PolygonBlitPipeline::triangulate_verts(
+                                surf.vertices,
+                                bb[0],
+                                bb[1],
+                                bb[2],
+                                bb[3],
+                            );
+                            (None, verts)
+                        }
                     }
                 };
 
@@ -921,6 +950,8 @@ impl OutputWindow {
                     homography,
                     overlap_zones: &surf.overlap_zones,
                     vertices,
+                    mask_uuid: surf.uuid,
+                    mask_uv_contours: surf.hole_uv_contours.clone(),
                 }
             })
             .collect();

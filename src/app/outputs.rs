@@ -263,6 +263,7 @@ impl VardaApp {
                             surface_uuid: assignment.surface_uuid.clone(),
                             vertices: surface.vertices.clone(),
                             extra_contours: surface.extra_contours.clone(),
+                            holes: surface.hole_contours.clone(),
                         });
                     }
                 }

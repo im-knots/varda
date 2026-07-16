@@ -143,7 +143,8 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
         .map_err(|e| ImportError::SvgParse(e.to_string()))?;
 
     let mut paths: Vec<SurfacePath> = Vec::new();
-    walk_svg_group(tree.root(), &mut paths);
+    let root = tree.root();
+    walk_svg_group(root, root.transform(), &mut paths);
 
     if paths.is_empty() {
         return Err(ImportError::NoContours);
@@ -214,13 +215,31 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
 }
 
 /// Recursively walk a usvg Group, extracting an editable [`SurfacePath`] from
-/// each Path node.
-fn walk_svg_group(group: &usvg::Group, out: &mut Vec<SurfacePath>) {
+/// each Path node with the accumulated ancestor transform baked in.
+///
+/// usvg keeps each path's geometry in local coordinates and carries placement
+/// (`<use transform="rotate(...)">`, viewBox scaling, Illustrator/Inkscape group
+/// transforms) on the ancestor groups' *relative* transforms. We compose those
+/// group `transform()`s from the root down (`acc`) and apply the result, so
+/// every transformed copy lands where it belongs instead of collapsing onto its
+/// untransformed base.
+///
+/// Note: we deliberately do NOT use `Path::abs_transform()`. For `<use>`-resolved
+/// nodes usvg reports an absolute transform that double-applies the ancestor
+/// rotation, which halves the effective radial symmetry (e.g. a 12-fold mandala
+/// renders as 6 stacked pairs).
+fn walk_svg_group(group: &usvg::Group, acc: usvg::Transform, out: &mut Vec<SurfacePath>) {
     for node in group.children() {
         match node {
-            usvg::Node::Group(ref g) => walk_svg_group(g, out),
+            usvg::Node::Group(ref g) => walk_svg_group(g, acc.pre_concat(g.transform()), out),
             usvg::Node::Path(ref p) => {
-                if let Some(path) = svg_path_to_surface_path(p.data()) {
+                let transformed = if acc.is_identity() {
+                    None
+                } else {
+                    p.data().clone().transform(acc)
+                };
+                let data = transformed.as_ref().unwrap_or_else(|| p.data());
+                if let Some(path) = svg_path_to_surface_path(data) {
                     // Require at least a triangle's worth of geometry.
                     if path.flatten().len() >= 3 {
                         out.push(path);
@@ -559,6 +578,73 @@ mod tests {
     }
 
     #[test]
+    fn detect_from_svg_applies_node_transforms() {
+        // Two instances of the same base rect, placed at opposite corners via
+        // `<use transform="translate(...)">`. usvg keeps the geometry in local
+        // coords and stores placement in the node transform; if the importer
+        // ignores that transform both copies collapse onto the base position.
+        // Regression guard for the mandala "all arms stacked at 12 o'clock" bug.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg"
+                           xmlns:xlink="http://www.w3.org/1999/xlink"
+                           viewBox="0 0 100 100">
+            <defs><rect id="r" x="0" y="0" width="20" height="20"/></defs>
+            <use xlink:href="#r" transform="translate(0,0)"/>
+            <use xlink:href="#r" transform="translate(80,80)"/>
+        </svg>"##;
+        let det = detect_from_svg(svg).expect("two transformed uses should detect");
+        assert_eq!(det.contours.len(), 2, "each <use> is its own surface");
+
+        let centroid = |c: &DetectedContour| {
+            let n = c.vertices.len() as f32;
+            let sx: f32 = c.vertices.iter().map(|v| v[0]).sum();
+            let sy: f32 = c.vertices.iter().map(|v| v[1]).sum();
+            [sx / n, sy / n]
+        };
+        let a = centroid(&det.contours[0]);
+        let b = centroid(&det.contours[1]);
+        let dist = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+        // Opposite corners of the normalized canvas are ~1.13 apart; a collapse
+        // would leave them coincident (~0).
+        assert!(
+            dist > 0.5,
+            "transformed copies must stay spatially separated, got dist={dist} (a={a:?}, b={b:?})"
+        );
+    }
+
+    #[test]
+    fn detect_from_svg_rotate_use_is_not_doubled() {
+        // A marker rect at 12 o'clock, plus a copy rotated 90° about the centre.
+        // Correct placement puts the rotated copy at 3 o'clock (right edge).
+        // usvg's `Path::abs_transform()` double-applies the ancestor rotation for
+        // `<use>` nodes, which would land it at 6 o'clock (bottom) instead —
+        // halving radial symmetry (the mandala "6 arms not 12" bug). We compose
+        // the group `transform()`s ourselves to avoid that; this guards it.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg"
+                           xmlns:xlink="http://www.w3.org/1999/xlink"
+                           viewBox="0 0 100 100">
+            <defs><rect id="m" x="40" y="0" width="20" height="20"/></defs>
+            <use xlink:href="#m" transform="rotate(0 50 50)"/>
+            <use xlink:href="#m" transform="rotate(90 50 50)"/>
+        </svg>"##;
+        let det = detect_from_svg(svg).expect("rotated use should detect");
+        assert_eq!(det.contours.len(), 2);
+
+        let centroid = |c: &DetectedContour| {
+            let n = c.vertices.len() as f32;
+            let sx: f32 = c.vertices.iter().map(|v| v[0]).sum();
+            let sy: f32 = c.vertices.iter().map(|v| v[1]).sum();
+            [sx / n, sy / n]
+        };
+        // Correct: rotated copy sits far to the right (x ≈ 0.83). Doubled: both
+        // copies share x ≈ 0.5, so no contour clears 0.6.
+        assert!(
+            det.contours.iter().any(|c| centroid(c)[0] > 0.6),
+            "rotate(90) copy must land at 3 o'clock (right), not doubled to 6 o'clock: {:?}",
+            det.contours.iter().map(centroid).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn detect_from_svg_preserves_cubic_control_points() {
         // A path whose top edge is a cubic bezier; the rest are straight lines.
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -603,6 +689,54 @@ mod tests {
     fn detect_from_dxf_invalid_rejects() {
         let result = detect_from_dxf(b"not valid dxf");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn detect_from_dxf_mixed_entities() {
+        // A closed LWPOLYLINE square + a CIRCLE + a 2-point LINE. The polyline
+        // and circle become surfaces; the line (2 verts) is filtered out. Header
+        // must be ≥R14 or the dxf writer silently drops LWPOLYLINE/ELLIPSE.
+        use dxf::entities::{Circle, Entity, EntityType, Line, LwPolyline};
+        use dxf::{Drawing, LwPolylineVertex, Point};
+
+        let mut d = Drawing::new();
+        d.header.version = dxf::enums::AcadVersion::R2000;
+        let mut sq = LwPolyline::default();
+        sq.set_is_closed(true);
+        sq.vertices = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
+            .iter()
+            .map(|&(x, y)| LwPolylineVertex {
+                x,
+                y,
+                ..Default::default()
+            })
+            .collect();
+        d.add_entity(Entity::new(EntityType::LwPolyline(sq)));
+        d.add_entity(Entity::new(EntityType::Circle(Circle::new(
+            Point::new(200.0, 200.0, 0.0),
+            40.0,
+        ))));
+        d.add_entity(Entity::new(EntityType::Line(Line::new(
+            Point::new(0.0, -50.0, 0.0),
+            Point::new(300.0, -50.0, 0.0),
+        ))));
+
+        let mut bytes = Vec::new();
+        d.save(&mut bytes).expect("serialize dxf");
+
+        let det = detect_from_dxf(&bytes).expect("mixed dxf should detect");
+        assert_eq!(det.contours.len(), 2, "square + circle, line dropped");
+        assert_eq!(
+            det.contours.iter().filter(|c| c.is_circular).count(),
+            1,
+            "only the circle is circular"
+        );
+        for c in &det.contours {
+            for v in &c.vertices {
+                assert!(v[0].is_finite() && v[1].is_finite());
+                assert!((-0.001..=1.001).contains(&v[0]) && (-0.001..=1.001).contains(&v[1]));
+            }
+        }
     }
 
     #[test]

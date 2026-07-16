@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1600 1200" width="1600" height="1200">
+  <style>
+    svg { background: #0b0b1e; }
+    path, polygon, circle, ellipse, rect {
+      fill: none !important; stroke-width: 3;
+      stroke-linejoin: round; stroke-linecap: round;
+    }
+    path            { stroke: #ff3ea5 !important; }
+    polygon         { stroke: #35e6ff !important; }
+    circle, ellipse { stroke: #9dff3c !important; }
+    rect            { stroke: #ffc93c !important; }
+  </style>
+  <!--
+    Varda import fixture — LEVEL 2 (moderate): hexagonal rib-vault temple.
+    Motif: Boom Dance Temple 6-fold radial symmetry. ~20 surfaces.
+    Base shapes are defined once and rotated about the centre (800,600) via <use>.
+    usvg bakes the rotate() transforms into path coords on import.
+  -->
+  <defs>
+    <!-- Lancet rib-vault arch pillar, apex up from centre -->
+    <path id="rib" d="M 762,600 L 762,320 C 762,230 800,182 800,182
+                      C 800,182 838,230 838,320 L 838,600 Z"/>
+    <!-- Triangular skylight (negative-space panel between ribs) -->
+    <polygon id="sky" points="800,215 766,345 834,345"/>
+    <!-- Hexagon riser, seated in the outer ring below centre -->
+    <polygon id="riser" points="800,920 852,950 852,1010 800,1040 748,1010 748,950"/>
+  </defs>
+
+  <!-- Stage perimeter: dodecagon -->
+  <polygon points="1340,600 1267.6,870 1070,1067.6 800,1140 530,1067.6 332.4,870
+                   260,600 332.4,330 530,132.4 800,60 1070,132.4 1267.6,330"
+           fill="black"/>
+
+  <!-- Central hexagon DJ booth -->
+  <polygon points="800,510 878,555 878,645 800,690 722,645 722,555" fill="black"/>
+
+  <!-- 6 rib-vault arches (0°,60°,...) -->
+  <use xlink:href="#rib" transform="rotate(0 800 600)"   fill="black"/>
+  <use xlink:href="#rib" transform="rotate(60 800 600)"  fill="black"/>
+  <use xlink:href="#rib" transform="rotate(120 800 600)" fill="black"/>
+  <use xlink:href="#rib" transform="rotate(180 800 600)" fill="black"/>
+  <use xlink:href="#rib" transform="rotate(240 800 600)" fill="black"/>
+  <use xlink:href="#rib" transform="rotate(300 800 600)" fill="black"/>
+
+  <!-- 6 triangular skylights, offset 30° so they sit between the ribs -->
+  <use xlink:href="#sky" transform="rotate(30 800 600)"  fill="black"/>
+  <use xlink:href="#sky" transform="rotate(90 800 600)"  fill="black"/>
+  <use xlink:href="#sky" transform="rotate(150 800 600)" fill="black"/>
+  <use xlink:href="#sky" transform="rotate(210 800 600)" fill="black"/>
+  <use xlink:href="#sky" transform="rotate(270 800 600)" fill="black"/>
+  <use xlink:href="#sky" transform="rotate(330 800 600)" fill="black"/>
+
+  <!-- 6 hexagon risers in the outer ring -->
+  <use xlink:href="#riser" transform="rotate(0 800 600)"   fill="black"/>
+  <use xlink:href="#riser" transform="rotate(60 800 600)"  fill="black"/>
+  <use xlink:href="#riser" transform="rotate(120 800 600)" fill="black"/>
+  <use xlink:href="#riser" transform="rotate(180 800 600)" fill="black"/>
+  <use xlink:href="#riser" transform="rotate(240 800 600)" fill="black"/>
+  <use xlink:href="#riser" transform="rotate(300 800 600)" fill="black"/>
+</svg>

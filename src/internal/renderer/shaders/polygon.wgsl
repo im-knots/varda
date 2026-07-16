@@ -36,6 +36,12 @@ var source_texture: texture_2d<f32>;
 @group(0) @binding(2)
 var<uniform> params: PolygonParams;
 
+// Subtractive hole coverage mask (8i.7). R channel: 1.0 = content, 0.0 = hole.
+// Sampled by the surface's bb-normalized uv so it stays warp-agnostic. A 1×1
+// white texture is bound for hole-less surfaces (no-op).
+@group(0) @binding(3)
+var mask_texture: texture_2d<f32>;
+
 struct VertexInput {
     @location(0) position: vec2<f32>,
     @location(1) uv: vec2<f32>,
@@ -142,6 +148,11 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     if (n >= 3) { blend *= zone_blend(uv, params.zone2_rect, params.zone2_cfg); }
     if (n >= 4) { blend *= zone_blend(uv, params.zone3_rect, params.zone3_cfg); }
     color = vec4<f32>(color.rgb * blend, color.a);
+
+    // Subtractive holes: multiply by coverage so holes (0.0) become black +
+    // transparent, feathered edges (8i.8) ramp smoothly.
+    let coverage = textureSample(mask_texture, texture_sampler, uv).r;
+    color = color * coverage;
 
     return color;
 }

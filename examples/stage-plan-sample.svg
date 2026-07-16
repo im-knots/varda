@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" width="1600" height="1000">
+  <style>
+    svg { background: #0b0b1e; }
+    path, polygon, circle, ellipse, rect {
+      fill: none !important; stroke-width: 3;
+      stroke-linejoin: round; stroke-linecap: round;
+    }
+    path            { stroke: #ff3ea5 !important; }
+    polygon         { stroke: #35e6ff !important; }
+    circle, ellipse { stroke: #9dff3c !important; }
+    rect            { stroke: #ffc93c !important; }
+  </style>
+  <!--
+    Varda import test fixture: a complex stage plan.
+    Each closed shape below becomes its own surface on import.
+    Exercises: <path> cubic + quadratic beziers, <polygon> (incl. concave star),
+               <ellipse>, <circle>, <rect>. usvg converts all to normalized paths;
+               Varda scales the combined bounding box to fit the [0..1] canvas.
+  -->
+
+  <!-- 1. Proscenium arch frame: rectangle body with a cubic-bezier arched top -->
+  <path d="M 200,900 L 200,350 C 200,180 500,120 800,120 C 1100,120 1400,180 1400,350 L 1400,900 Z"
+        fill="black"/>
+
+  <!-- 2. LED ribbon band across the top: alternating cubic beziers (wavy, closed) -->
+  <path d="M 450,150 C 550,110 650,190 750,150 C 850,110 950,190 1050,150 L 1050,190
+           C 950,230 850,150 750,190 C 650,230 550,150 450,190 Z"
+        fill="black"/>
+
+  <!-- 3. Upstage drum riser: concave 5-point star (polygon) -->
+  <polygon points="800,210 821.2,270.9 885.6,272.2 834.2,311.1 852.9,372.8 800,336
+                   747.1,372.8 765.8,311.1 714.4,272.2 778.8,270.9"
+           fill="black"/>
+
+  <!-- 4. Center turntable: ellipse -->
+  <ellipse cx="800" cy="500" rx="180" ry="120" fill="black"/>
+
+  <!-- 5. Left hex riser: polygon -->
+  <polygon points="300,450 380,450 420,520 380,590 300,590 260,520" fill="black"/>
+
+  <!-- 6. Right hex riser: polygon -->
+  <polygon points="1220,450 1300,450 1340,520 1300,590 1220,590 1180,520" fill="black"/>
+
+  <!-- 7. Thrust apron downstage: quadratic + line, curved front edge (path) -->
+  <path d="M 550,900 L 550,820 C 650,760 950,760 1050,820 L 1050,900 Z" fill="black"/>
+
+  <!-- 8. Left follow-spot / speaker position: circle -->
+  <circle cx="350" cy="780" r="50" fill="black"/>
+
+  <!-- 9. Right follow-spot / speaker position: circle -->
+  <circle cx="1250" cy="780" r="50" fill="black"/>
+
+  <!-- 10. Left PA tower: rect -->
+  <rect x="120" y="400" width="60" height="220" fill="black"/>
+
+  <!-- 11. Right PA tower: rect -->
+  <rect x="1420" y="400" width="60" height="220" fill="black"/>
+</svg>
