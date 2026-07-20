@@ -1496,6 +1496,11 @@ pub struct UIActions {
     pub undo_requested: bool,
     /// Redo last undone action
     pub redo_requested: bool,
+    /// A mutating stage/warp pointer drag is in progress this frame. Set by the
+    /// stage editor and warp editor while dragging a vertex, warp point, bezier
+    /// handle, or gizmo. Used to collapse a continuous drag into a single undo
+    /// step (snapshot on gesture start, suppressed while held).
+    pub gesture_active: bool,
     /// (ch_idx, deck_preset_idx) — load a deck preset into a channel
     pub deck_preset_to_add: Option<(usize, usize)>,
     /// (target_ch_idx or None, channel_preset_idx) — load a channel preset; if target_ch is Some, fill decks into that existing channel
@@ -1735,6 +1740,7 @@ impl UIActions {
             target_fps_change: None,
             undo_requested: false,
             redo_requested: false,
+            gesture_active: false,
             deck_preset_to_add: None,
             channel_preset_to_add: None,
             save_deck_preset: None,
@@ -1784,6 +1790,35 @@ impl UIActions {
             || !self.sequence_actions.is_empty()
             || self.deck_preset_to_add.is_some()
             || self.channel_preset_to_add.is_some()
+    }
+
+    /// Whether this frame's actions include any undoable *stage* mutation
+    /// (surface geometry/warp/holes/combine/reorder, surface→output
+    /// assignments, or authored dome changes).
+    ///
+    /// Deliberately excludes non-authored actions on the same collections:
+    /// output-window lifecycle (create/remove/reposition) and dome preview
+    /// camera navigation (rotate/zoom/reset) are live/venue controls, not
+    /// stage-editor edits, so they must not create history entries.
+    ///
+    /// Does NOT distinguish continuous vs discrete edits — gesture collapsing is
+    /// handled by the `gesture_active` edge in the runner.
+    pub fn has_undoable_stage_action(&self) -> bool {
+        !self.surface_actions.is_empty()
+            || self.output_actions.iter().any(|a| {
+                matches!(
+                    a,
+                    OutputAction::AssignSurface { .. } | OutputAction::UnassignSurface { .. }
+                )
+            })
+            || self.dome_actions.iter().any(|a| {
+                !matches!(
+                    a,
+                    DomeAction::RotateCamera { .. }
+                        | DomeAction::ZoomCamera { .. }
+                        | DomeAction::ResetCamera
+                )
+            })
     }
 }
 

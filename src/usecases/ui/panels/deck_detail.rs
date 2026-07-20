@@ -429,6 +429,8 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
 
     if let Some((row, col)) = dragging {
         if resp.dragged() {
+            // Warp point drag is one undo gesture.
+            actions.gesture_active = true;
             if let Some(p) = resp.interact_pointer_pos() {
                 let np = from_screen(p);
                 if is_mesh {
@@ -641,6 +643,8 @@ fn render_bezier_canvas(
     }
     if let Some(t) = drag {
         if resp.dragged() {
+            // Bezier warp cage drag is one undo gesture.
+            actions.gesture_active = true;
             if let Some(p) = resp.interact_pointer_pos() {
                 let np = from_screen(p);
                 match t {

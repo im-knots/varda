@@ -41,6 +41,7 @@ Surfaces let you place content in specific regions of the output. Use them when 
 - **D** — Duplicate selected surface
 - **H / V** — Flip horizontal / vertical
 - **🔗 Combine** (G) — merge selected surfaces into one
+- **⤒ Front / ⤓ Back** — restack the selected surface (see [Stacking Order](#stacking-order-layers))
 
 Hit-testing uses the raw cursor position, so vertices and edges stay grabbable even after they have been moved off the grid (e.g. by a gizmo scale or rotate). Snap-to-grid still applies to where a dragged vertex is placed.
 
@@ -65,7 +66,18 @@ Bezier edits work in raw, un-snapped coordinates so handles move with full sub-g
 
 ### Combining Surfaces (Multi-Contour)
 
-Select two or more surfaces and click **🔗 Combine** (G) to merge them into a single surface. Varda computes a polygon union: overlapping regions fuse into one outline, while disjoint regions are kept as **extra contours** on the combined surface. All contours share the same content source, color, and warp — useful for treating several separate shapes (e.g. a row of panels) as one routing target.
+Select two or more surfaces and click **🔗 Combine** (G) to merge them into a single surface. Varda computes a polygon union: overlapping regions fuse into one outline, while disjoint regions are kept as **extra contours** on the combined surface. All contours share one content source and color, and every contour shows the slice of that source falling over its area (a bounding-box UV fill across the combined bounds) — useful for treating several separate shapes (e.g. the arms of a mandala, or a row of panels) as one routing target.
+
+A combined (multi-contour) surface does **not** carry a per-surface warp: a single warp mesh can't describe disjoint contours, so warp controls are unavailable while a surface has extra contours. To warp individual pieces, keep them as separate surfaces.
+
+### Stacking Order (Layers)
+
+When surfaces overlap, their **stacking order** decides which draws on top. The order is **global** — identical across the stage canvas and every output — so what you arrange in the editor is exactly what projects. Surfaces draw bottom-to-top.
+
+- In the surface list, use the per-row **▲ / ▼** buttons to nudge a surface toward the **front** (top) or **back** (bottom) one step at a time (disabled at the extremes).
+- With a surface selected, use **⤒ Front** / **⤓ Back** in the toolbar to jump it to the top or bottom of the stack.
+
+The surface list is ordered bottom-layer first. Stacking order is saved with the stage and is also available via the HTTP API: `POST /api/surfaces/{uuid}/reorder`.
 
 ### Warp Calibration
 

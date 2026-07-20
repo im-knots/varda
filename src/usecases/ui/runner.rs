@@ -136,6 +136,9 @@ pub struct UIRunner {
 
     // ── Undo/redo history ─────────────────────────────────────────────
     history: HistoryManager,
+    /// Previous frame's `gesture_active` flag, for detecting drag start vs.
+    /// continuation so a continuous stage/warp drag collapses into one undo step.
+    prev_gesture_active: bool,
 
     // ── Performance: gate publish_state to reduce snapshot overhead ──
     publish_counter: u32,
@@ -202,6 +205,7 @@ impl UIRunner {
             gpu_init_handle: None,
             startup_t0: None,
             history: HistoryManager::new(),
+            prev_gesture_active: false,
             publish_counter: 0,
             api_handle: None,
             cadence_anchor: None,
@@ -1180,14 +1184,18 @@ impl UIRunner {
             };
 
             // ── Undo/redo: snapshot before undoable mutations ──
-            if ui_actions.has_undoable_action() {
-                let snapshot = crate::persistence::snapshot_scene(
-                    varda.mixer_ref(),
-                    varda.render_width(),
-                    varda.render_height(),
-                );
+            // Unified scene+stage timeline. A snapshot is pushed when the frame
+            // is scene-dirty, or stage-dirty AND not the *continuation* of a
+            // held drag — so a continuous stage/warp gesture collapses into a
+            // single undo step (snapshot taken on the drag's first frame).
+            let scene_dirty = ui_actions.has_undoable_action();
+            let stage_dirty = ui_actions.has_undoable_stage_action();
+            let gesture_continuation = ui_actions.gesture_active && self.prev_gesture_active;
+            if scene_dirty || (stage_dirty && !gesture_continuation) {
+                let snapshot = varda.history_snapshot(&self.layout);
                 self.history.push(snapshot);
             }
+            self.prev_gesture_active = ui_actions.gesture_active;
 
             // Intercept shader_to_add: resolve and route to background loading
             if let Some((ch_idx, gen_idx)) = ui_actions.shader_to_add.take() {
@@ -1225,23 +1233,30 @@ impl UIRunner {
 
             // ── Undo/redo: diff-apply from history ──
             if ui_actions.undo_requested || ui_actions.redo_requested {
-                let current = crate::persistence::snapshot_scene(
-                    varda.mixer_ref(),
-                    varda.render_width(),
-                    varda.render_height(),
-                );
+                let current = varda.history_snapshot(&self.layout);
                 let target = if ui_actions.undo_requested {
                     self.history.undo(current)
                 } else {
                     self.history.redo(current)
                 };
-                if let Some(config) = target {
+                if let Some(snap) = target {
                     let rw = varda.render_width();
                     let rh = varda.render_height();
-                    let (warnings, structural_changed) = varda.apply_scene_diff(&config, rw, rh);
+                    // Scene half — diff-apply (patches only what changed).
+                    let (warnings, structural_changed) =
+                        varda.apply_scene_diff(&snap.scene, rw, rh);
                     for w in &warnings {
                         log::warn!("Undo/redo restore warning: {}", w);
                     }
+                    // Stage half — restore surfaces + assignments (no window
+                    // lifecycle), then restore dome layout flags into UI layout.
+                    // Cosmetic editor prefs (grid/snap/panels) are intentionally
+                    // left untouched so undo doesn't toggle panels.
+                    varda.apply_stage_diff(&snap.stage);
+                    self.layout.dome_mode_active = snap.stage.dome_mode_active;
+                    self.layout.dome_preset = snap.stage.dome_preset;
+                    self.layout.dome_geometry = snap.stage.dome_geometry;
+
                     let label = if ui_actions.undo_requested {
                         "↩ Undo"
                     } else {
