@@ -2045,6 +2045,17 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             }
 
             if canvas_response.dragged() {
+                // A mutating drag (not marquee selection) is one undo gesture —
+                // flag it so the runner collapses the drag into a single step.
+                if state.dragging_rotate.is_some()
+                    || state.dragging_scale.is_some()
+                    || state.dragging_radius.is_some()
+                    || state.dragging_vertex.is_some()
+                    || state.dragging_edge.is_some()
+                    || state.moving_surface.is_some()
+                {
+                    actions.gesture_active = true;
+                }
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
 
@@ -2519,6 +2530,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
 
             // Apply the active drag.
             if canvas_response.dragged() {
+                // Bezier anchor/handle drag is one undo gesture.
+                if state.dragging_handle.is_some() || state.dragging_anchor.is_some() {
+                    actions.gesture_active = true;
+                }
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm_raw(pos);
                     if let Some((ref uuid, si, handle)) = state.dragging_handle {

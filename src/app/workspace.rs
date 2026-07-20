@@ -585,6 +585,97 @@ impl VardaApp {
         (warnings, structural)
     }
 
+    /// Build a combined history snapshot (scene + stage) of current engine
+    /// state using neutral/default editor prefs.
+    ///
+    /// Used by the headless/API undo path (`EngineCommand::Undo`/`Redo`), which
+    /// has no UI layout to source cosmetic editor prefs or dome layout flags
+    /// from. `apply_stage_diff` ignores those cosmetic fields anyway, so the
+    /// defaults are inconsequential to what undo actually restores. The windowed
+    /// runner builds its own snapshot with real layout prefs.
+    pub fn history_snapshot_default(&self) -> super::history::HistorySnapshot {
+        let scene =
+            crate::persistence::snapshot_scene(&self.mixer, self.render_width, self.render_height);
+        let d = crate::persistence::StagePrefs::default();
+        let stage = crate::persistence::snapshot_stage(
+            &self.output.surface_manager,
+            &self.output.outputs,
+            d.grid_size,
+            d.snap,
+            d.library_panel_open,
+            d.right_panel_open,
+            d.stage_editor_open,
+            d.dome_preview_open,
+            d.dome_mode_active,
+            d.dome_preset,
+            d.dome_geometry,
+        );
+        super::history::HistorySnapshot { scene, stage }
+    }
+
+    /// Build a combined history snapshot (scene + stage) of current engine
+    /// state, sourcing cosmetic editor prefs and dome layout flags from the UI
+    /// `layout`. Used by the windowed runner's undo/redo push and restore.
+    pub fn history_snapshot(&self, layout: &UILayoutState) -> super::history::HistorySnapshot {
+        let scene =
+            crate::persistence::snapshot_scene(&self.mixer, self.render_width, self.render_height);
+        let stage = crate::persistence::snapshot_stage(
+            &self.output.surface_manager,
+            &self.output.outputs,
+            layout.stage_editor_grid_size,
+            layout.stage_editor_snap,
+            layout.library_panel_open,
+            layout.right_panel_open,
+            layout.stage_editor_open,
+            layout.dome_preview_open,
+            layout.dome_mode_active,
+            layout.dome_preset,
+            layout.dome_geometry,
+        );
+        super::history::HistorySnapshot { scene, stage }
+    }
+
+    /// Apply a stage diff: restore the authored stage state from a `StagePrefs`
+    /// snapshot onto live state for undo/redo.
+    ///
+    /// Restores surfaces (geometry, warp, holes, combine, stacking, dome_setup)
+    /// and per-output surface assignments. Deliberately does NOT recreate,
+    /// remove, move, or resize output windows/monitors, and does NOT touch
+    /// cosmetic editor prefs (grid size, snap, panel-open flags) — those are not
+    /// authored content. Dome layout flags (mode/preset/geometry) live in UI
+    /// layout state and are restored by the caller (the runner).
+    ///
+    /// GPU-derived caches rebuild automatically from the restored surface data:
+    /// hole masks are content-hash keyed and warp meshes are tessellated per
+    /// frame, so no explicit cache invalidation is needed here.
+    pub fn apply_stage_diff(&mut self, target: &crate::persistence::StagePrefs) {
+        // (a) Surfaces — plain data, swap wholesale.
+        self.output.surface_manager = target.surfaces.clone();
+
+        // (b) Per-output surface assignments — patch by matching uuid to the
+        //     snapshot's OutputConfig. Never create/destroy/reposition windows;
+        //     outputs present in the snapshot but not live (or vice versa) are
+        //     ignored for lifecycle.
+        for output in self.output.outputs.iter_mut() {
+            let uuid = output.uuid().to_string();
+            if let Some(cfg) = target.outputs.iter().find(|c| c.uuid == uuid) {
+                *output.surface_assignments_mut() = cfg
+                    .surface_assignments
+                    .iter()
+                    .map(|a| crate::renderer::context::SurfaceAssignment {
+                        surface_uuid: a.surface_uuid.clone(),
+                        enabled: a.enabled,
+                        overlap_zones: Default::default(),
+                    })
+                    .collect();
+            }
+        }
+
+        // (c) Recompute Auto-mode edge-blend overlap zones for the restored
+        //     surface topology.
+        self.recompute_auto_edge_blend();
+    }
+
     /// Patch a DeckSlot's properties from config without rebuilding the source.
     fn patch_deck_slot(
         slot: &mut crate::channel::DeckSlot,

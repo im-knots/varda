@@ -139,7 +139,7 @@ Multiple named sequences can play at the same time. This is essential for multi-
 
 ## Undo / Redo
 
-Varda maintains a 50-level undo history using scene snapshots.
+Varda maintains a 50-level undo history on a single unified timeline covering both your mixer/scene edits and your stage-editor / warp edits. One Cmd+Z reverts the most recent action you took, whichever it was.
 
 | Action | Shortcut |
 |--------|----------|
@@ -156,13 +156,19 @@ Both actions are MIDI and keyboard mappable via the `action/undo` and `action/re
 - Effect reordering (drag-and-drop)
 - Deck moves between channels
 - Transition shader selection
+- **Surface geometry** — add/remove/duplicate a surface, move vertices/edges, the move/rotate/scale gizmo, flip H/V, bezier edge edits, circle radius/sides
+- **Warp** — corner-pin/mesh point drags, subdivide, convert to bezier, bezier cage edits, bind-to-shape, reset warp
+- **Masking & layers** — make/punch holes, combine surfaces, stacking order (front/back/up/down)
+- **Assignments & dome** — assigning a surface to an output, dome mode/preset/geometry
+
+A continuous drag (dragging a vertex, a warp point, a bezier handle, or the gizmo) counts as **one** undo step — Cmd+Z returns to where the shape was before you started dragging, not one pixel at a time.
 
 ### What's NOT Undoable
 
 - **Crossfader position** — continuous live control (too many snapshots)
 - **Video playback** — temporal state (position, play/pause)
 - **MIDI mappings** — device configuration, not show state
-- **Outputs and surfaces** — venue configuration (stage.json, not scene.json)
+- **Output windows** — creating, removing, moving, or resizing a projector output window is a physical-hardware action; undo won't tear down or recreate an output feed mid-set. (Assigning surfaces *onto* an existing output is undoable.)
 
 Undo history is cleared on workspace load. A new action after an undo clears the redo stack (fork behavior).
 

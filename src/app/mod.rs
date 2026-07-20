@@ -2026,15 +2026,12 @@ impl VardaApp {
 
             // ── History ───────────────────────────────────────────
             EngineCommand::Undo => {
-                let current = crate::persistence::snapshot_scene(
-                    &self.mixer,
-                    self.render_width,
-                    self.render_height,
-                );
-                if let Some(config) = self.session.history.undo(current) {
+                let current = self.history_snapshot_default();
+                if let Some(snap) = self.session.history.undo(current) {
                     let rw = self.render_width;
                     let rh = self.render_height;
-                    let (warnings, _) = self.apply_scene_diff(&config, rw, rh);
+                    let (warnings, _) = self.apply_scene_diff(&snap.scene, rw, rh);
+                    self.apply_stage_diff(&snap.stage);
                     self.mixer.clear_sub_mix_cache();
                     for w in &warnings {
                         log::warn!("Undo warning: {}", w);
@@ -2048,15 +2045,12 @@ impl VardaApp {
                 }
             }
             EngineCommand::Redo => {
-                let current = crate::persistence::snapshot_scene(
-                    &self.mixer,
-                    self.render_width,
-                    self.render_height,
-                );
-                if let Some(config) = self.session.history.redo(current) {
+                let current = self.history_snapshot_default();
+                if let Some(snap) = self.session.history.redo(current) {
                     let rw = self.render_width;
                     let rh = self.render_height;
-                    let (warnings, _) = self.apply_scene_diff(&config, rw, rh);
+                    let (warnings, _) = self.apply_scene_diff(&snap.scene, rw, rh);
+                    self.apply_stage_diff(&snap.stage);
                     self.mixer.clear_sub_mix_cache();
                     for w in &warnings {
                         log::warn!("Redo warning: {}", w);
@@ -2589,6 +2583,73 @@ mod tests {
         tx.send((crate::engine::EngineCommand::Redo, None)).unwrap();
         app.process_commands();
         // Just verify no crash — undo/redo correctness is tested in history.rs
+    }
+
+    #[test]
+    fn stage_diff_restores_surface_geometry() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let tx = app.command_sender();
+        tx.send((
+            crate::engine::EngineCommand::AddSurface {
+                name: "S".into(),
+                source: crate::engine::OutputSource::Master,
+            },
+            None,
+        ))
+        .unwrap();
+        app.process_commands();
+
+        // Capture the added surface's uuid + original geometry.
+        let (uuid, orig) = {
+            let s = app
+                .output
+                .surface_manager
+                .surfaces
+                .last()
+                .expect("surface added");
+            (s.uuid.clone(), s.vertices.clone())
+        };
+
+        // Snapshot the stage state before mutating.
+        let snap = app.history_snapshot_default();
+
+        // Move the surface.
+        tx.send((
+            crate::engine::EngineCommand::MoveSurface {
+                uuid: uuid.clone(),
+                dx: 0.2,
+                dy: 0.1,
+            },
+            None,
+        ))
+        .unwrap();
+        app.process_commands();
+        let moved = app
+            .output
+            .surface_manager
+            .surfaces
+            .last()
+            .unwrap()
+            .vertices
+            .clone();
+        assert_ne!(orig, moved, "surface should have moved");
+
+        // Restore the stage snapshot — geometry returns to pre-move state.
+        app.apply_stage_diff(&snap.stage);
+        let restored = app
+            .output
+            .surface_manager
+            .surfaces
+            .last()
+            .unwrap()
+            .vertices
+            .clone();
+        assert_eq!(
+            orig, restored,
+            "apply_stage_diff should restore pre-move surface geometry"
+        );
     }
 
     #[test]
