@@ -6,7 +6,9 @@ struct BlitParams {
     rotation: u32,
     uv_scale: vec2<f32>,
     uv_offset: vec2<f32>,
-    _pad2: vec2<f32>,
+    // 1 = source is premultiplied-alpha (scale rgb+a by opacity); 0 = straight (scale alpha only).
+    premultiplied: u32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0)
@@ -49,6 +51,13 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     }
 
     var color = textureSample(source_texture, texture_sampler, source_uv);
-    color.a *= params.opacity;
+    if (params.premultiplied == 1u) {
+        // Premultiplied source: scale rgb and alpha together so opacity dims the
+        // channel uniformly. Paired with PREMULTIPLIED_ALPHA_BLENDING on the target.
+        color *= params.opacity;
+    } else {
+        // Straight source: scale coverage only (rgb is the un-premultiplied colour).
+        color.a *= params.opacity;
+    }
     return color;
 }

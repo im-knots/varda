@@ -568,13 +568,15 @@ impl Mixer {
             }
 
             if is_first {
-                // First visible channel: per-draw params blit
+                // First visible channel: per-draw params blit.
+                // Channel composites are premultiplied-alpha (see blit_pipeline blend).
                 self.blit_pipeline.write_params_slot(
                     &context.queue,
                     slot,
                     opacity,
                     [1.0, 1.0],
                     [0.0, 0.0],
+                    true,
                 );
                 let bind_group = self.blit_pipeline.create_ring_bind_group(
                     &context.device,
@@ -631,6 +633,7 @@ impl Mixer {
                     blend_mode.to_index(),
                     [1.0, 1.0],
                     [0.0, 0.0],
+                    true,
                 );
                 let bind_group = self.composite_pipeline.create_ring_bind_group(
                     &context.device,
@@ -741,13 +744,15 @@ impl Mixer {
             }
 
             if is_first {
-                // First visible channel: per-draw params blit
+                // First visible channel: per-draw params blit.
+                // Channel composites are premultiplied-alpha (see blit_pipeline blend).
                 self.blit_pipeline.write_params_slot(
                     &context.queue,
                     slot,
                     opacity,
                     [1.0, 1.0],
                     [0.0, 0.0],
+                    true,
                 );
                 let bind_group = self.blit_pipeline.create_ring_bind_group(
                     &context.device,
@@ -804,6 +809,7 @@ impl Mixer {
                     blend_mode.to_index(),
                     [1.0, 1.0],
                     [0.0, 0.0],
+                    true,
                 );
                 let bind_group = self.composite_pipeline.create_ring_bind_group(
                     &context.device,

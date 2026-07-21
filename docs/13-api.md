@@ -6,6 +6,24 @@ Varda's GUI and HTTP API are co-equal consumers of the same engine. The GUI read
 
 The API runs on **port 8080** by default (configurable with `--port`).
 
+## Security & Network Trust Model
+
+**Varda trusts the network.** The HTTP API has **no authentication** and binds to
+**all interfaces** (`0.0.0.0`), and the OSC input (default port 9000) does the
+same. CORS is intentionally permissive (see [CORS](#cors)). This is a deliberate
+design choice for the live-performance and installation use cases: a dedicated
+front-of-house or show/installation network where controllers, control panels,
+and automation scripts talk to the engine without credential friction.
+
+The practical consequence: **anyone who can reach the port has full control of the
+engine** — creating/removing decks, loading local media and LUT files by path,
+starting streams and recordings, and shutting the process down (`POST /api/shutdown`).
+
+Run Varda only on a network you control. If you need it reachable from a wider or
+untrusted network, put it behind your own boundary. Bind the machine to a private
+interface, use a firewall or VPN, or front it with an authenticating reverse proxy.
+
+
 ## Swagger UI
 
 Browse all routes interactively at:
@@ -299,7 +317,10 @@ Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
 Access-Control-Allow-Headers: Content-Type, Authorization
 ```
 
-Browser-based control panels work from any origin without configuration.
+Browser-based control panels work from any origin without configuration. This
+pairs with the [trusted-network model](#security--network-trust-model): there is
+no auth, so origin restrictions would add friction without a security benefit on
+a trusted LAN. Do not expose the port to untrusted networks.
 
 ---
 

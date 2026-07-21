@@ -21,7 +21,10 @@ struct BlitParams {
     uv_scale: [f32; 2],
     /// UV offset (default 0.0, 0.0 = no offset)
     uv_offset: [f32; 2],
-    _pad2: [f32; 2],
+    /// 1 = source is premultiplied-alpha (scale rgb+a by opacity); 0 = straight
+    /// (scale alpha only). See composite.wgsl / spec/linear-light-compositing.md.
+    premultiplied: u32,
+    _pad2: f32,
 }
 
 pub struct BlitPipeline {
@@ -91,7 +94,8 @@ impl BlitPipeline {
                 rotation: 0,
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
-                _pad2: [0.0, 0.0],
+                premultiplied: 0,
+                _pad2: 0.0,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -227,7 +231,8 @@ impl BlitPipeline {
                 rotation: 0,
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
-                _pad2: [0.0, 0.0],
+                premultiplied: 0,
+                _pad2: 0.0,
             }]),
         );
     }
@@ -248,7 +253,8 @@ impl BlitPipeline {
                 rotation: 0,
                 uv_scale,
                 uv_offset,
-                _pad2: [0.0, 0.0],
+                premultiplied: 0,
+                _pad2: 0.0,
             }]),
         );
     }
@@ -263,7 +269,8 @@ impl BlitPipeline {
                 rotation,
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
-                _pad2: [0.0, 0.0],
+                premultiplied: 0,
+                _pad2: 0.0,
             }]),
         );
     }
@@ -300,6 +307,7 @@ impl BlitPipeline {
         opacity: f32,
         uv_scale: [f32; 2],
         uv_offset: [f32; 2],
+        premultiplied: bool,
     ) {
         queue.write_buffer(
             &self.ring_buffer,
@@ -309,7 +317,8 @@ impl BlitPipeline {
                 rotation: 0,
                 uv_scale,
                 uv_offset,
-                _pad2: [0.0, 0.0],
+                premultiplied: premultiplied as u32,
+                _pad2: 0.0,
             }]),
         );
     }
@@ -372,7 +381,10 @@ struct CompositeParams {
     blend_mode: u32,
     uv_scale: [f32; 2],
     uv_offset: [f32; 2],
-    _pad: [f32; 2],
+    /// 1 = source texture is premultiplied-alpha (un-premultiply before the
+    /// blend-mode math so the straight-over result stays correct); 0 = straight.
+    premultiplied: u32,
+    _pad: f32,
 }
 
 /// Shader-based composite pipeline that reads both source and destination textures
@@ -447,7 +459,8 @@ impl CompositeBlitPipeline {
                 blend_mode: 0,
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
-                _pad: [0.0, 0.0],
+                premultiplied: 0,
+                _pad: 0.0,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -555,7 +568,8 @@ impl CompositeBlitPipeline {
                 blend_mode,
                 uv_scale,
                 uv_offset,
-                _pad: [0.0, 0.0],
+                premultiplied: 0,
+                _pad: 0.0,
             }]),
         );
     }
@@ -609,6 +623,7 @@ impl CompositeBlitPipeline {
 
     /// Write composite params into a slot of the pre-allocated ring buffer.
     /// Call once per draw before `create_bind_group_for_slot`.
+    #[allow(clippy::too_many_arguments)]
     pub fn write_params_slot(
         &self,
         queue: &wgpu::Queue,
@@ -617,6 +632,7 @@ impl CompositeBlitPipeline {
         blend_mode: u32,
         uv_scale: [f32; 2],
         uv_offset: [f32; 2],
+        premultiplied: bool,
     ) {
         queue.write_buffer(
             &self.ring_buffer,
@@ -626,7 +642,8 @@ impl CompositeBlitPipeline {
                 blend_mode,
                 uv_scale,
                 uv_offset,
-                _pad: [0.0, 0.0],
+                premultiplied: premultiplied as u32,
+                _pad: 0.0,
             }]),
         );
     }
