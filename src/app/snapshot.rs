@@ -1148,6 +1148,7 @@ pub(crate) fn build_ui_data(
         clock_manual_bpm: engine.clock.manual_bpm,
         render_width: app.render_width,
         render_height: app.render_height,
+        max_render_dimension: app.max_render_dimension(),
         target_fps: app.target_fps,
         // Populated by UIRunner after build (history/pending loads live on runner, not app)
         can_undo: false,

@@ -24,6 +24,16 @@ pub const DEFAULT_RENDER_WIDTH: u32 = 1920;
 /// Default render resolution for all decks and stage output (Full HD 1080p)
 pub const DEFAULT_RENDER_HEIGHT: u32 = 1080;
 
+/// Clamp a requested render resolution to what the GPU can allocate.
+///
+/// Varda imposes no artificial resolution cap; the only bound is the GPU's
+/// `max_texture_dimension_2d` (spec/resolution-and-scaling.md, "No Maximum
+/// Resolution"). Each dimension is independently clamped to `max_dim`. Zero is
+/// left untouched — callers reject it separately so this stays a pure clamp.
+pub(crate) fn clamp_resolution_to_gpu(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
+    (width.min(max_dim), height.min(max_dim))
+}
+
 /// Session configuration derived from CLI flags + workspace defaults.
 /// CLI flags override persisted config for the session without modifying files.
 #[derive(Debug, Clone, clap::Parser)]
@@ -2278,13 +2288,26 @@ impl VardaApp {
         self.render_height
     }
 
+    /// Maximum render dimension (width or height) the GPU can allocate a
+    /// texture for. Varda imposes no artificial cap — this hardware limit is
+    /// the only bound on render resolution (see spec/resolution-and-scaling.md).
+    pub fn max_render_dimension(&self) -> u32 {
+        self.context.device.limits().max_texture_dimension_2d
+    }
+
     /// Change the master render resolution. Resizes all textures in the pipeline.
+    ///
+    /// Zero dimensions are rejected. Larger-than-hardware requests are clamped to
+    /// the GPU's `max_texture_dimension_2d` so both the UI and the HTTP API share
+    /// the same bound and neither can trigger a GPU allocation failure.
     pub fn set_render_resolution(&mut self, width: u32, height: u32) {
-        if width == self.render_width && height == self.render_height {
-            return;
-        }
         if width == 0 || height == 0 {
             log::warn!("Ignoring zero render resolution {}×{}", width, height);
+            return;
+        }
+        let max_dim = self.max_render_dimension();
+        let (width, height) = clamp_resolution_to_gpu(width, height, max_dim);
+        if width == self.render_width && height == self.render_height {
             return;
         }
         log::info!(
@@ -2727,6 +2750,21 @@ mod tests {
         .unwrap();
         app.process_commands();
         // Verify no crash — blend mode is GPU-level and verified through state
+    }
+
+    #[test]
+    fn clamp_resolution_leaves_in_range_untouched() {
+        // Within the GPU limit: returned unchanged.
+        assert_eq!(clamp_resolution_to_gpu(1920, 1080, 16384), (1920, 1080));
+        assert_eq!(clamp_resolution_to_gpu(16384, 16384, 16384), (16384, 16384));
+    }
+
+    #[test]
+    fn clamp_resolution_caps_each_dimension_to_gpu_max() {
+        // Beyond the GPU limit: each dimension clamped independently.
+        assert_eq!(clamp_resolution_to_gpu(20000, 12000, 16384), (16384, 12000));
+        assert_eq!(clamp_resolution_to_gpu(30000, 30000, 16384), (16384, 16384));
+        assert_eq!(clamp_resolution_to_gpu(1024, 99999, 8192), (1024, 8192));
     }
 
     #[test]
