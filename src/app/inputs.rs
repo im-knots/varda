@@ -97,12 +97,15 @@ impl VardaApp {
                                     log::debug!("Unknown OSC action: {}", path);
                                 }
                             }
-                        } else if crate::param_router::apply_param_by_path(
-                            &mut self.mixer,
-                            path,
-                            value,
-                        ) {
-                            changed_params.push((path.clone(), value));
+                        } else {
+                            match crate::param_router::apply_param_by_path(
+                                &mut self.mixer,
+                                path,
+                                value,
+                            ) {
+                                Ok(()) => changed_params.push((path.clone(), value)),
+                                Err(e) => log::warn!("OSC param route failed ({path}): {e}"),
+                            }
                         }
                     }
                     crate::osc::OscInput::ClockBpm(bpm) => {
@@ -243,12 +246,15 @@ impl VardaApp {
                                 log::debug!("Unknown action path: {}", path);
                             }
                         }
-                    } else if crate::param_router::apply_param_by_path(
-                        &mut self.mixer,
-                        &path,
-                        value,
-                    ) {
-                        changed_params.push((path.clone(), value));
+                    } else {
+                        match crate::param_router::apply_param_by_path(
+                            &mut self.mixer,
+                            &path,
+                            value,
+                        ) {
+                            Ok(()) => changed_params.push((path.clone(), value)),
+                            Err(e) => log::warn!("MIDI param route failed ({path}): {e}"),
+                        }
                     }
                 } else if !self.input.midi_mappings.learn_mode {
                     log::debug!("Unmapped MIDI: {} value={:.2}", key, value);

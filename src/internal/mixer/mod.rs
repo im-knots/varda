@@ -879,4 +879,53 @@ mod tests {
         assert_eq!(mixer.channel(0).unwrap().active_deck_count, 1);
         assert_eq!(mixer.channel(1).unwrap().active_deck_count, 0);
     }
+
+    // ── Parameter router: UUID addressing survives reorder (WS2) ─────
+    //
+    // Regression guard for /spec/parameter-routing.md: modulators are
+    // addressed by stable UUID, so removing an earlier source (which shifts
+    // positional indices) must not retarget a saved binding.
+
+    #[test]
+    fn param_router_addresses_modulator_by_uuid_after_reorder() {
+        use crate::modulation::ModulationSource;
+        use crate::param_router::{apply_param_by_path, EntityKind, ParamRouteError};
+
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+
+        // Two LFOs; `b` starts at positional index 1.
+        let a = mixer
+            .modulation_mut()
+            .add_source(ModulationSource::sine_lfo(1.0));
+        let b = mixer
+            .modulation_mut()
+            .add_source(ModulationSource::sine_lfo(1.0));
+
+        // Remove `a` → `b` shifts to positional index 0. Under the old
+        // index-based router, `mod/<b>` would have missed or hit the wrong
+        // source; under UUID addressing it still resolves to `b`.
+        mixer.modulation_mut().remove_source(&a);
+
+        let path = format!("mod/{b}/frequency");
+        assert!(apply_param_by_path(&mut mixer, &path, 0.5).is_ok());
+
+        // 0.01 + 0.5 * 9.99 = 5.005 proves `b` was the source mutated.
+        let entry = mixer.modulation().find_source_by_uuid(&b).unwrap();
+        if let ModulationSource::LFO { frequency, .. } = entry.source {
+            assert!((frequency - 5.005).abs() < 1e-4, "frequency = {frequency}");
+        } else {
+            panic!("expected LFO");
+        }
+
+        // Unknown modulator UUID resolves to a structured error, not a silent no-op.
+        let err = apply_param_by_path(&mut mixer, "mod/deadbeef/frequency", 0.5).unwrap_err();
+        assert!(matches!(
+            err,
+            ParamRouteError::UnknownEntity {
+                kind: EntityKind::Modulator,
+                ..
+            }
+        ));
+    }
 }

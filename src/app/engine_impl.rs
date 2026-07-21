@@ -504,27 +504,19 @@ impl MixerCommands for VardaApp {
     }
 
     fn set_param(&mut self, path: &str, value: ParamValue) {
-        // Convert ParamValue to f32 for the param router
-        let f_value = match value {
-            ParamValue::Float(v) => v,
-            ParamValue::Bool(b) => {
-                if b {
-                    1.0
-                } else {
-                    0.0
+        // Typed routing preserves Color/Point2D for shader/effect params; scalar
+        // paths flatten internally. OSC feedback stays a scalar f32.
+        let feedback_value = crate::param_router::param_value_to_norm_f32(&value);
+        match crate::param_router::apply_typed_param_by_path(&mut self.mixer, path, value) {
+            Ok(()) => {
+                // Broadcast to OSC feedback targets
+                if let Some(ref sender) = self.input.osc_feedback {
+                    if sender.has_targets() {
+                        sender.send_param(path, feedback_value);
+                    }
                 }
             }
-            ParamValue::Long(i) => i as f32,
-            ParamValue::Color(c) => c[0],
-            ParamValue::Point2D(p) => p[0],
-        };
-        if crate::param_router::apply_param_by_path(&mut self.mixer, path, f_value) {
-            // Broadcast to OSC feedback targets
-            if let Some(ref sender) = self.input.osc_feedback {
-                if sender.has_targets() {
-                    sender.send_param(path, f_value);
-                }
-            }
+            Err(e) => log::warn!("API set_param route failed ({path}): {e}"),
         }
     }
 }

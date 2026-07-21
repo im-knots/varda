@@ -555,11 +555,11 @@ impl MidiDeviceManager {
 ///   crossfader                              → mixer crossfader position
 ///   deck/<uuid>/opacity                     → deck opacity
 ///   deck/<uuid>/param/<name>                → generator param (float)
-///   deck/<uuid>/effect/<k>/param/<name>     → deck effect param (float)
+///   deck/<uuid>/effect/<effect_uuid>/param/<name> → deck effect param (float)
 ///   ch/<uuid>/opacity                       → channel opacity
-///   ch/<uuid>/effect/<k>/param/<name>       → channel effect param (float)
-///   master/effect/<k>/param/<name>          → master effect param (float)
-///   mod/<idx>/<param_name>                  → modulation source param
+///   ch/<uuid>/effect/<effect_uuid>/param/<name>   → channel effect param (float)
+///   master/effect/<effect_uuid>/param/<name>      → master effect param (float)
+///   mod/<mod_uuid>/<param_name>             → modulation source param
 #[derive(Debug, Clone)]
 pub struct MidiMappingStore {
     /// MidiKey → parameter path
@@ -903,7 +903,7 @@ mod tests {
     fn test_mapping_store_clear_all() {
         let mut store = MidiMappingStore::new();
         store.set(MidiKey::CC(0, 0, 48), "crossfader".to_string());
-        store.set(MidiKey::Note(1, 0, 36), "ch/0/opacity".to_string());
+        store.set(MidiKey::Note(1, 0, 36), "ch/aabbccdd/opacity".to_string());
         assert_eq!(store.mappings.len(), 2);
         store.clear_all();
         assert_eq!(store.mappings.len(), 0);
@@ -1002,7 +1002,7 @@ mod tests {
                 msg_type: "cc".into(),
                 channel: 0,
                 number: 48,
-                param_path: "ch/0/opacity".into(),
+                param_path: "ch/aabbccdd/opacity".into(),
             }],
         };
         assert!(config.validate().is_empty());
@@ -1015,7 +1015,7 @@ mod tests {
             msg_type: "cc".into(),
             channel: 0,
             number: 0,
-            param_path: "ch/0/opacity".into(),
+            param_path: "ch/aabbccdd/opacity".into(),
         };
         assert!(entry
             .validate("m[0]")
@@ -1030,7 +1030,7 @@ mod tests {
             msg_type: "sysex".into(),
             channel: 0,
             number: 0,
-            param_path: "ch/0/opacity".into(),
+            param_path: "ch/aabbccdd/opacity".into(),
         };
         assert!(entry
             .validate("m[0]")
@@ -1045,7 +1045,7 @@ mod tests {
             msg_type: "note".into(),
             channel: 16,
             number: 60,
-            param_path: "ch/0/opacity".into(),
+            param_path: "ch/aabbccdd/opacity".into(),
         };
         assert!(entry.validate("m[0]").iter().any(|e| e.contains("channel")));
     }
@@ -1136,15 +1136,15 @@ mod tests {
         // Auto-mapped key (grid note within 0–63) — should be filtered
         store
             .mappings
-            .insert(MidiKey::Note(dev_id, 0, 10), "ch/0/deck/0/play".into());
+            .insert(MidiKey::Note(dev_id, 0, 10), "deck/aabbccdd/trigger".into());
         // Auto-mapped key (fader CC within 48–55) — should be filtered
         store
             .mappings
-            .insert(MidiKey::CC(dev_id, 0, 50), "ch/0/opacity".into());
+            .insert(MidiKey::CC(dev_id, 0, 50), "ch/aabbccdd/opacity".into());
         // Manual mapping (CC outside auto-map range) — should be kept
         store
             .mappings
-            .insert(MidiKey::CC(dev_id, 0, 99), "ch/1/opacity".into());
+            .insert(MidiKey::CC(dev_id, 0, 99), "ch/eeff0011/opacity".into());
 
         let mut devices = HashMap::new();
         devices.insert(
@@ -1160,7 +1160,7 @@ mod tests {
 
         let config = store.to_config(&devices, &auto_map);
         assert_eq!(config.mappings.len(), 1);
-        assert_eq!(config.mappings[0].param_path, "ch/1/opacity");
+        assert_eq!(config.mappings[0].param_path, "ch/eeff0011/opacity");
         assert_eq!(config.mappings[0].number, 99);
     }
 
@@ -1172,10 +1172,10 @@ mod tests {
         let mut store = MidiMappingStore::new();
         store
             .mappings
-            .insert(MidiKey::Note(dev_id, 0, 10), "ch/0/deck/0/play".into());
+            .insert(MidiKey::Note(dev_id, 0, 10), "deck/aabbccdd/trigger".into());
         store
             .mappings
-            .insert(MidiKey::CC(dev_id, 0, 50), "ch/0/opacity".into());
+            .insert(MidiKey::CC(dev_id, 0, 50), "ch/aabbccdd/opacity".into());
 
         let mut devices = HashMap::new();
         devices.insert(

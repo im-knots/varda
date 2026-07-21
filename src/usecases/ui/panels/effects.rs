@@ -61,7 +61,7 @@ pub(super) fn render_master_effect_detail(
                                             if !eff_params.params.is_empty() {
                                                 let eff_idx_copy = eff_idx;
                                                 let midi_prefix =
-                                                    format!("master/effect/{}", eff_idx_copy);
+                                                    format!("master/effect/{}", eff_uuid);
                                                 widgets::render_effect_params(
                                                     ui,
                                                     &eff_params.params,
@@ -329,10 +329,8 @@ pub(super) fn render_channel_effect_detail(
                                                 let eff_idx_copy = eff_idx;
                                                 let ch_uuid = ch.uuid.clone();
                                                 let _ch_uuid = ch_uuid.clone();
-                                                let midi_prefix = format!(
-                                                    "ch/{}/effect/{}",
-                                                    ch_uuid, eff_idx_copy
-                                                );
+                                                let midi_prefix =
+                                                    format!("ch/{}/effect/{}", ch_uuid, eff_uuid);
                                                 widgets::render_effect_params(
                                                     ui,
                                                     &eff_params.params,

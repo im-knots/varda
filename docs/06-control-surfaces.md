@@ -216,7 +216,7 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `deck/<uuid>/solo` | Deck solo toggle |
 | `deck/<uuid>/trigger` | Set deck opacity to 1.0 |
 | `deck/<uuid>/param/<name>` | Shader parameter |
-| `deck/<uuid>/effect/<k>/param/<name>` | Deck effect parameter |
+| `deck/<uuid>/effect/<effect_uuid>/param/<name>` | Deck effect parameter |
 | `deck/<uuid>/video/play` | Set video play state (playing when > 0.5) |
 | `deck/<uuid>/video/speed` | Video playback speed (0.0–1.0 → 0.1×–4.0×) |
 | `deck/<uuid>/video/seek` | Seek position (0.0–1.0 → start–end of clip) |
@@ -226,15 +226,16 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `deck/<uuid>/video/loop_mode` | Loop mode, fader-bucketed (Loop / Ping-Pong / One Shot / Hold Last) |
 | `deck/<uuid>/scaling_mode` | Source scaling, fader-bucketed (Fill / Fit / Stretch / Center) |
 | `ch/<uuid>/opacity` | Channel opacity |
-| `ch/<uuid>/effect/<k>/param/<name>` | Channel effect parameter |
-| `master/effect/<k>/param/<name>` | Master effect parameter |
-| `mod/<idx>/frequency` | LFO frequency |
-| `mod/<idx>/amplitude` | LFO amplitude |
+| `ch/<uuid>/effect/<effect_uuid>/param/<name>` | Channel effect parameter |
+| `master/effect/<effect_uuid>/param/<name>` | Master effect parameter |
+| `mod/<mod_uuid>/frequency` | LFO frequency |
+| `mod/<mod_uuid>/amplitude` | LFO amplitude |
+| `mod/<mod_uuid>/step/<n>` | Step-sequencer step value (step index is positional within the source) |
 | `action/undo` | Trigger undo |
 | `action/redo` | Trigger redo |
 | `action/save` | Trigger save |
 
-Entity UUIDs are stable 8-character hex strings that persist across moves, reorders, and scene save/restore.
+Entity UUIDs are stable 8-character hex strings that persist across moves, reorders, and scene save/restore. Decks, channels, effects, and modulation sources are all addressed by UUID — never by positional index — so a saved mapping keeps targeting the same entity after a chain or rack is reordered. LED feedback reads state back through the same UUID paths.
 
 The `video/*` and `scaling_mode` paths resolve only on the matching source type (video controls on video decks; `scaling_mode` on image, video, camera, and external-source decks). **Discrete (enum) controls** — `loop_mode` and `scaling_mode` — use **fader bucketing**: the 0.0–1.0 range is split into equal segments so a fader or knob sweeps through the options. **Seek and in/out points** scale the 0.0–1.0 value against the clip's duration, so one mapping works for clips of any length.
 

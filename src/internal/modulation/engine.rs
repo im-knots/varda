@@ -492,6 +492,12 @@ impl ModulationEngine {
         self.sources.iter().find(|e| e.uuid == uuid)
     }
 
+    /// Find an existing source by UUID (mutable). Used by the parameter router
+    /// to address modulators by stable identity rather than positional index.
+    pub fn find_source_by_uuid_mut(&mut self, uuid: &str) -> Option<&mut ModulationSourceEntry> {
+        self.sources.iter_mut().find(|e| e.uuid == uuid)
+    }
+
     /// Iterate over all assignments (key → modulations).
     pub fn assignments_iter(
         &self,
