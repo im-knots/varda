@@ -61,6 +61,10 @@ pub struct EngineState {
     /// Active stream receiver configs (url, mode, connected)
     pub stream_receivers: Vec<StreamReceiverSnapshot>,
     pub analyzers: Vec<AnalyzerTypeInfo>,
+    /// Whether the undo timeline has an undoable action (shared UI/API timeline).
+    pub can_undo: bool,
+    /// Whether the redo timeline has a redoable action (shared UI/API timeline).
+    pub can_redo: bool,
 }
 
 /// Snapshot of an active stream receiver for UI consumption.
@@ -603,6 +607,8 @@ mod tests {
             syphon_available: false,
             stream_receivers: vec![],
             analyzers: vec![],
+            can_undo: false,
+            can_redo: false,
         };
         assert!((state.fps - 60.0).abs() < 1e-5);
         assert_eq!(state.frame_count, 0);
@@ -680,6 +686,8 @@ mod tests {
             syphon_available: false,
             stream_receivers: vec![],
             analyzers: vec![],
+            can_undo: false,
+            can_redo: false,
         };
         let cloned = state.clone();
         assert!((cloned.mixer.crossfader - 0.5).abs() < 1e-5);
