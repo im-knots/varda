@@ -7,7 +7,9 @@ struct CompositeParams {
     blend_mode: u32,
     uv_scale: vec2<f32>,
     uv_offset: vec2<f32>,
-    _pad: vec2<f32>,
+    // 1 = source is premultiplied-alpha (un-premultiply before blend math); 0 = straight.
+    premultiplied: u32,
+    _pad: f32,
 }
 
 @group(0) @binding(0)
@@ -34,6 +36,14 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         src = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     } else {
         src = textureSample(source_texture, texture_sampler, source_uv);
+    }
+
+    // Premultiplied sources (channel composites fed into the mixer) carry
+    // coverage baked into RGB. The blend-mode math and the OVER below assume a
+    // straight (un-premultiplied) source, so recover it here. Opaque content
+    // (a = 1) is unchanged; a ≈ 0 is guarded (it early-outs on src_a below).
+    if (params.premultiplied == 1u && src.a > EPSILON) {
+        src = vec4<f32>(src.rgb / src.a, src.a);
     }
 
     // Sample destination at raw UV (full composite, no transform)

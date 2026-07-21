@@ -180,10 +180,16 @@ impl Mixer {
 
         let composite_pipeline =
             CompositeBlitPipeline::new(&context.device, context.compositing_format)?;
+        // Channel composites are premultiplied-alpha (coverage baked into RGB by
+        // the channel's straight-over deck compositing). Blending them into the
+        // mixer therefore uses PREMULTIPLIED_ALPHA_BLENDING (src factor One), not
+        // ALPHA_BLENDING (src factor SrcAlpha) which would re-apply coverage and
+        // darken partial-opacity channels by an extra factor of their own alpha.
+        // See /spec/linear-light-compositing.md.
         let blit_pipeline = BlitPipeline::with_blend(
             &context.device,
             context.compositing_format,
-            wgpu::BlendState::ALPHA_BLENDING,
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
         )?;
         let tonemap_pipeline = TonemapPipeline::new(&context.device, context.compositing_format)?;
         let lut_pipeline = LutPipeline::new(&context.device, context.compositing_format)?;
@@ -426,6 +432,16 @@ impl Mixer {
     /// The composited output texture view (post-crossfade, post-master-effects, post-tonemap).
     pub fn composite_view(&self) -> &wgpu::TextureView {
         &self.composite_view
+    }
+
+    /// The composited output texture (post-crossfade, post-master-effects, post-tonemap).
+    ///
+    /// Same target as [`Self::composite_view`], exposed as the `Texture` so
+    /// callers can `copy_texture_to_buffer` for GPU readback. The texture is
+    /// created with `COPY_SRC` (see `GpuContext::create_compositing_texture`).
+    /// Used by render-correctness tests (see /spec/render-testing.md).
+    pub fn composite_texture(&self) -> &wgpu::Texture {
+        &self.composite_texture
     }
 
     /// Current tonemap mode.

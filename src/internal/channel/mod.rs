@@ -818,6 +818,7 @@ impl Channel {
                         fade_opacity,
                         [1.0, 1.0],
                         [0.0, 0.0],
+                        false,
                     );
                     let bind_group = self.blit_pipeline.create_ring_bind_group(
                         &context.device,
@@ -873,6 +874,7 @@ impl Channel {
                         info.blend_mode.to_index(),
                         [1.0, 1.0],
                         [0.0, 0.0],
+                        false,
                     );
                     let bind_group = self.composite_pipeline.create_ring_bind_group(
                         &context.device,
@@ -922,6 +924,7 @@ impl Channel {
                     info.opacity,
                     [1.0, 1.0],
                     [0.0, 0.0],
+                    false,
                 );
                 let t_bg = std::time::Instant::now();
                 let bind_group = self.blit_pipeline.create_ring_bind_group(
@@ -982,6 +985,7 @@ impl Channel {
                     info.blend_mode.to_index(),
                     [1.0, 1.0],
                     [0.0, 0.0],
+                    false,
                 );
                 let t_bg = std::time::Instant::now();
                 let bind_group = self.composite_pipeline.create_ring_bind_group(

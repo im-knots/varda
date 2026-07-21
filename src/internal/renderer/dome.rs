@@ -347,7 +347,7 @@ impl DomemasterRenderer {
 
         for (i, (opacity, uv_scale, uv_offset)) in face_uv_configs.iter().enumerate() {
             self.face_blit
-                .write_params_slot(queue, i, *opacity, *uv_scale, *uv_offset);
+                .write_params_slot(queue, i, *opacity, *uv_scale, *uv_offset, false);
             let bind_group = self
                 .face_blit
                 .create_ring_bind_group(device, source_view, i);
