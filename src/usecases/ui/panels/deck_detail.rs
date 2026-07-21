@@ -1367,7 +1367,7 @@ pub(super) fn render_selected_deck_detail(
                                     let deck_uuid_eff = deck.uuid.clone();
                                     let eff_uuid_assign = eff_uuid.clone();
                                     let eff_uuid_remove = eff_uuid.clone();
-                                    let eff_midi_prefix = format!("deck/{}/effect/{}", deck_uuid_eff, eff_idx_copy);
+                                    let eff_midi_prefix = format!("deck/{}/effect/{}", deck_uuid_eff, eff_uuid);
                                     widgets::render_effect_params(
                                         ui,
                                         &eff_params.params,

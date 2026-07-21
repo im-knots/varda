@@ -629,45 +629,12 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
             }
             false
         }
-        // deck/<uuid>/effect/<k>/param/<name>
-        ["deck", uuid, "effect", ek_s, "param", name] => {
+        // deck/<uuid>/effect/<effect_uuid>/param/<name>
+        ["deck", uuid, "effect", fx_uuid, "param", name] => {
             if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
-                if let Ok(ek) = ek_s.parse::<usize>() {
-                    let slot = &mut mixer.channels_mut()[ch].decks[dk];
-                    if ek < slot.deck.effects.len() {
-                        if let Some(val) = slot.deck.effects[ek].params.values.get_mut(*name) {
-                            toggle_param_value(val);
-                            return true;
-                        }
-                    }
-                }
-            }
-            false
-        }
-        // ch/<uuid>/effect/<k>/param/<name>
-        ["ch", ch_uuid, "effect", ek_s, "param", name] => {
-            if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
-                if let Ok(ek) = ek_s.parse::<usize>() {
-                    if ek < mixer.channels_mut()[ch].effects.len() {
-                        if let Some(val) = mixer.channels_mut()[ch].effects[ek]
-                            .params
-                            .values
-                            .get_mut(*name)
-                        {
-                            toggle_param_value(val);
-                            return true;
-                        }
-                    }
-                }
-            }
-            false
-        }
-        // master/effect/<k>/param/<name>
-        ["master", "effect", ek_s, "param", name] => {
-            if let Ok(ek) = ek_s.parse::<usize>() {
-                let effects = mixer.master_effects_mut();
-                if ek < effects.len() {
-                    if let Some(val) = effects[ek].params.values.get_mut(*name) {
+                let slot = &mut mixer.channels_mut()[ch].decks[dk];
+                if let Some(ek) = slot.deck.effects.iter().position(|e| e.uuid == *fx_uuid) {
+                    if let Some(val) = slot.deck.effects[ek].params.values.get_mut(*name) {
                         toggle_param_value(val);
                         return true;
                     }
@@ -675,8 +642,39 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
             }
             false
         }
-        // mod/<idx>/<param> — modulation source params (toggle float between 0 and 1)
-        ["mod", _idx_s, _param] => {
+        // ch/<uuid>/effect/<effect_uuid>/param/<name>
+        ["ch", ch_uuid, "effect", fx_uuid, "param", name] => {
+            if let Some(ch) = mixer.find_channel_by_uuid(ch_uuid) {
+                if let Some(ek) = mixer.channels_mut()[ch]
+                    .effects
+                    .iter()
+                    .position(|e| e.uuid == *fx_uuid)
+                {
+                    if let Some(val) = mixer.channels_mut()[ch].effects[ek]
+                        .params
+                        .values
+                        .get_mut(*name)
+                    {
+                        toggle_param_value(val);
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        // master/effect/<effect_uuid>/param/<name>
+        ["master", "effect", fx_uuid, "param", name] => {
+            let effects = mixer.master_effects_mut();
+            if let Some(ek) = effects.iter().position(|e| e.uuid == *fx_uuid) {
+                if let Some(val) = effects[ek].params.values.get_mut(*name) {
+                    toggle_param_value(val);
+                    return true;
+                }
+            }
+            false
+        }
+        // mod/<mod_uuid>/<param> — modulation source params (toggle float between 0 and 1)
+        ["mod", _mod_uuid, _param] => {
             // Modulation params are continuous values; keyboard toggle doesn't apply well.
             // Fall through to default.
             false

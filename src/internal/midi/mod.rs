@@ -555,11 +555,11 @@ impl MidiDeviceManager {
 ///   crossfader                              → mixer crossfader position
 ///   deck/<uuid>/opacity                     → deck opacity
 ///   deck/<uuid>/param/<name>                → generator param (float)
-///   deck/<uuid>/effect/<k>/param/<name>     → deck effect param (float)
+///   deck/<uuid>/effect/<effect_uuid>/param/<name> → deck effect param (float)
 ///   ch/<uuid>/opacity                       → channel opacity
-///   ch/<uuid>/effect/<k>/param/<name>       → channel effect param (float)
-///   master/effect/<k>/param/<name>          → master effect param (float)
-///   mod/<idx>/<param_name>                  → modulation source param
+///   ch/<uuid>/effect/<effect_uuid>/param/<name>   → channel effect param (float)
+///   master/effect/<effect_uuid>/param/<name>      → master effect param (float)
+///   mod/<mod_uuid>/<param_name>             → modulation source param
 #[derive(Debug, Clone)]
 pub struct MidiMappingStore {
     /// MidiKey → parameter path

@@ -119,7 +119,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut freq = *frequency;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Freq:").small());
-                                    let path = format!("mod/{}/frequency", idx);
+                                    let path = format!("mod/{}/frequency", sid);
                                     if render_mod_learn_slider(ui, &mut freq, 0.01..=10.0, |s| s.logarithmic(true).show_value(true).suffix("Hz"), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateLFOFrequency { source_id: sid.clone(), frequency: freq });
                                     }
@@ -128,7 +128,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut amp = *amplitude;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Amp:").small());
-                                    let path = format!("mod/{}/amplitude", idx);
+                                    let path = format!("mod/{}/amplitude", sid);
                                     if render_mod_learn_slider(ui, &mut amp, 0.0..=1.0, |s| s.show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateLFOAmplitude { source_id: sid.clone(), amplitude: amp });
                                     }
@@ -137,7 +137,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut ph = *phase;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Phase:").small());
-                                    let path = format!("mod/{}/phase", idx);
+                                    let path = format!("mod/{}/phase", sid);
                                     if render_mod_learn_slider(ui, &mut ph, 0.0..=1.0, |s| s.show_value(false), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateLFOPhase { source_id: sid.clone(), phase: ph });
                                     }
@@ -227,7 +227,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut fl = *freq_low;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Lo:").small());
-                                    let path = format!("mod/{}/freq_low", idx);
+                                    let path = format!("mod/{}/freq_low", sid);
                                     if render_mod_learn_slider(ui, &mut fl, 20.0..=20000.0, |s| s.logarithmic(true).suffix("Hz"), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateAudioFreqLow { source_id: sid.clone(), freq_low: fl });
                                     }
@@ -235,7 +235,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut fh = *freq_high;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Hi:").small());
-                                    let path = format!("mod/{}/freq_high", idx);
+                                    let path = format!("mod/{}/freq_high", sid);
                                     if render_mod_learn_slider(ui, &mut fh, 20.0..=20000.0, |s| s.logarithmic(true).suffix("Hz"), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateAudioFreqHigh { source_id: sid.clone(), freq_high: fh });
                                     }
@@ -244,7 +244,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut g = *gain;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Gain:").small());
-                                    let path = format!("mod/{}/gain", idx);
+                                    let path = format!("mod/{}/gain", sid);
                                     if render_mod_learn_slider(ui, &mut g, 0.0..=4.0, |s| s.show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateAudioGain { source_id: sid.clone(), gain: g });
                                     }
@@ -254,7 +254,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut sm = *smoothing;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Smooth:").small());
-                                    let path = format!("mod/{}/smoothing", idx);
+                                    let path = format!("mod/{}/smoothing", sid);
                                     if render_mod_learn_slider(ui, &mut sm, 0.0..=0.99, |s| s.show_value(false), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateAudioSmoothing { source_id: sid.clone(), smoothing: sm });
                                     }
@@ -298,7 +298,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                             }
                             ModSourceUI::ADSR { attack, decay, sustain, release, stage: _ } => {
                                 // Combined gate button: press → trigger, release → gate off
-                                let gate_path = format!("mod/{}/gate", idx);
+                                let gate_path = format!("mod/{}/gate", sid);
                                 let any_learn = data.midi_learn_active || data.keyboard_learn_active;
                                 let gate_id = ui.id().with(("adsr_gate", idx));
                                 let was_held = ui.memory(|m| m.data.get_temp::<bool>(gate_id).unwrap_or(false));
@@ -364,7 +364,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut a = *attack;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("A:").small());
-                                    let path = format!("mod/{}/attack", idx);
+                                    let path = format!("mod/{}/attack", sid);
                                     if render_mod_learn_slider(ui, &mut a, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateADSRAttack { source_id: sid.clone(), attack: a });
                                     }
@@ -373,7 +373,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut d = *decay;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("D:").small());
-                                    let path = format!("mod/{}/decay", idx);
+                                    let path = format!("mod/{}/decay", sid);
                                     if render_mod_learn_slider(ui, &mut d, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateADSRDecay { source_id: sid.clone(), decay: d });
                                     }
@@ -382,7 +382,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut s = *sustain;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("S:").small());
-                                    let path = format!("mod/{}/sustain", idx);
+                                    let path = format!("mod/{}/sustain", sid);
                                     if render_mod_learn_slider(ui, &mut s, 0.0..=1.0, |s| s.show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateADSRSustain { source_id: sid.clone(), sustain: s });
                                     }
@@ -391,7 +391,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                 let mut r = *release;
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("R:").small());
-                                    let path = format!("mod/{}/release", idx);
+                                    let path = format!("mod/{}/release", sid);
                                     if render_mod_learn_slider(ui, &mut r, 0.001..=5.0, |s| s.logarithmic(true).suffix("s").show_value(true), &path, data, actions) {
                                         actions.modulation_actions.push(ModulationAction::UpdateADSRRelease { source_id: sid.clone(), release: r });
                                     }
@@ -459,7 +459,7 @@ fn render_step_sequencer_controls(
     let mut r = rate;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rate:").small());
-        let path = format!("mod/{}/rate", idx);
+        let path = format!("mod/{}/rate", sid);
         if render_mod_learn_slider(
             ui,
             &mut r,
@@ -687,7 +687,7 @@ fn render_step_sequencer_controls(
                 egui::pos2(x0, rect.top()),
                 egui::vec2(step_w, rect.height()),
             );
-            let step_path = format!("mod/{}/step/{}", idx, step_idx);
+            let step_path = format!("mod/{}/step/{}", sid, step_idx);
             if data.midi_learn_active {
                 let is_target = data.midi_learn_target.as_deref() == Some(step_path.as_str());
                 if is_target {
