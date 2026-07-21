@@ -15,7 +15,7 @@ pub use crate::modulation::{
     ADSRStage, AudioBandPreset, AudioReactMode, LFOWaveform, StepInterpolation,
 };
 pub use crate::params::ParamValue;
-pub use crate::renderer::context::OutputSource;
+pub use crate::renderer::config::OutputSource;
 pub use crate::surface::{
     CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
 };
@@ -138,7 +138,7 @@ pub struct MixerSnapshot {
     pub active_transition_name: Option<String>,
     pub transition_names: Vec<String>,
     pub sequences: Vec<SequenceSnapshot>,
-    pub tonemap_mode: crate::renderer::tonemap::TonemapMode,
+    pub tonemap_mode: crate::renderer::config::TonemapMode,
     pub active_lut: Option<String>,
 }
 
@@ -373,13 +373,13 @@ pub struct OutputWindowSnapshot {
     pub uuid: String,
     pub name: String,
     /// Full output target (carries `audio_device` for ffmpeg-backed outputs).
-    pub target: crate::renderer::context::OutputTarget,
+    pub target: crate::renderer::config::OutputTarget,
     pub target_label: String,
     pub is_on_display: bool,
     /// Whether a headless output is actively recording/streaming.
     pub is_active: bool,
     pub surface_assignments: Vec<SurfaceAssignmentSnapshot>,
-    pub calibration_mode: crate::renderer::context::CalibrationMode,
+    pub calibration_mode: crate::renderer::config::CalibrationMode,
     /// Live audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughSnapshot>,
 }
@@ -547,7 +547,7 @@ mod tests {
                 active_transition_name: None,
                 transition_names: vec![],
                 sequences: vec![],
-                tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+                tonemap_mode: crate::renderer::config::TonemapMode::default(),
                 active_lut: None,
             },
             audio: AudioSnapshot {
@@ -626,7 +626,7 @@ mod tests {
                 active_transition_name: None,
                 transition_names: vec![],
                 sequences: vec![],
-                tonemap_mode: crate::renderer::tonemap::TonemapMode::default(),
+                tonemap_mode: crate::renderer::config::TonemapMode::default(),
                 active_lut: None,
             },
             audio: AudioSnapshot {

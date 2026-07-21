@@ -1,5 +1,6 @@
 pub mod blit;
 pub mod compute_pipeline;
+pub mod config;
 pub mod context;
 pub mod dome;
 pub mod dome_preview;

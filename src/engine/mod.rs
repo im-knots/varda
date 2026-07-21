@@ -51,7 +51,7 @@ pub type CommandEnvelope = (
 pub enum EngineCommand {
     // ── Mixer ──────────────────────────────────────────────────
     SetCrossfader(f32),
-    SetTonemapMode(crate::renderer::tonemap::TonemapMode),
+    SetTonemapMode(crate::renderer::config::TonemapMode),
     LoadLut {
         filename: String,
     },
@@ -453,7 +453,7 @@ pub enum EngineCommand {
     // ── Output ─────────────────────────────────────────────────
     CreateOutput,
     CreateHeadlessOutput {
-        target: crate::renderer::context::OutputTarget,
+        target: crate::renderer::config::OutputTarget,
     },
     CloseOutput {
         idx: usize,
@@ -464,7 +464,7 @@ pub enum EngineCommand {
     },
     SetOutputTarget {
         idx: usize,
-        target: crate::renderer::context::OutputTarget,
+        target: crate::renderer::config::OutputTarget,
     },
     StartOutput {
         idx: usize,
@@ -475,7 +475,7 @@ pub enum EngineCommand {
     /// Set the calibration display mode for an output (Off / Projector / Surfaces).
     SetCalibrationMode {
         idx: usize,
-        mode: crate::renderer::context::CalibrationMode,
+        mode: crate::renderer::config::CalibrationMode,
     },
     /// Move one corner-pin corner of a surface's warp (per-surface).
     SetWarpCorner {
@@ -539,15 +539,15 @@ pub enum EngineCommand {
     },
     SetEdgeBlend {
         output_idx: usize,
-        config: crate::renderer::edge_blend::EdgeBlendConfig,
+        config: crate::renderer::config::EdgeBlendConfig,
     },
     SetEdgeBlendMode {
         output_idx: usize,
-        mode: crate::renderer::edge_blend::EdgeBlendMode,
+        mode: crate::renderer::config::EdgeBlendMode,
     },
     SetOutputRotation {
         idx: usize,
-        rotation: crate::renderer::context::OutputRotation,
+        rotation: crate::renderer::config::OutputRotation,
     },
 
     // ── Surfaces ────────────────────────────────────────────────

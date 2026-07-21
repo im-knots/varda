@@ -3,63 +3,11 @@
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 
-/// Controls whether edge blend config is user-set or auto-computed from surface topology.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    utoipa::ToSchema,
-    Default,
-)]
-pub enum EdgeBlendMode {
-    /// User sets each edge manually (default — preserves existing behavior).
-    #[default]
-    Manual,
-    /// Blend config is auto-derived from overlapping surfaces across outputs.
-    Auto,
-}
-
-/// Per-edge blend configuration.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, utoipa::ToSchema)]
-pub struct EdgeBlendEdge {
-    pub enabled: bool,
-    /// Blend zone width as fraction of output dimension (0.0–0.5).
-    pub width: f32,
-    /// Gamma curve exponent for the blend ramp (typically 1.0–3.0).
-    pub gamma: f32,
-}
-
-impl Default for EdgeBlendEdge {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            width: 0.1,
-            gamma: 2.2,
-        }
-    }
-}
-
-/// Edge blending configuration for an output — four independent edges.
-#[derive(
-    Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, utoipa::ToSchema, Default,
-)]
-pub struct EdgeBlendConfig {
-    pub left: EdgeBlendEdge,
-    pub right: EdgeBlendEdge,
-    pub top: EdgeBlendEdge,
-    pub bottom: EdgeBlendEdge,
-}
-
-impl EdgeBlendConfig {
-    /// Returns true if any edge has blending enabled.
-    pub fn any_enabled(&self) -> bool {
-        self.left.enabled || self.right.enabled || self.top.enabled || self.bottom.enabled
-    }
-}
+// The user-facing blend config value types (`EdgeBlendMode`, `EdgeBlendEdge`,
+// `EdgeBlendConfig`) are framework-free; defined in `config` and re-exported
+// here so `crate::renderer::edge_blend::…` paths still resolve. The GPU
+// pipeline and auto-detection logic below stay in this file.
+pub use super::config::{EdgeBlendConfig, EdgeBlendEdge, EdgeBlendMode};
 
 // ── Per-surface overlap zone blending (Auto mode) ────────────────────
 
