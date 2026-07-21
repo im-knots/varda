@@ -5,9 +5,11 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'tests/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'
+      - '.github/workflows/test.yml'
 
 env:
   CARGO_TERM_COLOR: always
@@ -42,5 +44,12 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
+      - name: Run unit tests
         run: cargo test --lib
+
+      # GPU-free integration suite: egui/AccessKit interaction tests run entirely
+      # on the CPU (no wgpu device is created without `.snapshot()`), so they work
+      # on GPU-less GitHub runners. The headless-engine and snapshot suites still
+      # require a GPU adapter and are gated separately.
+      - name: Run GPU-free integration tests
+        run: cargo test --test ui_integration
