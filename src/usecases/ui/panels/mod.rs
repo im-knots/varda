@@ -1366,17 +1366,20 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
     let mut custom_w: u32 = ui.data(|d| d.get_temp(custom_w_id)).unwrap_or(current_w);
     let mut custom_h: u32 = ui.data(|d| d.get_temp(custom_h_id)).unwrap_or(current_h);
 
+    // No artificial cap: the upper bound is the GPU's max texture dimension,
+    // matching what the engine/API accept (spec/resolution-and-scaling.md).
+    let max_dim = data.max_render_dimension;
     ui.horizontal(|ui| {
         ui.label("W:");
         ui.add(
             egui::DragValue::new(&mut custom_w)
-                .range(64..=7680)
+                .range(64..=max_dim)
                 .speed(16),
         );
         ui.label("H:");
         ui.add(
             egui::DragValue::new(&mut custom_h)
-                .range(64..=4320)
+                .range(64..=max_dim)
                 .speed(16),
         );
     });

@@ -894,6 +894,9 @@ pub struct UIData {
     pub render_width: u32,
     /// Current master render height
     pub render_height: u32,
+    /// GPU's maximum 2D texture dimension — the only bound on custom render
+    /// resolution (Varda imposes no artificial cap).
+    pub max_render_dimension: u32,
     /// Target FPS (0 = uncapped)
     pub target_fps: u32,
     /// Whether undo is available
@@ -2203,6 +2206,7 @@ impl UIData {
             clock_manual_bpm: None,
             render_width: 1920,
             render_height: 1080,
+            max_render_dimension: 16384,
             target_fps: 60,
             can_undo: false,
             can_redo: false,
