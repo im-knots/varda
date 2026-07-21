@@ -473,6 +473,8 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         syphon_available: false,
         stream_receivers: build_stream_receiver_snapshots(app),
         analyzers: app.available_analyzers(),
+        can_undo: app.history_can_undo(),
+        can_redo: app.history_can_redo(),
     }
 }
 

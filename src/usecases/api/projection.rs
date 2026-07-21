@@ -288,6 +288,8 @@ pub(crate) mod tests {
             syphon_available: false,
             stream_receivers: vec![],
             analyzers: vec![],
+            can_undo: false,
+            can_redo: false,
         }
     }
 

@@ -1487,17 +1487,13 @@ impl VardaApp {
             }
 
             // ── History ───────────────────────────────────────────
+            // Restore is shared with the windowed runner via `history_undo` /
+            // `history_redo` on the unified timeline. The headless/API path has
+            // no UI layout, so it uses `history_snapshot_default()` for the
+            // "current" state pushed onto the opposite stack.
             EngineCommand::Undo => {
                 let current = self.history_snapshot_default();
-                if let Some(snap) = self.session.history.undo(current) {
-                    let rw = self.render_width;
-                    let rh = self.render_height;
-                    let (warnings, _) = self.apply_scene_diff(&snap.scene, rw, rh);
-                    self.apply_stage_diff(&snap.stage);
-                    self.mixer.clear_sub_mix_cache();
-                    for w in &warnings {
-                        log::warn!("Undo warning: {}", w);
-                    }
+                if self.history_undo(current).is_some() {
                     CommandResult::Ok
                 } else {
                     CommandResult::Err {
@@ -1508,15 +1504,7 @@ impl VardaApp {
             }
             EngineCommand::Redo => {
                 let current = self.history_snapshot_default();
-                if let Some(snap) = self.session.history.redo(current) {
-                    let rw = self.render_width;
-                    let rh = self.render_height;
-                    let (warnings, _) = self.apply_scene_diff(&snap.scene, rw, rh);
-                    self.apply_stage_diff(&snap.stage);
-                    self.mixer.clear_sub_mix_cache();
-                    for w in &warnings {
-                        log::warn!("Redo warning: {}", w);
-                    }
+                if self.history_redo(current).is_some() {
                     CommandResult::Ok
                 } else {
                     CommandResult::Err {
@@ -1532,5 +1520,148 @@ impl VardaApp {
                 CommandResult::Ok
             }
         }
+    }
+}
+
+/// Whether a bus-driven command should record an undo/redo snapshot before it
+/// executes. This is what makes API / WebSocket / CLI edits undoable on the
+/// same timeline the windowed UI uses (see [undo-redo.md](/spec/undo-redo.md)).
+///
+/// The predicate is an explicit **denylist** of live-control, transient, and
+/// non-authored commands; everything else defaults to undoable. New commands
+/// are therefore undoable unless added here — when introducing a live control
+/// (transport, device toggle, output-window lifecycle) or a transient action,
+/// add it below so it does not pollute the undo timeline. This mirrors
+/// `UIActions::has_undoable_action` / `has_undoable_stage_action`, which are
+/// the equivalent gate for the windowed consumer.
+pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
+    use EngineCommand as C;
+    !matches!(
+        cmd,
+        // Live crossfader control (spec: ⚠️ live, excluded).
+        C::SetCrossfader(..)
+            | C::AutoCrossfade { .. }
+            | C::BeatCrossfade { .. }
+            // Audio device lifecycle / scanning.
+            | C::OpenAudioSource { .. }
+            | C::CloseAudioSource { .. }
+            | C::ScanAudioDevices
+            | C::RescanAudio
+            | C::ToggleAudioSource { .. }
+            // Video transport (temporal, not structural).
+            | C::VideoTogglePlay { .. }
+            | C::VideoSeek { .. }
+            | C::VideoSetSpeed { .. }
+            | C::VideoSetLoopMode { .. }
+            | C::VideoSetInPoint { .. }
+            | C::VideoSetOutPoint { .. }
+            | C::VideoClearInOutPoints { .. }
+            // ADSR live triggers.
+            | C::TriggerAdsr { .. }
+            | C::ReleaseAdsr { .. }
+            // Sequence playback transport (authoring steps stay undoable).
+            | C::PlaySequence { .. }
+            | C::StopSequence { .. }
+            | C::ToggleSequence { .. }
+            // HTML transient window / reload.
+            | C::OpenHtmlInteractive { .. }
+            | C::CloseHtmlInteractive
+            | C::ReloadHtmlDeck { .. }
+            // Stream library config (not scene state).
+            | C::AddStreamLibraryEntry { .. }
+            | C::RemoveStreamLibraryEntry { .. }
+            | C::AddHlsLibraryEntry { .. }
+            | C::RemoveHlsLibraryEntry { .. }
+            | C::AddDashLibraryEntry { .. }
+            | C::RemoveDashLibraryEntry { .. }
+            | C::AddRtmpLibraryEntry { .. }
+            | C::RemoveRtmpLibraryEntry { .. }
+            // Output-window lifecycle / device config (spec: ❌, excluded).
+            // Surface→output *assignments* remain undoable (default true).
+            | C::CreateOutput
+            | C::CreateHeadlessOutput { .. }
+            | C::CloseOutput { .. }
+            | C::SetOutputDisplay { .. }
+            | C::SetOutputTarget { .. }
+            | C::StartOutput { .. }
+            | C::StopOutput { .. }
+            | C::SetCalibrationMode { .. }
+            | C::SetOutputRotation { .. }
+            | C::SetEdgeBlend { .. }
+            | C::SetEdgeBlendMode { .. }
+            // Surface auto-detection produces preview contours only; the scene
+            // is not mutated until ConfirmDetectedContours (which is undoable).
+            | C::DetectFromImage { .. }
+            | C::DetectFromSvg { .. }
+            | C::DetectFromDxf { .. }
+            | C::DetectFromCamera { .. }
+            // Analyzer instance lifecycle (runtime, not SceneConfig state).
+            | C::RequestAnalyzer { .. }
+            | C::ReleaseAnalyzer { .. }
+            | C::AddAnalyzerModSource { .. }
+            | C::UpdateAnalyzerSmoothing { .. }
+            // Device scanning / MIDI mappings (device config, not scene).
+            | C::RescanNdi
+            | C::RescanSyphon
+            | C::RescanCameras
+            | C::RescanMidi
+            | C::SetMidiDeviceEnabled { .. }
+            | C::ClearMidiMappings
+            | C::RemoveMidiMapping { .. }
+            // Clock preference / manual BPM (live sync config).
+            | C::SetClockPreference { .. }
+            | C::SetManualBpm { .. }
+            // Global engine settings / profiling.
+            | C::SetRenderResolution { .. }
+            | C::SetTargetFps { .. }
+            | C::StartPerfProfile { .. }
+            // Persistence, history control, and shutdown are never undoable.
+            | C::SaveWorkspace
+            | C::LoadWorkspace
+            | C::Undo
+            | C::Redo
+            | C::Shutdown
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_is_undoable;
+    use crate::engine::EngineCommand as C;
+
+    #[test]
+    fn authoring_commands_are_undoable() {
+        assert!(command_is_undoable(&C::AddChannel));
+        assert!(command_is_undoable(&C::RemoveChannel { channel_idx: 0 }));
+        assert!(command_is_undoable(&C::SetChannelOpacity {
+            channel_idx: 0,
+            opacity: 0.5,
+        }));
+        assert!(command_is_undoable(&C::SetParam {
+            path: "deck/abc/opacity".into(),
+            value: crate::engine::ParamValue::Float(0.5),
+        }));
+        assert!(command_is_undoable(&C::RemoveSurface { uuid: "s".into() }));
+        // Surface→output assignment is authoring and must be undoable.
+        assert!(command_is_undoable(&C::AssignSurfaceToOutputByIdx {
+            output_idx: 0,
+            surface_uuid: "s".into(),
+        }));
+    }
+
+    #[test]
+    fn live_and_transient_commands_are_not_undoable() {
+        assert!(!command_is_undoable(&C::SetCrossfader(0.5)));
+        assert!(!command_is_undoable(&C::VideoTogglePlay {
+            channel_idx: 0,
+            deck_idx: 0,
+        }));
+        assert!(!command_is_undoable(&C::PlaySequence { idx: 0 }));
+        assert!(!command_is_undoable(&C::StartOutput { idx: 0 }));
+        assert!(!command_is_undoable(&C::CreateOutput));
+        assert!(!command_is_undoable(&C::Undo));
+        assert!(!command_is_undoable(&C::Redo));
+        assert!(!command_is_undoable(&C::SaveWorkspace));
+        assert!(!command_is_undoable(&C::Shutdown));
     }
 }

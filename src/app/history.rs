@@ -79,6 +79,20 @@ impl HistoryManager {
     }
 }
 
+/// Result of a successful undo/redo restore, returned to the caller.
+///
+/// A windowed consumer uses `structural_changed` to decide whether to
+/// re-register GPU preview textures and reads dome layout flags off the
+/// restored `snapshot`'s stage half. The headless/API consumer only needs to
+/// know a restore happened (`Some(_)` vs `None`).
+pub struct HistoryRestore {
+    /// The state that was restored onto live engine state.
+    pub snapshot: HistorySnapshot,
+    /// True if the scene diff changed deck/channel structure (GPU resources
+    /// were rebuilt, so preview textures must be re-registered).
+    pub structural_changed: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

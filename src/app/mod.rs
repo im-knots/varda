@@ -525,6 +525,15 @@ impl VardaApp {
     /// is handled. Adding a new variant requires wiring it here.
     pub fn process_commands(&mut self) {
         while let Ok((cmd, reply_tx)) = self.bus.command_rx.try_recv() {
+            // Record pre-mutation state so bus-driven (HTTP API / WebSocket /
+            // CLI / MIDI-issued) edits are undoable on the same timeline the
+            // windowed UI uses. In-process UI mutations do NOT flow through the
+            // bus — the windowed runner records those itself — so there is no
+            // double-record here. See commands::command_is_undoable.
+            if commands::command_is_undoable(&cmd) {
+                let snapshot = self.history_snapshot_default();
+                self.push_history(snapshot);
+            }
             let result = self.execute_command(cmd);
             if let Some(tx) = reply_tx {
                 let _ = tx.send(result);
@@ -1064,23 +1073,73 @@ mod tests {
         assert!((state.mixer.channels[0].opacity - 0.5).abs() < 1e-5);
     }
 
+    /// Regression test for the previously-dead API undo/redo path: bus-driven
+    /// (HTTP API / headless) commands must record onto the shared timeline so
+    /// `Undo`/`Redo` sent over the same bus actually restore state.
     #[test]
-    fn smoke_undo_redo_roundtrip() {
+    fn api_command_undo_redo_roundtrip() {
         let Some(mut app) = headless_app() else {
             return;
         };
         let tx = app.command_sender();
-        // Set crossfader to 0.5 (will trigger history push)
+
+        // Baseline: no history yet, nothing to undo.
+        assert!(!app.history_can_undo(), "fresh app has empty undo stack");
+        let original = app.build_engine_state().mixer.channels[0].opacity;
+
+        // An undoable, bus-driven edit records a pre-mutation snapshot.
+        let new_opacity = if (original - 0.5).abs() < 1e-3 {
+            0.25
+        } else {
+            0.5
+        };
+        tx.send((
+            crate::engine::EngineCommand::SetChannelOpacity {
+                channel_idx: 0,
+                opacity: new_opacity,
+            },
+            None,
+        ))
+        .unwrap();
+        app.process_commands();
+        assert!(
+            app.history_can_undo(),
+            "undoable API command should record history"
+        );
+        assert!((app.build_engine_state().mixer.channels[0].opacity - new_opacity).abs() < 1e-5);
+
+        // Undo over the bus restores the pre-edit opacity.
+        tx.send((crate::engine::EngineCommand::Undo, None)).unwrap();
+        app.process_commands();
+        assert!(
+            (app.build_engine_state().mixer.channels[0].opacity - original).abs() < 1e-5,
+            "API undo must restore the pre-command state"
+        );
+        assert!(app.history_can_redo(), "after undo, redo is available");
+
+        // Redo re-applies the edit.
+        tx.send((crate::engine::EngineCommand::Redo, None)).unwrap();
+        app.process_commands();
+        assert!(
+            (app.build_engine_state().mixer.channels[0].opacity - new_opacity).abs() < 1e-5,
+            "API redo must re-apply the command"
+        );
+    }
+
+    /// Live-control commands (crossfader) must NOT pollute the undo timeline.
+    #[test]
+    fn live_control_commands_do_not_record_history() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let tx = app.command_sender();
         tx.send((crate::engine::EngineCommand::SetCrossfader(0.5), None))
             .unwrap();
         app.process_commands();
-        // Undo
-        tx.send((crate::engine::EngineCommand::Undo, None)).unwrap();
-        app.process_commands();
-        // Redo
-        tx.send((crate::engine::EngineCommand::Redo, None)).unwrap();
-        app.process_commands();
-        // Just verify no crash — undo/redo correctness is tested in history.rs
+        assert!(
+            !app.history_can_undo(),
+            "crossfader is a live control and must not record history"
+        );
     }
 
     #[test]

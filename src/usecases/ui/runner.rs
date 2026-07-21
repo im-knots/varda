@@ -4,7 +4,6 @@
 //! The engine (`VardaApp`) is owned here and driven each frame.
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
-use crate::app::history::HistoryManager;
 use crate::app::render::{DeckLoadResult, FileDialogKind, FileDialogResult};
 use crate::app::{AppConfig, VardaApp};
 use crate::renderer::blit::BlitPipeline;
@@ -134,8 +133,10 @@ pub struct UIRunner {
     gpu_init_handle: Option<std::thread::JoinHandle<anyhow::Result<(GpuContext, WindowSurface)>>>,
     startup_t0: Option<std::time::Instant>,
 
-    // ── Undo/redo history ─────────────────────────────────────────────
-    history: HistoryManager,
+    // ── Undo/redo ─────────────────────────────────────────────────────
+    // The undo/redo timeline itself lives on `VardaApp` (shared with the
+    // HTTP/headless command bus). The runner only tracks gesture edges so a
+    // continuous stage/warp drag collapses into one undo step.
     /// Previous frame's `gesture_active` flag, for detecting drag start vs.
     /// continuation so a continuous stage/warp drag collapses into one undo step.
     prev_gesture_active: bool,
@@ -204,7 +205,6 @@ impl UIRunner {
             varda: None,
             gpu_init_handle: None,
             startup_t0: None,
-            history: HistoryManager::new(),
             prev_gesture_active: false,
             publish_counter: 0,
             api_handle: None,
@@ -532,7 +532,7 @@ impl UIRunner {
         if let Some(loaded_layout) = varda.load_workspace() {
             self.layout = loaded_layout;
         }
-        self.history.clear();
+        // `load_workspace` clears the engine-owned undo/redo timeline.
         log::info!("[STARTUP] Workspace loaded ({:.0?})", startup_t0.elapsed());
 
         // Start HTTP API server on background thread
@@ -948,8 +948,8 @@ impl UIRunner {
             &self.output_preview_textures,
             self.main_output_texture,
         );
-        ui_data.can_undo = self.history.can_undo();
-        ui_data.can_redo = self.history.can_redo();
+        ui_data.can_undo = varda_ref.history_can_undo();
+        ui_data.can_redo = varda_ref.history_can_redo();
         ui_data.pending_deck_loads = self
             .pending_deck_loads
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -1193,7 +1193,7 @@ impl UIRunner {
             let gesture_continuation = ui_actions.gesture_active && self.prev_gesture_active;
             if scene_dirty || (stage_dirty && !gesture_continuation) {
                 let snapshot = varda.history_snapshot(&self.layout);
-                self.history.push(snapshot);
+                varda.push_history(snapshot);
             }
             self.prev_gesture_active = ui_actions.gesture_active;
 
@@ -1231,31 +1231,24 @@ impl UIRunner {
                 ui_actions.save_requested = true;
             }
 
-            // ── Undo/redo: diff-apply from history ──
+            // ── Undo/redo: restore via the engine's shared timeline ──
+            // The restore (scene + stage diff-apply) lives on `VardaApp` so the
+            // windowed and headless/API consumers behave identically; the
+            // runner only layers on UI-specific refresh (dome layout flags +
+            // GPU preview texture re-registration).
             if ui_actions.undo_requested || ui_actions.redo_requested {
                 let current = varda.history_snapshot(&self.layout);
-                let target = if ui_actions.undo_requested {
-                    self.history.undo(current)
+                let restore = if ui_actions.undo_requested {
+                    varda.history_undo(current)
                 } else {
-                    self.history.redo(current)
+                    varda.history_redo(current)
                 };
-                if let Some(snap) = target {
-                    let rw = varda.render_width();
-                    let rh = varda.render_height();
-                    // Scene half — diff-apply (patches only what changed).
-                    let (warnings, structural_changed) =
-                        varda.apply_scene_diff(&snap.scene, rw, rh);
-                    for w in &warnings {
-                        log::warn!("Undo/redo restore warning: {}", w);
-                    }
-                    // Stage half — restore surfaces + assignments (no window
-                    // lifecycle), then restore dome layout flags into UI layout.
-                    // Cosmetic editor prefs (grid/snap/panels) are intentionally
-                    // left untouched so undo doesn't toggle panels.
-                    varda.apply_stage_diff(&snap.stage);
-                    self.layout.dome_mode_active = snap.stage.dome_mode_active;
-                    self.layout.dome_preset = snap.stage.dome_preset;
-                    self.layout.dome_geometry = snap.stage.dome_geometry;
+                if let Some(restore) = restore {
+                    let structural_changed = restore.structural_changed;
+                    // Dome layout flags live in UI layout, not engine state.
+                    self.layout.dome_mode_active = restore.snapshot.stage.dome_mode_active;
+                    self.layout.dome_preset = restore.snapshot.stage.dome_preset;
+                    self.layout.dome_geometry = restore.snapshot.stage.dome_geometry;
 
                     let label = if ui_actions.undo_requested {
                         "↩ Undo"

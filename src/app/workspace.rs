@@ -102,6 +102,9 @@ impl VardaApp {
             log::info!("No .varda/ directory found, starting fresh");
             return None;
         }
+        // Loading a workspace replaces the live scene/stage, so the undo/redo
+        // timeline (which references the previous state) must be cleared.
+        self.session.history.clear();
         let mut loaded_layout: Option<UILayoutState> = None;
         if self.session.workspace.has_stage() {
             match crate::persistence::StagePrefs::load(self.session.workspace.stage_path()) {
@@ -633,6 +636,77 @@ impl VardaApp {
             layout.dome_geometry,
         );
         super::history::HistorySnapshot { scene, stage }
+    }
+
+    // ── Unified undo/redo timeline ─────────────────────────────────────────
+    //
+    // The engine owns the single `HistoryManager` (on `SessionState`). Both
+    // consumers push into and restore from it through these methods, so the
+    // windowed UI and the HTTP/headless command bus share one timeline. See
+    // [undo-redo.md](/spec/undo-redo.md) → "Recording Points".
+
+    /// True if there is an undoable action on the shared timeline.
+    pub fn history_can_undo(&self) -> bool {
+        self.session.history.can_undo()
+    }
+
+    /// True if there is a redoable action on the shared timeline.
+    pub fn history_can_redo(&self) -> bool {
+        self.session.history.can_redo()
+    }
+
+    /// Record `snapshot` as the pre-mutation state for one undoable step.
+    pub fn push_history(&mut self, snapshot: super::history::HistorySnapshot) {
+        self.session.history.push(snapshot);
+    }
+
+    /// Clear the undo/redo timeline (e.g. on workspace load).
+    pub fn clear_history(&mut self) {
+        self.session.history.clear();
+    }
+
+    /// Restore a history snapshot onto live state (scene + stage), returning
+    /// what changed so a windowed caller can refresh GPU preview textures.
+    fn restore_history_snapshot(
+        &mut self,
+        snapshot: super::history::HistorySnapshot,
+    ) -> super::history::HistoryRestore {
+        let rw = self.render_width;
+        let rh = self.render_height;
+        // Scene half — diff-apply (patches only what changed).
+        let (warnings, structural_changed) = self.apply_scene_diff(&snapshot.scene, rw, rh);
+        // Stage half — restore surfaces + assignments (no window lifecycle).
+        // Cosmetic editor prefs are intentionally left untouched; dome layout
+        // flags live in UI layout and are restored by the windowed caller.
+        self.apply_stage_diff(&snapshot.stage);
+        self.mixer.clear_sub_mix_cache();
+        for w in &warnings {
+            log::warn!("History restore warning: {}", w);
+        }
+        super::history::HistoryRestore {
+            snapshot,
+            structural_changed,
+        }
+    }
+
+    /// Undo the most recent undoable action. `current` is the live state to
+    /// place on the redo stack. Returns `None` when the undo stack is empty.
+    pub fn history_undo(
+        &mut self,
+        current: super::history::HistorySnapshot,
+    ) -> Option<super::history::HistoryRestore> {
+        let snapshot = self.session.history.undo(current)?;
+        Some(self.restore_history_snapshot(snapshot))
+    }
+
+    /// Redo the most recently undone action. `current` is the live state to
+    /// place on the undo stack. Returns `None` when the redo stack is empty.
+    pub fn history_redo(
+        &mut self,
+        current: super::history::HistorySnapshot,
+    ) -> Option<super::history::HistoryRestore> {
+        let snapshot = self.session.history.redo(current)?;
+        Some(self.restore_history_snapshot(snapshot))
     }
 
     /// Apply a stage diff: restore the authored stage state from a `StagePrefs`
