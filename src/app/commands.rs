@@ -2,7 +2,7 @@
 //!
 //! Houses `execute_command`, the exhaustive match over every `EngineCommand`
 //! variant that cross-thread consumers (HTTP API, WebSocket, CLI) drive through
-//! the command channel. 
+//! the command channel.
 
 use super::VardaApp;
 use crate::engine::{CommandResult, EngineCommand, ErrorCode};
