@@ -581,72 +581,58 @@ impl ControllerLedManager {
 // This is parameter semantics, not device knowledge. It maps parameter
 // state to logical color names that profiles resolve to MIDI values.
 
+/// Resolve a deck slot by its stable UUID, mirroring the parameter router.
+fn deck_slot_by_uuid<'a>(mixer: &'a Mixer, uuid: &str) -> Option<&'a crate::channel::DeckSlot> {
+    let (ch, dk) = mixer.find_deck_by_uuid(uuid)?;
+    mixer.channel(ch).and_then(|c| c.decks.get(dk))
+}
+
 /// Read a parameter value from the mixer. Returns 0.0–1.0 or -1.0 if not found.
+///
+/// Paths use stable UUIDs for channels, decks, and effects, matching the
+/// canonical format emitted by the UI and consumed by `param_router`. Any
+/// unresolved entity yields -1.0, which callers render as the "not found" LED
+/// color.
 fn read_param_value(mixer: &Mixer, path: &str) -> f32 {
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
         ["crossfader"] => mixer.crossfader(),
-        ["ch", ch_s, "opacity"] => ch_s
-            .parse::<usize>()
-            .ok()
+        ["ch", ch_uuid, "opacity"] => mixer
+            .find_channel_by_uuid(ch_uuid)
             .and_then(|ch| mixer.channel(ch))
             .map(|c| c.opacity)
             .unwrap_or(-1.0),
-        ["ch", ch_s, "deck", dk_s, "opacity"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                mixer
-                    .channel(ch)
-                    .and_then(|c| c.decks.get(dk))
-                    .map(|d| d.opacity)
-                    .unwrap_or(-1.0)
-            } else {
-                -1.0
-            }
-        }
-        ["ch", ch_s, "deck", dk_s, "mute"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                mixer
-                    .channel(ch)
-                    .and_then(|c| c.decks.get(dk))
-                    .map(|d| if d.mute { 1.0 } else { 0.0 })
-                    .unwrap_or(-1.0)
-            } else {
-                -1.0
-            }
-        }
-        ["ch", ch_s, "deck", dk_s, "solo"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                mixer
-                    .channel(ch)
-                    .and_then(|c| c.decks.get(dk))
-                    .map(|d| if d.solo { 1.0 } else { 0.0 })
-                    .unwrap_or(-1.0)
-            } else {
-                -1.0
-            }
-        }
-        ["ch", ch_s, "deck", dk_s, "trigger"] => {
-            if let (Ok(ch), Ok(dk)) = (ch_s.parse::<usize>(), dk_s.parse::<usize>()) {
-                mixer
-                    .channel(ch)
-                    .and_then(|c| c.decks.get(dk))
-                    .map(|d| d.opacity)
-                    .unwrap_or(-1.0)
-            } else {
-                -1.0
-            }
-        }
-        ["ch", ch_s, "effect", ek_s, "param", name] => {
-            if let (Ok(ch), Ok(ek)) = (ch_s.parse::<usize>(), ek_s.parse::<usize>()) {
-                mixer
-                    .channel(ch)
-                    .and_then(|c| c.effects.get(ek))
-                    .and_then(|e| e.params.get_float(name))
-                    .unwrap_or(-1.0)
-            } else {
-                -1.0
-            }
-        }
+        ["deck", uuid, "opacity"] => deck_slot_by_uuid(mixer, uuid)
+            .map(|d| d.opacity)
+            .unwrap_or(-1.0),
+        ["deck", uuid, "mute"] => deck_slot_by_uuid(mixer, uuid)
+            .map(|d| if d.mute { 1.0 } else { 0.0 })
+            .unwrap_or(-1.0),
+        ["deck", uuid, "solo"] => deck_slot_by_uuid(mixer, uuid)
+            .map(|d| if d.solo { 1.0 } else { 0.0 })
+            .unwrap_or(-1.0),
+        ["deck", uuid, "trigger"] => deck_slot_by_uuid(mixer, uuid)
+            .map(|d| d.opacity)
+            .unwrap_or(-1.0),
+        ["deck", uuid, "param", name] => deck_slot_by_uuid(mixer, uuid)
+            .and_then(|d| d.deck.generator_params.get_float(name))
+            .unwrap_or(-1.0),
+        ["deck", uuid, "effect", fx_uuid, "param", name] => deck_slot_by_uuid(mixer, uuid)
+            .and_then(|d| d.deck.effects.iter().find(|e| e.uuid == *fx_uuid))
+            .and_then(|e| e.params.get_float(name))
+            .unwrap_or(-1.0),
+        ["ch", ch_uuid, "effect", fx_uuid, "param", name] => mixer
+            .find_channel_by_uuid(ch_uuid)
+            .and_then(|ch| mixer.channel(ch))
+            .and_then(|c| c.effects.iter().find(|e| e.uuid == *fx_uuid))
+            .and_then(|e| e.params.get_float(name))
+            .unwrap_or(-1.0),
+        ["master", "effect", fx_uuid, "param", name] => mixer
+            .master_effects()
+            .iter()
+            .find(|e| e.uuid == *fx_uuid)
+            .and_then(|e| e.params.get_float(name))
+            .unwrap_or(-1.0),
         _ => -1.0,
     }
 }
@@ -741,15 +727,60 @@ mod tests {
 
     #[test]
     fn test_param_value_to_color_mute() {
-        assert_eq!(param_value_to_color("ch/0/deck/0/mute", 1.0), "red");
-        assert_eq!(param_value_to_color("ch/0/deck/0/mute", 0.0), "off");
+        assert_eq!(param_value_to_color("deck/aabbccdd/mute", 1.0), "red");
+        assert_eq!(param_value_to_color("deck/aabbccdd/mute", 0.0), "off");
     }
 
     #[test]
     fn test_param_value_to_color_continuous() {
-        assert_eq!(param_value_to_color("ch/0/opacity", 0.0), "off");
-        assert_eq!(param_value_to_color("ch/0/opacity", 0.5), "yellow");
-        assert_eq!(param_value_to_color("ch/0/opacity", 1.0), "green");
+        assert_eq!(param_value_to_color("ch/aabbccdd/opacity", 0.0), "off");
+        assert_eq!(param_value_to_color("ch/aabbccdd/opacity", 0.5), "yellow");
+        assert_eq!(param_value_to_color("ch/aabbccdd/opacity", 1.0), "green");
+    }
+
+    // ── LED feedback reader resolves entities by stable UUID (matches
+    //    param_router). Regression guard: the reader previously parsed
+    //    positional indices, so every UUID path returned -1.0 (the
+    //    "not found" color) and LEDs never reflected mapped state.
+    #[test]
+    fn read_param_value_resolves_by_uuid_and_survives_reorder() {
+        use crate::renderer::GpuContext;
+
+        let gpu = GpuContext::new_headless().expect("headless GPU required for tests");
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+
+        let ch_uuid = mixer.channel(0).unwrap().uuid().to_string();
+        mixer.channel_mut(0).unwrap().opacity = 0.42;
+
+        // Two decks in channel 0; capture the second (positional index 1).
+        let first = crate::deck::Deck::new_solid_color(&gpu, [1.0, 0.0, 0.0, 1.0], 64, 64).unwrap();
+        let second =
+            crate::deck::Deck::new_solid_color(&gpu, [0.0, 1.0, 0.0, 1.0], 64, 64).unwrap();
+        mixer.channel_mut(0).unwrap().add_deck(first);
+        mixer.channel_mut(0).unwrap().add_deck(second);
+        let deck_uuid = mixer.channel(0).unwrap().decks[1].deck.uuid().to_string();
+        mixer.channel_mut(0).unwrap().decks[1].opacity = 0.7;
+        mixer.channel_mut(0).unwrap().decks[1].mute = true;
+
+        // UUID paths resolve to live values (would be -1.0 under index parsing).
+        assert!((read_param_value(&mixer, &format!("ch/{ch_uuid}/opacity")) - 0.42).abs() < 1e-4);
+        assert!(
+            (read_param_value(&mixer, &format!("deck/{deck_uuid}/opacity")) - 0.7).abs() < 1e-4
+        );
+        assert_eq!(
+            read_param_value(&mixer, &format!("deck/{deck_uuid}/mute")),
+            1.0
+        );
+
+        // Removing the earlier deck shifts positional indices; UUID still resolves.
+        mixer.channel_mut(0).unwrap().decks.remove(0);
+        assert!(
+            (read_param_value(&mixer, &format!("deck/{deck_uuid}/opacity")) - 0.7).abs() < 1e-4
+        );
+
+        // Unknown UUIDs yield the "not found" sentinel, not a wrong entity.
+        assert_eq!(read_param_value(&mixer, "deck/deadbeef/opacity"), -1.0);
+        assert_eq!(read_param_value(&mixer, "ch/deadbeef/opacity"), -1.0);
     }
 
     #[test]

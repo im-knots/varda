@@ -299,11 +299,11 @@ mod tests {
 
     #[test]
     fn parse_param_mod_frequency() {
-        let input = parse_osc_message("/varda/mod/2/frequency", &[OscType::Float(0.5)]);
+        let input = parse_osc_message("/varda/mod/lfo123ab/frequency", &[OscType::Float(0.5)]);
         assert_eq!(
             input,
             OscInput::Param {
-                path: "mod/2/frequency".into(),
+                path: "mod/lfo123ab/frequency".into(),
                 value: 0.5
             }
         );
@@ -396,13 +396,13 @@ mod tests {
     #[test]
     fn parse_deep_path_effect_param() {
         let input = parse_osc_message(
-            "/varda/deck/abc/effect/0/param/brightness",
+            "/varda/deck/abc/effect/fx0011aa/param/brightness",
             &[OscType::Float(0.7)],
         );
         assert_eq!(
             input,
             OscInput::Param {
-                path: "deck/abc/effect/0/param/brightness".into(),
+                path: "deck/abc/effect/fx0011aa/param/brightness".into(),
                 value: 0.7
             },
         );
@@ -411,13 +411,13 @@ mod tests {
     #[test]
     fn parse_master_effect_param() {
         let input = parse_osc_message(
-            "/varda/master/effect/1/param/amount",
+            "/varda/master/effect/fx22bb33/param/amount",
             &[OscType::Float(0.3)],
         );
         assert_eq!(
             input,
             OscInput::Param {
-                path: "master/effect/1/param/amount".into(),
+                path: "master/effect/fx22bb33/param/amount".into(),
                 value: 0.3
             },
         );
@@ -437,11 +437,11 @@ mod tests {
 
     #[test]
     fn parse_step_sequencer_step() {
-        let input = parse_osc_message("/varda/mod/0/step/3", &[OscType::Float(0.6)]);
+        let input = parse_osc_message("/varda/mod/lfo123ab/step/3", &[OscType::Float(0.6)]);
         assert_eq!(
             input,
             OscInput::Param {
-                path: "mod/0/step/3".into(),
+                path: "mod/lfo123ab/step/3".into(),
                 value: 0.6
             }
         );
