@@ -56,6 +56,7 @@ pub struct SceneResponse {
     pub master_effects: Vec<EffectSnapshot>,
     pub active_transition_name: Option<String>,
     pub modulation: ModulationSnapshot,
+    pub macros: Vec<crate::macros::Macro>,
     pub sequences: Vec<SequenceSnapshot>,
     pub streams: Vec<StreamReceiverSnapshot>,
 }
@@ -67,6 +68,7 @@ pub fn project_scene(state: &EngineState) -> SceneResponse {
         master_effects: state.mixer.master_effects.clone(),
         active_transition_name: state.mixer.active_transition_name.clone(),
         modulation: state.modulation.clone(),
+        macros: state.macros.clone(),
         sequences: state.mixer.sequences.clone(),
         streams: state.stream_receivers.clone(),
     }
@@ -288,6 +290,7 @@ pub(crate) mod tests {
             syphon_available: false,
             stream_receivers: vec![],
             analyzers: vec![],
+            macros: vec![],
             can_undo: false,
             can_redo: false,
         }

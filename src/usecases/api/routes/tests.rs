@@ -766,6 +766,163 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    // ── Read: Macro routes ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_state_macros() {
+        let (status, json) = get_json(router_with_state(), "/api/state/macros").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json.is_array());
+    }
+
+    #[tokio::test]
+    async fn test_scene_macros() {
+        let (status, json) = get_json(router_with_state(), "/api/scene/macros").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json.is_array());
+    }
+
+    // ── Write: Macro routes ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_add_macro() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/macros",
+            serde_json::json!({"kind": "Knob"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_remove_macro() {
+        let app = router_with_mock_engine();
+        let resp = app
+            .oneshot(
+                Request::delete("/api/macros/mac-123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_rename_macro() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/macros/mac-123/name",
+            serde_json::json!({"name": "Sweep"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_macro_kind() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/macros/mac-123/kind",
+            serde_json::json!({"kind": "Button"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_macro_value() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/macros/mac-123/value",
+            serde_json::json!({"value": 0.75}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_add_macro_target() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/macros/mac-123/targets",
+            serde_json::json!({"path": "crossfader"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_update_macro_target() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/macros/mac-123/targets/0",
+            serde_json::json!({"min": 0.2, "max": 0.9, "curve": "SCurve", "invert": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_update_macro_target_stepped_curve() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/macros/mac-123/targets/1",
+            serde_json::json!({"min": 0.0, "max": 1.0, "curve": {"Stepped": 4}, "invert": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_remove_macro_target() {
+        let app = router_with_mock_engine();
+        let resp = app
+            .oneshot(
+                Request::delete("/api/macros/mac-123/targets/0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_set_macro_button_behavior() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/macros/mac-123/button/behavior",
+            serde_json::json!({"behavior": "Toggle"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_macro_triggers() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/macros/mac-123/button/triggers",
+            serde_json::json!({"triggers": [
+                {"Global": "Save"},
+                {"Param": {"path": "crossfader", "value": 0.0}}
+            ]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
     // ── Write: Surface routes ───────────────────────────────────
 
     #[tokio::test]

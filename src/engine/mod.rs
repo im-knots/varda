@@ -210,6 +210,10 @@ pub enum EngineCommand {
     ClearModulation {
         target: String,
     },
+    ClearModulationSource {
+        target: String,
+        source_id: String,
+    },
 
     // ── Video Playback ────────────────────────────────────────────
     VideoTogglePlay {
@@ -839,6 +843,51 @@ pub enum EngineCommand {
     RemoveModOnMod {
         target_source_id: String,
         param_name: String,
+    },
+
+    // ── Macros ─────────────────────────────────────────────────
+    AddMacro {
+        kind: crate::macros::MacroKind,
+    },
+    RemoveMacro {
+        uuid: String,
+    },
+    RenameMacro {
+        uuid: String,
+        name: String,
+    },
+    SetMacroKind {
+        uuid: String,
+        kind: crate::macros::MacroKind,
+    },
+    /// Live macro turn — fans out to all targets. Not undoable.
+    SetMacroValue {
+        uuid: String,
+        value: f32,
+    },
+    AddMacroTarget {
+        uuid: String,
+        path: String,
+    },
+    RemoveMacroTarget {
+        uuid: String,
+        target_idx: usize,
+    },
+    UpdateMacroTarget {
+        uuid: String,
+        target_idx: usize,
+        min: f32,
+        max: f32,
+        curve: crate::macros::MacroCurve,
+        invert: bool,
+    },
+    SetMacroButtonBehavior {
+        uuid: String,
+        behavior: crate::macros::ButtonBehavior,
+    },
+    SetMacroTriggers {
+        uuid: String,
+        actions: Vec<crate::macros::TriggerAction>,
     },
 
     // ── Analyzers ──────────────────────────────────────────────────

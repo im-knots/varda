@@ -10,6 +10,7 @@ pub use transition::{
 
 use crate::channel::Channel;
 use crate::deck::Effect;
+use crate::macros::MacroBank;
 use crate::modulation::ModulationEngine;
 use crate::renderer::lut::{LoadedLut, LutPipeline};
 pub use crate::renderer::tonemap::TonemapMode;
@@ -74,6 +75,9 @@ pub struct Mixer {
 
     /// Global modulation engine
     modulation: ModulationEngine,
+
+    /// User-defined macro controls (one control → many parameter targets).
+    macros: MacroBank,
 
     /// Start time for TIME-based modulation
     start_time: std::time::Instant,
@@ -206,6 +210,7 @@ impl Mixer {
             auto_crossfade: None,
             beat_sync_crossfade: None,
             modulation: ModulationEngine::new(),
+            macros: MacroBank::new(),
             start_time: now,
             last_render_time: now,
             composite_texture,
@@ -414,6 +419,16 @@ impl Mixer {
         &mut self.modulation
     }
 
+    /// Read-only access to the macro bank.
+    pub fn macros(&self) -> &MacroBank {
+        &self.macros
+    }
+
+    /// Mutable access to the macro bank.
+    pub fn macros_mut(&mut self) -> &mut MacroBank {
+        &mut self.macros
+    }
+
     /// Read-only access to the active transition effect.
     pub fn active_transition(&self) -> Option<&TransitionEffect> {
         self.active_transition.as_ref()
@@ -537,6 +552,11 @@ impl Mixer {
     /// Replace the modulation engine (used by persistence restore).
     pub fn set_modulation(&mut self, engine: ModulationEngine) {
         self.modulation = engine;
+    }
+
+    /// Replace the macro bank (used by persistence restore).
+    pub fn set_macros(&mut self, macros: MacroBank) {
+        self.macros = macros;
     }
 
     /// Replace transition sequences (used by persistence restore).
@@ -927,5 +947,158 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // ── Macro controls: one control → many targets via the router ─────
+
+    #[test]
+    fn macro_value_fans_out_to_multiple_targets() {
+        use crate::macros::{MacroKind, MacroTarget};
+        use crate::param_router::{apply_param_by_path, EntityKind, ParamRouteError};
+
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        add_solid_deck_to(&mut mixer, &gpu, 0, [1.0, 0.0, 0.0, 1.0]);
+        let deck_uuid = mixer.channel(0).unwrap().decks[0].deck.uuid().to_string();
+
+        // One knob → crossfader + deck opacity (inverted).
+        let macro_uuid = mixer.macros_mut().add_macro(MacroKind::Knob);
+        {
+            let m = mixer.macros_mut().find_mut(&macro_uuid).unwrap();
+            m.targets.push(MacroTarget::new("crossfader"));
+            let mut inv = MacroTarget::new(format!("deck/{deck_uuid}/opacity"));
+            inv.invert = true;
+            m.targets.push(inv);
+        }
+
+        let path = format!("macro/{macro_uuid}/value");
+        assert!(apply_param_by_path(&mut mixer, &path, 0.75).is_ok());
+
+        assert!((mixer.crossfader() - 0.75).abs() < 1e-5);
+        assert!(
+            (mixer.channel(0).unwrap().decks[0].opacity - 0.25).abs() < 1e-5,
+            "inverted target should be 1 - 0.75"
+        );
+
+        // Unknown macro UUID → structured error, not silent.
+        let err = apply_param_by_path(&mut mixer, "macro/deadbeef/value", 0.5).unwrap_err();
+        assert!(matches!(
+            err,
+            ParamRouteError::UnknownEntity {
+                kind: EntityKind::Macro,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn macro_modulation_drives_targets_on_top_of_base() {
+        use crate::macros::{Macro, MacroKind, MacroTarget};
+        use crate::modulation::{AnalyzerValues, AudioValues, ModulationSource};
+
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        add_solid_deck_to(&mut mixer, &gpu, 0, [1.0, 0.0, 0.0, 1.0]);
+        let deck_uuid = mixer.channel(0).unwrap().decks[0].deck.uuid().to_string();
+
+        // Knob macro at base 0.5 driving deck opacity.
+        let macro_uuid = mixer.macros_mut().add_macro(MacroKind::Knob);
+        {
+            let m = mixer.macros_mut().find_mut(&macro_uuid).unwrap();
+            m.value = 0.5;
+            m.targets
+                .push(MacroTarget::new(format!("deck/{deck_uuid}/opacity")));
+        }
+
+        // Assign an LFO to the macro's value key and advance the engine.
+        let src = mixer
+            .modulation_mut()
+            .add_source(ModulationSource::sine_lfo(1.0));
+        let key = Macro::value_mod_key(&macro_uuid);
+        mixer.modulation_mut().assign(&key, &src, 1.0, None);
+        mixer.update_modulation(&AudioValues::default(), &AnalyzerValues::default());
+
+        mixer.apply_macro_modulation();
+
+        // The opacity target must equal the modulated (base + offset) value, and
+        // the macro's stored base must be untouched.
+        let offset = mixer.modulation().get_modulation(&key);
+        let expected = (0.5 + offset).clamp(0.0, 1.0);
+        assert!(
+            (mixer.channel(0).unwrap().decks[0].opacity - expected).abs() < 1e-5,
+            "opacity {} should equal modulated effective {expected}",
+            mixer.channel(0).unwrap().decks[0].opacity
+        );
+        assert!(
+            (mixer.macros().find(&macro_uuid).unwrap().value - 0.5).abs() < 1e-6,
+            "modulation must not overwrite the macro base value"
+        );
+    }
+
+    #[test]
+    fn macro_modulation_noop_without_assignment() {
+        use crate::macros::{MacroKind, MacroTarget};
+        use crate::modulation::ModulationSource;
+
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        add_solid_deck_to(&mut mixer, &gpu, 0, [1.0, 0.0, 0.0, 1.0]);
+        let deck_uuid = mixer.channel(0).unwrap().decks[0].deck.uuid().to_string();
+        mixer.channels_mut()[0].decks[0].opacity = 0.33;
+
+        let macro_uuid = mixer.macros_mut().add_macro(MacroKind::Knob);
+        mixer
+            .macros_mut()
+            .find_mut(&macro_uuid)
+            .unwrap()
+            .targets
+            .push(MacroTarget::new(format!("deck/{deck_uuid}/opacity")));
+        // A source exists but is NOT assigned to the macro → macro is left alone.
+        mixer
+            .modulation_mut()
+            .add_source(ModulationSource::sine_lfo(1.0));
+
+        mixer.apply_macro_modulation();
+
+        assert!(
+            (mixer.channel(0).unwrap().decks[0].opacity - 0.33).abs() < 1e-6,
+            "unmodulated macro must not touch its targets each frame"
+        );
+    }
+
+    #[test]
+    fn clear_assignment_source_removes_only_that_source() {
+        use crate::macros::{Macro, MacroKind};
+        use crate::modulation::ModulationSource;
+
+        let gpu = headless_gpu();
+        let mut mixer = Mixer::new(&gpu, 64, 64).unwrap();
+        let macro_uuid = mixer.macros_mut().add_macro(MacroKind::Knob);
+        let key = Macro::value_mod_key(&macro_uuid);
+
+        // Two sources assigned to the same macro value.
+        let a = mixer
+            .modulation_mut()
+            .add_source(ModulationSource::sine_lfo(1.0));
+        let b = mixer
+            .modulation_mut()
+            .add_source(ModulationSource::sine_lfo(2.0));
+        mixer.modulation_mut().assign(&key, &a, 1.0, None);
+        mixer.modulation_mut().assign(&key, &b, 1.0, None);
+        assert!(mixer.modulation().has_modulation(&key));
+
+        // Removing one leaves the other intact.
+        mixer.modulation_mut().clear_assignment_source(&key, &a);
+        assert!(
+            mixer.modulation().has_modulation(&key),
+            "the second source must still drive the macro"
+        );
+
+        // Removing the last drops the target entirely.
+        mixer.modulation_mut().clear_assignment_source(&key, &b);
+        assert!(
+            !mixer.modulation().has_modulation(&key),
+            "removing the last source clears the target"
+        );
     }
 }

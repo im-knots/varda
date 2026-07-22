@@ -45,6 +45,7 @@ state_route!(surfaces, |s: &crate::engine::EngineState| s
 state_route!(registry, |s: &crate::engine::EngineState| s
     .registry
     .clone());
+state_route!(macros, |s: &crate::engine::EngineState| s.macros.clone());
 state_route!(midi, |s: &crate::engine::EngineState| s.midi.clone());
 state_route!(cameras, |s: &crate::engine::EngineState| s.cameras.clone());
 state_route!(clock, |s: &crate::engine::EngineState| s.clock.clone());

@@ -8,6 +8,7 @@ pub mod deck;
 pub mod html;
 pub mod isf;
 pub mod keymap;
+pub mod macros;
 pub mod midi;
 pub mod mixer;
 pub mod modulation;

@@ -54,6 +54,12 @@ Varda is built for live VJ performance, dome projection, multi-projector install
   - [Keyboard Shortcuts](06-control-surfaces.md#keyboard-shortcuts) — learn mode, default bindings, param toggle
   - [Clock Synchronization](06-control-surfaces.md#clock-synchronization) — MIDI/OSC/audio/manual BPM, priority resolution
   - [Parameter Paths](06-control-surfaces.md#parameter-paths)
+- **7. [Macro Controls](15-macro-controls.md)** — one knob/fader/button drives many parameters
+  - [Creating a Macro](15-macro-controls.md#creating-a-macro) — knob, fader, button cards
+  - [Binding Targets](15-macro-controls.md#binding-targets) — per-target range, curve, invert
+  - [Buttons](15-macro-controls.md#buttons) — momentary, toggle, trigger actions
+  - [Mapping to MIDI / OSC / Keyboard](15-macro-controls.md#mapping-a-macro-to-midi--osc--keyboard)
+  - [HTTP API](15-macro-controls.md#http-api)
 
 ### Part III — Output & Display
 
@@ -105,4 +111,3 @@ Varda is built for live VJ performance, dome projection, multi-projector install
 
 - **API Reference** — interactive Swagger UI at [`http://localhost:8080/api/docs`](http://localhost:8080/api/docs) (when Varda is running)
 - **ISF Shader Format** — [isf.video](https://isf.video) (external)
-- **Source Code** — MIT licensed, contributions welcome

@@ -302,6 +302,9 @@ impl VardaApp {
         // (b) Modulation — cheap clone
         self.mixer.set_modulation(target.modulation.clone());
 
+        // (b2) Macros — cheap clone (config changes are undoable; live turns are not)
+        self.mixer.set_macros(target.macros.clone());
+
         // (c) Transition shader — compare names, only recreate if changed
         {
             let current_name = self.mixer.active_transition().map(|t| t.name.clone());
@@ -1053,6 +1056,7 @@ mod tests {
             active_transition: None,
             master_effects: vec![],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),

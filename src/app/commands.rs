@@ -320,6 +320,10 @@ impl VardaApp {
                 self.clear_modulation(&target);
                 CommandResult::Ok
             }
+            EngineCommand::ClearModulationSource { target, source_id } => {
+                self.clear_modulation_source(&target, &source_id);
+                CommandResult::Ok
+            }
 
             // ── Output ───────────────────────────────────────
             EngineCommand::CreateOutput => {
@@ -1244,6 +1248,55 @@ impl VardaApp {
                 self.mixer
                     .modulation_mut()
                     .clear_mod_on_mod(&target_source_id, &param_name);
+                CommandResult::Ok
+            }
+
+            // ── Macros ───────────────────────────────────────────
+            EngineCommand::AddMacro { kind } => {
+                let uuid = self.add_macro(kind);
+                CommandResult::OkWithId { uuid }
+            }
+            EngineCommand::RemoveMacro { uuid } => {
+                self.remove_macro(&uuid);
+                CommandResult::Ok
+            }
+            EngineCommand::RenameMacro { uuid, name } => {
+                self.rename_macro(&uuid, &name);
+                CommandResult::Ok
+            }
+            EngineCommand::SetMacroKind { uuid, kind } => {
+                self.set_macro_kind(&uuid, kind);
+                CommandResult::Ok
+            }
+            EngineCommand::SetMacroValue { uuid, value } => {
+                self.set_macro_value(&uuid, value);
+                CommandResult::Ok
+            }
+            EngineCommand::AddMacroTarget { uuid, path } => {
+                self.add_macro_target(&uuid, &path);
+                CommandResult::Ok
+            }
+            EngineCommand::RemoveMacroTarget { uuid, target_idx } => {
+                self.remove_macro_target(&uuid, target_idx);
+                CommandResult::Ok
+            }
+            EngineCommand::UpdateMacroTarget {
+                uuid,
+                target_idx,
+                min,
+                max,
+                curve,
+                invert,
+            } => {
+                self.update_macro_target(&uuid, target_idx, min, max, curve, invert);
+                CommandResult::Ok
+            }
+            EngineCommand::SetMacroButtonBehavior { uuid, behavior } => {
+                self.set_macro_button_behavior(&uuid, behavior);
+                CommandResult::Ok
+            }
+            EngineCommand::SetMacroTriggers { uuid, actions } => {
+                self.set_macro_triggers(&uuid, actions);
                 CommandResult::Ok
             }
 

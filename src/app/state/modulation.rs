@@ -245,6 +245,27 @@ impl VardaApp {
                 } => EngineCommand::ClearModulation {
                     target: format!("fx_{}:{}", effect_uuid, param_name),
                 },
+                ModulationAction::AssignMacroModulation {
+                    macro_uuid,
+                    source_id,
+                    amount,
+                } => EngineCommand::AssignModulation {
+                    target: crate::macros::Macro::value_mod_key(macro_uuid),
+                    source_id: source_id.clone(),
+                    amount: *amount,
+                },
+                ModulationAction::RemoveMacroModulation { macro_uuid } => {
+                    EngineCommand::ClearModulation {
+                        target: crate::macros::Macro::value_mod_key(macro_uuid),
+                    }
+                }
+                ModulationAction::RemoveMacroModulationSource {
+                    macro_uuid,
+                    source_id,
+                } => EngineCommand::ClearModulationSource {
+                    target: crate::macros::Macro::value_mod_key(macro_uuid),
+                    source_id: source_id.clone(),
+                },
             };
             self.execute_command(cmd);
         }

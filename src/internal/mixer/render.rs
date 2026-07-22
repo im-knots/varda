@@ -36,6 +36,36 @@ impl Mixer {
         self.modulation.update(time, audio_values, analyzer_values);
     }
 
+    /// Drive knob/fader macros from any modulation assigned to their value, then
+    /// fan the modulated value out to every target. The macro's stored value is
+    /// the base (manual set point); modulation rides on top as an offset. Only
+    /// macros with an active assignment on `macro_<uuid>:value` pay the cost.
+    /// See `/spec/macro-controls.md` §Macro Value Modulation.
+    ///
+    /// Must run after `ModulationEngine::update` and before compositing so
+    /// opacity/param targets take effect the same frame.
+    pub fn apply_macro_modulation(&mut self) {
+        if self.macros.macros().is_empty() || self.modulation.source_count() == 0 {
+            return;
+        }
+        // Gather writes first (shared borrows of macros + modulation), then apply
+        // them mutably through the router — mirrors the `macro/<uuid>/value` route.
+        let mut writes: Vec<(String, f32)> = Vec::new();
+        for m in self.macros.macros() {
+            let key = crate::macros::Macro::value_mod_key(&m.uuid);
+            if !self.modulation.has_modulation(&key) {
+                continue;
+            }
+            let offset = self.modulation.get_modulation(&key);
+            writes.extend(m.modulated_fanout(offset));
+        }
+        for (path, value) in writes {
+            if let Err(e) = crate::param_router::apply_param_by_path(self, &path, value) {
+                log::debug!("macro modulation target '{path}' skipped: {e}");
+            }
+        }
+    }
+
     /// Render all channels and composite them via crossfader, then apply master effects.
     /// `target_fps` is used for adaptive deck render skipping budget calculation.
     /// `preview_channels` are force-rendered even when culled by opacity, so their
@@ -162,6 +192,9 @@ impl Mixer {
         let t_modulation = std::time::Instant::now();
         let time = self.start_time.elapsed().as_secs_f32();
         self.modulation.update(time, audio_values, analyzer_values);
+        // Drive any modulation-assigned macros and fan their values out to targets
+        // before compositing reads opacities/params this frame.
+        self.apply_macro_modulation();
         let modulation_us = t_modulation.elapsed().as_micros();
 
         // Compute effective opacity per channel (stack-allocated for the common 2-channel case)

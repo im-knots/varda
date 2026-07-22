@@ -154,6 +154,82 @@ fn modulation_values_change_over_frames() {
 }
 
 #[test]
+fn macro_value_modulation_drives_targets_live() {
+    use varda::macros::MacroKind;
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    // Deck on channel 0 to receive the modulated macro value via its opacity.
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    let deck_uuid = app.build_engine_state().mixer.channels[0].decks[0]
+        .uuid
+        .clone();
+
+    // Knob macro at base 0.5 driving that deck's opacity.
+    send_cmd(
+        &mut app,
+        EngineCommand::AddMacro {
+            kind: MacroKind::Knob,
+        },
+    );
+    let macro_uuid = app.build_engine_state().macros[0].uuid.clone();
+    fire(
+        &mut app,
+        EngineCommand::SetMacroValue {
+            uuid: macro_uuid.clone(),
+            value: 0.5,
+        },
+    );
+    fire(
+        &mut app,
+        EngineCommand::AddMacroTarget {
+            uuid: macro_uuid.clone(),
+            path: format!("deck/{deck_uuid}/opacity"),
+        },
+    );
+
+    // LFO assigned to the macro's *value* key (the exact path the UI uses).
+    send_cmd(
+        &mut app,
+        EngineCommand::AddLfo {
+            waveform: LFOWaveform::Sine,
+            frequency: 10.0,
+        },
+    );
+    let lfo_id = app.build_engine_state().modulation.sources[0].uuid.clone();
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::AssignModulation {
+            target: format!("macro_{macro_uuid}:value"),
+            source_id: lfo_id,
+            amount: 1.0,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok), "{r:?}");
+
+    // Step frames and observe the deck opacity swing as the LFO drives the macro.
+    let mut min = f32::MAX;
+    let mut max = f32::MIN;
+    for _ in 0..60 {
+        app.update_frame_timing();
+        app.render_mixer_frame();
+        let op = app.build_engine_state().mixer.channels[0].decks[0].opacity;
+        min = min.min(op);
+        max = max.max(op);
+    }
+    assert!(
+        max - min > 0.05,
+        "deck opacity should oscillate from macro-value modulation: min={min} max={max}"
+    );
+}
+
+#[test]
 fn add_multiple_channels_verify_order() {
     let Some(mut app) = headless_app() else {
         return;

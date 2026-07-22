@@ -55,6 +55,42 @@ impl VardaApp {
         }
     }
 
+    /// Apply macro-control intents from the macro strip. Config edits mutate the
+    /// macro bank (undo captured upstream via the scene snapshot); `SetValue`
+    /// drives the macro live through the parameter router.
+    fn apply_macro_actions(&mut self, ui_actions: &ui::UIActions) {
+        use crate::engine::traits::MacroCommands;
+        for action in &ui_actions.macro_actions {
+            match action {
+                ui::MacroAction::Add { kind } => {
+                    self.add_macro(*kind);
+                }
+                ui::MacroAction::Remove { uuid } => self.remove_macro(uuid),
+                ui::MacroAction::Rename { uuid, name } => self.rename_macro(uuid, name),
+                ui::MacroAction::SetKind { uuid, kind } => self.set_macro_kind(uuid, *kind),
+                ui::MacroAction::SetValue { uuid, value } => self.set_macro_value(uuid, *value),
+                ui::MacroAction::AddTarget { uuid, path } => self.add_macro_target(uuid, path),
+                ui::MacroAction::RemoveTarget { uuid, target_idx } => {
+                    self.remove_macro_target(uuid, *target_idx)
+                }
+                ui::MacroAction::UpdateTarget {
+                    uuid,
+                    target_idx,
+                    min,
+                    max,
+                    curve,
+                    invert,
+                } => self.update_macro_target(uuid, *target_idx, *min, *max, *curve, *invert),
+                ui::MacroAction::SetButtonBehavior { uuid, behavior } => {
+                    self.set_macro_button_behavior(uuid, *behavior)
+                }
+                ui::MacroAction::SetTriggers { uuid, actions } => {
+                    self.set_macro_triggers(uuid, actions.clone())
+                }
+            }
+        }
+    }
+
     /// Apply engine mutations: mixer, decks, effects, transitions, channels, cameras.
     /// Routes through engine trait methods where possible, VardaApp methods otherwise.
     /// `egui_renderer` and `deck_preview_textures` are passed in because they are
@@ -197,6 +233,7 @@ impl VardaApp {
         self.apply_auto_transition_actions(ui_actions);
         self.apply_param_updates(ui_actions);
         self.apply_modulation_actions(ui_actions);
+        self.apply_macro_actions(ui_actions);
         self.apply_sequence_actions(ui_actions);
 
         // Channel add first — new channel must exist before deck/effect adds target it

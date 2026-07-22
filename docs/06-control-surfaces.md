@@ -231,6 +231,7 @@ MIDI, OSC, and keyboard shortcuts all use the same parameter path format:
 | `mod/<mod_uuid>/frequency` | LFO frequency |
 | `mod/<mod_uuid>/amplitude` | LFO amplitude |
 | `mod/<mod_uuid>/step/<n>` | Step-sequencer step value (step index is positional within the source) |
+| `macro/<uuid>/value` | Macro control (0.0–1.0); fans out to all the macro's targets — see [Macro Controls](15-macro-controls.md) |
 | `action/undo` | Trigger undo |
 | `action/redo` | Trigger redo |
 | `action/save` | Trigger save |
@@ -241,4 +242,4 @@ The `video/*` and `scaling_mode` paths resolve only on the matching source type 
 
 ---
 
-[← Prev: Modulation & Audio Reactivity](05-modulation.md) · [Home](README.md) · [Next: Outputs →](07-outputs.md)
+[← Prev: Modulation & Audio Reactivity](05-modulation.md) · [Home](README.md) · [Next: Macro Controls →](15-macro-controls.md)

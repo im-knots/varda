@@ -93,6 +93,14 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::modulation::update_step_seq_bipolar, routes::modulation::set_step_seq_count,
         routes::modulation::update_step_seq_value,
         routes::modulation::assign_mod_on_mod, routes::modulation::remove_mod_on_mod,
+        // Macros
+        routes::macros::add_macro, routes::macros::remove_macro,
+        routes::macros::rename_macro, routes::macros::set_kind,
+        routes::macros::set_value, routes::macros::add_target,
+        routes::macros::remove_target, routes::macros::update_target,
+        routes::macros::set_button_behavior, routes::macros::set_triggers,
+        routes::macros::assign_modulation, routes::macros::clear_modulation,
+        routes::macros::clear_modulation_source,
         // Analyzers
         routes::library::analyzers,
         routes::decks::request_analyzer, routes::decks::release_analyzer,
@@ -150,6 +158,7 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Effects", description = "Effect chain management"),
         (name = "Audio", description = "Audio device management"),
         (name = "Modulation", description = "LFO, audio-reactive, ADSR, step sequencer sources"),
+        (name = "Macros", description = "Macro controls — one knob/fader/button drives many parameter targets"),
         (name = "Analyzers", description = "Analyzer lifecycle on decks"),
         (name = "Surfaces", description = "Surface geometry and mapping"),
         (name = "Outputs", description = "Output window management and warp"),
@@ -176,6 +185,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/mixer", get(routes::state::mixer))
         .route("/api/state/audio", get(routes::state::audio))
         .route("/api/state/modulation", get(routes::state::modulation))
+        .route("/api/state/macros", get(routes::state::macros))
         .route("/api/state/outputs", get(routes::state::outputs))
         .route("/api/state/surfaces", get(routes::state::surfaces))
         .route("/api/state/registry", get(routes::state::registry))
@@ -202,6 +212,7 @@ pub fn build_router(shared: SharedState) -> Router {
             get(routes::scene::deck_by_uuid),
         )
         .route("/api/scene/modulation", get(routes::scene::modulation))
+        .route("/api/scene/macros", get(routes::scene::macros))
         .route("/api/scene/sequences", get(routes::scene::sequences))
         .route("/api/scene/streams", get(routes::scene::streams))
         // ── Stage ───────────────────────────────────────────────
@@ -645,6 +656,52 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/modulation/mod-on-mod/remove",
             axum::routing::post(routes::modulation::remove_mod_on_mod),
+        )
+        // ── Write: Macros ────────────────────────────────────────
+        .route(
+            "/api/macros",
+            axum::routing::post(routes::macros::add_macro),
+        )
+        .route(
+            "/api/macros/{uuid}",
+            axum::routing::delete(routes::macros::remove_macro),
+        )
+        .route(
+            "/api/macros/{uuid}/name",
+            axum::routing::put(routes::macros::rename_macro),
+        )
+        .route(
+            "/api/macros/{uuid}/kind",
+            axum::routing::put(routes::macros::set_kind),
+        )
+        .route(
+            "/api/macros/{uuid}/value",
+            axum::routing::put(routes::macros::set_value),
+        )
+        .route(
+            "/api/macros/{uuid}/targets",
+            axum::routing::post(routes::macros::add_target),
+        )
+        .route(
+            "/api/macros/{uuid}/targets/{target_idx}",
+            axum::routing::delete(routes::macros::remove_target).put(routes::macros::update_target),
+        )
+        .route(
+            "/api/macros/{uuid}/button/behavior",
+            axum::routing::put(routes::macros::set_button_behavior),
+        )
+        .route(
+            "/api/macros/{uuid}/button/triggers",
+            axum::routing::put(routes::macros::set_triggers),
+        )
+        .route(
+            "/api/macros/{uuid}/modulation",
+            axum::routing::put(routes::macros::assign_modulation)
+                .delete(routes::macros::clear_modulation),
+        )
+        .route(
+            "/api/macros/{uuid}/modulation/{source_id}",
+            axum::routing::delete(routes::macros::clear_modulation_source),
         )
         .route(
             "/api/decks/{deck_id}/analyzers",
