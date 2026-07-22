@@ -622,6 +622,115 @@ impl ModulationCommands for VardaApp {
     fn clear_modulation(&mut self, target: &str) {
         self.mixer.modulation_mut().clear_assignments(target);
     }
+
+    fn clear_modulation_source(&mut self, target: &str, source_id: &str) {
+        self.mixer
+            .modulation_mut()
+            .clear_assignment_source(target, source_id);
+    }
+}
+
+impl MacroCommands for VardaApp {
+    fn add_macro(&mut self, kind: crate::macros::MacroKind) -> String {
+        self.mixer.macros_mut().add_macro(kind)
+    }
+
+    fn remove_macro(&mut self, uuid: &str) {
+        self.mixer.macros_mut().remove_macro(uuid);
+    }
+
+    fn rename_macro(&mut self, uuid: &str, name: &str) {
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
+            m.name = name.to_string();
+        }
+    }
+
+    fn set_macro_kind(&mut self, uuid: &str, kind: crate::macros::MacroKind) {
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
+            m.set_kind(kind);
+        }
+    }
+
+    fn set_macro_value(&mut self, uuid: &str, value: f32) {
+        // Route through the shared param router so the fan-out (and any global
+        // trigger actions, drained in process_inputs) behave identically to a
+        // MIDI/OSC-driven `macro/<uuid>/value`.
+        let path = format!("macro/{uuid}/value");
+        if let Err(e) = crate::param_router::apply_param_by_path(&mut self.mixer, &path, value) {
+            log::debug!("set_macro_value {uuid}: {e}");
+        }
+    }
+
+    fn add_macro_target(&mut self, uuid: &str, path: &str) {
+        if path == "macro" || path.starts_with("macro/") {
+            log::warn!("refusing macro target on macro path '{path}' (loop prevention)");
+            return;
+        }
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
+            m.targets.push(crate::macros::MacroTarget::new(path));
+        }
+    }
+
+    fn remove_macro_target(&mut self, uuid: &str, target_idx: usize) {
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
+            if target_idx < m.targets.len() {
+                m.targets.remove(target_idx);
+            }
+        }
+    }
+
+    fn update_macro_target(
+        &mut self,
+        uuid: &str,
+        target_idx: usize,
+        min: f32,
+        max: f32,
+        curve: crate::macros::MacroCurve,
+        invert: bool,
+    ) {
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
+            if let Some(t) = m.targets.get_mut(target_idx) {
+                t.min = min;
+                t.max = max;
+                t.curve = curve;
+                t.invert = invert;
+            }
+        }
+    }
+
+    fn set_macro_button_behavior(&mut self, uuid: &str, behavior: crate::macros::ButtonBehavior) {
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
+            match &mut m.button {
+                Some(spec) => spec.behavior = behavior,
+                None => {
+                    m.button = Some(crate::macros::ButtonSpec {
+                        behavior,
+                        trigger: Vec::new(),
+                    })
+                }
+            }
+        }
+    }
+
+    fn set_macro_triggers(&mut self, uuid: &str, actions: Vec<crate::macros::TriggerAction>) {
+        if let Some(m) = self.mixer.macros_mut().find_mut(uuid) {
+            match &mut m.button {
+                Some(spec) => spec.trigger = actions,
+                None => {
+                    m.button = Some(crate::macros::ButtonSpec {
+                        behavior: crate::macros::ButtonBehavior::Trigger,
+                        trigger: actions,
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl MacroQueries for VardaApp {
+    fn macro_snapshot(&self) -> Vec<crate::macros::Macro> {
+        self.mixer.macros().macros().to_vec()
+    }
 }
 
 impl ModulationQueries for VardaApp {

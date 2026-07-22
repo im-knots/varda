@@ -531,3 +531,93 @@ pub fn draw_keyboard_learn_selected(ui: &egui::Ui, rect: egui::Rect) {
         egui::StrokeKind::Outside,
     );
 }
+
+/// A rotary knob for a normalized `0.0..=1.0` value. Vertical drag adjusts it
+/// (drag **up** = increase, down = decrease); the arc and pointer fill in the
+/// `accent` color. Returns the response with `.changed()` set on movement, so
+/// callers can emit a live value action and attach a MIDI-learn overlay.
+pub fn render_knob(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    diameter: f32,
+    accent: egui::Color32,
+    ghost: Option<(f32, egui::Color32)>,
+) -> egui::Response {
+    let (rect, mut response) = ui.allocate_exact_size(
+        egui::vec2(diameter, diameter),
+        egui::Sense::click_and_drag(),
+    );
+
+    if response.dragged() {
+        let dy = response.drag_delta().y;
+        if dy != 0.0 {
+            // 200px of vertical travel spans the full range — precise but reachable.
+            *value = (*value - dy / 200.0).clamp(0.0, 1.0);
+            response.mark_changed();
+        }
+    }
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let center = rect.center();
+        let radius = diameter * 0.5 - 2.0;
+
+        // Body
+        painter.circle_filled(center, radius, egui::Color32::from_rgb(28, 28, 38));
+        painter.circle_stroke(
+            center,
+            radius,
+            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(70, 70, 90)),
+        );
+
+        // The knob sweeps 270° clockwise from lower-left (min) to lower-right (max),
+        // passing through the top. Screen space is y-down, so angles grow clockwise.
+        const START_DEG: f32 = 135.0;
+        const SWEEP_DEG: f32 = 270.0;
+        let v = value.clamp(0.0, 1.0);
+        let start = START_DEG.to_radians();
+        let end = (START_DEG + SWEEP_DEG * v).to_radians();
+        let on_arc = |a: f32, r: f32| center + egui::vec2(a.cos(), a.sin()) * r;
+
+        // Full track (faint) then the filled value arc on top.
+        let arc_r = radius - 2.0;
+        let track_end = (START_DEG + SWEEP_DEG).to_radians();
+        let track: Vec<egui::Pos2> = (0..=48)
+            .map(|i| {
+                let a = start + (track_end - start) * (i as f32 / 48.0);
+                on_arc(a, arc_r)
+            })
+            .collect();
+        painter.add(egui::Shape::line(
+            track,
+            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(55, 55, 70)),
+        ));
+        let fill: Vec<egui::Pos2> = (0..=48)
+            .map(|i| {
+                let a = start + (end - start) * (i as f32 / 48.0);
+                on_arc(a, arc_r)
+            })
+            .collect();
+        painter.add(egui::Shape::line(fill, egui::Stroke::new(2.5_f32, accent)));
+
+        // Modulation ghost: a marker at the effective (base + offset) value in
+        // the modulator's color, so a modulated knob visibly tracks the source
+        // (mirrors the ghost line on modulated param sliders).
+        if let Some((gv, gcolor)) = ghost {
+            let gend = (START_DEG + SWEEP_DEG * gv.clamp(0.0, 1.0)).to_radians();
+            painter.line_segment(
+                [center, on_arc(gend, radius - 3.0)],
+                egui::Stroke::new(1.5_f32, gcolor),
+            );
+            painter.circle_filled(on_arc(gend, arc_r), 2.5_f32, gcolor);
+        }
+
+        // Pointer from center to the current angle.
+        painter.line_segment(
+            [center, on_arc(end, radius - 3.0)],
+            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(220, 220, 230)),
+        );
+    }
+
+    response
+}

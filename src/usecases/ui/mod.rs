@@ -39,6 +39,8 @@ pub struct UILayoutState {
     pub selected_sequence: Option<usize>,
     /// Currently selected step within the selected sequence (seq_idx, step_idx)
     pub selected_sequence_step: Option<(usize, usize)>,
+    /// Currently selected macro (by UUID) for detail view in bottom bar
+    pub selected_macro: Option<String>,
     /// Whether the full-screen stage editor is open (replaces deck view)
     pub stage_editor_open: bool,
     /// Stage editor grid size (normalized, e.g. 0.05 = 20 divisions)
@@ -69,6 +71,7 @@ impl Default for UILayoutState {
             selected_master: false,
             selected_sequence: None,
             selected_sequence_step: None,
+            selected_macro: None,
             stage_editor_open: false,
             stage_editor_grid_size: 0.05,
             stage_editor_snap: true,
@@ -122,6 +125,7 @@ impl UILayoutState {
             self.selected_master = false;
             self.selected_sequence = None;
             self.selected_sequence_step = None;
+            self.selected_macro = None;
         }
         if let Some(ch) = ui_actions.select_channel {
             self.selected_channel = Some(ch);
@@ -129,6 +133,7 @@ impl UILayoutState {
             self.selected_master = false;
             self.selected_sequence = None;
             self.selected_sequence_step = None;
+            self.selected_macro = None;
         }
         if ui_actions.select_master {
             self.selected_master = true;
@@ -136,6 +141,7 @@ impl UILayoutState {
             self.selected_channel = None;
             self.selected_sequence = None;
             self.selected_sequence_step = None;
+            self.selected_macro = None;
         }
         if let Some(seq) = ui_actions.select_sequence {
             self.selected_sequence = Some(seq);
@@ -143,11 +149,23 @@ impl UILayoutState {
             self.selected_deck = None;
             self.selected_channel = None;
             self.selected_master = false;
+            self.selected_macro = None;
         }
         if let Some(step) = ui_actions.select_sequence_step {
             self.selected_sequence_step = Some(step);
             // Ensure sequence is also selected
             self.selected_sequence = Some(step.0);
+        }
+        if let Some(uuid) = &ui_actions.select_macro {
+            self.selected_macro = Some(uuid.clone());
+            self.selected_deck = None;
+            self.selected_channel = None;
+            self.selected_master = false;
+            self.selected_sequence = None;
+            self.selected_sequence_step = None;
+        }
+        if ui_actions.deselect_macro {
+            self.selected_macro = None;
         }
         if ui_actions.toggle_stage_editor {
             self.stage_editor_open = !self.stage_editor_open;
@@ -483,6 +501,20 @@ pub enum ModulationAction {
         effect_uuid: String,
         param_name: String,
     },
+    /// Assign a modulation source to a macro's value (`macro_<uuid>:value`), so
+    /// the modulator drives the whole macro and its targets.
+    AssignMacroModulation {
+        macro_uuid: String,
+        source_id: String,
+        amount: f32,
+    },
+    RemoveMacroModulation {
+        macro_uuid: String,
+    },
+    RemoveMacroModulationSource {
+        macro_uuid: String,
+        source_id: String,
+    },
 }
 
 /// Modulation source data snapshot for UI display (paired with UUID)
@@ -737,6 +769,8 @@ pub struct UIData {
     pub modulation_current_values: std::collections::HashMap<String, f32>,
     /// Modulation assignments: param_key -> list of (source_id, amount)
     pub modulation_assignments: std::collections::HashMap<String, Vec<ModAssignmentUI>>,
+    /// User-defined macro controls (one control → many parameter targets).
+    pub macros: Vec<crate::macros::Macro>,
     pub audio: AudioUIData,
     /// Deck preview textures keyed by (ch_idx, deck_idx)
     pub deck_preview_textures: std::collections::HashMap<(usize, usize), egui::TextureId>,
@@ -783,6 +817,8 @@ pub struct UIData {
     pub selected_sequence: Option<usize>,
     /// Currently selected step within the selected sequence (seq_idx, step_idx)
     pub selected_sequence_step: Option<(usize, usize)>,
+    /// Currently selected macro (by UUID) for detail view in bottom bar
+    pub selected_macro: Option<String>,
     /// Unified outputs (windowed + headless) for UI display
     pub outputs: Vec<OutputUI>,
     /// Surfaces in the stage layout
@@ -1305,6 +1341,63 @@ pub enum CrossfaderAction {
     BeatTransition { target: f32, beats: f32 },
 }
 
+/// A macro-control intent emitted by the macro strip. Config edits are undoable
+/// (captured via the scene snapshot); `SetValue` is a live turn and is not.
+#[derive(Debug, Clone)]
+pub enum MacroAction {
+    Add {
+        kind: crate::macros::MacroKind,
+    },
+    Remove {
+        uuid: String,
+    },
+    Rename {
+        uuid: String,
+        name: String,
+    },
+    SetKind {
+        uuid: String,
+        kind: crate::macros::MacroKind,
+    },
+    /// Live turn — fans out to targets. Not undoable.
+    SetValue {
+        uuid: String,
+        value: f32,
+    },
+    AddTarget {
+        uuid: String,
+        path: String,
+    },
+    RemoveTarget {
+        uuid: String,
+        target_idx: usize,
+    },
+    UpdateTarget {
+        uuid: String,
+        target_idx: usize,
+        min: f32,
+        max: f32,
+        curve: crate::macros::MacroCurve,
+        invert: bool,
+    },
+    SetButtonBehavior {
+        uuid: String,
+        behavior: crate::macros::ButtonBehavior,
+    },
+    SetTriggers {
+        uuid: String,
+        actions: Vec<crate::macros::TriggerAction>,
+    },
+}
+
+impl MacroAction {
+    /// Whether this action mutates persistent macro config (and so should push
+    /// an undo snapshot). Live value turns (`SetValue`) are excluded.
+    pub fn is_undoable(&self) -> bool {
+        !matches!(self, MacroAction::SetValue { .. })
+    }
+}
+
 /// All UI actions/intents collected during a frame
 pub struct UIActions {
     /// (ch_idx, generator_registry_idx) — add a shader as a new deck to channel
@@ -1342,6 +1435,8 @@ pub struct UIActions {
     pub ch_effect_to_toggle: Option<(usize, usize)>,
     pub param_updates: Vec<ParamUpdate>,
     pub modulation_actions: Vec<ModulationAction>,
+    /// Macro control intents (create/edit/drive macros).
+    pub macro_actions: Vec<MacroAction>,
     pub master_effect_to_add: Option<usize>,
     pub master_effect_to_remove: Option<usize>,
     pub master_effect_to_toggle: Option<usize>,
@@ -1381,6 +1476,10 @@ pub struct UIActions {
     pub select_sequence: Option<usize>,
     /// Select a step within a sequence for editing in bottom bar (seq_idx, step_idx)
     pub select_sequence_step: Option<(usize, usize)>,
+    /// Select a macro (by UUID) for detail view in bottom bar
+    pub select_macro: Option<String>,
+    /// Clear the macro selection (e.g. its macro was deleted, or Close pressed)
+    pub deselect_macro: bool,
     /// Add a new channel to the mixer
     pub add_channel: bool,
     /// Remove a channel from the mixer (by index)
@@ -1655,6 +1754,7 @@ impl UIActions {
             scaling_mode_updates: Vec::new(),
             transparent_updates: Vec::new(),
             render_fps_updates: Vec::new(),
+            macro_actions: Vec::new(),
             effect_to_add: None,
             effect_to_remove: None,
             effect_to_toggle: None,
@@ -1685,6 +1785,8 @@ impl UIActions {
             select_master: false,
             select_sequence: None,
             select_sequence_step: None,
+            select_macro: None,
+            deselect_macro: false,
             add_channel: false,
             remove_channel: None,
             deck_to_move: None,
@@ -1763,6 +1865,7 @@ impl UIActions {
             || !self.render_fps_updates.is_empty()
             || !self.param_updates.is_empty()
             || !self.modulation_actions.is_empty()
+            || self.macro_actions.iter().any(|a| a.is_undoable())
             || self.effect_to_add.is_some()
             || self.effect_to_remove.is_some()
             || self.effect_to_toggle.is_some()
@@ -2102,6 +2205,7 @@ impl UIData {
                 );
                 m
             },
+            macros: Vec::new(),
             audio: AudioUIData {
                 level: 0.0,
                 bass: 0.0,
@@ -2137,6 +2241,7 @@ impl UIData {
             selected_master: false,
             selected_sequence: None,
             selected_sequence_step: None,
+            selected_macro: None,
             outputs: vec![],
             surfaces: vec![],
             stage_editor_open: false,

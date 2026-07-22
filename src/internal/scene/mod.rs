@@ -5,6 +5,7 @@
 //! Surfaces and outputs live in `stage.json` (venue-specific, not show-specific).
 
 use crate::channel::{BlendMode, DeckRenderFps};
+use crate::macros::MacroBank;
 use crate::modulation::ModulationEngine;
 use crate::params::ParamValue;
 use anyhow::{Context, Result};
@@ -40,6 +41,11 @@ pub struct SceneConfig {
     /// Modulation engine state (sources + assignments, already Serialize/Deserialize)
     #[serde(default)]
     pub modulation: ModulationEngine,
+
+    /// Macro controls (user-defined knobs/faders/buttons → many parameter targets).
+    /// Additive since scene v4; pre-macro scenes default to an empty bank.
+    #[serde(default)]
+    pub macros: MacroBank,
 
     /// Transition sequences (channel-to-channel automation). Multiple named sequences.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -777,6 +783,7 @@ mod tests {
             active_transition: None,
             master_effects: vec![],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
@@ -823,6 +830,7 @@ mod tests {
             active_transition: Some("dissolve".into()),
             master_effects: vec![],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
@@ -857,6 +865,7 @@ mod tests {
                 },
             }],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
@@ -1078,6 +1087,7 @@ mod tests {
             active_transition: None,
             master_effects: vec![],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
@@ -1130,6 +1140,7 @@ mod tests {
             active_transition: None,
             master_effects: vec![],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
@@ -1148,6 +1159,7 @@ mod tests {
             active_transition: None,
             master_effects: vec![],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
@@ -1169,6 +1181,7 @@ mod tests {
             active_transition: None,
             master_effects: vec![],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: Some(0),
             render_height: Some(0),

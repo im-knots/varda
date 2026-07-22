@@ -61,6 +61,8 @@ pub struct EngineState {
     /// Active stream receiver configs (url, mode, connected)
     pub stream_receivers: Vec<StreamReceiverSnapshot>,
     pub analyzers: Vec<AnalyzerTypeInfo>,
+    /// User-defined macro controls (one control → many parameter targets).
+    pub macros: Vec<crate::macros::Macro>,
     /// Whether the undo timeline has an undoable action (shared UI/API timeline).
     pub can_undo: bool,
     /// Whether the redo timeline has a redoable action (shared UI/API timeline).
@@ -609,6 +611,7 @@ mod tests {
             analyzers: vec![],
             can_undo: false,
             can_redo: false,
+            macros: vec![],
         };
         assert!((state.fps - 60.0).abs() < 1e-5);
         assert_eq!(state.frame_count, 0);
@@ -688,6 +691,7 @@ mod tests {
             analyzers: vec![],
             can_undo: false,
             can_redo: false,
+            macros: vec![],
         };
         let cloned = state.clone();
         assert!((cloned.mixer.crossfader - 0.5).abs() < 1e-5);

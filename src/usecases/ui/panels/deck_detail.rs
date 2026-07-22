@@ -88,13 +88,15 @@ pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mu
         return;
     }
 
-    // Context-sensitive bottom bar: master effects, channel effects, sequence, or deck detail
+    // Context-sensitive bottom bar: master effects, channel effects, sequence, macro, or deck detail
     if data.selected_master {
         render_master_effect_detail(ui, data, actions);
     } else if let Some(ch_idx) = data.selected_channel {
         render_channel_effect_detail(ui, ch_idx, data, actions);
     } else if let Some(seq_idx) = data.selected_sequence {
         render_sequence_detail(ui, seq_idx, data, actions);
+    } else if let Some(uuid) = data.selected_macro.clone() {
+        super::macros::render_macro_detail(ui, &uuid, data, actions);
     } else {
         render_selected_deck_detail(ui, data, actions);
     }

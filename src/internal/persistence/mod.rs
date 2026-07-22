@@ -555,12 +555,13 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
         .collect();
 
     SceneConfig {
-        version: 3,
+        version: 4,
         channels,
         crossfader: mixer.crossfader(),
         active_transition,
         master_effects,
         modulation: mixer.modulation().clone(),
+        macros: mixer.macros().clone(),
         transition_sequences,
         render_width: Some(render_width),
         render_height: Some(render_height),
@@ -1036,6 +1037,9 @@ pub fn restore_scene(
 
     // Restore modulation engine
     mixer.set_modulation(config.modulation.clone());
+
+    // Restore macro controls
+    mixer.set_macros(config.macros.clone());
 
     // Restore active transition
     if let Some(transition_name) = &config.active_transition {

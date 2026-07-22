@@ -26,6 +26,7 @@ pub enum EntityKind {
     Effect,
     Modulator,
     Step,
+    Macro,
 }
 
 impl std::fmt::Display for EntityKind {
@@ -36,6 +37,7 @@ impl std::fmt::Display for EntityKind {
             EntityKind::Effect => "effect",
             EntityKind::Modulator => "modulator",
             EntityKind::Step => "step",
+            EntityKind::Macro => "macro",
         };
         f.write_str(s)
     }
@@ -374,6 +376,24 @@ pub fn apply_param_by_path(
                 .find_source_by_uuid_mut(mod_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Modulator, mod_uuid))?;
             apply_mod_param(&mut entry.source, param_name, value)
+        }
+        ["macro", macro_uuid, "value"] => {
+            // Feed the macro; it returns the parameter writes to fan out. Global
+            // app actions (undo/save/tap) are queued on the bank for the app layer
+            // to drain (see app/inputs.rs). Targets are never `macro/*` paths
+            // (filtered in the fan-out), so recursion depth is bounded at 1.
+            let fanout = mixer
+                .macros_mut()
+                .apply_input(macro_uuid, value)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Macro, macro_uuid))?;
+            for (target_path, target_value) in fanout {
+                if let Err(e) = apply_param_by_path(mixer, &target_path, target_value) {
+                    // A macro target may reference a deleted/absent entity; log at
+                    // debug rather than failing the whole macro turn.
+                    log::debug!("macro {macro_uuid} target '{target_path}' skipped: {e}");
+                }
+            }
+            Ok(())
         }
         _ => Err(ParamRouteError::UnknownPath {
             path: path.to_string(),

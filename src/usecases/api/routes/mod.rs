@@ -9,6 +9,7 @@ pub mod channels;
 pub mod decks;
 pub mod effects;
 pub mod library;
+pub mod macros;
 pub mod mixer;
 pub mod modulation;
 pub mod outputs;

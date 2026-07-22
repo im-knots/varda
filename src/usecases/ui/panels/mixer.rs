@@ -4,6 +4,7 @@ use super::super::{
     widgets, ChannelUIInfo, CrossfaderAction, DeckUIInfo, LibraryDrag, SequenceAction, UIActions,
     UIData,
 };
+use super::macros::render_macro_column;
 use super::sequence::render_sequence_builder;
 use super::stage::render_stage_editor;
 use super::utils::channel_color;
@@ -18,7 +19,6 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 
     let available = ui.available_width();
     let panel_height = ui.available_height();
-    let has_sequences = !data.sequences.is_empty();
     let num_channels = data.channels.len();
     let left_count = num_channels.div_ceil(2); // ceil(N/2)
     let right_count = num_channels / 2; // floor(N/2)
@@ -53,43 +53,33 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 ui.horizontal_top(|ui| {
                     for i in 0..left_count {
                         if let Some(ch) = data.channels.get(i) {
-                            ui.vertical(|ui| {
-                                ui.set_width(ch_card_width);
-                                render_channel_column(ui, ch, data, actions);
-                            });
+                            render_channel_column_scrolled(
+                                ui,
+                                ch,
+                                data,
+                                actions,
+                                ch_card_width,
+                                panel_height,
+                            );
                         }
                     }
                     ui.separator();
                     ui.vertical(|ui| {
                         ui.set_width(center_width);
-                        render_mixer_box(ui, data, actions);
-                        // Sequence builder — same width as mixer
-                        if has_sequences {
-                            ui.add_space(4.0);
-                            render_sequence_builder(ui, data, actions);
-                        }
-                        // + Sequence button — centered below mixer
-                        if data.channel_count >= 2 {
-                            ui.add_space(4.0);
-                            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                if ui
-                                    .small_button("+ Sequence")
-                                    .on_hover_text("Create a new transition sequence")
-                                    .clicked()
-                                {
-                                    actions.sequence_actions.push(SequenceAction::Create);
-                                }
-                            });
-                        }
+                        render_center_stack(ui, data, actions);
                     });
                     ui.separator();
                     for i in 0..right_count {
                         let ch_idx = left_count + i;
                         if let Some(ch) = data.channels.get(ch_idx) {
-                            ui.vertical(|ui| {
-                                ui.set_width(ch_card_width);
-                                render_channel_column(ui, ch, data, actions);
-                            });
+                            render_channel_column_scrolled(
+                                ui,
+                                ch,
+                                data,
+                                actions,
+                                ch_card_width,
+                                panel_height,
+                            );
                         }
                     }
                 });
@@ -115,10 +105,14 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     }
                     for i in 0..left_count {
                         if let Some(ch) = data.channels.get(i) {
-                            ui.vertical(|ui| {
-                                ui.set_width(ch_card_width);
-                                render_channel_column(ui, ch, data, actions);
-                            });
+                            render_channel_column_scrolled(
+                                ui,
+                                ch,
+                                data,
+                                actions,
+                                ch_card_width,
+                                panel_height,
+                            );
                         }
                     }
                 });
@@ -130,25 +124,7 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
                     ui.separator();
-                    render_mixer_box(ui, data, actions);
-                    // Sequence builder — same width as mixer
-                    if has_sequences {
-                        ui.add_space(4.0);
-                        render_sequence_builder(ui, data, actions);
-                    }
-                    // + Sequence button — centered below mixer
-                    if data.channel_count >= 2 {
-                        ui.add_space(4.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                            if ui
-                                .small_button("+ Sequence")
-                                .on_hover_text("Create a new transition sequence")
-                                .clicked()
-                            {
-                                actions.sequence_actions.push(SequenceAction::Create);
-                            }
-                        });
-                    }
+                    render_center_stack(ui, data, actions);
                 },
             );
 
@@ -159,10 +135,14 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     for i in 0..right_count {
                         let ch_idx = left_count + i;
                         if let Some(ch) = data.channels.get(ch_idx) {
-                            ui.vertical(|ui| {
-                                ui.set_width(ch_card_width);
-                                render_channel_column(ui, ch, data, actions);
-                            });
+                            render_channel_column_scrolled(
+                                ui,
+                                ch,
+                                data,
+                                actions,
+                                ch_card_width,
+                                panel_height,
+                            );
                         }
                     }
                     if empty_each > preset_hint_threshold {
@@ -172,6 +152,61 @@ pub(super) fn render_central_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
             });
         });
     }
+}
+
+/// A single channel column, wrapped in a vertical scroll area so a tall deck
+/// stack scrolls independently instead of overflowing the panel.
+fn render_channel_column_scrolled(
+    ui: &mut egui::Ui,
+    ch: &ChannelUIInfo,
+    data: &UIData,
+    actions: &mut UIActions,
+    width: f32,
+    height: f32,
+) {
+    ui.vertical(|ui| {
+        ui.set_width(width);
+        egui::ScrollArea::vertical()
+            .id_salt(("ch_col_scroll", ch.ch_idx))
+            .max_height(height)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                render_channel_column(ui, ch, data, actions);
+            });
+    });
+}
+
+/// The center column stack (mixer box, sequence builder, macros), wrapped in a
+/// vertical scroll area so many sequences/macros scroll instead of overflowing.
+fn render_center_stack(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
+    let height = ui.available_height();
+    egui::ScrollArea::vertical()
+        .id_salt("center_column_scroll")
+        .max_height(height)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            render_mixer_box(ui, data, actions);
+            // Sequence builder — same width as mixer
+            if !data.sequences.is_empty() {
+                ui.add_space(4.0);
+                render_sequence_builder(ui, data, actions);
+            }
+            // + Sequence button — centered below mixer
+            if data.channel_count >= 2 {
+                ui.add_space(4.0);
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("+ Sequence")
+                        .on_hover_text("Create a new transition sequence")
+                        .clicked()
+                    {
+                        actions.sequence_actions.push(SequenceAction::Create);
+                    }
+                });
+            }
+            // Macro controls — compact widgets in the center column
+            render_macro_column(ui, data, actions);
+        });
 }
 
 /// Render the center mixer box (DJ console style)

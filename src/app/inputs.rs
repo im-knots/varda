@@ -262,6 +262,18 @@ impl VardaApp {
             }
         }
 
+        // Drain macro-triggered global actions. Trigger buttons routed through
+        // `macro/<uuid>/value` queue these on the macro bank; here we forward
+        // them onto the same pending flags as the MIDI `action/*` paths so the
+        // runner dispatches undo/redo/save uniformly.
+        for action in self.mixer.macros_mut().take_pending_actions() {
+            match action {
+                crate::macros::GlobalAction::Undo => self.midi_pending_undo = true,
+                crate::macros::GlobalAction::Redo => self.midi_pending_redo = true,
+                crate::macros::GlobalAction::Save => self.midi_pending_save = true,
+            }
+        }
+
         // Feed audio BPM to ClockManager
         {
             let primary = self.audio_manager.get_primary_data();

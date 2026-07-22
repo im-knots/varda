@@ -89,6 +89,14 @@ pub async fn modulation(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
+/// GET /api/scene/macros
+pub async fn macros(State(state): State<SharedState>) -> impl IntoResponse {
+    match read_or_error(&state) {
+        Ok(s) => Json(&s.macros).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
+    }
+}
+
 /// GET /api/scene/sequences
 pub async fn sequences(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {

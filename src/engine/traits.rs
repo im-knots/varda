@@ -79,11 +79,49 @@ pub trait ModulationCommands {
     fn remove_modulation_source(&mut self, uuid: &str);
     fn assign_modulation(&mut self, target: &str, source_id: &str, amount: f32);
     fn clear_modulation(&mut self, target: &str);
+    fn clear_modulation_source(&mut self, target: &str, source_id: &str);
 }
 
 /// Read-only queries for modulation state.
 pub trait ModulationQueries {
     fn modulation_snapshot(&self) -> ModulationSnapshot;
+}
+
+// ── Macros ──────────────────────────────────────────────────────────
+
+/// Commands for the macro bank (one control → many parameter targets).
+///
+/// Config mutations (`add`/`remove`/`rename`/`kind`/target edits/button config)
+/// are undoable via the scene snapshot. `set_macro_value` is a live performance
+/// turn (fans out to targets) and is intentionally **not** undoable.
+pub trait MacroCommands {
+    /// Add a macro of `kind`; returns its UUID.
+    fn add_macro(&mut self, kind: crate::macros::MacroKind) -> String;
+    fn remove_macro(&mut self, uuid: &str);
+    fn rename_macro(&mut self, uuid: &str, name: &str);
+    fn set_macro_kind(&mut self, uuid: &str, kind: crate::macros::MacroKind);
+    /// Drive a macro's value 0..1, fanning out to all targets (not undoable).
+    fn set_macro_value(&mut self, uuid: &str, value: f32);
+    /// Append a target on `path` (full-range linear by default).
+    fn add_macro_target(&mut self, uuid: &str, path: &str);
+    fn remove_macro_target(&mut self, uuid: &str, target_idx: usize);
+    #[allow(clippy::too_many_arguments)]
+    fn update_macro_target(
+        &mut self,
+        uuid: &str,
+        target_idx: usize,
+        min: f32,
+        max: f32,
+        curve: crate::macros::MacroCurve,
+        invert: bool,
+    );
+    fn set_macro_button_behavior(&mut self, uuid: &str, behavior: crate::macros::ButtonBehavior);
+    fn set_macro_triggers(&mut self, uuid: &str, actions: Vec<crate::macros::TriggerAction>);
+}
+
+/// Read-only queries for macro state.
+pub trait MacroQueries {
+    fn macro_snapshot(&self) -> Vec<crate::macros::Macro>;
 }
 
 // ── Output ──────────────────────────────────────────────────────────

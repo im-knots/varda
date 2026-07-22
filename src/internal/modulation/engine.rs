@@ -174,6 +174,19 @@ impl ModulationEngine {
         self.invalidate_order();
     }
 
+    /// Remove only the assignment(s) from a specific source on a target, leaving
+    /// any other sources on that target intact. Drops the target entry entirely
+    /// once its last source is removed.
+    pub fn clear_assignment_source(&mut self, param_name: &str, source_id: &str) {
+        if let Some(list) = self.assignments.get_mut(param_name) {
+            list.retain(|a| a.source_id != source_id);
+            if list.is_empty() {
+                self.assignments.remove(param_name);
+            }
+            self.invalidate_order();
+        }
+    }
+
     pub fn trigger_adsr(&mut self, uuid: &str) {
         if let Some(&idx) = self.uuid_to_idx.get(uuid) {
             self.sources[idx].source.gate_on();

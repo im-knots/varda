@@ -106,6 +106,7 @@ mod tests {
             active_transition: None,
             master_effects: vec![],
             modulation: Default::default(),
+            macros: Default::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,

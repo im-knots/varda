@@ -7,6 +7,7 @@ mod deck_detail;
 mod effects;
 mod geometry;
 mod library;
+mod macros;
 mod midi;
 mod mixer;
 mod modulation;
@@ -404,7 +405,8 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             });
         });
 
-    // === CENTRAL AREA: Decks as columns ===
+    // === CENTRAL AREA: Decks as columns; macro controls live in the center
+    // column (see mixer.rs) and their config shows in the bottom bar. ===
     egui::CentralPanel::default().show_inside(ui, |ui| {
         render_central_panel(ui, data, &mut actions);
     });

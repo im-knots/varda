@@ -473,6 +473,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         syphon_available: false,
         stream_receivers: build_stream_receiver_snapshots(app),
         analyzers: app.available_analyzers(),
+        macros: app.macro_snapshot(),
         can_undo: app.history_can_undo(),
         can_redo: app.history_can_redo(),
     }
@@ -970,6 +971,7 @@ pub(crate) fn build_ui_data(
         modulation_sources,
         modulation_current_values,
         modulation_assignments,
+        macros: engine.macros.clone(),
         audio,
         deck_preview_textures: deck_preview_textures.clone(),
         channel_preview_textures: channel_preview_textures.clone(),
@@ -1000,6 +1002,7 @@ pub(crate) fn build_ui_data(
         selected_master: layout.selected_master,
         selected_sequence: layout.selected_sequence,
         selected_sequence_step: layout.selected_sequence_step,
+        selected_macro: layout.selected_macro.clone(),
         outputs,
         surfaces,
         stage_editor_open: layout.stage_editor_open,

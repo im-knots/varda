@@ -147,6 +147,27 @@ Place `.cube` or `.3dl` files in `.varda/luts/`. The filename is relative to tha
 curl -X DELETE http://localhost:8080/api/mixer/lut
 ```
 
+### Create a macro and bind a target
+
+A macro drives many parameters from one control. Create it, add a target, then drive it live (or map `macro/<uuid>/value` to MIDI/OSC). See [Macro Controls](15-macro-controls.md).
+
+```sh
+# Create a knob macro (returns its uuid)
+curl -X POST http://localhost:8080/api/macros \
+  -H "Content-Type: application/json" \
+  -d '{"kind": "Knob"}'
+
+# Add a target parameter
+curl -X POST http://localhost:8080/api/macros/<uuid>/targets \
+  -H "Content-Type: application/json" \
+  -d '{"path": "deck/<deck_uuid>/effect/<fx_uuid>/param/scale"}'
+
+# Drive the macro (fans out to all targets)
+curl -X PUT http://localhost:8080/api/macros/<uuid>/value \
+  -H "Content-Type: application/json" \
+  -d '{"value": 0.75}'
+```
+
 ### Send any engine command
 
 ```sh
@@ -285,7 +306,7 @@ curl -X PUT http://localhost:8080/api/outputs/0/calibration \
 
 ## Route Groups
 
-The API is organized into 15 OpenAPI tags:
+The API is organized into 16 OpenAPI tags:
 
 | Tag | Examples |
 |-----|----------|
@@ -296,6 +317,7 @@ The API is organized into 15 OpenAPI tags:
 | **Video** | `POST /api/decks/:uuid/video/toggle-play`, `PUT /api/decks/:uuid/video/speed` |
 | **Effects** | `POST /api/effects`, `POST /api/effects/toggle` |
 | **Modulation** | `POST /api/modulation/lfo`, `POST /api/modulation/assign` |
+| **Macros** | `POST /api/macros`, `POST /api/macros/:uuid/targets`, `PUT /api/macros/:uuid/value`, `PUT /api/macros/:uuid/button/behavior` |
 | **Params** | `PUT /api/params` (set any parameter by path) |
 | **Surfaces** | `POST /api/surfaces/rect`, `PUT /api/surfaces/:uuid/source`, `PUT /api/surfaces/:uuid/path/handle`, `PUT /api/surfaces/:uuid/warp/corner`, `POST /api/surfaces/:uuid/warp/reset`, `PUT /api/surfaces/:uuid/warp/subdivisions`, `PUT /api/surfaces/:uuid/warp/mesh-point`, `POST /api/surfaces/:uuid/warp/bind`, `POST /api/surfaces/:uuid/warp/bezier`, `PUT /api/surfaces/:uuid/warp/anchor`, `PUT /api/surfaces/:uuid/warp/handle`, `PUT /api/surfaces/:uuid/warp/cage` |
 | **Outputs** | `POST /api/outputs/windowed`, `POST /api/outputs/headless`, `PUT /api/outputs/:idx/calibration` |
