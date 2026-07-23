@@ -41,7 +41,7 @@ pub trait MixerCommands {
     fn toggle_effect(&mut self, target: EffectTarget, effect_idx: usize);
     fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize);
     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()>;
-    fn set_tonemap_mode(&mut self, mode: crate::renderer::config::TonemapMode);
+    fn set_tonemap_mode(&mut self, mode: crate::engine::value::render::TonemapMode);
     fn load_lut(&mut self, filename: &str) -> Result<()>;
     fn unload_lut(&mut self);
     fn set_param(&mut self, path: &str, value: ParamValue);
@@ -175,28 +175,40 @@ pub trait DetectCommands {
     fn detect_from_image(
         &self,
         image_data: &[u8],
-        params: &crate::surface::detect::DetectionParams,
-    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+        params: &crate::engine::value::detect::DetectionParams,
+    ) -> Result<
+        crate::engine::value::detect::DetectionResult,
+        crate::engine::value::detect::ImportError,
+    >;
     /// Detect contours from SVG data.
     fn detect_from_svg(
         &self,
         svg_data: &[u8],
-    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    ) -> Result<
+        crate::engine::value::detect::DetectionResult,
+        crate::engine::value::detect::ImportError,
+    >;
     /// Detect contours from DXF data.
     fn detect_from_dxf(
         &self,
         dxf_data: &[u8],
-    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    ) -> Result<
+        crate::engine::value::detect::DetectionResult,
+        crate::engine::value::detect::ImportError,
+    >;
     /// Detect contours from a camera snapshot (RGBA frame data).
     fn detect_from_camera(
         &mut self,
         camera_id: CameraId,
-        params: &crate::surface::detect::DetectionParams,
-    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+        params: &crate::engine::value::detect::DetectionParams,
+    ) -> Result<
+        crate::engine::value::detect::DetectionResult,
+        crate::engine::value::detect::ImportError,
+    >;
     /// Create surfaces from confirmed detected contours.
     fn confirm_detected_contours(
         &mut self,
-        contours: &[crate::surface::detect::DetectedContour],
+        contours: &[crate::engine::value::detect::DetectedContour],
     ) -> Vec<String>;
 }
 

@@ -1,74 +1,12 @@
 //! Contour detection pipeline for surface auto-detection.
+//!
+//! DTOs (`DetectedContour`, `DetectionMethod`, `HullMode`, `DetectionParams`,
+//! `DetectionResult`) live in `engine::value::detect` (see
+//! /spec/engine-value-types.md); this module holds the CV pipeline.
 
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
-
-/// A single detected contour with computed geometry metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct DetectedContour {
-    /// Polygon vertices in normalized [0..1] coordinates.
-    pub vertices: Vec<[f32; 2]>,
-    /// Polygon area in normalized coordinates.
-    pub area: f32,
-    /// Whether the contour approximates a circle.
-    pub is_circular: bool,
-    /// If circular, the fitted (center, radius) in normalized coords.
-    pub circle_fit: Option<([f32; 2], f32)>,
-    /// Auto-generated name based on position (e.g. "top-left-1").
-    pub suggested_name: String,
-    /// Editable curve outline captured during SVG import (control points
-    /// preserved). `None` for raster/DXF detection, which produce polylines only.
-    #[serde(default)]
-    pub path: Option<super::curve::SurfacePath>,
-}
-
-/// Method used to produce the binary image for contour detection.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema, Default)]
-pub enum DetectionMethod {
-    /// Canny edge detector (good for line-art and SVG-like inputs).
-    Canny,
-    /// Simple threshold (industry standard for camera feeds with controlled lighting).
-    #[default]
-    Threshold,
-}
-
-/// Post-processing hull mode applied after simplification.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema, Default)]
-pub enum HullMode {
-    /// Keep the simplified polygon as-is.
-    #[default]
-    None,
-    /// Replace with convex hull (removes concavities).
-    ConvexHull,
-}
-
-/// Parameters controlling the contour detection pipeline.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(default)]
-pub struct DetectionParams {
-    /// Canny edge detector low threshold.
-    pub canny_low: u8,
-    /// Canny edge detector high threshold.
-    pub canny_high: u8,
-    /// Gaussian blur radius applied before edge detection.
-    pub blur_radius: u32,
-    /// Douglas-Peucker simplification tolerance (normalized).
-    pub simplify_tolerance: f32,
-    /// Minimum polygon area to keep (normalized).
-    pub min_area: f32,
-    /// Minimum vertex count after simplification.
-    pub min_vertices: usize,
-    /// Detection method: Canny or Threshold.
-    pub detection_method: DetectionMethod,
-    /// Threshold value for binary image creation (0-255).
-    pub threshold: u8,
-    /// Invert the threshold (foreground becomes background).
-    pub invert: bool,
-    /// Morphological close kernel radius (0 = disabled).
-    pub morph_size: u32,
-    /// Post-processing hull mode.
-    pub hull_mode: HullMode,
-}
+pub use crate::engine::value::detect::{
+    DetectedContour, DetectionMethod, DetectionParams, DetectionResult, HullMode,
+};
 
 impl Default for DetectionParams {
     fn default() -> Self {
@@ -86,17 +24,6 @@ impl Default for DetectionParams {
             hull_mode: HullMode::default(),
         }
     }
-}
-
-/// Result of running contour detection on an image.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct DetectionResult {
-    /// Detected contours, sorted by area descending.
-    pub contours: Vec<DetectedContour>,
-    /// Width of the source image in pixels.
-    pub source_width: u32,
-    /// Height of the source image in pixels.
-    pub source_height: u32,
 }
 
 /// Run the full contour detection pipeline on a grayscale image.

@@ -8,6 +8,7 @@
 
 pub mod traits;
 pub mod types;
+pub mod value;
 
 pub use traits::*;
 pub use types::*;
@@ -62,8 +63,8 @@ pub enum CommandOutcome {
 #[derive(Debug, Clone, Copy)]
 pub struct DomeLayoutFields {
     pub dome_mode_active: bool,
-    pub dome_preset: crate::renderer::slicer::DomePreset,
-    pub dome_geometry: crate::renderer::slicer::DomeGeometry,
+    pub dome_preset: crate::engine::value::dome::DomePreset,
+    pub dome_geometry: crate::engine::value::dome::DomeGeometry,
 }
 
 /// Error codes for command failures.
@@ -91,7 +92,7 @@ pub type CommandEnvelope = (
 pub enum EngineCommand {
     // ── Mixer ──────────────────────────────────────────────────
     SetCrossfader(f32),
-    SetTonemapMode(crate::renderer::config::TonemapMode),
+    SetTonemapMode(crate::engine::value::render::TonemapMode),
     LoadLut {
         filename: String,
     },
@@ -279,7 +280,7 @@ pub enum EngineCommand {
     VideoSetLoopMode {
         channel_idx: usize,
         deck_idx: usize,
-        mode: crate::video::LoopMode,
+        mode: crate::engine::value::video::LoopMode,
     },
     VideoSetInPoint {
         channel_idx: usize,
@@ -509,7 +510,7 @@ pub enum EngineCommand {
     // ── Output ─────────────────────────────────────────────────
     CreateOutput,
     CreateHeadlessOutput {
-        target: crate::renderer::config::OutputTarget,
+        target: crate::engine::value::render::OutputTarget,
     },
     CloseOutput {
         idx: usize,
@@ -520,7 +521,7 @@ pub enum EngineCommand {
     },
     SetOutputTarget {
         idx: usize,
-        target: crate::renderer::config::OutputTarget,
+        target: crate::engine::value::render::OutputTarget,
     },
     StartOutput {
         idx: usize,
@@ -531,7 +532,7 @@ pub enum EngineCommand {
     /// Set the calibration display mode for an output (Off / Projector / Surfaces).
     SetCalibrationMode {
         idx: usize,
-        mode: crate::renderer::config::CalibrationMode,
+        mode: crate::engine::value::render::CalibrationMode,
     },
     /// Move one corner-pin corner of a surface's warp (per-surface).
     SetWarpCorner {
@@ -595,15 +596,15 @@ pub enum EngineCommand {
     },
     SetEdgeBlend {
         output_idx: usize,
-        config: crate::renderer::config::EdgeBlendConfig,
+        config: crate::engine::value::render::EdgeBlendConfig,
     },
     SetEdgeBlendMode {
         output_idx: usize,
-        mode: crate::renderer::config::EdgeBlendMode,
+        mode: crate::engine::value::render::EdgeBlendMode,
     },
     SetOutputRotation {
         idx: usize,
-        rotation: crate::renderer::config::OutputRotation,
+        rotation: crate::engine::value::render::OutputRotation,
     },
 
     // ── Surfaces ────────────────────────────────────────────────
@@ -761,7 +762,7 @@ pub enum EngineCommand {
     /// Detect contours from a raster image and create surfaces from them.
     DetectFromImage {
         image_data: Vec<u8>,
-        params: crate::surface::detect::DetectionParams,
+        params: crate::engine::value::detect::DetectionParams,
     },
     /// Detect contours from an SVG file.
     DetectFromSvg {
@@ -773,7 +774,7 @@ pub enum EngineCommand {
     },
     /// Confirm detected contours: create surfaces from them.
     ConfirmDetectedContours {
-        contours: Vec<crate::surface::detect::DetectedContour>,
+        contours: Vec<crate::engine::value::detect::DetectedContour>,
     },
     /// Import surfaces from a stage-plan file (image/SVG/DXF): detect contours
     /// and create surfaces. Composite of detect + confirm.
@@ -783,12 +784,12 @@ pub enum EngineCommand {
     /// Generate per-projector dome surfaces with warp meshes from a dome setup.
     /// Removes existing "Dome P*" surfaces, computes meshes, creates new ones.
     GenerateDomeSlices {
-        setup: crate::renderer::slicer::DomeSetup,
+        setup: crate::engine::value::dome::DomeSetup,
     },
     /// Detect contours from a camera snapshot.
     DetectFromCamera {
         camera_id: CameraId,
-        params: crate::surface::detect::DetectionParams,
+        params: crate::engine::value::detect::DetectionParams,
     },
 
     // ── Modulation Updates ─────────────────────────────────────

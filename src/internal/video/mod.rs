@@ -19,29 +19,10 @@ use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context as Scaler, flag::Flags};
 use ffmpeg::util::frame::video::Video;
 
-/// Loop mode for video playback.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    serde::Serialize,
-    serde::Deserialize,
-    utoipa::ToSchema,
-)]
-pub enum LoopMode {
-    /// Standard loop — restart from in-point when reaching out-point.
-    #[default]
-    Loop,
-    /// Play forward then reverse repeatedly.
-    PingPong,
-    /// Play once and stop at the out-point.
-    OneShot,
-    /// Play once and hold the last frame.
-    HoldLast,
-}
+/// Loop mode for video playback. Definition lives in `engine::value::video`
+/// (see /spec/engine-value-types.md); re-exported here so existing
+/// `crate::video::LoopMode` call sites keep working.
+pub use crate::engine::value::video::LoopMode;
 
 /// Result of advancing playback state.
 pub struct AdvanceResult {
