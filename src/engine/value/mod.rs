@@ -8,7 +8,7 @@
 //! module's path type) working, while `engine/{mod,types,traits}.rs` name
 //! types from here directly rather than reaching into `internal`.
 //!
-//! See /spec/engine-value-types.md 
+//! See /spec/engine-value-types.md
 pub mod detect;
 pub mod dome;
 pub mod render;

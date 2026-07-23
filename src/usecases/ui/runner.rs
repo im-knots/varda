@@ -86,6 +86,106 @@ fn spawn_detect_thread(
     result_rx
 }
 
+/// Register a single deck's preview texture at `(channel_idx, deck_idx)`.
+///
+/// Lives here, not on `VardaApp`, because egui texture handles are a
+/// presentation concern the engine never touches — see
+/// `/spec/app-presentation-boundary.md`.
+fn register_deck_preview_texture(
+    egui_renderer: &mut egui_wgpu::Renderer,
+    context: &GpuContext,
+    mixer: &crate::mixer::Mixer,
+    channel_idx: usize,
+    deck_idx: usize,
+    deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
+) {
+    if let Some(slot) = mixer
+        .channels()
+        .get(channel_idx)
+        .and_then(|ch| ch.decks.get(deck_idx))
+    {
+        let texture_id = egui_renderer.register_native_texture(
+            &context.device,
+            &slot.deck.texture_view,
+            wgpu::FilterMode::Linear,
+        );
+        deck_preview_textures.insert((channel_idx, deck_idx), texture_id);
+    }
+}
+
+/// Free and re-register every preview texture for `channel_idx`, keeping the
+/// index-keyed map consistent after deck indices shift (remove/move/reorder).
+fn reregister_channel_preview_textures(
+    egui_renderer: &mut egui_wgpu::Renderer,
+    context: &GpuContext,
+    mixer: &crate::mixer::Mixer,
+    channel_idx: usize,
+    deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
+) {
+    let stale: Vec<(usize, usize)> = deck_preview_textures
+        .keys()
+        .filter(|(c, _)| *c == channel_idx)
+        .copied()
+        .collect();
+    for key in stale {
+        if let Some(tex_id) = deck_preview_textures.remove(&key) {
+            egui_renderer.free_texture(&tex_id);
+        }
+    }
+    if let Some(ch) = mixer.channels().get(channel_idx) {
+        for (deck_idx, slot) in ch.decks.iter().enumerate() {
+            let texture_id = egui_renderer.register_native_texture(
+                &context.device,
+                &slot.deck.texture_view,
+                wgpu::FilterMode::Linear,
+            );
+            deck_preview_textures.insert((channel_idx, deck_idx), texture_id);
+        }
+    }
+}
+
+/// Apply the egui texture post-step for a frame's `apply_engine_actions` outcomes:
+/// register newly-created decks' previews, or refresh the index-keyed map for
+/// channels whose deck indices shifted (remove/move/reorder).
+fn apply_deck_texture_outcomes(
+    outcomes: &[crate::engine::CommandOutcome],
+    egui_renderer: &mut egui_wgpu::Renderer,
+    context: &GpuContext,
+    mixer: &crate::mixer::Mixer,
+    deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
+) {
+    for outcome in outcomes {
+        match outcome {
+            crate::engine::CommandOutcome::DeckCreated {
+                channel_idx,
+                deck_idx,
+                ..
+            } => {
+                register_deck_preview_texture(
+                    egui_renderer,
+                    context,
+                    mixer,
+                    *channel_idx,
+                    *deck_idx,
+                    deck_preview_textures,
+                );
+            }
+            crate::engine::CommandOutcome::DecksReindexed { channels } => {
+                for &ch in channels {
+                    reregister_channel_preview_textures(
+                        egui_renderer,
+                        context,
+                        mixer,
+                        ch,
+                        deck_preview_textures,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 pub struct UIRunner {
     // ── Session config (CLI flags + workspace defaults) ──────────────
     config: AppConfig,
@@ -941,7 +1041,8 @@ impl UIRunner {
         let Some(varda_ref) = self.varda.as_ref() else {
             return;
         };
-        let mut ui_data = varda_ref.collect_ui_data(
+        let mut ui_data = crate::usecases::ui::build_ui_data(
+            varda_ref,
             &self.layout,
             &self.deck_preview_textures,
             &self.channel_preview_textures,
@@ -1223,9 +1324,12 @@ impl UIRunner {
                 }
             }
 
-            let engine_outcome = varda.apply_engine_actions(
-                &mut ui_actions,
+            let engine_outcome = varda.apply_engine_actions(&mut ui_actions);
+            apply_deck_texture_outcomes(
+                &engine_outcome.texture_outcomes,
                 egui_renderer,
+                varda.gpu_context(),
+                varda.mixer_ref(),
                 &mut self.deck_preview_textures,
             );
 

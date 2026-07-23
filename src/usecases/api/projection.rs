@@ -1,7 +1,7 @@
 //! Projection layer — transforms `EngineState` into API response DTOs.
 //!
 //! Pure functions, no HTTP/axum dependency. This is the API consumer's
-//! equivalent of `collect_ui_data()` in the UI consumer.
+//! equivalent of `usecases::ui::build_ui_data()` in the UI consumer.
 
 use crate::engine::types::*;
 use serde::Serialize;

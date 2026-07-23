@@ -6,7 +6,6 @@
 use super::VardaApp;
 use crate::engine::{CommandOutcome, CommandResult, EngineCommand};
 use crate::usecases::ui;
-use std::collections::HashMap;
 
 impl VardaApp {
     /// Apply UI-driven engine state changes: MIDI learn, notifications.
@@ -52,27 +51,22 @@ impl VardaApp {
 
     /// Apply engine mutations: mixer, decks, effects, transitions, channels, cameras.
     /// Routes through engine trait methods where possible, VardaApp methods otherwise.
-    /// `egui_renderer` and `deck_preview_textures` are passed in because they are
-    /// egui-specific state owned by the window layer.
     ///
     /// Returns an [`EngineActionsOutcome`] carrying the GUI post-steps the runner
-    /// must apply after the drain: the removed channel index (selection fixup)
-    /// and whether the render resolution changed (egui texture re-point).
-    pub fn apply_engine_actions(
-        &mut self,
-        ui_actions: &mut ui::UIActions,
-        egui_renderer: &mut egui_wgpu::Renderer,
-        deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
-    ) -> EngineActionsOutcome {
+    /// must apply after the drain: the removed channel index (selection fixup),
+    /// whether the render resolution changed (egui texture re-point), and the
+    /// `CommandOutcome`s a preview-texture-registering consumer needs to act on.
+    /// This method itself never touches egui — see `/spec/app-presentation-boundary.md`.
+    pub fn apply_engine_actions(&mut self, ui_actions: &mut ui::UIActions) -> EngineActionsOutcome {
         // ── Unified command stream (WS2) ──────────────────────────────────
         // Panels push `EngineCommand`s directly; drain them through the same
         // dispatch as the bus. Ordering within the vec is preserved, so a
         // new-channel library drop enqueues `AddChannel` before its `Add*Deck`
         // and the deck resolves against the freshly created channel. Deck-
-        // creating commands register their preview texture + emit a toast;
-        // structural changes (remove/move/reorder, preset load) reindex the
-        // channel's textures — all via the typed `CommandOutcome`.
+        // creating / reindexing outcomes are handed back to the caller, which
+        // registers preview textures — all via the typed `CommandOutcome`.
         let mut resolution_changed = false;
+        let mut texture_outcomes = Vec::new();
         let commands = std::mem::take(&mut ui_actions.commands);
         for cmd in commands {
             let is_deck_add = command_is_deck_add(&cmd);
@@ -86,7 +80,12 @@ impl VardaApp {
                         && (*width != self.render_width || *height != self.render_height)
             );
             let outcome = self.execute_command_gui(cmd);
-            self.apply_deck_texture_outcome(&outcome, egui_renderer, deck_preview_textures);
+            if matches!(
+                outcome,
+                CommandOutcome::DeckCreated { .. } | CommandOutcome::DecksReindexed { .. }
+            ) {
+                texture_outcomes.push(outcome.clone());
+            }
             if is_deck_add {
                 self.notify_deck_add_outcome(&outcome);
             }
@@ -98,14 +97,15 @@ impl VardaApp {
         EngineActionsOutcome {
             removed_channel: self.apply_remove_channel(ui_actions),
             resolution_changed,
+            texture_outcomes,
         }
     }
 
-    /// Emit the GUI toast for a deck-creating command's outcome — the egui-side
-    /// post-step that mirrors the old `dispatch_source_deck_add`. The engine
-    /// logic lives in the command; this only surfaces success/failure to the
-    /// notification center (texture registration is done separately by
-    /// `apply_deck_texture_outcome`).
+    /// Emit the GUI toast for a deck-creating command's outcome — the post-step
+    /// that mirrors the old `dispatch_source_deck_add`. The engine logic lives
+    /// in the command; this only surfaces success/failure to the notification
+    /// center (preview texture registration is the caller's job — see
+    /// `EngineActionsOutcome::texture_outcomes`).
     fn notify_deck_add_outcome(&mut self, outcome: &CommandOutcome) {
         match outcome {
             CommandOutcome::DeckCreated {
@@ -131,94 +131,6 @@ impl VardaApp {
                     .error(format!("Failed to add deck: {}", message));
             }
             _ => {}
-        }
-    }
-
-    /// Apply the egui texture post-step for a GUI command outcome: register the
-    /// created deck's preview, or refresh the index-keyed map for channels whose
-    /// deck indices shifted (remove/move/reorder).
-    pub(crate) fn apply_deck_texture_outcome(
-        &self,
-        outcome: &CommandOutcome,
-        egui_renderer: &mut egui_wgpu::Renderer,
-        deck_preview_textures: &mut HashMap<(usize, usize), egui::TextureId>,
-    ) {
-        match outcome {
-            CommandOutcome::DeckCreated {
-                channel_idx,
-                deck_idx,
-                ..
-            } => {
-                self.register_deck_preview_texture(
-                    *channel_idx,
-                    *deck_idx,
-                    egui_renderer,
-                    deck_preview_textures,
-                );
-            }
-            CommandOutcome::DecksReindexed { channels } => {
-                for &ch in channels {
-                    self.reregister_channel_preview_textures(
-                        ch,
-                        egui_renderer,
-                        deck_preview_textures,
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Register a single deck's preview texture at `(channel_idx, deck_idx)`.
-    pub(crate) fn register_deck_preview_texture(
-        &self,
-        channel_idx: usize,
-        deck_idx: usize,
-        egui_renderer: &mut egui_wgpu::Renderer,
-        deck_preview_textures: &mut HashMap<(usize, usize), egui::TextureId>,
-    ) {
-        if let Some(slot) = self
-            .mixer
-            .channels()
-            .get(channel_idx)
-            .and_then(|ch| ch.decks.get(deck_idx))
-        {
-            let texture_id = egui_renderer.register_native_texture(
-                &self.context.device,
-                &slot.deck.texture_view,
-                wgpu::FilterMode::Linear,
-            );
-            deck_preview_textures.insert((channel_idx, deck_idx), texture_id);
-        }
-    }
-
-    /// Free and re-register every preview texture for `channel_idx`, keeping the
-    /// index-keyed map consistent after deck indices shift.
-    pub(crate) fn reregister_channel_preview_textures(
-        &self,
-        channel_idx: usize,
-        egui_renderer: &mut egui_wgpu::Renderer,
-        deck_preview_textures: &mut HashMap<(usize, usize), egui::TextureId>,
-    ) {
-        let stale: Vec<(usize, usize)> = deck_preview_textures
-            .keys()
-            .filter(|(c, _)| *c == channel_idx)
-            .copied()
-            .collect();
-        for key in stale {
-            if let Some(tex_id) = deck_preview_textures.remove(&key) {
-                egui_renderer.free_texture(&tex_id);
-            }
-        }
-        if let Some(ch) = self.mixer.channels().get(channel_idx) {
-            for (deck_idx, slot) in ch.decks.iter().enumerate() {
-                let texture_id = egui_renderer.register_native_texture(
-                    &self.context.device,
-                    &slot.deck.texture_view,
-                    wgpu::FilterMode::Linear,
-                );
-                deck_preview_textures.insert((channel_idx, deck_idx), texture_id);
-            }
         }
     }
 
@@ -251,13 +163,18 @@ impl VardaApp {
 }
 
 /// GUI post-steps the runner applies after [`VardaApp::apply_engine_actions`]:
-/// selection fixup for a removed channel and egui texture re-point after a
-/// render-resolution change (both need window-layer state the engine can't touch).
+/// selection fixup for a removed channel, egui texture re-point after a
+/// render-resolution change, and the deck-texture-relevant command outcomes
+/// to register/free egui preview textures for (both need window-layer state
+/// the engine can't touch — see `/spec/app-presentation-boundary.md`).
 pub struct EngineActionsOutcome {
     /// Index of a channel removed this frame (for UI selection fixup).
     pub removed_channel: Option<usize>,
     /// Whether the render resolution changed (recreated GPU textures).
     pub resolution_changed: bool,
+    /// `DeckCreated` / `DecksReindexed` outcomes from this frame's command
+    /// drain, in order — the caller registers/frees preview textures for each.
+    pub texture_outcomes: Vec<CommandOutcome>,
 }
 
 /// True for the deck-creating commands the GUI drain toasts + registers a

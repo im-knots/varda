@@ -31,7 +31,7 @@ The **internal layer** (`src/internal/`) contains domain modules that each own o
 
 The **app layer** (`src/app/`, `VardaApp`) is the concrete implementation. It owns all subsystems and implements the engine traits. It can run headless without any window or UI.
 
-The **usecases layer** (`src/usecases/`) is the only place that touches egui, windowed rendering, or HTTP routing. It reads engine state snapshots and emits action structs. The UI never mutates engine state directly — commands flow through the app layer via the engine traits.
+The **usecases layer** (`src/usecases/`) is the only place that touches egui or HTTP routing, and owns all *main-window* presentation (blit pipeline, texture registration, `UIData` construction). It reads engine state snapshots and emits action structs. The UI never mutates engine state directly — commands flow through the app layer via the engine traits. Two documented exceptions touch `winit` (not egui) directly in `app/`: output windows (`app/outputs.rs`, `app/render.rs` — see `clean-architecture.md` Decision #10, engine-owned so they exist even in headless/API-driven setups) and the HTML-deck interactive window (`app/interactive/` — see `/spec/html-source.md` §4).
 
 This separation means the same engine can be driven from the GUI, the HTTP API, or a test harness without changing engine code. When adding a feature, think about whether it needs updates in *all* delivery paths (UI panel, HTTP route, MIDI/OSC mapping) or just one.
 

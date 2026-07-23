@@ -1,7 +1,10 @@
 pub mod notifications;
 pub mod panels;
 pub mod runner;
+mod snapshot;
 pub mod widgets;
+
+pub(crate) use snapshot::build_ui_data;
 
 use crate::audio::AudioSourceId;
 use crate::camera::CameraId;
