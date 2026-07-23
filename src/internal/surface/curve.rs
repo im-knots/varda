@@ -9,26 +9,12 @@
 //! editing both go through here, so there is a single sampling convention and
 //! no parallel curve math elsewhere in the codebase.
 
-use serde::{Deserialize, Serialize};
-
 /// Default subdivision counts for bezier sampling, matched to the historical
 /// SVG import behavior so detection output stays stable.
 pub const QUAD_STEPS: usize = 8;
 pub const CUBIC_STEPS: usize = 12;
 
-/// One segment of a [`SurfacePath`]. Each segment ends at `to`; its start is the
-/// previous segment's endpoint (or the path's `start` for the first segment).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
-pub enum PathSegment {
-    /// Straight line to `to`.
-    Line { to: [f32; 2] },
-    /// Cubic bezier with control points `c1`, `c2`, ending at `to`.
-    Cubic {
-        c1: [f32; 2],
-        c2: [f32; 2],
-        to: [f32; 2],
-    },
-}
+pub use crate::engine::value::surface::{CubicHandle, PathSegment, SurfacePath};
 
 impl PathSegment {
     /// The endpoint this segment terminates at.
@@ -38,32 +24,6 @@ impl PathSegment {
             PathSegment::Cubic { to, .. } => *to,
         }
     }
-}
-
-/// Which control point of a [`PathSegment::Cubic`] a handle refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
-pub enum CubicHandle {
-    /// Control point leaving the segment's start anchor.
-    C1,
-    /// Control point entering the segment's end anchor.
-    C2,
-}
-
-/// An editable curve outline for a surface, in normalized canvas coords [0..1].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SurfacePath {
-    /// Starting point of the path (first vertex of the flattened polygon).
-    pub start: [f32; 2],
-    /// Ordered segments; each continues from the previous endpoint.
-    pub segments: Vec<PathSegment>,
-    /// Whether the outline is closed. Surfaces render closed regardless; this
-    /// records authoring intent for edit-time handles.
-    #[serde(default = "default_true")]
-    pub closed: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl SurfacePath {

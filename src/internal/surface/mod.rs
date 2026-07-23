@@ -12,26 +12,14 @@ pub mod detect;
 pub mod import;
 pub mod mask;
 
-pub use curve::{CubicHandle, PathSegment, SurfacePath};
+pub use crate::engine::value::surface::{
+    CircleHint, ContentMapping, CubicHandle, PathSegment, SurfaceOutputType, SurfacePath,
+    SurfaceReorderOp,
+};
 
 use crate::deck::generate_short_uuid;
 use crate::renderer::context::OutputSource;
 use serde::{Deserialize, Serialize};
-
-/// Metadata that marks a surface as a "true circle" with editable radius/sides.
-///
-/// When present, the surface's vertices are generated from this hint.
-/// Editing radius or sides regenerates vertices automatically.
-/// Converting to polygon clears the hint, keeping vertices as-is.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct CircleHint {
-    pub center: [f32; 2],
-    pub radius: f32,
-    pub sides: u32,
-    /// Canvas aspect ratio used when generating vertices (width/height).
-    /// Stored so regeneration produces the same visual shape.
-    pub aspect_ratio: f32,
-}
 
 impl CircleHint {
     /// Generate polygon vertices from this circle hint.
@@ -106,24 +94,6 @@ pub struct Surface {
     /// vertices`). Canvas coords; the renderer bakes these into a uv-space mask.
     #[serde(default)]
     pub hole_contours: Vec<Vec<[f32; 2]>>,
-}
-
-/// How content is mapped onto a surface.
-///
-/// - **Fill**: The entire source texture is scaled to fill this surface. Each surface
-///   with the same source gets an independent full copy.
-/// - **Mapped**: The surface's canvas position determines which region of the source
-///   it displays. The canvas IS the content space — a surface at (0.2, 0.3, 0.1, 0.1)
-///   shows source UVs from (0.2, 0.3) to (0.3, 0.4). Multiple surfaces with the same
-///   source in Mapped mode implicitly form a group, each showing its slice of one
-///   continuous image.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
-pub enum ContentMapping {
-    /// Entire source scaled to fill the surface (independent per surface)
-    #[default]
-    Fill,
-    /// Surface position on canvas = UV crop into the source (spatial mapping)
-    Mapped,
 }
 
 impl std::fmt::Display for ContentMapping {
@@ -666,15 +636,6 @@ impl Surface {
     }
 }
 
-/// How this surface connects to physical output hardware
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
-pub enum SurfaceOutputType {
-    /// Projection — content is warped to match projector position/surface shape
-    Projection,
-    /// LED Direct — pixel-accurate crop/scale, no perspective warp
-    LEDDirect,
-}
-
 impl std::fmt::Display for SurfaceOutputType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -682,20 +643,6 @@ impl std::fmt::Display for SurfaceOutputType {
             SurfaceOutputType::LEDDirect => write!(f, "LED Direct"),
         }
     }
-}
-
-/// A stacking-order move for a surface (8i.12). The `SurfaceManager.surfaces`
-/// Vec order is authoritative (index 0 = bottom/drawn-first, last = top).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
-pub enum SurfaceReorderOp {
-    /// Move to the top of the stack (drawn last, over everything).
-    ToFront,
-    /// Move to the bottom of the stack (drawn first, under everything).
-    ToBack,
-    /// Move one step toward the front (up in stacking order).
-    Up,
-    /// Move one step toward the back (down in stacking order).
-    Down,
 }
 
 /// Manages all surfaces in the stage layout

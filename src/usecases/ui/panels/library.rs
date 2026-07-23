@@ -1,6 +1,7 @@
 //! Library panel.
 
 use super::super::{LibraryDrag, UIActions, UIData};
+use crate::engine::EngineCommand;
 
 /// Render a stream/URL library entry as a single row.
 ///
@@ -45,7 +46,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 .on_hover_text("Close library (L)")
                 .clicked()
             {
-                actions.toggle_library_panel = true;
+                actions.session.toggle_library_panel = true;
             }
         });
     });
@@ -81,7 +82,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                         }
                         // Fallback: double-click adds to first channel
                         if resp.double_clicked() {
-                            actions.shader_to_add = Some((0, *gen_idx));
+                            actions.session.shader_to_add = Some((0, *gen_idx));
                         }
                         resp.on_hover_text(
                             "Drag to a channel to create a deck, or double-click to add to Ch 0",
@@ -127,7 +128,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     );
                     for ch in &data.channels {
                         if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
-                            actions.open_image_dialog_for_channel = Some(ch.ch_idx);
+                            actions.session.open_image_dialog_for_channel = Some(ch.ch_idx);
                         }
                     }
                 });
@@ -146,7 +147,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     );
                     for ch in &data.channels {
                         if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
-                            actions.open_video_dialog_for_channel = Some(ch.ch_idx);
+                            actions.session.open_video_dialog_for_channel = Some(ch.ch_idx);
                         }
                     }
                 });
@@ -161,7 +162,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                 .default_open(false)
                 .show(ui, |ui| {
                     if ui.small_button("🔄 Rescan").clicked() {
-                        actions.camera_rescan = true;
+                        actions.commands.push(EngineCommand::RescanCameras);
                     }
                     if data.cameras.is_empty() {
                         ui.label(egui::RichText::new("No cameras detected").small().weak());
@@ -205,7 +206,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     if ui.small_button("🔄 Rescan").clicked() {
-                                        actions.ndi_rescan = true;
+                                        actions.commands.push(EngineCommand::RescanNdi);
                                     }
                                     if !data.ndi_available {
                                         ui.label(
@@ -292,7 +293,12 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                                 crate::stream::SrtMode::Caller
                                             };
                                             // Add to library only — user drags to channel to create deck
-                                            actions.srt_library_add = Some((url.clone(), mode));
+                                            actions.commands.push(
+                                                EngineCommand::AddStreamLibraryEntry {
+                                                    url: url.clone(),
+                                                    mode,
+                                                },
+                                            );
                                             ui.data_mut(|d| d.insert_temp(adding_id, false));
                                         }
                                         if ui.small_button("✕ Cancel").clicked() {
@@ -325,7 +331,11 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         status_color,
                                         format!("📺 {}", url),
                                     ) {
-                                        actions.srt_library_remove = Some(url.clone());
+                                        actions.commands.push(
+                                            EngineCommand::RemoveStreamLibraryEntry {
+                                                url: url.clone(),
+                                            },
+                                        );
                                     }
                                     ui.label(
                                         egui::RichText::new(format!("  Mode: {}", entry.mode))
@@ -371,7 +381,11 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                     });
                                     ui.horizontal(|ui| {
                                         if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                            actions.hls_library_add = Some(url.clone());
+                                            actions.commands.push(
+                                                EngineCommand::AddHlsLibraryEntry {
+                                                    url: url.clone(),
+                                                },
+                                            );
                                             ui.data_mut(|d| d.insert_temp(adding_id, false));
                                         }
                                         if ui.small_button("✕ Cancel").clicked() {
@@ -400,7 +414,11 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         status_color,
                                         format!("📡 {}", url),
                                     ) {
-                                        actions.hls_library_remove = Some(url.clone());
+                                        actions.commands.push(
+                                            EngineCommand::RemoveHlsLibraryEntry {
+                                                url: url.clone(),
+                                            },
+                                        );
                                     }
                                     if ui.ctx().is_being_dragged(item_id) {
                                         ui.ctx().memory_mut(|mem| {
@@ -441,7 +459,11 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                     });
                                     ui.horizontal(|ui| {
                                         if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                            actions.dash_library_add = Some(url.clone());
+                                            actions.commands.push(
+                                                EngineCommand::AddDashLibraryEntry {
+                                                    url: url.clone(),
+                                                },
+                                            );
                                             ui.data_mut(|d| d.insert_temp(adding_id, false));
                                         }
                                         if ui.small_button("✕ Cancel").clicked() {
@@ -470,7 +492,11 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         status_color,
                                         format!("📡 {}", url),
                                     ) {
-                                        actions.dash_library_remove = Some(url.clone());
+                                        actions.commands.push(
+                                            EngineCommand::RemoveDashLibraryEntry {
+                                                url: url.clone(),
+                                            },
+                                        );
                                     }
                                     if ui.ctx().is_being_dragged(item_id) {
                                         ui.ctx().memory_mut(|mem| {
@@ -571,7 +597,12 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                     }
                                     ui.horizontal(|ui| {
                                         if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                            actions.rtmp_library_add = Some((url.clone(), mode));
+                                            actions.commands.push(
+                                                EngineCommand::AddRtmpLibraryEntry {
+                                                    url: url.clone(),
+                                                    mode,
+                                                },
+                                            );
                                             ui.data_mut(|d| d.insert_temp(adding_id, false));
                                         }
                                         if ui.small_button("✕ Cancel").clicked() {
@@ -603,7 +634,11 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         status_color,
                                         format!("📺 {} ({})", url, mode),
                                     ) {
-                                        actions.rtmp_library_remove = Some(url.clone());
+                                        actions.commands.push(
+                                            EngineCommand::RemoveRtmpLibraryEntry {
+                                                url: url.clone(),
+                                            },
+                                        );
                                     }
                                     if ui.ctx().is_being_dragged(item_id) {
                                         ui.ctx().memory_mut(|mem| {
@@ -645,7 +680,9 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             });
                             ui.horizontal(|ui| {
                                 if ui.small_button("✓ Add").clicked() && !url.is_empty() {
-                                    actions.html_library_add = Some(url.clone());
+                                    actions.commands.push(EngineCommand::AddHtmlLibraryEntry {
+                                        url: url.clone(),
+                                    });
                                     ui.data_mut(|d| d.insert_temp(adding_id, false));
                                 }
                                 if ui.small_button("✕ Cancel").clicked() {
@@ -674,7 +711,11 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                 status_color,
                                 format!("🌐 {}", url),
                             ) {
-                                actions.html_library_remove = Some(url.clone());
+                                actions
+                                    .commands
+                                    .push(EngineCommand::RemoveHtmlLibraryEntry {
+                                        url: url.clone(),
+                                    });
                             }
                             if ui.ctx().is_being_dragged(item_id) {
                                 ui.ctx().memory_mut(|mem| {
@@ -700,7 +741,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     .default_open(false)
                     .show(ui, |ui| {
                         if ui.small_button("🔄 Rescan").clicked() {
-                            actions.syphon_rescan = true;
+                            actions.commands.push(EngineCommand::RescanSyphon);
                         }
                         if data.syphon_sources.is_empty() {
                             ui.label(
@@ -755,7 +796,10 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                 });
                             }
                             if resp.double_clicked() {
-                                actions.deck_preset_to_add = Some((0, idx));
+                                actions.commands.push(EngineCommand::LoadDeckPreset {
+                                    channel_idx: 0,
+                                    preset_idx: idx,
+                                });
                             }
                             resp.on_hover_text("Drag to a channel to load this deck preset");
                         }
@@ -791,7 +835,10 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                 });
                             }
                             if resp.double_clicked() {
-                                actions.channel_preset_to_add = Some((None, idx));
+                                actions.commands.push(EngineCommand::LoadChannelPreset {
+                                    target_channel: None,
+                                    preset_idx: idx,
+                                });
                             }
                             resp.on_hover_text("Double-click to add this channel to the mixer");
                         }

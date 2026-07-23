@@ -1,9 +1,6 @@
 //! Bottom panel and deck detail.
 
-use super::super::{
-    widgets, AutoTransitionAction, EffectDrag, LibraryDrag, ModulationAction, ParamUpdate,
-    SurfaceAction, SurfaceUI, UIActions, UIData, VideoAction,
-};
+use super::super::{widgets, EffectDrag, LibraryDrag, SurfaceUI, UIActions, UIData};
 use super::effects::{render_channel_effect_detail, render_master_effect_detail};
 use super::sequence::{render_sequence_step_editor, render_timeline_strip};
 use super::utils::{
@@ -11,6 +8,7 @@ use super::utils::{
     render_effect_drag_handle, render_effect_drop_zone,
 };
 use crate::channel::DeckRenderFps;
+use crate::engine::{EffectTarget, EngineCommand};
 use crate::params::ParamValue;
 use crate::{BlendMode, ScalingMode};
 
@@ -32,7 +30,7 @@ fn learn_overlay(
         }
         let id = ui.id().with(("midi_learn", path.as_str()));
         if ui.interact(rect, id, egui::Sense::click()).clicked() {
-            actions.midi_learn_select = Some(path);
+            actions.session.midi_learn_select = Some(path);
         }
     } else if data.keyboard_learn_active {
         if data.keyboard_learn_target.as_deref() == Some(path.as_str()) {
@@ -42,7 +40,7 @@ fn learn_overlay(
         }
         let id = ui.id().with(("kb_learn", path.as_str()));
         if ui.interact(rect, id, egui::Sense::click()).clicked() {
-            actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
+            actions.session.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
         }
     }
 }
@@ -74,7 +72,7 @@ pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("x Exit MIDI Learn").clicked() {
-                            actions.midi_learn_toggle = true;
+                            actions.session.midi_learn_toggle = true;
                         }
                     });
                 });
@@ -200,8 +198,8 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
             )
             .changed()
         {
-            actions.surface_actions.push(SurfaceAction::SetWarpBound {
-                uuid: uuid.clone(),
+            actions.commands.push(EngineCommand::SetWarpBound {
+                surface_uuid: uuid.clone(),
                 bound: bind,
             });
         }
@@ -217,7 +215,7 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
                 .on_hover_text("Fewer columns")
                 .clicked()
             {
-                actions.surface_actions.push(subdiv_action(
+                actions.commands.push(subdiv_action(
                     is_bezier,
                     uuid.clone(),
                     cols.saturating_sub(1).max(2),
@@ -226,7 +224,7 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
             }
             ui.label(egui::RichText::new(format!("{cols}")).monospace().small());
             if ui.small_button("+").on_hover_text("More columns").clicked() {
-                actions.surface_actions.push(subdiv_action(
+                actions.commands.push(subdiv_action(
                     is_bezier,
                     uuid.clone(),
                     (cols + 1).min(UI_MAX_WARP_SUBDIVISIONS),
@@ -235,7 +233,7 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
             }
             ui.label(egui::RichText::new("×").weak().small());
             if ui.small_button("−").on_hover_text("Fewer rows").clicked() {
-                actions.surface_actions.push(subdiv_action(
+                actions.commands.push(subdiv_action(
                     is_bezier,
                     uuid.clone(),
                     cols,
@@ -244,7 +242,7 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
             }
             ui.label(egui::RichText::new(format!("{rows}")).monospace().small());
             if ui.small_button("+").on_hover_text("More rows").clicked() {
-                actions.surface_actions.push(subdiv_action(
+                actions.commands.push(subdiv_action(
                     is_bezier,
                     uuid.clone(),
                     cols,
@@ -259,22 +257,20 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
                     .on_hover_text("Switch back to a straight mesh warp")
                     .clicked()
                 {
-                    actions
-                        .surface_actions
-                        .push(SurfaceAction::SetWarpSubdivisions {
-                            uuid: uuid.clone(),
-                            cols,
-                            rows,
-                        });
+                    actions.commands.push(EngineCommand::SetWarpSubdivisions {
+                        surface_uuid: uuid.clone(),
+                        cols,
+                        rows,
+                    });
                 }
             } else if ui
                 .small_button("〰 Curve")
                 .on_hover_text("Convert to a smooth bezier warp with tangent handles")
                 .clicked()
             {
-                actions
-                    .surface_actions
-                    .push(SurfaceAction::ConvertWarpToBezier { uuid: uuid.clone() });
+                actions.commands.push(EngineCommand::ConvertWarpToBezier {
+                    surface_uuid: uuid.clone(),
+                });
             }
             ui.separator();
             if ui
@@ -282,9 +278,9 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
                 .on_hover_text("Clear warp")
                 .clicked()
             {
-                actions
-                    .surface_actions
-                    .push(SurfaceAction::ResetWarp { uuid: uuid.clone() });
+                actions.commands.push(EngineCommand::ResetWarp {
+                    surface_uuid: uuid.clone(),
+                });
             }
         });
     });
@@ -432,21 +428,19 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
     if let Some((row, col)) = dragging {
         if resp.dragged() {
             // Warp point drag is one undo gesture.
-            actions.gesture_active = true;
+            actions.session.gesture_active = true;
             if let Some(p) = resp.interact_pointer_pos() {
                 let np = from_screen(p);
                 if is_mesh {
-                    actions
-                        .surface_actions
-                        .push(SurfaceAction::SetWarpMeshPoint {
-                            uuid: uuid.clone(),
-                            row,
-                            col,
-                            position: np,
-                        });
+                    actions.commands.push(EngineCommand::SetWarpMeshPoint {
+                        surface_uuid: uuid.clone(),
+                        row,
+                        col,
+                        position: np,
+                    });
                 } else {
-                    actions.surface_actions.push(SurfaceAction::SetWarpCorner {
-                        uuid: uuid.clone(),
+                    actions.commands.push(EngineCommand::SetWarpCorner {
+                        surface_uuid: uuid.clone(),
                         corner_idx: rc_to_corner(row, col),
                         position: np,
                     });
@@ -462,11 +456,19 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
 
 /// Build the subdivision action for the warp steppers: in bezier mode this
 /// resizes the anchor cage, otherwise the mesh grid.
-fn subdiv_action(is_bezier: bool, uuid: String, cols: u32, rows: u32) -> SurfaceAction {
+fn subdiv_action(is_bezier: bool, uuid: String, cols: u32, rows: u32) -> EngineCommand {
     if is_bezier {
-        SurfaceAction::SetBezierCageSubdivisions { uuid, cols, rows }
+        EngineCommand::SetBezierCageSubdivisions {
+            surface_uuid: uuid,
+            cols,
+            rows,
+        }
     } else {
-        SurfaceAction::SetWarpSubdivisions { uuid, cols, rows }
+        EngineCommand::SetWarpSubdivisions {
+            surface_uuid: uuid,
+            cols,
+            rows,
+        }
     }
 }
 
@@ -646,13 +648,13 @@ fn render_bezier_canvas(
     if let Some(t) = drag {
         if resp.dragged() {
             // Bezier warp cage drag is one undo gesture.
-            actions.gesture_active = true;
+            actions.session.gesture_active = true;
             if let Some(p) = resp.interact_pointer_pos() {
                 let np = from_screen(p);
                 match t {
                     BezDrag::Anchor { r, c } => {
-                        actions.surface_actions.push(SurfaceAction::MoveWarpAnchor {
-                            uuid: uuid.to_string(),
+                        actions.commands.push(EngineCommand::MoveWarpAnchor {
+                            surface_uuid: uuid.to_string(),
                             row: r,
                             col: c,
                             position: np,
@@ -664,8 +666,8 @@ fn render_bezier_canvas(
                         c,
                         which,
                     } => {
-                        actions.surface_actions.push(SurfaceAction::MoveWarpHandle {
-                            uuid: uuid.to_string(),
+                        actions.commands.push(EngineCommand::MoveWarpHandle {
+                            surface_uuid: uuid.to_string(),
                             horizontal,
                             row: r,
                             col: c,
@@ -740,7 +742,11 @@ pub(super) fn render_selected_deck_detail(
                 ui.data_mut(|d| d.insert_temp(cleared_id, true));
             }
             if ui.small_button("✓ Save").clicked() && !name.is_empty() {
-                actions.save_deck_preset = Some((ch_idx, deck_idx, name.clone()));
+                actions.commands.push(EngineCommand::SaveDeckPreset {
+                    channel_idx: ch_idx,
+                    deck_idx,
+                    name: name.clone(),
+                });
                 ui.data_mut(|d| d.insert_temp(prompt_id, false));
             }
             if ui.small_button("✕").clicked() {
@@ -792,7 +798,10 @@ pub(super) fn render_selected_deck_detail(
                             ui.label(egui::RichText::new("🌐 HTML").strong());
                             let reload_resp = ui.button("⟳ Reload");
                             if reload_resp.clicked() {
-                                actions.html_to_reload.push((ch_idx, deck_idx));
+                                actions.commands.push(EngineCommand::ReloadHtmlDeck {
+                                    channel_idx: ch_idx,
+                                    deck_idx,
+                                });
                             }
                             learn_overlay(
                                 ui,
@@ -808,11 +817,15 @@ pub(super) fn render_selected_deck_detail(
                             };
                             let interactive_resp = ui.button(interactive_label);
                             if interactive_resp.clicked() {
-                                actions.html_set_interactive.push((
-                                    ch_idx,
-                                    deck_idx,
-                                    !deck.is_html_interactive,
-                                ));
+                                let cmd = if deck.is_html_interactive {
+                                    EngineCommand::CloseHtmlInteractive
+                                } else {
+                                    EngineCommand::OpenHtmlInteractive {
+                                        channel_idx: ch_idx,
+                                        deck_idx,
+                                    }
+                                };
+                                actions.commands.push(cmd);
                             }
                             learn_overlay(
                                 ui,
@@ -825,11 +838,11 @@ pub(super) fn render_selected_deck_detail(
                             let transparent_resp =
                                 ui.checkbox(&mut transparent, "Transparent BG");
                             if transparent_resp.changed() {
-                                actions.transparent_updates.push((
-                                    ch_idx,
+                                actions.commands.push(EngineCommand::SetDeckTransparent {
+                                    channel_idx: ch_idx,
                                     deck_idx,
                                     transparent,
-                                ));
+                                });
                             }
                             learn_overlay(
                                 ui,
@@ -859,7 +872,7 @@ pub(super) fn render_selected_deck_detail(
                             let play_label = if vp.playing { "⏸ Pause" } else { "▶ Play" };
                             let play_resp = ui.button(play_label);
                             if play_resp.clicked() {
-                                actions.video_actions.push((ch_idx, deck_idx, VideoAction::TogglePlay));
+                                actions.commands.push(EngineCommand::VideoTogglePlay { channel_idx: ch_idx, deck_idx });
                             }
                             learn_overlay(ui, play_resp.rect, format!("deck/{}/video/play", deck.uuid), data, actions);
 
@@ -873,7 +886,7 @@ pub(super) fn render_selected_deck_detail(
                                     .trailing_fill(true);
                                 let resp = ui.add(slider);
                                 if resp.changed() {
-                                    actions.video_actions.push((ch_idx, deck_idx, VideoAction::Seek(pos as f64)));
+                                    actions.commands.push(EngineCommand::VideoSeek { channel_idx: ch_idx, deck_idx, position_secs: pos as f64 });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/seek", deck.uuid), data, actions);
                                 ui.label(format_time(duration));
@@ -885,7 +898,7 @@ pub(super) fn render_selected_deck_detail(
                                 ui.label("Speed:");
                                 let resp = ui.add(egui::Slider::new(&mut speed, 0.1..=4.0).step_by(0.05).suffix("x"));
                                 if resp.changed() {
-                                    actions.video_actions.push((ch_idx, deck_idx, VideoAction::SetSpeed(speed as f64)));
+                                    actions.commands.push(EngineCommand::VideoSetSpeed { channel_idx: ch_idx, deck_idx, speed: speed as f64 });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/speed", deck.uuid), data, actions);
                             });
@@ -903,7 +916,7 @@ pub(super) fn render_selected_deck_detail(
                                     let selected = vp.loop_mode == *mode;
                                     let btn = egui::Button::new(*icon).selected(selected);
                                     if ui.add(btn).on_hover_text(*tooltip).clicked() && !selected {
-                                        actions.video_actions.push((ch_idx, deck_idx, VideoAction::SetLoopMode(*mode)));
+                                        actions.commands.push(EngineCommand::VideoSetLoopMode { channel_idx: ch_idx, deck_idx, mode: *mode });
                                     }
                                 }
                             });
@@ -923,8 +936,7 @@ pub(super) fn render_selected_deck_detail(
                                     .show_value(false).trailing_fill(true));
                                 if resp.changed()
                                 {
-                                    actions.video_actions.push((ch_idx, deck_idx,
-                                        VideoAction::SetInPoint(in_pt as f64)));
+                                    actions.commands.push(EngineCommand::VideoSetInPoint { channel_idx: ch_idx, deck_idx, secs: in_pt as f64 });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/in_point", deck.uuid), data, actions);
                                 ui.label(format_time(in_pt as f64));
@@ -938,8 +950,7 @@ pub(super) fn render_selected_deck_detail(
                                     .show_value(false).trailing_fill(true));
                                 if resp.changed()
                                 {
-                                    actions.video_actions.push((ch_idx, deck_idx,
-                                        VideoAction::SetOutPoint(out_pt as f64)));
+                                    actions.commands.push(EngineCommand::VideoSetOutPoint { channel_idx: ch_idx, deck_idx, secs: out_pt as f64 });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/out_point", deck.uuid), data, actions);
                                 ui.label(format_time(out_pt as f64));
@@ -948,20 +959,17 @@ pub(super) fn render_selected_deck_detail(
                             // Set from current / clear buttons
                             ui.horizontal(|ui| {
                                 if ui.small_button("[ Set In").on_hover_text("Set in-point to current position").clicked() {
-                                    actions.video_actions.push((ch_idx, deck_idx,
-                                        VideoAction::SetInPoint(vp.position)));
+                                    actions.commands.push(EngineCommand::VideoSetInPoint { channel_idx: ch_idx, deck_idx, secs: vp.position });
                                 }
                                 if ui.small_button("Set Out ]").on_hover_text("Set out-point to current position").clicked() {
-                                    actions.video_actions.push((ch_idx, deck_idx,
-                                        VideoAction::SetOutPoint(vp.position)));
+                                    actions.commands.push(EngineCommand::VideoSetOutPoint { channel_idx: ch_idx, deck_idx, secs: vp.position });
                                 }
                                 // Clear is always shown (disabled when no range) so it stays MIDI/keyboard-mappable.
                                 let clear_resp = ui
                                     .add_enabled(has_range, egui::Button::new("x Clear").small())
                                     .on_hover_text("Reset to full clip");
                                 if clear_resp.clicked() {
-                                    actions.video_actions.push((ch_idx, deck_idx,
-                                        VideoAction::ClearInOutPoints));
+                                    actions.commands.push(EngineCommand::VideoClearInOutPoints { channel_idx: ch_idx, deck_idx });
                                 }
                                 learn_overlay(ui, clear_resp.rect, format!("deck/{}/video/clear", deck.uuid), data, actions);
                             });
@@ -1015,8 +1023,7 @@ pub(super) fn render_selected_deck_detail(
                                     let mut en = enabled;
                                     ui.checkbox(&mut en, "Enabled");
                                     if en != enabled {
-                                        actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                            AutoTransitionAction::SetEnabled(en)));
+                                        actions.commands.push(EngineCommand::SetAutoTransitionEnabled { channel_idx: ch_idx, deck_idx, enabled: en });
                                     }
                                 });
 
@@ -1027,12 +1034,10 @@ pub(super) fn render_selected_deck_detail(
                                             let mut clip_end = at.trigger_is_clip_end;
                                             if ui.selectable_label(!clip_end, "Timer").clicked() && clip_end {
                                                 clip_end = false;
-                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                    AutoTransitionAction::SetTrigger(false)));
+                                                actions.commands.push(EngineCommand::SetAutoTransitionTrigger { channel_idx: ch_idx, deck_idx, clip_end: false });
                                             }
                                             if ui.selectable_label(clip_end, "Clip End").clicked() && !clip_end {
-                                                actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                    AutoTransitionAction::SetTrigger(true)));
+                                                actions.commands.push(EngineCommand::SetAutoTransitionTrigger { channel_idx: ch_idx, deck_idx, clip_end: true });
                                             }
                                         });
                                         let any_learn = data.midi_learn_active || data.keyboard_learn_active;
@@ -1054,8 +1059,7 @@ pub(super) fn render_selected_deck_detail(
                                                     .logarithmic(true)
                                                     .suffix(if at.play_duration_is_beats { " beats" } else { " sec" }));
                                                 if resp.changed() {
-                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                        AutoTransitionAction::SetPlayDuration(val as f64)));
+                                                    actions.commands.push(EngineCommand::SetAutoTransitionPlayDurationValue { channel_idx: ch_idx, deck_idx, value: val as f64 });
                                                 }
                                                 resp.rect
                                             };
@@ -1065,7 +1069,7 @@ pub(super) fn render_selected_deck_detail(
                                                 else { widgets::draw_midi_learn_glow(ui, slider_rect); }
                                                 let click_id = ui.id().with(("midi_learn_at_play", ch_idx, deck_idx));
                                                 if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
-                                                    actions.midi_learn_select = Some(play_path.clone());
+                                                    actions.session.midi_learn_select = Some(play_path.clone());
                                                 }
                                             }
                                             if data.keyboard_learn_active {
@@ -1074,15 +1078,14 @@ pub(super) fn render_selected_deck_detail(
                                                 else { widgets::draw_keyboard_learn_glow(ui, slider_rect); }
                                                 let click_id = ui.id().with(("kb_learn_at_play", ch_idx, deck_idx));
                                                 if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
-                                                    actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(play_path));
+                                                    actions.session.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(play_path));
                                                 }
                                             }
                                             if !any_learn
                                                 && ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
                                                     .on_hover_text("Toggle beats/seconds").clicked()
                                                 {
-                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                        AutoTransitionAction::TogglePlayDurationUnit));
+                                                    actions.commands.push(EngineCommand::ToggleAutoTransitionPlayDurationUnit { channel_idx: ch_idx, deck_idx });
                                                 }
                                         });
                                         ui.horizontal(|ui| {
@@ -1103,8 +1106,7 @@ pub(super) fn render_selected_deck_detail(
                                                     .logarithmic(true)
                                                     .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" }));
                                                 if resp.changed() {
-                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                        AutoTransitionAction::SetTransitionDuration(val as f64)));
+                                                    actions.commands.push(EngineCommand::SetAutoTransitionDurationValue { channel_idx: ch_idx, deck_idx, value: val as f64 });
                                                 }
                                                 resp.rect
                                             };
@@ -1114,7 +1116,7 @@ pub(super) fn render_selected_deck_detail(
                                                 else { widgets::draw_midi_learn_glow(ui, slider_rect); }
                                                 let click_id = ui.id().with(("midi_learn_at_trans", ch_idx, deck_idx));
                                                 if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
-                                                    actions.midi_learn_select = Some(trans_path.clone());
+                                                    actions.session.midi_learn_select = Some(trans_path.clone());
                                                 }
                                             }
                                             if data.keyboard_learn_active {
@@ -1123,15 +1125,14 @@ pub(super) fn render_selected_deck_detail(
                                                 else { widgets::draw_keyboard_learn_glow(ui, slider_rect); }
                                                 let click_id = ui.id().with(("kb_learn_at_trans", ch_idx, deck_idx));
                                                 if ui.interact(slider_rect, click_id, egui::Sense::click()).clicked() {
-                                                    actions.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(trans_path));
+                                                    actions.session.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(trans_path));
                                                 }
                                             }
                                             if !any_learn
                                                 && ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
                                                     .on_hover_text("Toggle beats/seconds").clicked()
                                                 {
-                                                    actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                        AutoTransitionAction::ToggleTransitionDurationUnit));
+                                                    actions.commands.push(EngineCommand::ToggleAutoTransitionDurationUnit { channel_idx: ch_idx, deck_idx });
                                                 }
                                         });
                                         ui.horizontal(|ui| {
@@ -1142,14 +1143,12 @@ pub(super) fn render_selected_deck_detail(
                                                 .width(120.0)
                                                 .show_ui(ui, |ui| {
                                                     if ui.selectable_label(at.transition_shader_name.is_none(), "(fade)").clicked() {
-                                                        actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                            AutoTransitionAction::SetTransitionShader(None)));
+                                                        actions.commands.push(EngineCommand::SetAutoTransitionShader { channel_idx: ch_idx, deck_idx, shader_name: None });
                                                     }
                                                     for name in &data.transition_names {
                                                         let selected = at.transition_shader_name.as_deref() == Some(name.as_str());
                                                         if ui.selectable_label(selected, name).clicked() && !selected {
-                                                            actions.auto_transition_actions.push((ch_idx, deck_idx,
-                                                                AutoTransitionAction::SetTransitionShader(Some(name.clone()))));
+                                                            actions.commands.push(EngineCommand::SetAutoTransitionShader { channel_idx: ch_idx, deck_idx, shader_name: Some(name.clone()) });
                                                         }
                                                     }
                                                 });
@@ -1209,8 +1208,11 @@ pub(super) fn render_selected_deck_detail(
                                         });
                                 });
                                 if selected != current_blend {
-                                    let new_blend = all_modes[selected];
-                                    actions.deck_updates.push((ch_idx, deck_idx, deck.opacity, new_blend, deck.solo, deck.mute));
+                                    actions.commands.push(EngineCommand::SetDeckBlendMode {
+                                        channel_idx: ch_idx,
+                                        deck_idx,
+                                        mode: all_modes[selected],
+                                    });
                                 }
 
                                 // Scaling mode
@@ -1238,7 +1240,11 @@ pub(super) fn render_selected_deck_detail(
                                             1 => ScalingMode::Fit, 2 => ScalingMode::Stretch,
                                             3 => ScalingMode::Center, _ => ScalingMode::Fill,
                                         };
-                                        actions.scaling_mode_updates.push((ch_idx, deck_idx, new_scaling));
+                                        actions.commands.push(EngineCommand::SetDeckScalingMode {
+                                            channel_idx: ch_idx,
+                                            deck_idx,
+                                            mode: new_scaling,
+                                        });
                                     }
                                 }
 
@@ -1269,7 +1275,11 @@ pub(super) fn render_selected_deck_detail(
                                             3 => DeckRenderFps::Fixed(15),
                                             _ => DeckRenderFps::Auto,
                                         };
-                                        actions.render_fps_updates.push((ch_idx, deck_idx, new_fps));
+                                        actions.commands.push(EngineCommand::SetDeckRenderFps {
+                                            channel_idx: ch_idx,
+                                            deck_idx,
+                                            render_fps: new_fps,
+                                        });
                                     }
                                     // Show render cost
                                     if deck.gpu_render_cost_us > 0.0 {
@@ -1294,35 +1304,30 @@ pub(super) fn render_selected_deck_detail(
                                         ui,
                                         &gen_params.params,
                                         &data.modulation_sources,
-                                        &|name: &str, val: ParamValue| match val {
-                                            ParamValue::Float(v) => ParamUpdate::GeneratorFloat { ch_idx, deck_idx, name: name.to_string(), value: v },
-                                            ParamValue::Bool(v) => ParamUpdate::GeneratorBool { ch_idx, deck_idx, name: name.to_string(), value: v },
-                                            ParamValue::Color(v) => ParamUpdate::GeneratorColor { ch_idx, deck_idx, name: name.to_string(), value: v },
-                                            _ => unreachable!(),
-                                        },
-                                        Some(&|name: &str, source_uuid: &str| ModulationAction::AssignModulation {
-                                            deck_uuid: deck_uuid_assign.clone(), param_name: name.to_string(), source_id: source_uuid.to_string(), amount: 0.5,
+                                        &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam { channel_idx: ch_idx, deck_idx, name: name.to_string(), value: val },
+                                        Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
+                                            target: format!("deck_{}:{}", deck_uuid_assign, name), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
-                                        Some(&|name: &str| ModulationAction::RemoveAssignment {
-                                            deck_uuid: deck_uuid_remove.clone(), param_name: name.to_string(), source_id: String::new(),
+                                        Some(&|name: &str| EngineCommand::ClearModulation {
+                                            target: format!("deck_{}:{}", deck_uuid_remove, name),
                                         }),
-                                        &mut actions.param_updates,
-                                        &mut actions.modulation_actions,
+                                        &mut actions.commands,
+                                        &mut actions.session.gesture_active,
                                         &format!("sel_{}_{}", ch_idx, deck_idx),
                                         Some(&midi_path_prefix),
                                         data.midi_learn_active,
-                                        &mut actions.midi_learn_select,
+                                        &mut actions.session.midi_learn_select,
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
                                         &format!("deck_{}", deck_uuid),
                                         data.keyboard_learn_active,
-                                        &mut actions.keyboard_learn_select,
+                                        &mut actions.session.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
                                     );
                                     ui.add_space(4.0);
                                     if ui.button("Reset").clicked() {
-                                        actions.param_updates.push(ParamUpdate::GeneratorResetToDefaults { ch_idx, deck_idx });
+                                        actions.commands.push(EngineCommand::ResetGeneratorParamsToDefaults { channel_idx: ch_idx, deck_idx });
                                     }
                                 }
                             });
@@ -1357,7 +1362,10 @@ pub(super) fn render_selected_deck_detail(
                                     render_effect_drag_handle(ui, EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
                                     let mut enabled = *eff_enabled;
                                     if ui.checkbox(&mut enabled, "").changed() {
-                                        actions.effect_to_toggle = Some((ch_idx, deck_idx, eff_idx));
+                                        actions.commands.push(EngineCommand::ToggleEffect {
+                                            target: EffectTarget::Deck(ch_idx, deck_idx),
+                                            effect_idx: eff_idx,
+                                        });
                                     }
                                     ui.label(egui::RichText::new(eff_name).strong());
                                 });
@@ -1374,32 +1382,25 @@ pub(super) fn render_selected_deck_detail(
                                         ui,
                                         &eff_params.params,
                                         &data.modulation_sources,
-                                        &|name: &str, val: ParamValue| match val {
-                                            ParamValue::Float(v) => ParamUpdate::EffectFloat { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                            ParamValue::Bool(v) => ParamUpdate::EffectBool { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                            ParamValue::Color(v) => ParamUpdate::EffectColor { ch_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: v },
-                                            _ => unreachable!(),
-                                        },
-                                        Some(&|name: &str, source_uuid: &str| ModulationAction::AssignEffectModulation {
-                                            effect_uuid: eff_uuid_assign.clone(),
-                                            param_name: name.to_string(), source_id: source_uuid.to_string(), amount: 0.5,
+                                        &|name: &str, val: ParamValue| EngineCommand::SetEffectParam { channel_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: val },
+                                        Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
+                                            target: format!("fx_{}:{}", eff_uuid_assign, name), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
-                                        Some(&|name: &str| ModulationAction::RemoveEffectAssignment {
-                                            effect_uuid: eff_uuid_remove.clone(),
-                                            param_name: name.to_string(),
+                                        Some(&|name: &str| EngineCommand::ClearModulation {
+                                            target: format!("fx_{}:{}", eff_uuid_remove, name),
                                         }),
-                                        &mut actions.param_updates,
-                                        &mut actions.modulation_actions,
+                                        &mut actions.commands,
+                                        &mut actions.session.gesture_active,
                                         &format!("fx_{}_{}_{}", ch_copy, deck_copy, eff_idx_copy),
                                         Some(&eff_midi_prefix),
                                         data.midi_learn_active,
-                                        &mut actions.midi_learn_select,
+                                        &mut actions.session.midi_learn_select,
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
                                         &format!("fx_{}", eff_uuid),
                                         data.keyboard_learn_active,
-                                        &mut actions.keyboard_learn_select,
+                                        &mut actions.session.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
                                     );
                                 }
@@ -1416,7 +1417,10 @@ pub(super) fn render_selected_deck_detail(
                         let color = if btn_resp.hovered() { ui.visuals().strong_text_color() } else { ui.visuals().text_color() };
                         ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "x", egui::FontId::proportional(12.0), color);
                         if btn_resp.clicked() {
-                            actions.effect_to_remove = Some((ch_idx, deck_idx, eff_idx));
+                            actions.commands.push(EngineCommand::RemoveEffect {
+                                target: EffectTarget::Deck(ch_idx, deck_idx),
+                                effect_idx: eff_idx,
+                            });
                         }
                     }
                     render_effect_drag_ghost(
@@ -1472,7 +1476,7 @@ fn render_sequence_detail(
     data: &UIData,
     actions: &mut UIActions,
 ) {
-    use super::super::{SequenceAction, SequenceStepDrag, SequenceStepKindUI};
+    use super::super::{SequenceStepDrag, SequenceStepKindUI};
 
     let Some(seq) = data.sequences.get(seq_idx) else {
         ui.label(egui::RichText::new("Sequence not found").weak());
@@ -1499,13 +1503,15 @@ fn render_sequence_detail(
             .clicked()
         {
             actions
-                .sequence_actions
-                .push(SequenceAction::ToggleEnabled(seq_idx));
+                .commands
+                .push(EngineCommand::ToggleSequence { idx: seq_idx });
         }
 
         if seq.playing {
             if ui.button("⏹ Stop").on_hover_text("Stop playback").clicked() {
-                actions.sequence_actions.push(SequenceAction::Stop(seq_idx));
+                actions
+                    .commands
+                    .push(EngineCommand::StopSequence { idx: seq_idx });
             }
         } else if seq.enabled
             && !seq.steps.is_empty()
@@ -1514,7 +1520,9 @@ fn render_sequence_detail(
                 .on_hover_text("Start playback")
                 .clicked()
         {
-            actions.sequence_actions.push(SequenceAction::Play(seq_idx));
+            actions
+                .commands
+                .push(EngineCommand::PlaySequence { idx: seq_idx });
         }
 
         if ui
@@ -1523,8 +1531,8 @@ fn render_sequence_detail(
             .clicked()
         {
             actions
-                .sequence_actions
-                .push(SequenceAction::Delete(seq_idx));
+                .commands
+                .push(EngineCommand::DeleteSequence { idx: seq_idx });
         }
     });
 
@@ -1548,7 +1556,7 @@ fn render_sequence_detail(
             data.clock_bpm,
         );
         if let Some(clicked) = clicked_step {
-            actions.select_sequence_step = Some((seq_idx, clicked));
+            actions.session.select_sequence_step = Some((seq_idx, clicked));
         }
     }
 
@@ -1735,7 +1743,7 @@ fn render_sequence_detail(
                             };
 
                             if ui.selectable_label(is_selected, text).clicked() {
-                                actions.select_sequence_step = Some((seq_idx, i));
+                                actions.session.select_sequence_step = Some((seq_idx, i));
                             }
                         });
                     }
@@ -1767,7 +1775,7 @@ fn render_sequence_detail(
                 let from = 0;
                 let to = 1.min(data.channel_count.saturating_sub(1));
                 if ui.small_button("+Fade").clicked() {
-                    actions.sequence_actions.push(SequenceAction::AddFade {
+                    actions.commands.push(EngineCommand::AddFadeStep {
                         seq_idx,
                         from_ch: from,
                         to_ch: to,
@@ -1775,11 +1783,11 @@ fn render_sequence_detail(
                 }
                 if ui.small_button("+Wait").clicked() {
                     actions
-                        .sequence_actions
-                        .push(SequenceAction::AddWait(seq_idx));
+                        .commands
+                        .push(EngineCommand::AddWaitStep { seq_idx });
                 }
                 if ui.small_button("+Loop").clicked() {
-                    actions.sequence_actions.push(SequenceAction::AddGoTo {
+                    actions.commands.push(EngineCommand::AddGoToStep {
                         seq_idx,
                         step_index: 0,
                     });
@@ -1805,8 +1813,8 @@ fn render_sequence_detail(
                             .clicked()
                         {
                             actions
-                                .sequence_actions
-                                .push(SequenceAction::RemoveStep { seq_idx, step_idx });
+                                .commands
+                                .push(EngineCommand::RemoveStep { seq_idx, step_idx });
                         }
                     });
                     ui.add_space(4.0);

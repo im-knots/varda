@@ -1,22 +1,20 @@
 pub mod notifications;
 pub mod panels;
 pub mod runner;
+mod snapshot;
 pub mod widgets;
+
+pub(crate) use snapshot::build_ui_data;
 
 use crate::audio::AudioSourceId;
 use crate::camera::CameraId;
 use crate::channel::DeckRenderFps;
-use crate::mixer::CrossfadeEasing;
-use crate::modulation::{
-    ADSRStage, AudioBandPreset, AudioReactMode, LFOWaveform, StepInterpolation,
-};
+use crate::modulation::{ADSRStage, AudioReactMode, LFOWaveform, StepInterpolation};
 use crate::params::ParamValue;
 use crate::renderer::context::OutputSource;
-use crate::renderer::slicer::{DomeGeometry, DomePreset, DomeSetup};
+use crate::renderer::slicer::{DomeGeometry, DomePreset};
 use crate::surface::detect::{DetectedContour, DetectionParams};
-use crate::surface::{
-    CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
-};
+use crate::surface::{CircleHint, ContentMapping, SurfaceOutputType, SurfacePath};
 use crate::{BlendMode, ScalingMode, ShaderParams};
 
 // Re-export default render resolution constants from the engine layer
@@ -119,7 +117,8 @@ pub enum CameraDetectAction {
 impl UILayoutState {
     /// Apply selection actions from UIActions.
     pub fn apply_selections(&mut self, ui_actions: &UIActions) {
-        if let Some(sel) = ui_actions.select_deck {
+        let session = &ui_actions.session;
+        if let Some(sel) = session.select_deck {
             self.selected_deck = Some(sel);
             self.selected_channel = None;
             self.selected_master = false;
@@ -127,7 +126,7 @@ impl UILayoutState {
             self.selected_sequence_step = None;
             self.selected_macro = None;
         }
-        if let Some(ch) = ui_actions.select_channel {
+        if let Some(ch) = session.select_channel {
             self.selected_channel = Some(ch);
             self.selected_deck = None;
             self.selected_master = false;
@@ -135,7 +134,7 @@ impl UILayoutState {
             self.selected_sequence_step = None;
             self.selected_macro = None;
         }
-        if ui_actions.select_master {
+        if session.select_master {
             self.selected_master = true;
             self.selected_deck = None;
             self.selected_channel = None;
@@ -143,7 +142,7 @@ impl UILayoutState {
             self.selected_sequence_step = None;
             self.selected_macro = None;
         }
-        if let Some(seq) = ui_actions.select_sequence {
+        if let Some(seq) = session.select_sequence {
             self.selected_sequence = Some(seq);
             self.selected_sequence_step = None;
             self.selected_deck = None;
@@ -151,12 +150,12 @@ impl UILayoutState {
             self.selected_master = false;
             self.selected_macro = None;
         }
-        if let Some(step) = ui_actions.select_sequence_step {
+        if let Some(step) = session.select_sequence_step {
             self.selected_sequence_step = Some(step);
             // Ensure sequence is also selected
             self.selected_sequence = Some(step.0);
         }
-        if let Some(uuid) = &ui_actions.select_macro {
+        if let Some(uuid) = &session.select_macro {
             self.selected_macro = Some(uuid.clone());
             self.selected_deck = None;
             self.selected_channel = None;
@@ -164,29 +163,29 @@ impl UILayoutState {
             self.selected_sequence = None;
             self.selected_sequence_step = None;
         }
-        if ui_actions.deselect_macro {
+        if session.deselect_macro {
             self.selected_macro = None;
         }
-        if ui_actions.toggle_stage_editor {
+        if session.toggle_stage_editor {
             self.stage_editor_open = !self.stage_editor_open;
         }
-        if let Some(size) = ui_actions.set_grid_size {
+        if let Some(size) = session.set_grid_size {
             self.stage_editor_grid_size = size;
         }
-        if ui_actions.toggle_snap {
+        if session.toggle_snap {
             self.stage_editor_snap = !self.stage_editor_snap;
         }
-        if ui_actions.toggle_library_panel {
+        if session.toggle_library_panel {
             self.library_panel_open = !self.library_panel_open;
         }
-        if ui_actions.toggle_right_panel {
+        if session.toggle_right_panel {
             self.right_panel_open = !self.right_panel_open;
         }
-        if ui_actions.toggle_dome_preview {
+        if session.toggle_dome_preview {
             self.dome_preview_open = !self.dome_preview_open;
         }
         // Dome mode actions
-        for action in &ui_actions.dome_actions {
+        for action in &session.dome_actions {
             match action {
                 DomeAction::SetMode(active) => {
                     self.dome_mode_active = *active;
@@ -267,254 +266,6 @@ pub struct ParamUIInfo {
 pub struct ShaderParamsUI {
     pub shader_name: String,
     pub params: Vec<ParamUIInfo>,
-}
-
-/// Parameter update to apply after egui
-pub enum ParamUpdate {
-    GeneratorFloat {
-        ch_idx: usize,
-        deck_idx: usize,
-        name: String,
-        value: f32,
-    },
-    GeneratorBool {
-        ch_idx: usize,
-        deck_idx: usize,
-        name: String,
-        value: bool,
-    },
-    GeneratorColor {
-        ch_idx: usize,
-        deck_idx: usize,
-        name: String,
-        value: [f32; 4],
-    },
-    GeneratorResetToDefaults {
-        ch_idx: usize,
-        deck_idx: usize,
-    },
-    EffectFloat {
-        ch_idx: usize,
-        deck_idx: usize,
-        effect_idx: usize,
-        name: String,
-        value: f32,
-    },
-    EffectBool {
-        ch_idx: usize,
-        deck_idx: usize,
-        effect_idx: usize,
-        name: String,
-        value: bool,
-    },
-    EffectColor {
-        ch_idx: usize,
-        deck_idx: usize,
-        effect_idx: usize,
-        name: String,
-        value: [f32; 4],
-    },
-    ChannelEffectFloat {
-        ch_idx: usize,
-        effect_idx: usize,
-        name: String,
-        value: f32,
-    },
-    ChannelEffectBool {
-        ch_idx: usize,
-        effect_idx: usize,
-        name: String,
-        value: bool,
-    },
-    ChannelEffectColor {
-        ch_idx: usize,
-        effect_idx: usize,
-        name: String,
-        value: [f32; 4],
-    },
-    MasterEffectFloat {
-        effect_idx: usize,
-        name: String,
-        value: f32,
-    },
-    MasterEffectBool {
-        effect_idx: usize,
-        name: String,
-        value: bool,
-    },
-    MasterEffectColor {
-        effect_idx: usize,
-        name: String,
-        value: [f32; 4],
-    },
-}
-
-/// Modulation action from UI
-pub enum ModulationAction {
-    AddLFO {
-        waveform: LFOWaveform,
-        frequency: f32,
-    },
-    AddAudioFFT {
-        preset: AudioBandPreset,
-        source_id: Option<AudioSourceId>,
-    },
-    AddADSR {
-        attack: f32,
-        decay: f32,
-        sustain: f32,
-        release: f32,
-    },
-    AddStepSequencer {
-        num_steps: usize,
-        rate: f32,
-    },
-    RemoveSource {
-        source_id: String,
-    },
-    UpdateLFOFrequency {
-        source_id: String,
-        frequency: f32,
-    },
-    UpdateLFOWaveform {
-        source_id: String,
-        waveform: LFOWaveform,
-    },
-    UpdateLFOPhase {
-        source_id: String,
-        phase: f32,
-    },
-    UpdateLFOAmplitude {
-        source_id: String,
-        amplitude: f32,
-    },
-    UpdateLFOBipolar {
-        source_id: String,
-        bipolar: bool,
-    },
-    UpdateAudioSmoothing {
-        source_id: String,
-        smoothing: f32,
-    },
-    UpdateAudioFreqLow {
-        source_id: String,
-        freq_low: f32,
-    },
-    UpdateAudioFreqHigh {
-        source_id: String,
-        freq_high: f32,
-    },
-    UpdateAudioGain {
-        source_id: String,
-        gain: f32,
-    },
-    UpdateAudioPreset {
-        source_id: String,
-        preset: AudioBandPreset,
-    },
-    UpdateAudioSource {
-        source_id: String,
-        source_id_audio: Option<AudioSourceId>,
-    },
-    UpdateAudioMode {
-        source_id: String,
-        mode: AudioReactMode,
-    },
-    UpdateAudioNoiseGate {
-        source_id: String,
-        noise_gate: f32,
-    },
-    // ADSR updates
-    UpdateADSRAttack {
-        source_id: String,
-        attack: f32,
-    },
-    UpdateADSRDecay {
-        source_id: String,
-        decay: f32,
-    },
-    UpdateADSRSustain {
-        source_id: String,
-        sustain: f32,
-    },
-    UpdateADSRRelease {
-        source_id: String,
-        release: f32,
-    },
-    TriggerADSR {
-        source_id: String,
-    },
-    ReleaseADSR {
-        source_id: String,
-    },
-    // Step sequencer updates
-    UpdateStepValue {
-        source_id: String,
-        step_idx: usize,
-        value: f32,
-    },
-    UpdateStepRate {
-        source_id: String,
-        rate: f32,
-    },
-    UpdateStepInterpolation {
-        source_id: String,
-        interpolation: StepInterpolation,
-    },
-    UpdateStepBipolar {
-        source_id: String,
-        bipolar: bool,
-    },
-    SetStepCount {
-        source_id: String,
-        count: usize,
-    },
-    // Mod-on-mod: assign a modulator to another modulator's parameter
-    AssignModOnMod {
-        target_source_id: String,
-        param_name: String,
-        modulator_id: String,
-        amount: f32,
-    },
-    RemoveModOnMod {
-        target_source_id: String,
-        param_name: String,
-    },
-    AssignModulation {
-        deck_uuid: String,
-        param_name: String,
-        source_id: String,
-        amount: f32,
-    },
-    RemoveAssignment {
-        deck_uuid: String,
-        param_name: String,
-        source_id: String,
-    },
-    AssignEffectModulation {
-        effect_uuid: String,
-        param_name: String,
-        source_id: String,
-        amount: f32,
-    },
-    RemoveEffectAssignment {
-        effect_uuid: String,
-        param_name: String,
-    },
-    /// Assign a modulation source to a macro's value (`macro_<uuid>:value`), so
-    /// the modulator drives the whole macro and its targets.
-    AssignMacroModulation {
-        macro_uuid: String,
-        source_id: String,
-        amount: f32,
-    },
-    RemoveMacroModulation {
-        macro_uuid: String,
-    },
-    RemoveMacroModulationSource {
-        macro_uuid: String,
-        source_id: String,
-    },
 }
 
 /// Modulation source data snapshot for UI display (paired with UUID)
@@ -1020,57 +771,6 @@ pub struct MidiMappingUI {
     pub param_path: String,
 }
 
-/// Output action from UI (unified — covers windowed and headless outputs)
-pub enum OutputAction {
-    /// Create a new windowed output (default)
-    Create,
-    /// Create a new headless output with the given target
-    CreateHeadless {
-        target: crate::renderer::context::OutputTarget,
-    },
-    /// Close/remove an output by index
-    Close { idx: usize },
-    /// Set the target for an output (may swap windowed↔headless)
-    SetTarget {
-        idx: usize,
-        target: crate::renderer::context::OutputTarget,
-    },
-    /// Start a headless output (begin recording/streaming)
-    Start { idx: usize },
-    /// Stop a headless output (end recording/streaming)
-    Stop { idx: usize },
-    /// Assign a surface to this output (adds a SurfaceAssignment)
-    AssignSurface {
-        output_idx: usize,
-        surface_uuid: String,
-    },
-    /// Remove a surface assignment from this output
-    UnassignSurface {
-        output_idx: usize,
-        assignment_idx: usize,
-    },
-    /// Set the calibration display mode on an output (windowed only)
-    SetCalibrationMode {
-        idx: usize,
-        mode: crate::renderer::context::CalibrationMode,
-    },
-    /// Set edge blending configuration for an output
-    SetEdgeBlend {
-        output_idx: usize,
-        config: crate::renderer::edge_blend::EdgeBlendConfig,
-    },
-    /// Set edge blend mode (Auto / Manual) for an output
-    SetEdgeBlendMode {
-        output_idx: usize,
-        mode: crate::renderer::edge_blend::EdgeBlendMode,
-    },
-    /// Set output rotation (0°/90°/180°/270°)
-    SetRotation {
-        idx: usize,
-        rotation: crate::renderer::context::OutputRotation,
-    },
-}
-
 /// Snapshot of a surface assignment for UI display
 #[derive(Clone)]
 pub struct SurfaceAssignmentUI {
@@ -1117,156 +817,6 @@ pub struct AudioPassthroughUI {
     pub frames_written: u64,
     /// PCM chunks dropped on backpressure.
     pub frames_dropped: u64,
-}
-
-/// Surface action from UI
-pub enum SurfaceAction {
-    /// Add a new rectangular surface
-    Add { name: String, source: OutputSource },
-    /// Add a polygon surface with specific vertices
-    AddPolygon {
-        name: String,
-        vertices: Vec<[f32; 2]>,
-        source: OutputSource,
-    },
-    /// Remove a surface by UUID
-    Remove { uuid: String },
-    /// Change a surface's global stacking order (8i.12)
-    Reorder { uuid: String, op: SurfaceReorderOp },
-    /// Update the vertices of a surface (specific contour: 0=primary, 1+=extra)
-    UpdateVertices {
-        uuid: String,
-        contour: usize,
-        vertices: Vec<[f32; 2]>,
-    },
-    /// Move a surface by a delta (moves all contours)
-    MoveDelta { uuid: String, dx: f32, dy: f32 },
-    /// Rotate a surface by `angle` radians around `pivot` (normalized coords)
-    Rotate {
-        uuid: String,
-        angle: f32,
-        pivot: [f32; 2],
-    },
-    /// Scale a surface by `(sx, sy)` around `pivot` (normalized coords)
-    Scale {
-        uuid: String,
-        sx: f32,
-        sy: f32,
-        pivot: [f32; 2],
-    },
-    /// Convert a curve-path edge to a cubic bezier or back to a straight line
-    ConvertEdge {
-        uuid: String,
-        edge_idx: usize,
-        to_cubic: bool,
-    },
-    /// Move a curve-path anchor to a new position (normalized coords)
-    MoveAnchor {
-        uuid: String,
-        anchor_idx: usize,
-        pos: [f32; 2],
-    },
-    /// Move a cubic control handle of a curve-path segment (normalized coords)
-    MoveHandle {
-        uuid: String,
-        segment_idx: usize,
-        handle: CubicHandle,
-        pos: [f32; 2],
-    },
-    /// Add a subtractive cut-out hole (8i.7) from a closed path (canvas coords)
-    AddHole { uuid: String, hole: SurfacePath },
-    /// Remove the hole at `hole_index` from a surface
-    RemoveHole { uuid: String, hole_index: usize },
-    /// "Make Hole" (8i.7): convert this surface into a cut-out in the surface
-    /// beneath it, consuming the source surface.
-    PunchHole { source_uuid: String },
-    /// Change the content source for a surface
-    SetSource { uuid: String, source: OutputSource },
-    /// Change the output type for a surface
-    SetOutputType {
-        uuid: String,
-        output_type: SurfaceOutputType,
-    },
-    /// Change the content mapping mode for a surface
-    SetContentMapping {
-        uuid: String,
-        mapping: ContentMapping,
-    },
-    /// Rename a surface
-    Rename { uuid: String, name: String },
-    /// Duplicate a surface (offset slightly so it's visible)
-    Duplicate { uuid: String },
-    /// Flip a surface horizontally (mirror around its bounding box center X)
-    FlipHorizontal { uuid: String },
-    /// Flip a surface vertically (mirror around its bounding box center Y)
-    FlipVertical { uuid: String },
-    /// Move one corner-pin corner of a surface's warp (per-surface)
-    SetWarpCorner {
-        uuid: String,
-        corner_idx: usize,
-        position: [f32; 2],
-    },
-    /// Clear a surface's warp (back to no-warp / native position)
-    ResetWarp { uuid: String },
-    /// Convert a surface's warp into a `cols` × `rows` mesh (preserving deformation)
-    SetWarpSubdivisions { uuid: String, cols: u32, rows: u32 },
-    /// Move a single mesh grid point of a surface's mesh warp
-    SetWarpMeshPoint {
-        uuid: String,
-        row: usize,
-        col: usize,
-        position: [f32; 2],
-    },
-    /// Bind/unbind a surface's warp from its shape (auto-warp)
-    SetWarpBound { uuid: String, bound: bool },
-    /// Convert a surface's warp into a smooth bezier patch grid (8i.6)
-    ConvertWarpToBezier { uuid: String },
-    /// Move a bezier-warp control anchor
-    MoveWarpAnchor {
-        uuid: String,
-        row: usize,
-        col: usize,
-        position: [f32; 2],
-    },
-    /// Move a bezier-warp tangent handle (`horizontal` edge vs vertical; `which` 0/1)
-    MoveWarpHandle {
-        uuid: String,
-        horizontal: bool,
-        row: usize,
-        col: usize,
-        which: usize,
-        position: [f32; 2],
-    },
-    /// Set the bezier-warp control-cage resolution (anchor `cols` × `rows`)
-    SetBezierCageSubdivisions { uuid: String, cols: u32, rows: u32 },
-    /// Insert a vertex on an edge (after vertex at `after_vert_idx`)
-    InsertVertex {
-        uuid: String,
-        after_vert_idx: usize,
-        position: [f32; 2],
-    },
-    /// Add a circle surface with a CircleHint (vertices generated from hint)
-    AddCircle {
-        name: String,
-        hint: CircleHint,
-        source: OutputSource,
-    },
-    /// Update a circle's radius and regenerate vertices
-    SetCircleRadius { uuid: String, radius: f32 },
-    /// Update a circle's side count and regenerate vertices
-    SetCircleSides { uuid: String, sides: u32 },
-    /// Convert a circle surface to a plain polygon (drop circle hint)
-    ConvertToPolygon { uuid: String },
-    /// Combine multiple surfaces into one (overlapping → merge, non-overlapping → multi-contour)
-    Combine { uuids: Vec<String> },
-    /// Generate dome slices: remove old "Dome P*" surfaces, compute warp meshes, create new surfaces
-    GenerateDomeSlices { setup: DomeSetup },
-    /// Import surfaces from a file (path decided by UI file dialog)
-    ImportFromFile { path: std::path::PathBuf },
-    /// Confirm detected contours and create surfaces from them
-    ConfirmDetectedContours {
-        contours: Vec<crate::surface::detect::DetectedContour>,
-    },
 }
 
 /// Dome-mode UI actions (camera interaction, mode toggle, config changes).
@@ -1323,135 +873,28 @@ pub struct SurfaceUI {
     pub hole_contours: Vec<Vec<[f32; 2]>>,
 }
 
-/// Crossfader action from UI
-pub enum CrossfaderAction {
-    /// Set crossfader manually (drag)
-    SetPosition(f32),
-    /// Snap to A (0.0) immediately
-    SnapA,
-    /// Snap to B (1.0) immediately
-    SnapB,
-    /// Start auto-transition to target over duration with easing
-    AutoTransition {
-        target: f32,
-        duration_secs: f32,
-        easing: CrossfadeEasing,
-    },
-    /// Start beat-synced transition
-    BeatTransition { target: f32, beats: f32 },
-}
-
-/// A macro-control intent emitted by the macro strip. Config edits are undoable
-/// (captured via the scene snapshot); `SetValue` is a live turn and is not.
-#[derive(Debug, Clone)]
-pub enum MacroAction {
-    Add {
-        kind: crate::macros::MacroKind,
-    },
-    Remove {
-        uuid: String,
-    },
-    Rename {
-        uuid: String,
-        name: String,
-    },
-    SetKind {
-        uuid: String,
-        kind: crate::macros::MacroKind,
-    },
-    /// Live turn — fans out to targets. Not undoable.
-    SetValue {
-        uuid: String,
-        value: f32,
-    },
-    AddTarget {
-        uuid: String,
-        path: String,
-    },
-    RemoveTarget {
-        uuid: String,
-        target_idx: usize,
-    },
-    UpdateTarget {
-        uuid: String,
-        target_idx: usize,
-        min: f32,
-        max: f32,
-        curve: crate::macros::MacroCurve,
-        invert: bool,
-    },
-    SetButtonBehavior {
-        uuid: String,
-        behavior: crate::macros::ButtonBehavior,
-    },
-    SetTriggers {
-        uuid: String,
-        actions: Vec<crate::macros::TriggerAction>,
-    },
-}
-
-impl MacroAction {
-    /// Whether this action mutates persistent macro config (and so should push
-    /// an undo snapshot). Live value turns (`SetValue`) are excluded.
-    pub fn is_undoable(&self) -> bool {
-        !matches!(self, MacroAction::SetValue { .. })
-    }
-}
-
-/// All UI actions/intents collected during a frame
-pub struct UIActions {
-    /// (ch_idx, generator_registry_idx) — add a shader as a new deck to channel
+/// UI-local session/ephemeral state accumulated during a frame (Population 2).
+///
+/// This is the half of the frame's UI output that is **not** an engine mutation:
+/// selection focus, panel visibility, learn-mode targeting, dialog-open triggers,
+/// notification dismissals, gesture continuation, the async shader-load request,
+/// and the layout-coupled undo/redo/save triggers. None of it belongs on the
+/// command bus (the HTTP/CLI/MIDI consumers neither can nor should express it);
+/// it targets UI-local state (`UILayoutState`) or the runner, not the engine.
+///
+/// See /spec/ui-engine-boundary.md WS4 / Decision #11 — the deliberate split of
+/// "what I tell the engine" (`UIActions::commands`) from "my local view state".
+pub struct UISession {
+    /// (ch_idx, generator_registry_idx) — add a shader as a new deck to channel.
+    /// Async request resolved off-frame via `spawn_deck_loads` (not a command).
     pub shader_to_add: Option<(usize, usize)>,
-    /// (ch_idx, path) — add image files as new decks to channel (supports multi-select)
-    pub images_to_add: Vec<(usize, std::path::PathBuf)>,
     /// Channel index to open an image file dialog for (deferred to outside egui frame)
     pub open_image_dialog_for_channel: Option<usize>,
-    /// (ch_idx, path) — add video files as new decks to channel (supports multi-select)
-    pub videos_to_add: Vec<(usize, std::path::PathBuf)>,
     /// Channel index to open a video file dialog for (deferred to outside egui frame)
     pub open_video_dialog_for_channel: Option<usize>,
-
-    /// (ch_idx, deck_idx) — remove deck from channel
-    pub deck_to_remove: Option<(usize, usize)>,
-    /// (ch_idx, deck_idx, opacity, blend_mode, solo, mute)
-    pub deck_updates: Vec<(usize, usize, f32, BlendMode, bool, bool)>,
-    /// (ch_idx, deck_idx, scaling_mode) — change scaling mode for an image deck
-    pub scaling_mode_updates: Vec<(usize, usize, ScalingMode)>,
-    /// (ch_idx, deck_idx, transparent) — toggle transparent compositing for a deck
-    pub transparent_updates: Vec<(usize, usize, bool)>,
-    /// (ch_idx, deck_idx, render_fps) — change render FPS for a deck
-    pub render_fps_updates: Vec<(usize, usize, DeckRenderFps)>,
-    /// (ch_idx, deck_idx, filter_registry_idx) — add effect to deck
-    pub effect_to_add: Option<(usize, usize, usize)>,
-    /// (ch_idx, deck_idx, effect_idx) — remove effect from deck
-    pub effect_to_remove: Option<(usize, usize, usize)>,
-    /// (ch_idx, deck_idx, effect_idx) — toggle effect
-    pub effect_to_toggle: Option<(usize, usize, usize)>,
-    /// (ch_idx, filter_registry_idx) — add effect to channel
-    pub ch_effect_to_add: Option<(usize, usize)>,
-    /// (ch_idx, effect_idx) — remove effect from channel
-    pub ch_effect_to_remove: Option<(usize, usize)>,
-    /// (ch_idx, effect_idx) — toggle channel effect
-    pub ch_effect_to_toggle: Option<(usize, usize)>,
-    pub param_updates: Vec<ParamUpdate>,
-    pub modulation_actions: Vec<ModulationAction>,
-    /// Macro control intents (create/edit/drive macros).
-    pub macro_actions: Vec<MacroAction>,
-    pub master_effect_to_add: Option<usize>,
-    pub master_effect_to_remove: Option<usize>,
-    pub master_effect_to_toggle: Option<usize>,
     pub notifications_to_dismiss: Vec<usize>,
     /// Info notifications to push (e.g. "Copied URL to clipboard")
     pub info_notifications: Vec<String>,
-    pub crossfader_action: Option<CrossfaderAction>,
-    /// Set tonemap mode (Bypass or ACES)
-    pub set_tonemap_mode: Option<crate::renderer::tonemap::TonemapMode>,
-    /// Load a LUT file (filename relative to .varda/luts/)
-    pub load_lut: Option<String>,
-    /// Unload the active LUT
-    pub unload_lut: bool,
-    /// (ch_idx, opacity, blend_mode) — per-channel updates
-    pub channel_updates: Vec<(usize, f32, BlendMode)>,
     /// MIDI learn: toggle learn mode on/off
     pub midi_learn_toggle: bool,
     /// MIDI learn: select a parameter as learn target (in learn mode, clicking a param)
@@ -1462,10 +905,6 @@ pub struct UIActions {
     pub keyboard_learn_select: Option<crate::keymap::KeyTarget>,
     /// Keyboard learn: bind a key combo to current target
     pub keyboard_learn_bind: Option<crate::keymap::KeyCombo>,
-    /// Keyboard param toggle: toggle a param via keyboard shortcut
-    pub keyboard_param_toggle: Option<String>,
-    /// Set a transition shader by name (None = clear/use opacity crossfade)
-    pub set_transition: Option<Option<String>>,
     /// Select a deck for detail view in bottom bar (ch_idx, deck_idx)
     pub select_deck: Option<(usize, usize)>,
     /// Select a channel for detail view in bottom bar (ch_idx)
@@ -1480,259 +919,98 @@ pub struct UIActions {
     pub select_macro: Option<String>,
     /// Clear the macro selection (e.g. its macro was deleted, or Close pressed)
     pub deselect_macro: bool,
-    /// Add a new channel to the mixer
-    pub add_channel: bool,
-    /// Remove a channel from the mixer (by index)
+    /// Remove a channel from the mixer (by index). Retained as a non-command
+    /// field because the runner needs the removed index to fix up UI selection
+    /// state (`layout.fixup_channel_removal`).
     pub remove_channel: Option<usize>,
-    /// Move a deck between channels: (source_ch_idx, source_deck_idx, target_ch_idx)
-    pub deck_to_move: Option<(usize, usize, usize)>,
-    /// Reorder a deck within a channel: (channel_idx, from_deck_idx, to_deck_idx)
-    pub deck_to_reorder: Option<(usize, usize, usize)>,
-    /// Output window actions
-    pub output_actions: Vec<OutputAction>,
-    /// Surface actions
-    pub surface_actions: Vec<SurfaceAction>,
     /// Toggle stage editor open/closed
     pub toggle_stage_editor: bool,
     /// Toggle 3D dome preview in stage editor
     pub toggle_dome_preview: bool,
-    /// Dome mode actions (camera, config, mode toggle)
+    /// Dome mode actions (camera, config, mode toggle). UI-local layout state
+    /// (`DomeLayoutFields`); only committed to the engine via `GenerateDomeSlices`.
     pub dome_actions: Vec<DomeAction>,
-    /// Camera detection actions
+    /// Camera detection actions (preview state machine; only `Accept` becomes a command)
     pub camera_detect_actions: Vec<CameraDetectAction>,
     /// Set stage editor grid size (normalized)
     pub set_grid_size: Option<f32>,
     /// Toggle snap-to-grid
     pub toggle_snap: bool,
-    /// MIDI: rescan devices
-    pub midi_rescan: bool,
-    /// MIDI: toggle device enabled/disabled (device_id, enabled)
-    pub midi_device_toggles: Vec<(crate::midi::DeviceId, bool)>,
-    /// MIDI: clear all mappings
-    pub midi_clear_mappings: bool,
-    /// MIDI: remove a specific mapping
-    pub midi_remove_mapping: Vec<crate::midi::MidiKey>,
     /// Toggle library panel open/closed
     pub toggle_library_panel: bool,
     /// Toggle right panel open/closed
     pub toggle_right_panel: bool,
-    /// Move an effect within a deck's chain: (ch_idx, deck_idx, from_idx, to_idx)
-    pub effect_to_move: Option<(usize, usize, usize, usize)>,
-    /// Move a channel effect within its chain: (ch_idx, from_idx, to_idx)
-    pub ch_effect_to_move: Option<(usize, usize, usize)>,
-    /// Move a master effect within its chain: (from_idx, to_idx)
-    pub master_effect_to_move: Option<(usize, usize)>,
-    /// (ch_idx, camera_id) — add a camera as a new deck to channel
-    pub camera_to_add: Option<(usize, crate::camera::CameraId)>,
-    /// Rescan for camera devices
-    pub camera_rescan: bool,
-    /// (ch_idx, ndi_source_name) — add an NDI source as a new deck to channel
-    pub ndi_to_add: Option<(usize, String)>,
-    /// Rescan for NDI sources
-    pub ndi_rescan: bool,
-    /// (ch_idx, syphon_server_name) — add a Syphon server as a new deck to channel
-    pub syphon_to_add: Option<(usize, String)>,
-    /// Rescan for Syphon servers
-    pub syphon_rescan: bool,
-    /// (ch_idx, url, mode) — add an SRT source as a new deck to channel
-    pub srt_to_add: Option<(usize, String, crate::stream::SrtMode)>,
-    /// (url, mode) — add a stream source config to the library (no deck created)
-    pub srt_library_add: Option<(String, crate::stream::SrtMode)>,
-    /// URL to remove from the SRT library
-    pub srt_library_remove: Option<String>,
-    /// (ch_idx, url) — add an HLS source as a new deck to channel
-    pub hls_to_add: Option<(usize, String)>,
-    /// (ch_idx, url) — add a DASH source as a new deck to channel
-    pub dash_to_add: Option<(usize, String)>,
-    /// HLS URLs in the library
-    pub hls_library_configs: Vec<HlsLibraryEntry>,
-    /// DASH URLs in the library
-    pub dash_library_configs: Vec<DashLibraryEntry>,
-    /// HLS URL to add to library
-    pub hls_library_add: Option<String>,
-    /// DASH URL to add to library
-    pub dash_library_add: Option<String>,
-    /// HLS URL to remove from library
-    pub hls_library_remove: Option<String>,
-    /// DASH URL to remove from library
-    pub dash_library_remove: Option<String>,
-    /// (ch_idx, url, mode) — add an RTMP source as a new deck to channel
-    pub rtmp_to_add: Option<(usize, String, crate::stream::RtmpMode)>,
-    /// RTMP URL to add to library (url, mode)
-    pub rtmp_library_add: Option<(String, crate::stream::RtmpMode)>,
-    /// RTMP URL to remove from library
-    pub rtmp_library_remove: Option<String>,
-    /// (ch_idx, url) — add an HTML source as a new deck to channel
-    pub html_to_add: Option<(usize, String)>,
-    /// (ch_idx, deck_idx) — reload an existing HTML deck (re-fetch its URL)
-    pub html_to_reload: Vec<(usize, usize)>,
-    /// (ch_idx, deck_idx, open) — open (true) or close (false) the interactive
-    /// window for an HTML deck.
-    pub html_set_interactive: Vec<(usize, usize, bool)>,
-    /// HTML URL to add to library
-    pub html_library_add: Option<String>,
-    /// HTML URL to remove from library
-    pub html_library_remove: Option<String>,
-    // Recording/SRT start/stop is now via OutputAction::Start/Stop per output
-    /// Rescan for audio input devices
-    pub audio_rescan: bool,
-    /// Toggle an audio source on/off (source_id, enabled)
-    pub audio_source_toggles: Vec<(AudioSourceId, bool)>,
-    /// Video playback actions: (ch_idx, deck_idx, action)
-    pub video_actions: Vec<(usize, usize, VideoAction)>,
-    /// Auto-transition actions: (ch_idx, deck_idx, action)
-    pub auto_transition_actions: Vec<(usize, usize, AutoTransitionAction)>,
-    /// Save workspace requested (Ctrl+S / Cmd+S)
+    /// Save workspace requested (Ctrl+S / Cmd+S). Layout-coupled runner trigger
+    /// (accepted deviation, /spec/ui-engine-boundary.md Decision #10).
     pub save_requested: bool,
-    /// Transition sequence actions
-    pub sequence_actions: Vec<SequenceAction>,
-    /// Clock source preference change
-    pub clock_preference: Option<crate::clock::ClockPreference>,
-    /// Manual BPM change (from UI DragValue)
-    pub manual_bpm: Option<f32>,
-    /// Resolution change request: (width, height)
-    pub resolution_change: Option<(u32, u32)>,
-    /// Target FPS change request (0 = uncapped)
-    pub target_fps_change: Option<u32>,
-    /// Undo last undoable action
+    /// Undo last undoable action. Layout-coupled runner trigger (accepted deviation).
     pub undo_requested: bool,
-    /// Redo last undone action
+    /// Redo last undone action. Layout-coupled runner trigger (accepted deviation).
     pub redo_requested: bool,
     /// A mutating stage/warp pointer drag is in progress this frame. Set by the
     /// stage editor and warp editor while dragging a vertex, warp point, bezier
-    /// handle, or gizmo. Used to collapse a continuous drag into a single undo
-    /// step (snapshot on gesture start, suppressed while held).
+    /// handle, or gizmo, and by any scene param/opacity slider drag. Used to
+    /// collapse a continuous drag into a single undo step (snapshot on gesture
+    /// start, suppressed while held).
     pub gesture_active: bool,
-    /// (ch_idx, deck_preset_idx) — load a deck preset into a channel
-    pub deck_preset_to_add: Option<(usize, usize)>,
-    /// (target_ch_idx or None, channel_preset_idx) — load a channel preset; if target_ch is Some, fill decks into that existing channel
-    pub channel_preset_to_add: Option<(Option<usize>, usize)>,
-    /// Save current deck as preset (ch_idx, deck_idx, name)
-    pub save_deck_preset: Option<(usize, usize, String)>,
-    /// Save current channel as preset (ch_idx, name)
-    pub save_channel_preset: Option<(usize, String)>,
 }
 
-/// Action for controlling video deck playback
-#[derive(Debug, Clone)]
-pub enum VideoAction {
-    /// Toggle play/pause
-    TogglePlay,
-    /// Seek to position in seconds
-    Seek(f64),
-    /// Set playback speed multiplier
-    SetSpeed(f64),
-    /// Set loop mode
-    SetLoopMode(crate::video::LoopMode),
-    /// Set in-point (start of playback range) in seconds
-    SetInPoint(f64),
-    /// Set out-point (end of playback range) in seconds
-    SetOutPoint(f64),
-    /// Clear in/out points (reset to full clip)
-    ClearInOutPoints,
+impl Default for UISession {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// Action for configuring deck auto-transitions
-#[derive(Debug, Clone)]
-pub enum AutoTransitionAction {
-    /// Toggle enabled state
-    SetEnabled(bool),
-    /// Set trigger mode (false = Timer, true = ClipEnd)
-    SetTrigger(bool),
-    /// Set play duration value
-    SetPlayDuration(f64),
-    /// Toggle play duration unit (beats ↔ seconds)
-    TogglePlayDurationUnit,
-    /// Set transition duration value
-    SetTransitionDuration(f64),
-    /// Toggle transition duration unit (beats ↔ seconds)
-    ToggleTransitionDurationUnit,
-    /// Set transition shader by name (None = opacity fade)
-    SetTransitionShader(Option<String>),
+impl UISession {
+    pub fn new() -> Self {
+        Self {
+            shader_to_add: None,
+            open_image_dialog_for_channel: None,
+            open_video_dialog_for_channel: None,
+            notifications_to_dismiss: Vec::new(),
+            info_notifications: Vec::new(),
+            midi_learn_toggle: false,
+            midi_learn_select: None,
+            keyboard_learn_toggle: false,
+            keyboard_learn_select: None,
+            keyboard_learn_bind: None,
+            select_deck: None,
+            select_channel: None,
+            select_master: false,
+            select_sequence: None,
+            select_sequence_step: None,
+            select_macro: None,
+            deselect_macro: false,
+            remove_channel: None,
+            toggle_stage_editor: false,
+            toggle_dome_preview: false,
+            dome_actions: Vec::new(),
+            camera_detect_actions: Vec::new(),
+            set_grid_size: None,
+            toggle_snap: false,
+            toggle_library_panel: false,
+            toggle_right_panel: false,
+            save_requested: false,
+            undo_requested: false,
+            redo_requested: false,
+            gesture_active: false,
+        }
+    }
 }
 
-/// Action for controlling the transition sequence builder
-/// All sequence actions carry a `seq_idx` to identify which sequence they target.
-#[derive(Debug, Clone)]
-pub enum SequenceAction {
-    /// Create a new empty sequence
-    Create,
-    /// Delete a sequence by index
-    Delete(usize),
-    /// Toggle sequence enabled
-    ToggleEnabled(usize),
-    /// Start playing a sequence
-    Play(usize),
-    /// Stop playing a sequence
-    Stop(usize),
-    /// Add a Fade step to a sequence
-    AddFade {
-        seq_idx: usize,
-        from_ch: usize,
-        to_ch: usize,
-    },
-    /// Add a Wait step to a sequence
-    AddWait(usize),
-    /// Add a GoTo step to a sequence
-    AddGoTo { seq_idx: usize, step_index: usize },
-    /// Remove a step by index from a sequence
-    RemoveStep { seq_idx: usize, step_idx: usize },
-    /// Move a step (from_idx, to_idx) within a sequence
-    MoveStep {
-        seq_idx: usize,
-        from: usize,
-        to: usize,
-    },
-    /// Update fade/wait step duration value
-    SetStepDuration {
-        seq_idx: usize,
-        step_idx: usize,
-        value: f64,
-    },
-    /// Toggle step duration unit (cycles s → m → h → b → s)
-    ToggleStepDurationUnit { seq_idx: usize, step_idx: usize },
-    /// Set step duration unit directly
-    SetStepDurationUnit {
-        seq_idx: usize,
-        step_idx: usize,
-        unit: crate::channel::DurationUnit,
-    },
-    /// Set fade step easing
-    SetStepEasing {
-        seq_idx: usize,
-        step_idx: usize,
-        easing: String,
-    },
-    /// Set fade step from_ch
-    SetStepFromCh {
-        seq_idx: usize,
-        step_idx: usize,
-        ch: usize,
-    },
-    /// Set fade step to_ch
-    SetStepToCh {
-        seq_idx: usize,
-        step_idx: usize,
-        ch: usize,
-    },
-    /// Set GoTo step target
-    SetGoToTarget {
-        seq_idx: usize,
-        step_idx: usize,
-        target: usize,
-    },
-    /// Set fade step transition shader (None = opacity fade)
-    SetStepTransitionShader {
-        seq_idx: usize,
-        step_idx: usize,
-        shader: Option<String>,
-    },
-    /// Set fade step target opacity amount (0.0–1.0)
-    SetStepTargetAmount {
-        seq_idx: usize,
-        step_idx: usize,
-        amount: f32,
-    },
+/// All UI output collected during a frame, split into two buckets (WS4):
+///
+/// - [`commands`](Self::commands): the outbound engine-mutation stream. Panels
+///   push `EngineCommand`s directly (the single mutation vocabulary shared with
+///   the HTTP/CLI consumers); the app-layer drain runs each through the same
+///   dispatch as the command bus.
+/// - [`session`](Self::session): UI-local ephemeral state (selection, panel
+///   visibility, learn mode, dialog triggers, undo/redo/save). See [`UISession`].
+pub struct UIActions {
+    /// Outbound engine mutations (see /spec/ui-engine-boundary.md WS2).
+    pub commands: Vec<crate::engine::EngineCommand>,
+    /// UI-local session/ephemeral state (see [`UISession`], WS4).
+    pub session: UISession,
 }
 
 impl Default for UIActions {
@@ -1744,158 +1022,20 @@ impl Default for UIActions {
 impl UIActions {
     pub fn new() -> Self {
         Self {
-            shader_to_add: None,
-            images_to_add: Vec::new(),
-            open_image_dialog_for_channel: None,
-            videos_to_add: Vec::new(),
-            open_video_dialog_for_channel: None,
-            deck_to_remove: None,
-            deck_updates: Vec::new(),
-            scaling_mode_updates: Vec::new(),
-            transparent_updates: Vec::new(),
-            render_fps_updates: Vec::new(),
-            macro_actions: Vec::new(),
-            effect_to_add: None,
-            effect_to_remove: None,
-            effect_to_toggle: None,
-            ch_effect_to_add: None,
-            ch_effect_to_remove: None,
-            ch_effect_to_toggle: None,
-            param_updates: Vec::new(),
-            modulation_actions: Vec::new(),
-            master_effect_to_add: None,
-            master_effect_to_remove: None,
-            master_effect_to_toggle: None,
-            notifications_to_dismiss: Vec::new(),
-            info_notifications: Vec::new(),
-            crossfader_action: None,
-            set_tonemap_mode: None,
-            load_lut: None,
-            unload_lut: false,
-            channel_updates: Vec::new(),
-            midi_learn_toggle: false,
-            midi_learn_select: None,
-            keyboard_learn_toggle: false,
-            keyboard_learn_select: None,
-            keyboard_learn_bind: None,
-            keyboard_param_toggle: None,
-            set_transition: None,
-            select_deck: None,
-            select_channel: None,
-            select_master: false,
-            select_sequence: None,
-            select_sequence_step: None,
-            select_macro: None,
-            deselect_macro: false,
-            add_channel: false,
-            remove_channel: None,
-            deck_to_move: None,
-            deck_to_reorder: None,
-            output_actions: Vec::new(),
-            surface_actions: Vec::new(),
-            toggle_stage_editor: false,
-            toggle_dome_preview: false,
-            dome_actions: Vec::new(),
-            camera_detect_actions: Vec::new(),
-            set_grid_size: None,
-            toggle_snap: false,
-            midi_rescan: false,
-            midi_device_toggles: Vec::new(),
-            midi_clear_mappings: false,
-            midi_remove_mapping: Vec::new(),
-            toggle_library_panel: false,
-            toggle_right_panel: false,
-            effect_to_move: None,
-            ch_effect_to_move: None,
-            master_effect_to_move: None,
-            camera_to_add: None,
-            camera_rescan: false,
-            ndi_to_add: None,
-            ndi_rescan: false,
-            syphon_to_add: None,
-            syphon_rescan: false,
-            srt_to_add: None,
-            srt_library_add: None,
-            srt_library_remove: None,
-            hls_to_add: None,
-            dash_to_add: None,
-            hls_library_configs: Vec::new(),
-            dash_library_configs: Vec::new(),
-            hls_library_add: None,
-            dash_library_add: None,
-            hls_library_remove: None,
-            dash_library_remove: None,
-            rtmp_to_add: None,
-            rtmp_library_add: None,
-            rtmp_library_remove: None,
-            html_to_add: None,
-            html_to_reload: Vec::new(),
-            html_set_interactive: Vec::new(),
-            html_library_add: None,
-            html_library_remove: None,
-            audio_rescan: false,
-            audio_source_toggles: Vec::new(),
-            video_actions: Vec::new(),
-            auto_transition_actions: Vec::new(),
-            save_requested: false,
-            sequence_actions: Vec::new(),
-            clock_preference: None,
-            manual_bpm: None,
-            resolution_change: None,
-            target_fps_change: None,
-            undo_requested: false,
-            redo_requested: false,
-            gesture_active: false,
-            deck_preset_to_add: None,
-            channel_preset_to_add: None,
-            save_deck_preset: None,
-            save_channel_preset: None,
+            commands: Vec::new(),
+            session: UISession::new(),
         }
     }
 
-    /// Whether this frame's actions include any undoable mutation.
+    /// Whether this frame's actions include any undoable mutation carried by a
+    /// non-command field. Source-deck adds, deck remove/move/reorder, channel
+    /// add, effects, presets, and mixer edits now flow through `commands` and
+    /// are gated by `batch_has_undoable`. Only two irreducible residuals remain
+    /// here: the async shader load (`shader_to_add`, resolved off-frame and thus
+    /// never on `commands`) and channel removal (`remove_channel`, kept a field
+    /// so the runner can fix up UI selection with the removed index).
     pub fn has_undoable_action(&self) -> bool {
-        self.shader_to_add.is_some()
-            || !self.images_to_add.is_empty()
-            || !self.videos_to_add.is_empty()
-            || self.deck_to_remove.is_some()
-            || !self.deck_updates.is_empty()
-            || !self.scaling_mode_updates.is_empty()
-            || !self.transparent_updates.is_empty()
-            || !self.render_fps_updates.is_empty()
-            || !self.param_updates.is_empty()
-            || !self.modulation_actions.is_empty()
-            || self.macro_actions.iter().any(|a| a.is_undoable())
-            || self.effect_to_add.is_some()
-            || self.effect_to_remove.is_some()
-            || self.effect_to_toggle.is_some()
-            || self.ch_effect_to_add.is_some()
-            || self.ch_effect_to_remove.is_some()
-            || self.ch_effect_to_toggle.is_some()
-            || self.master_effect_to_add.is_some()
-            || self.master_effect_to_remove.is_some()
-            || self.master_effect_to_toggle.is_some()
-            || self.add_channel
-            || self.remove_channel.is_some()
-            || self.deck_to_move.is_some()
-            || self.deck_to_reorder.is_some()
-            || self.effect_to_move.is_some()
-            || self.ch_effect_to_move.is_some()
-            || self.master_effect_to_move.is_some()
-            || self.set_transition.is_some()
-            || !self.channel_updates.is_empty()
-            || self.camera_to_add.is_some()
-            || self.ndi_to_add.is_some()
-            || self.syphon_to_add.is_some()
-            || self.srt_to_add.is_some()
-            || self.hls_to_add.is_some()
-            || self.dash_to_add.is_some()
-            || self.rtmp_to_add.is_some()
-            || self.html_to_add.is_some()
-            || !self.auto_transition_actions.is_empty()
-            || !self.sequence_actions.is_empty()
-            || self.deck_preset_to_add.is_some()
-            || self.channel_preset_to_add.is_some()
+        self.session.shader_to_add.is_some() || self.session.remove_channel.is_some()
     }
 
     /// Whether this frame's actions include any undoable *stage* mutation
@@ -1910,21 +1050,14 @@ impl UIActions {
     /// Does NOT distinguish continuous vs discrete edits — gesture collapsing is
     /// handled by the `gesture_active` edge in the runner.
     pub fn has_undoable_stage_action(&self) -> bool {
-        !self.surface_actions.is_empty()
-            || self.output_actions.iter().any(|a| {
-                matches!(
-                    a,
-                    OutputAction::AssignSurface { .. } | OutputAction::UnassignSurface { .. }
-                )
-            })
-            || self.dome_actions.iter().any(|a| {
-                !matches!(
-                    a,
-                    DomeAction::RotateCamera { .. }
-                        | DomeAction::ZoomCamera { .. }
-                        | DomeAction::ResetCamera
-                )
-            })
+        self.session.dome_actions.iter().any(|a| {
+            !matches!(
+                a,
+                DomeAction::RotateCamera { .. }
+                    | DomeAction::ZoomCamera { .. }
+                    | DomeAction::ResetCamera
+            )
+        })
     }
 }
 

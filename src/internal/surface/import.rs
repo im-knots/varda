@@ -12,21 +12,7 @@ use super::detect::{
 
 // ── Error type ─────────────────────────────────────────────────────
 
-#[derive(Debug, thiserror::Error)]
-pub enum ImportError {
-    #[error("Failed to load image: {0}")]
-    ImageLoad(String),
-    #[error("Failed to parse SVG: {0}")]
-    SvgParse(String),
-    #[error("Failed to parse DXF: {0}")]
-    DxfParse(String),
-    #[error("Unsupported file format: {0}")]
-    UnsupportedFormat(String),
-    #[error("No contours detected")]
-    NoContours,
-    #[error("Detection panicked: {0}")]
-    InternalPanic(String),
-}
+pub use crate::engine::value::detect::ImportError;
 
 // ── Raster image import ────────────────────────────────────────────
 

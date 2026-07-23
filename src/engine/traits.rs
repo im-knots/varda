@@ -16,11 +16,13 @@ pub trait MixerCommands {
     fn set_crossfader(&mut self, position: f32);
     fn start_auto_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing);
     fn start_beat_crossfade(&mut self, target: f32, beats: f32);
-    fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<()>;
-    fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()>;
-    fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()>;
-    fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<()>;
-    fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<()>;
+    /// Deck-creating commands return the new deck's stable UUID so callers can
+    /// report it (`CommandResult::OkWithId`) and register a preview texture.
+    fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<String>;
+    fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String>;
+    fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String>;
+    fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<String>;
+    fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<String>;
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()>;
     fn move_deck(&mut self, src_ch: usize, src_deck: usize, dst_ch: usize) -> Result<()>;
     fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize);
@@ -39,7 +41,7 @@ pub trait MixerCommands {
     fn toggle_effect(&mut self, target: EffectTarget, effect_idx: usize);
     fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize);
     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()>;
-    fn set_tonemap_mode(&mut self, mode: crate::renderer::config::TonemapMode);
+    fn set_tonemap_mode(&mut self, mode: crate::engine::value::render::TonemapMode);
     fn load_lut(&mut self, filename: &str) -> Result<()>;
     fn unload_lut(&mut self);
     fn set_param(&mut self, path: &str, value: ParamValue);
@@ -173,28 +175,40 @@ pub trait DetectCommands {
     fn detect_from_image(
         &self,
         image_data: &[u8],
-        params: &crate::surface::detect::DetectionParams,
-    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+        params: &crate::engine::value::detect::DetectionParams,
+    ) -> Result<
+        crate::engine::value::detect::DetectionResult,
+        crate::engine::value::detect::ImportError,
+    >;
     /// Detect contours from SVG data.
     fn detect_from_svg(
         &self,
         svg_data: &[u8],
-    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    ) -> Result<
+        crate::engine::value::detect::DetectionResult,
+        crate::engine::value::detect::ImportError,
+    >;
     /// Detect contours from DXF data.
     fn detect_from_dxf(
         &self,
         dxf_data: &[u8],
-    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+    ) -> Result<
+        crate::engine::value::detect::DetectionResult,
+        crate::engine::value::detect::ImportError,
+    >;
     /// Detect contours from a camera snapshot (RGBA frame data).
     fn detect_from_camera(
         &mut self,
         camera_id: CameraId,
-        params: &crate::surface::detect::DetectionParams,
-    ) -> Result<crate::surface::detect::DetectionResult, crate::surface::import::ImportError>;
+        params: &crate::engine::value::detect::DetectionParams,
+    ) -> Result<
+        crate::engine::value::detect::DetectionResult,
+        crate::engine::value::detect::ImportError,
+    >;
     /// Create surfaces from confirmed detected contours.
     fn confirm_detected_contours(
         &mut self,
-        contours: &[crate::surface::detect::DetectedContour],
+        contours: &[crate::engine::value::detect::DetectedContour],
     ) -> Vec<String>;
 }
 

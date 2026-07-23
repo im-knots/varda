@@ -405,11 +405,168 @@ fn solid_color_deck_source_kind() {
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
-    assert!(matches!(r, CommandResult::Ok));
+    // Deck-creating commands report the new deck's UUID (see ui-engine-boundary.md WS1).
+    assert!(matches!(r, CommandResult::OkWithId { .. }));
     let state = app.build_engine_state();
     assert_eq!(state.mixer.channels[0].decks.len(), 1);
     // Solid color deck name is the hex color, not "Solid Color"
     assert!(!state.mixer.channels[0].decks[0].name.is_empty());
+}
+
+// ── Presets & ToggleParam ───────────────────────────────────────────
+
+fn headless_app_in(dir: &std::path::Path) -> Option<VardaApp> {
+    let gpu = varda::renderer::context::GpuContext::new_headless().ok()?;
+    let ws = dir.to_str().unwrap();
+    let config = parse_args(&[
+        "--headless",
+        "--no-osc",
+        "--no-ndi",
+        "--no-syphon",
+        "--workspace",
+        ws,
+    ]);
+    VardaApp::new(gpu, &config).ok()
+}
+
+#[test]
+fn toggle_param_flips_crossfader() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    // Default crossfader is 0.0; toggling snaps it to the opposite extreme (1.0).
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::ToggleParam {
+            path: "crossfader".into(),
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    assert!((app.build_engine_state().mixer.crossfader - 1.0).abs() < 1e-5);
+    // Toggling again snaps back to 0.0.
+    send_cmd(
+        &mut app,
+        EngineCommand::ToggleParam {
+            path: "crossfader".into(),
+        },
+    );
+    assert!(app.build_engine_state().mixer.crossfader.abs() < 1e-5);
+}
+
+#[test]
+fn load_deck_preset_out_of_range_errors() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::LoadDeckPreset {
+            channel_idx: 0,
+            preset_idx: 99,
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn load_channel_preset_out_of_range_errors() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::LoadChannelPreset {
+            target_channel: None,
+            preset_idx: 99,
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn deck_preset_save_then_load_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut app) = headless_app_in(dir.path()) else {
+        return;
+    };
+    // Create a source deck to save.
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 1);
+    // Save it as a preset (writes to the temp workspace + refreshes the library).
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::SaveDeckPreset {
+            channel_idx: 0,
+            deck_idx: 0,
+            name: "red".into(),
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    // Load the saved preset back into channel 0 → a second deck is appended.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::LoadDeckPreset {
+            channel_idx: 0,
+            preset_idx: 0,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 2);
+}
+
+#[test]
+fn channel_preset_save_then_load_appends_channel() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut app) = headless_app_in(dir.path()) else {
+        return;
+    };
+    // Populate channel 0 with a deck, then save the channel as a preset.
+    send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [0.0, 1.0, 0.0, 1.0],
+        },
+    );
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::SaveChannelPreset {
+            channel_idx: 0,
+            name: "green".into(),
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    let channels_before = app.build_engine_state().mixer.channels.len();
+    // Load with no target → a new channel is appended carrying the preset's deck.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::LoadChannelPreset {
+            target_channel: None,
+            preset_idx: 0,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    let state = app.build_engine_state();
+    assert_eq!(state.mixer.channels.len(), channels_before + 1);
+    assert_eq!(state.mixer.channels[channels_before].decks.len(), 1);
 }
 
 // ── Headless Render Smoke ───────────────────────────────────────────

@@ -1,13 +1,11 @@
 //! Central panel, mixer box, channel columns, deck thumbnails.
 
-use super::super::{
-    widgets, ChannelUIInfo, CrossfaderAction, DeckUIInfo, LibraryDrag, SequenceAction, UIActions,
-    UIData,
-};
+use super::super::{widgets, ChannelUIInfo, DeckUIInfo, LibraryDrag, UIActions, UIData};
 use super::macros::render_macro_column;
 use super::sequence::render_sequence_builder;
 use super::stage::render_stage_editor;
 use super::utils::channel_color;
+use crate::engine::EngineCommand;
 use crate::mixer::CrossfadeEasing;
 use crate::BlendMode;
 
@@ -200,7 +198,7 @@ fn render_center_stack(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions
                         .on_hover_text("Create a new transition sequence")
                         .clicked()
                     {
-                        actions.sequence_actions.push(SequenceAction::Create);
+                        actions.commands.push(EngineCommand::CreateSequence);
                     }
                 });
             }
@@ -231,7 +229,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                     .on_hover_text("Add a new channel")
                     .clicked()
                 {
-                    actions.add_channel = true;
+                    actions.commands.push(EngineCommand::AddChannel);
                 }
             });
             ui.add_space(4.0);
@@ -239,8 +237,6 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
             // Channel volume faders (vertical, side by side) — N channels
             let fader_height = 100.0;
             let mut opacities: Vec<f32> = data.channels.iter().map(|c| c.opacity).collect();
-            let blend_modes_orig: Vec<BlendMode> =
-                data.channels.iter().map(|c| c.blend_mode).collect();
 
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -270,7 +266,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                     .on_hover_text(format!("Remove channel {}", ch.name))
                                     .clicked()
                             {
-                                actions.remove_channel = Some(ch_idx);
+                                actions.session.remove_channel = Some(ch_idx);
                             }
                         });
                         // Render slider — disabled in learn mode
@@ -289,6 +285,10 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                                 .vertical()
                                 .show_value(false);
                             let resp = ui.add_sized([18.0, fader_height], slider);
+                            // A held fader drag is a single undo gesture.
+                            if resp.dragged() {
+                                actions.session.gesture_active = true;
+                            }
                             resp.rect
                         };
                         // MIDI learn: glow + click overlay
@@ -305,7 +305,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             let click_resp =
                                 ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
-                                actions.midi_learn_select = Some(path);
+                                actions.session.midi_learn_select = Some(path);
                             }
                         }
                         // Keyboard learn: orange glow + click overlay
@@ -322,7 +322,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             let click_resp =
                                 ui.interact(slider_rect, click_id, egui::Sense::click());
                             if click_resp.clicked() {
-                                actions.keyboard_learn_select =
+                                actions.session.keyboard_learn_select =
                                     Some(crate::keymap::KeyTarget::ParamPath(path));
                             }
                         }
@@ -334,11 +334,10 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
             // This avoids overwriting blend mode changes made by the blend mode selector below
             for (ch_idx, ch) in data.channels.iter().enumerate() {
                 if (opacities[ch_idx] - ch.opacity).abs() > f32::EPSILON {
-                    actions.channel_updates.push((
-                        ch_idx,
-                        opacities[ch_idx],
-                        blend_modes_orig[ch_idx],
-                    ));
+                    actions.commands.push(EngineCommand::SetChannelOpacity {
+                        channel_idx: ch_idx,
+                        opacity: opacities[ch_idx],
+                    });
                 }
             }
 
@@ -359,26 +358,26 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(name_a).small().color(color_a));
                     let mut crossfader = data.crossfader;
-                    let slider_rect;
                     let any_learn = data.midi_learn_active || data.keyboard_learn_active;
-                    if any_learn {
+                    let slider_rect = if any_learn {
                         let inner = ui.scope(|ui| {
                             ui.disable();
                             let slider =
                                 egui::Slider::new(&mut crossfader, 0.0..=1.0).show_value(false);
                             ui.add_sized([ui.available_width() - 16.0, 18.0], slider)
                         });
-                        slider_rect = inner.inner.rect;
+                        inner.inner.rect
                     } else {
                         let slider =
                             egui::Slider::new(&mut crossfader, 0.0..=1.0).show_value(false);
                         let resp = ui.add_sized([ui.available_width() - 16.0, 18.0], slider);
                         if resp.changed() {
-                            actions.crossfader_action =
-                                Some(CrossfaderAction::SetPosition(crossfader));
+                            actions
+                                .commands
+                                .push(EngineCommand::SetCrossfader(crossfader));
                         }
-                        slider_rect = resp.rect;
-                    }
+                        resp.rect
+                    };
                     if data.midi_learn_active {
                         let is_target = data.midi_learn_target.as_deref() == Some("crossfader");
                         if is_target {
@@ -389,7 +388,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         let click_id = ui.id().with("midi_learn_crossfader");
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
-                            actions.midi_learn_select = Some("crossfader".to_string());
+                            actions.session.midi_learn_select = Some("crossfader".to_string());
                         }
                     }
                     if data.keyboard_learn_active {
@@ -402,7 +401,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         let click_id = ui.id().with("kb_learn_crossfader");
                         let click_resp = ui.interact(slider_rect, click_id, egui::Sense::click());
                         if click_resp.clicked() {
-                            actions.keyboard_learn_select = Some(
+                            actions.session.keyboard_learn_select = Some(
                                 crate::keymap::KeyTarget::ParamPath("crossfader".to_string()),
                             );
                         }
@@ -413,10 +412,10 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 // Snap buttons
                 ui.horizontal(|ui| {
                     if ui.small_button(format!("⏮ {}", name_a)).clicked() {
-                        actions.crossfader_action = Some(CrossfaderAction::SnapA);
+                        actions.commands.push(EngineCommand::SetCrossfader(0.0));
                     }
                     if ui.small_button(format!("{} ⏭", name_b)).clicked() {
-                        actions.crossfader_action = Some(CrossfaderAction::SnapB);
+                        actions.commands.push(EngineCommand::SetCrossfader(1.0));
                     }
                 });
 
@@ -449,22 +448,20 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                         if is_beats {
                             for &beats in &[1.0f32, 2.0, 4.0, 8.0, 16.0] {
                                 if ui.small_button(format!("{}", beats as u32)).clicked() {
-                                    actions.crossfader_action =
-                                        Some(CrossfaderAction::BeatTransition {
-                                            target: auto_target,
-                                            beats,
-                                        });
+                                    actions.commands.push(EngineCommand::BeatCrossfade {
+                                        target: auto_target,
+                                        beats,
+                                    });
                                 }
                             }
                         } else {
                             for &secs in &[1.0f32, 2.0, 4.0, 8.0, 16.0] {
                                 if ui.small_button(format!("{}", secs as u32)).clicked() {
-                                    actions.crossfader_action =
-                                        Some(CrossfaderAction::AutoTransition {
-                                            target: auto_target,
-                                            duration_secs: secs,
-                                            easing: CrossfadeEasing::EaseInOut,
-                                        });
+                                    actions.commands.push(EngineCommand::AutoCrossfade {
+                                        target: auto_target,
+                                        duration_secs: secs,
+                                        easing: CrossfadeEasing::EaseInOut,
+                                    });
                                 }
                             }
                         }
@@ -496,13 +493,17 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                             .selectable_label(is_opacity, "Opacity (default)")
                             .clicked()
                         {
-                            actions.set_transition = Some(None);
+                            actions
+                                .commands
+                                .push(EngineCommand::SetTransition { shader_name: None });
                         }
                         ui.separator();
                         for name in &data.transition_names {
                             let selected = data.active_transition_name.as_ref() == Some(name);
                             if ui.selectable_label(selected, name).clicked() {
-                                actions.set_transition = Some(Some(name.clone()));
+                                actions.commands.push(EngineCommand::SetTransition {
+                                    shader_name: Some(name.clone()),
+                                });
                             }
                         }
                     });
@@ -584,7 +585,7 @@ pub(super) fn render_channel_column(
                             .sense(egui::Sense::click()),
                         );
                         if header_resp.clicked() {
-                            actions.select_channel = Some(ch_idx);
+                            actions.session.select_channel = Some(ch_idx);
                         }
 
                         // Blend mode dropdown — right-aligned in header
@@ -605,23 +606,17 @@ pub(super) fn render_channel_column(
                                 });
                         });
                         if selected != current {
-                            let new_blend = all_modes[selected];
-                            if let Some(entry) =
-                                actions.channel_updates.iter_mut().find(|e| e.0 == ch_idx)
-                            {
-                                entry.2 = new_blend;
-                            } else {
-                                actions
-                                    .channel_updates
-                                    .push((ch_idx, ch.opacity, new_blend));
-                            }
+                            actions.commands.push(EngineCommand::SetChannelBlendMode {
+                                channel_idx: ch_idx,
+                                mode: all_modes[selected],
+                            });
                         }
                     });
                 });
 
                 let sep_resp = ui.separator();
                 if sep_resp.interact(egui::Sense::click()).clicked() {
-                    actions.select_channel = Some(ch_idx);
+                    actions.session.select_channel = Some(ch_idx);
                 }
 
                 // Deck stack (single column, vertical)
@@ -651,7 +646,7 @@ pub(super) fn render_channel_column(
                                 .sense(egui::Sense::click()),
                             );
                             if empty_resp.clicked() {
-                                actions.select_channel = Some(ch_idx);
+                                actions.session.select_channel = Some(ch_idx);
                             }
                         }
                         let is_deck_drag_active =
@@ -682,7 +677,11 @@ pub(super) fn render_channel_column(
                                     if src_ch == ch_idx && src_deck != i {
                                         let to = if src_deck < i { i - 1 } else { i };
                                         if to != src_deck {
-                                            actions.deck_to_reorder = Some((ch_idx, src_deck, to));
+                                            actions.commands.push(EngineCommand::ReorderDeck {
+                                                ch: ch_idx,
+                                                from_idx: src_deck,
+                                                to_idx: to,
+                                            });
                                         }
                                     }
                                 }
@@ -710,7 +709,11 @@ pub(super) fn render_channel_column(
                                 let (src_ch, src_deck) = *payload;
                                 let last = ch.decks.len() - 1;
                                 if src_ch == ch_idx && src_deck != last {
-                                    actions.deck_to_reorder = Some((ch_idx, src_deck, last));
+                                    actions.commands.push(EngineCommand::ReorderDeck {
+                                        ch: ch_idx,
+                                        from_idx: src_deck,
+                                        to_idx: last,
+                                    });
                                 }
                             }
                         }
@@ -730,12 +733,16 @@ pub(super) fn render_channel_column(
                             egui::Sense::click() | egui::Sense::hover(),
                         );
                         if drop_resp.clicked() {
-                            actions.select_channel = Some(ch_idx);
+                            actions.session.select_channel = Some(ch_idx);
                         }
                         if let Some(payload) = drop_resp.dnd_release_payload::<(usize, usize)>() {
                             let (src_ch, src_deck) = *payload;
                             if src_ch != ch_idx && src_ch < data.channels.len() {
-                                actions.deck_to_move = Some((src_ch, src_deck, ch_idx));
+                                actions.commands.push(EngineCommand::MoveDeck {
+                                    src_ch,
+                                    src_deck,
+                                    dst_ch: ch_idx,
+                                });
                             }
                         }
 
@@ -749,7 +756,7 @@ pub(super) fn render_channel_column(
                                 .sense(egui::Sense::click()),
                             );
                             if fx_resp.clicked() {
-                                actions.select_channel = Some(ch_idx);
+                                actions.session.select_channel = Some(ch_idx);
                             }
                             for (_uuid, name, enabled, _) in ch.effects.iter() {
                                 ui.horizontal(|ui| {
@@ -761,7 +768,7 @@ pub(super) fn render_channel_column(
                                     let fx_item =
                                         ui.add(egui::Label::new(label).sense(egui::Sense::click()));
                                     if fx_item.clicked() {
-                                        actions.select_channel = Some(ch_idx);
+                                        actions.session.select_channel = Some(ch_idx);
                                     }
                                 });
                             }
@@ -860,8 +867,13 @@ fn render_new_channel_drop_zone(
     if let Some(payload) = resp.response.dnd_release_payload::<(usize, usize)>() {
         let (src_ch, src_deck) = *payload;
         let new_ch_idx = data.channels.len();
-        actions.add_channel = true;
-        actions.deck_to_move = Some((src_ch, src_deck, new_ch_idx));
+        // AddChannel first so the MoveDeck target index resolves.
+        actions.commands.push(EngineCommand::AddChannel);
+        actions.commands.push(EngineCommand::MoveDeck {
+            src_ch,
+            src_deck,
+            dst_ch: new_ch_idx,
+        });
         log::info!(
             "Deck drag -> new channel: ch{} deck{} -> new ch{}",
             src_ch,
@@ -924,7 +936,7 @@ pub(super) fn render_deck_thumbnail(
                 widgets::draw_midi_learn_glow(ui, card_rect);
             }
             if card_resp.clicked() {
-                actions.midi_learn_select = Some(trigger_path);
+                actions.session.midi_learn_select = Some(trigger_path);
             }
         }
         // Keyboard learn mode: orange glow on deck card
@@ -937,7 +949,7 @@ pub(super) fn render_deck_thumbnail(
                 widgets::draw_keyboard_learn_glow(ui, card_rect);
             }
             if card_resp.clicked() {
-                actions.keyboard_learn_select =
+                actions.session.keyboard_learn_select =
                     Some(crate::keymap::KeyTarget::ParamPath(trigger_path));
             }
         }
@@ -1068,7 +1080,7 @@ pub(super) fn render_deck_thumbnail(
 
         // Click on card to select deck (only when not in learn mode — learn mode click selects trigger)
         if !data.midi_learn_active && !data.keyboard_learn_active && card_resp.clicked() {
-            actions.select_deck = Some((ch_idx, idx));
+            actions.session.select_deck = Some((ch_idx, idx));
         }
 
         // Vertical opacity slider — use a child ui placed at the slider rect
@@ -1088,6 +1100,10 @@ pub(super) fn render_deck_thumbnail(
                 .vertical()
                 .show_value(false);
             let resp = slider_ui.add_sized([slider_width, preview_height], slider);
+            // A held fader drag is a single undo gesture.
+            if resp.dragged() {
+                actions.session.gesture_active = true;
+            }
             resp.rect
         };
         if data.midi_learn_active {
@@ -1103,7 +1119,7 @@ pub(super) fn render_deck_thumbnail(
                 .with(("midi_learn_deck_opacity", ch_idx, idx));
             let click_resp = slider_ui.interact(op_slider_rect, click_id, egui::Sense::click());
             if click_resp.clicked() {
-                actions.midi_learn_select = Some(opacity_path);
+                actions.session.midi_learn_select = Some(opacity_path);
             }
         }
         if data.keyboard_learn_active {
@@ -1117,7 +1133,7 @@ pub(super) fn render_deck_thumbnail(
             let click_id = slider_ui.id().with(("kb_learn_deck_opacity", ch_idx, idx));
             let click_resp = slider_ui.interact(op_slider_rect, click_id, egui::Sense::click());
             if click_resp.clicked() {
-                actions.keyboard_learn_select =
+                actions.session.keyboard_learn_select =
                     Some(crate::keymap::KeyTarget::ParamPath(opacity_path));
             }
         }
@@ -1173,7 +1189,7 @@ pub(super) fn render_deck_thumbnail(
                         widgets::draw_midi_learn_glow(ui, mute_resp.rect);
                     }
                     if mute_resp.clicked() {
-                        actions.midi_learn_select = Some(mute_path.clone());
+                        actions.session.midi_learn_select = Some(mute_path.clone());
                     }
                 }
                 if data.keyboard_learn_active {
@@ -1185,7 +1201,7 @@ pub(super) fn render_deck_thumbnail(
                         widgets::draw_keyboard_learn_glow(ui, mute_resp.rect);
                     }
                     if mute_resp.clicked() {
-                        actions.keyboard_learn_select =
+                        actions.session.keyboard_learn_select =
                             Some(crate::keymap::KeyTarget::ParamPath(mute_path));
                     }
                 }
@@ -1203,7 +1219,7 @@ pub(super) fn render_deck_thumbnail(
                         widgets::draw_midi_learn_glow(ui, solo_resp.rect);
                     }
                     if solo_resp.clicked() {
-                        actions.midi_learn_select = Some(solo_path.clone());
+                        actions.session.midi_learn_select = Some(solo_path.clone());
                     }
                 }
                 if data.keyboard_learn_active {
@@ -1215,7 +1231,7 @@ pub(super) fn render_deck_thumbnail(
                         widgets::draw_keyboard_learn_glow(ui, solo_resp.rect);
                     }
                     if solo_resp.clicked() {
-                        actions.keyboard_learn_select =
+                        actions.session.keyboard_learn_select =
                             Some(crate::keymap::KeyTarget::ParamPath(solo_path));
                     }
                 }
@@ -1223,17 +1239,36 @@ pub(super) fn render_deck_thumbnail(
                 solo = !solo;
             }
             if !any_learn && ui.small_button(egui::RichText::new("x").small()).clicked() {
-                actions.deck_to_remove = Some((ch_idx, idx));
+                actions.commands.push(EngineCommand::RemoveDeck {
+                    channel_idx: ch_idx,
+                    deck_idx: idx,
+                });
             }
         });
 
-        // Only push deck updates when something actually changed from the UI controls here
-        // (opacity slider, solo/mute buttons). This avoids overwriting blend mode changes
-        // made in the detail panel's blend mode selector.
-        if (opacity - deck.opacity).abs() > f32::EPSILON || solo != deck.solo || mute != deck.mute {
-            actions
-                .deck_updates
-                .push((ch_idx, idx, opacity, deck.blend_mode, solo, mute));
+        // Push a command per control that actually changed (opacity slider,
+        // solo/mute buttons). Separate commands mean a change here never clobbers
+        // a blend-mode edit made in the detail panel.
+        if (opacity - deck.opacity).abs() > f32::EPSILON {
+            actions.commands.push(EngineCommand::SetDeckOpacity {
+                channel_idx: ch_idx,
+                deck_idx: idx,
+                opacity,
+            });
+        }
+        if solo != deck.solo {
+            actions.commands.push(EngineCommand::SetDeckSolo {
+                channel_idx: ch_idx,
+                deck_idx: idx,
+                solo,
+            });
+        }
+        if mute != deck.mute {
+            actions.commands.push(EngineCommand::SetDeckMute {
+                channel_idx: ch_idx,
+                deck_idx: idx,
+                mute,
+            });
         }
     });
 }

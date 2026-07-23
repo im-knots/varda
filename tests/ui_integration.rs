@@ -10,11 +10,9 @@ use std::rc::Rc;
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
+use varda::engine::EngineCommand;
 use varda::usecases::ui::panels::render_ui;
-use varda::usecases::ui::{
-    CrossfaderAction, ModulationAction, OutputAction, SequenceAction, SurfaceAction, UIActions,
-    UIData,
-};
+use varda::usecases::ui::{UIActions, UIData};
 
 /// Accumulated actions from all passes within a `run()` call.
 ///
@@ -60,8 +58,6 @@ struct AccActions {
 
     // Combo box actions
     set_transition: Option<Option<String>>,
-    channel_updates_count: usize,
-    scaling_mode_updates_count: usize,
 
     // Collapsing header item actions
     open_image_dialog_for_channel: Option<usize>,
@@ -72,36 +68,31 @@ struct AccActions {
 impl AccActions {
     fn merge(&mut self, a: &UIActions) {
         // Booleans — OR-accumulate
-        self.add_channel |= a.add_channel;
-        self.toggle_library_panel |= a.toggle_library_panel;
-        self.toggle_right_panel |= a.toggle_right_panel;
-        self.select_master |= a.select_master;
-        self.save_requested |= a.save_requested;
-        self.toggle_stage_editor |= a.toggle_stage_editor;
-        self.toggle_snap |= a.toggle_snap;
-        self.midi_rescan |= a.midi_rescan;
-        self.midi_clear_mappings |= a.midi_clear_mappings;
-        self.midi_learn_toggle |= a.midi_learn_toggle;
-        self.camera_rescan |= a.camera_rescan;
-        self.audio_rescan |= a.audio_rescan;
+        self.toggle_library_panel |= a.session.toggle_library_panel;
+        self.toggle_right_panel |= a.session.toggle_right_panel;
+        self.select_master |= a.session.select_master;
+        self.save_requested |= a.session.save_requested;
+        self.toggle_stage_editor |= a.session.toggle_stage_editor;
+        self.toggle_snap |= a.session.toggle_snap;
+        self.midi_learn_toggle |= a.session.midi_learn_toggle;
 
         // Options — take latest non-None
-        if a.select_deck.is_some() {
-            self.select_deck = a.select_deck;
+        if a.session.select_deck.is_some() {
+            self.select_deck = a.session.select_deck;
         }
-        if a.select_channel.is_some() {
-            self.select_channel = a.select_channel;
+        if a.session.select_channel.is_some() {
+            self.select_channel = a.session.select_channel;
         }
-        if a.remove_channel.is_some() {
-            self.remove_channel = a.remove_channel;
+        if a.session.remove_channel.is_some() {
+            self.remove_channel = a.session.remove_channel;
         }
 
-        // Crossfader — pattern-match variants
-        if let Some(ref ca) = a.crossfader_action {
-            match ca {
-                CrossfaderAction::SnapA => self.crossfader_snap_a = true,
-                CrossfaderAction::SnapB => self.crossfader_snap_b = true,
-                CrossfaderAction::AutoTransition { duration_secs, .. } => {
+        // Unified command stream — crossfader, modulation-source adds, etc.
+        for cmd in &a.commands {
+            match cmd {
+                EngineCommand::SetCrossfader(p) if *p < 0.5 => self.crossfader_snap_a = true,
+                EngineCommand::SetCrossfader(_) => self.crossfader_snap_b = true,
+                EngineCommand::AutoCrossfade { duration_secs, .. } => {
                     if (*duration_secs - 1.0).abs() < 0.01 {
                         self.crossfader_auto_1s = true;
                     }
@@ -112,56 +103,35 @@ impl AccActions {
                         self.crossfader_auto_4s = true;
                     }
                 }
+                EngineCommand::AddLfo { .. } => self.mod_add_lfo = true,
+                EngineCommand::AddAudioBand { .. } => self.mod_add_audio = true,
+                EngineCommand::AddAdsr { .. } => self.mod_add_adsr = true,
+                EngineCommand::AddStepSequencer { .. } => self.mod_add_step_seq = true,
+                EngineCommand::CreateSequence => self.sequence_create = true,
+                EngineCommand::AddChannel => self.add_channel = true,
+                EngineCommand::CreateOutput => self.output_create = true,
+                EngineCommand::AddSurface { .. }
+                | EngineCommand::AddPolygonSurface { .. }
+                | EngineCommand::AddCircleSurface { .. } => self.surface_add = true,
+                EngineCommand::RescanMidi => self.midi_rescan = true,
+                EngineCommand::ClearMidiMappings => self.midi_clear_mappings = true,
+                EngineCommand::RescanCameras => self.camera_rescan = true,
+                EngineCommand::RescanAudio => self.audio_rescan = true,
+                EngineCommand::SetMidiDeviceEnabled { .. } => self.midi_device_toggles_count += 1,
+                EngineCommand::SetTransition { shader_name } => {
+                    self.set_transition = Some(shader_name.clone());
+                }
                 _ => {}
             }
         }
-
-        // Vec actions — match known patterns
-        for oa in &a.output_actions {
-            if matches!(oa, OutputAction::Create) {
-                self.output_create = true;
-            }
-        }
-        for sa in &a.surface_actions {
-            if matches!(
-                sa,
-                SurfaceAction::Add { .. }
-                    | SurfaceAction::AddPolygon { .. }
-                    | SurfaceAction::AddCircle { .. }
-            ) {
-                self.surface_add = true;
-            }
-        }
-        for ma in &a.modulation_actions {
-            match ma {
-                ModulationAction::AddLFO { .. } => self.mod_add_lfo = true,
-                ModulationAction::AddAudioFFT { .. } => self.mod_add_audio = true,
-                ModulationAction::AddADSR { .. } => self.mod_add_adsr = true,
-                ModulationAction::AddStepSequencer { .. } => self.mod_add_step_seq = true,
-                _ => {}
-            }
-        }
-        for sa in &a.sequence_actions {
-            if matches!(sa, SequenceAction::Create) {
-                self.sequence_create = true;
-            }
-        }
-
-        // Combo box actions
-        if a.set_transition.is_some() {
-            self.set_transition = a.set_transition.clone();
-        }
-        self.channel_updates_count += a.channel_updates.len();
-        self.scaling_mode_updates_count += a.scaling_mode_updates.len();
 
         // Collapsing header items
-        if a.open_image_dialog_for_channel.is_some() {
-            self.open_image_dialog_for_channel = a.open_image_dialog_for_channel;
+        if a.session.open_image_dialog_for_channel.is_some() {
+            self.open_image_dialog_for_channel = a.session.open_image_dialog_for_channel;
         }
-        if a.open_video_dialog_for_channel.is_some() {
-            self.open_video_dialog_for_channel = a.open_video_dialog_for_channel;
+        if a.session.open_video_dialog_for_channel.is_some() {
+            self.open_video_dialog_for_channel = a.session.open_video_dialog_for_channel;
         }
-        self.midi_device_toggles_count += a.midi_device_toggles.len();
     }
 }
 

@@ -5,30 +5,13 @@
 //! - **Mesh**: Arbitrary XYUV grid warp (generalization of corner-pin)
 //!
 //! Corner-pin is a strict subset of mesh warp (equivalent to a 2×2 grid).
+//!
+//! Data-type definitions (`MeshPoint`, `WarpMesh`, `WarpMode`, `BezierWarp`)
+//! live in `engine::value::warp` (see /spec/engine-value-types.md); this
+//! module re-exports them and holds all the mesh/tessellation algorithms as
+//! inherent impls.
 
-/// A single point in a UV warp mesh: output-space position + source-space UV.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct MeshPoint {
-    /// Position in output-normalized coords [0..1]
-    pub position: [f32; 2],
-    /// UV coordinates in source texture space [0..1]
-    pub uv: [f32; 2],
-}
-
-/// A grid of XYUV warp points defining an arbitrary mesh warp.
-///
-/// Points are stored row-major: `points[row * cols + col]`.
-/// The mesh defines a mapping from output positions to source UVs,
-/// with each grid cell subdivided into 2 triangles for GPU rendering.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct WarpMesh {
-    /// Number of columns in the grid (≥2)
-    pub cols: u32,
-    /// Number of rows in the grid (≥2)
-    pub rows: u32,
-    /// Grid points, row-major order. Length = cols × rows.
-    pub points: Vec<MeshPoint>,
-}
+pub use crate::engine::value::warp::{BezierWarp, MeshPoint, WarpMesh, WarpMode};
 
 impl WarpMesh {
     /// Create an identity mesh (no warp) with the given grid dimensions.
@@ -146,19 +129,6 @@ impl WarpMesh {
 /// Maximum warp grid resolution (columns or rows) a mesh warp may be
 /// subdivided to. Domain- and engine-enforced.
 pub const MAX_WARP_SUBDIVISIONS: u32 = 64;
-
-/// Warp mode for a surface: corner-pin, arbitrary mesh, or bezier patch grid.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type")]
-pub enum WarpMode {
-    /// 4-point corner-pin warp (TL, TR, BR, BL in output space [0..1]).
-    CornerPin { corners: [[f32; 2]; 4] },
-    /// Arbitrary XYUV mesh warp grid.
-    Mesh(WarpMesh),
-    /// Smooth bezier patch grid (8i.6). Editable control cage; tessellated into
-    /// a `WarpMesh` for the GPU via [`WarpMode::render_mesh`].
-    Bezier(BezierWarp),
-}
 
 impl WarpMode {
     /// Create a corner-pin warp from 4 corners.
@@ -470,29 +440,6 @@ pub fn coons_mesh(verts: &[[f32; 2]], cols: u32, rows: u32) -> WarpMesh {
 
 /// Default tessellation steps per patch edge for a new bezier warp.
 pub const DEFAULT_BEZIER_TESS: u32 = 6;
-
-/// A smooth warp defined by a grid of cubic-bezier patches with tangent
-/// handles. See the module comment above for the model.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BezierWarp {
-    /// Anchor columns in the control cage (≥2).
-    pub anchor_cols: u32,
-    /// Anchor rows in the control cage (≥2).
-    pub anchor_rows: u32,
-    /// Anchor positions, row-major (`anchor_cols` × `anchor_rows`), output
-    /// space [0..1].
-    pub anchors: Vec<[f32; 2]>,
-    /// Horizontal-edge cubic handles `[near-left, near-right]`, one per
-    /// horizontal edge, row-major over rows then per-row edges. Length
-    /// `anchor_rows · (anchor_cols − 1)`.
-    pub h_horiz: Vec<[[f32; 2]; 2]>,
-    /// Vertical-edge cubic handles `[near-top, near-bottom]`, one per vertical
-    /// edge, row-major over edge-rows then cols. Length
-    /// `anchor_cols · (anchor_rows − 1)`.
-    pub h_vert: Vec<[[f32; 2]; 2]>,
-    /// Tessellation steps per patch edge (≥1). Controls output mesh density.
-    pub tess: u32,
-}
 
 impl BezierWarp {
     fn lerp(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {

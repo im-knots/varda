@@ -2,10 +2,21 @@
 //!
 //! These types are used in engine trait signatures and snapshot structs.
 //! They MUST NOT reference wgpu, egui, winit, or any GPU/UI framework types.
+//!
+//! Per /spec/engine-value-types.md, this module names its value vocabulary
+//! from two places, and never reaches into `internal::{renderer,surface,video}`
+//! directly:
+//! - **Tier 1** (`engine::value::*`): plain data owned by the engine, whose
+//!   *definitions* live in `crate::engine::value` — `renderer`/`surface`/
+//!   `video` `pub use` them back to keep their existing call paths working.
+//! - **Tier 2** (domain modules below): genuine domain entities that already
+//!   lived in pure, framework-free modules (`audio`, `camera`, `channel`,
+//!   `deck`, `mixer`, `modulation`, `params`) — out of scope for the Tier 1
+//!   relocation; re-exported here as-is.
 
 use serde::{Deserialize, Serialize};
 
-// Re-export existing clean value types from domain modules
+// Tier 2 — pure domain modules, re-exported as-is.
 pub use crate::audio::AudioSourceId;
 pub use crate::camera::CameraId;
 pub use crate::channel::{BlendMode, DeckRenderFps};
@@ -15,11 +26,13 @@ pub use crate::modulation::{
     ADSRStage, AudioBandPreset, AudioReactMode, LFOWaveform, StepInterpolation,
 };
 pub use crate::params::ParamValue;
-pub use crate::renderer::config::OutputSource;
-pub use crate::surface::{
+
+// Tier 1 — engine-owned value types (see `crate::engine::value`).
+pub use crate::engine::value::render::OutputSource;
+pub use crate::engine::value::surface::{
     CircleHint, ContentMapping, CubicHandle, SurfaceOutputType, SurfacePath, SurfaceReorderOp,
 };
-pub use crate::video::LoopMode;
+pub use crate::engine::value::video::LoopMode;
 
 /// Identifies where to apply an effect in the signal chain.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize, utoipa::ToSchema)]
@@ -140,7 +153,7 @@ pub struct MixerSnapshot {
     pub active_transition_name: Option<String>,
     pub transition_names: Vec<String>,
     pub sequences: Vec<SequenceSnapshot>,
-    pub tonemap_mode: crate::renderer::config::TonemapMode,
+    pub tonemap_mode: crate::engine::value::render::TonemapMode,
     pub active_lut: Option<String>,
 }
 
@@ -375,13 +388,13 @@ pub struct OutputWindowSnapshot {
     pub uuid: String,
     pub name: String,
     /// Full output target (carries `audio_device` for ffmpeg-backed outputs).
-    pub target: crate::renderer::config::OutputTarget,
+    pub target: crate::engine::value::render::OutputTarget,
     pub target_label: String,
     pub is_on_display: bool,
     /// Whether a headless output is actively recording/streaming.
     pub is_active: bool,
     pub surface_assignments: Vec<SurfaceAssignmentSnapshot>,
-    pub calibration_mode: crate::renderer::config::CalibrationMode,
+    pub calibration_mode: crate::engine::value::render::CalibrationMode,
     /// Live audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughSnapshot>,
 }
@@ -414,7 +427,7 @@ pub struct SurfaceSnapshot {
     pub output_type: SurfaceOutputType,
     pub circle_hint: Option<CircleHint>,
     /// Effective warp (auto-conforming to the shape while `warp_bound`).
-    pub warp: Option<crate::renderer::warp::WarpMode>,
+    pub warp: Option<crate::engine::value::warp::WarpMode>,
     /// Whether the warp auto-conforms to the surface shape (auto-warp).
     pub warp_bound: bool,
     /// Curve authoring path, when the surface is bezier-edited.
@@ -549,7 +562,7 @@ mod tests {
                 active_transition_name: None,
                 transition_names: vec![],
                 sequences: vec![],
-                tonemap_mode: crate::renderer::config::TonemapMode::default(),
+                tonemap_mode: crate::engine::value::render::TonemapMode::default(),
                 active_lut: None,
             },
             audio: AudioSnapshot {
@@ -629,7 +642,7 @@ mod tests {
                 active_transition_name: None,
                 transition_names: vec![],
                 sequences: vec![],
-                tonemap_mode: crate::renderer::config::TonemapMode::default(),
+                tonemap_mode: crate::engine::value::render::TonemapMode::default(),
                 active_lut: None,
             },
             audio: AudioSnapshot {

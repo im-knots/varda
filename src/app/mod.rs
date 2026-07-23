@@ -596,27 +596,6 @@ impl VardaApp {
         }
     }
 
-    /// Collect all data needed by the UI into a read-only snapshot.
-    /// `layout` is UI-consumer-owned selection/layout state.
-    /// `deck_preview_textures` and `main_output_texture` are egui-owned state passed in.
-    pub fn collect_ui_data(
-        &self,
-        layout: &crate::usecases::ui::UILayoutState,
-        deck_preview_textures: &std::collections::HashMap<(usize, usize), egui::TextureId>,
-        channel_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
-        output_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
-        main_output_texture: Option<egui::TextureId>,
-    ) -> crate::usecases::ui::UIData {
-        snapshot::build_ui_data(
-            self,
-            layout,
-            deck_preview_textures,
-            channel_preview_textures,
-            output_preview_textures,
-            main_output_texture,
-        )
-    }
-
     // ── Public accessors (controlled access for delivery layers) ─────
 
     /// Read-only access to the GPU context.
@@ -1045,8 +1024,9 @@ mod tests {
         .unwrap();
         app.process_commands();
         let result = reply_rx.blocking_recv().unwrap();
+        // Deck-creating commands report the new deck's UUID (ui-engine-boundary.md WS1).
         assert!(
-            matches!(result, crate::engine::CommandResult::Ok),
+            matches!(result, crate::engine::CommandResult::OkWithId { .. }),
             "command should succeed: {:?}",
             result
         );

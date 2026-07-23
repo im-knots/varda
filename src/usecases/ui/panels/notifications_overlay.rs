@@ -104,7 +104,7 @@ pub(super) fn render_notifications(
                     )
                     .clicked()
                 {
-                    actions.notifications_to_dismiss.push(i);
+                    actions.session.notifications_to_dismiss.push(i);
                 }
             });
     }

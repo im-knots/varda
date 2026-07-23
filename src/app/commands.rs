@@ -5,9 +5,150 @@
 //! the command channel.
 
 use super::VardaApp;
-use crate::engine::{CommandResult, EngineCommand, ErrorCode};
+use crate::engine::{CommandOutcome, CommandResult, DomeLayoutFields, EngineCommand, ErrorCode};
 
 impl VardaApp {
+    /// Execute a command on behalf of the windowed GUI, returning a typed,
+    /// in-process [`CommandOutcome`] instead of the serializable wire
+    /// [`CommandResult`]. Deck-creating commands surface their location + UUID
+    /// so the runner can register a preview texture; everything else is
+    /// delegated verbatim to [`Self::execute_command`]. See
+    /// [`/spec/ui-engine-boundary.md`] WS1/Decision #9.
+    pub(crate) fn execute_command_gui(&mut self, cmd: EngineCommand) -> CommandOutcome {
+        // Deck-creating commands append to a channel; on success the runner
+        // registers the new deck's preview texture. Includes the external-I/O
+        // sources, which now report `OkWithId` (see `app/state/io.rs`).
+        let channel_idx = match &cmd {
+            EngineCommand::AddDeck { channel_idx, .. }
+            | EngineCommand::AddImageDeck { channel_idx, .. }
+            | EngineCommand::AddVideoDeck { channel_idx, .. }
+            | EngineCommand::AddSolidColorDeck { channel_idx, .. }
+            | EngineCommand::AddCameraDeck { channel_idx, .. }
+            | EngineCommand::AddNdiDeck { channel_idx, .. }
+            | EngineCommand::AddSyphonDeck { channel_idx, .. }
+            | EngineCommand::AddSrtDeck { channel_idx, .. }
+            | EngineCommand::AddHlsDeck { channel_idx, .. }
+            | EngineCommand::AddDashDeck { channel_idx, .. }
+            | EngineCommand::AddRtmpDeck { channel_idx, .. }
+            | EngineCommand::AddHtmlDeck { channel_idx, .. } => Some(*channel_idx),
+            _ => None,
+        };
+        // Structural deck changes shift indices; the runner must refresh the
+        // index-keyed preview-texture map for the affected channels.
+        let reindex: Option<Vec<usize>> = match &cmd {
+            EngineCommand::RemoveDeck { channel_idx, .. }
+            | EngineCommand::ReorderDeck {
+                ch: channel_idx, ..
+            } => Some(vec![*channel_idx]),
+            EngineCommand::MoveDeck { src_ch, dst_ch, .. } => Some(vec![*src_ch, *dst_ch]),
+            _ => None,
+        };
+        // Preset loads append decks (to a fixed channel) or fill/create a channel;
+        // the affected channel's previews are re-registered from the outcome. The
+        // channel target for `LoadChannelPreset` isn't known until after execution
+        // (it may create a new channel), so capture the pre-execution channel count.
+        let preset_deck_channel = match &cmd {
+            EngineCommand::LoadDeckPreset { channel_idx, .. } => Some(*channel_idx),
+            _ => None,
+        };
+        let preset_channel_target = match &cmd {
+            EngineCommand::LoadChannelPreset { target_channel, .. } => Some(*target_channel),
+            _ => None,
+        };
+        let channels_before = self.mixer.channels().len();
+        let result = self.execute_command(cmd);
+        if let Some(channel_idx) = preset_deck_channel {
+            if !matches!(result, CommandResult::Err { .. }) {
+                return CommandOutcome::DecksReindexed {
+                    channels: vec![channel_idx],
+                };
+            }
+            return CommandOutcome::Plain(result);
+        }
+        if let Some(target) = preset_channel_target {
+            if !matches!(result, CommandResult::Err { .. }) {
+                let channels_after = self.mixer.channels().len();
+                // A new channel was appended if the count grew; otherwise the
+                // preset filled the (empty) target channel in place.
+                let channels: Vec<usize> = if channels_after > channels_before {
+                    (channels_before..channels_after).collect()
+                } else {
+                    target.into_iter().collect()
+                };
+                return CommandOutcome::DecksReindexed { channels };
+            }
+            return CommandOutcome::Plain(result);
+        }
+        if let Some(channel_idx) = channel_idx {
+            if let CommandResult::OkWithId { uuid } = result {
+                // Deck-creating commands append to the channel, so the new deck
+                // is the last slot.
+                let deck_idx = self
+                    .mixer
+                    .channels()
+                    .get(channel_idx)
+                    .map(|ch| ch.decks.len().saturating_sub(1))
+                    .unwrap_or(0);
+                return CommandOutcome::DeckCreated {
+                    channel_idx,
+                    deck_idx,
+                    uuid,
+                };
+            }
+            return CommandOutcome::Plain(result);
+        }
+        if let Some(channels) = reindex {
+            if matches!(result, CommandResult::Ok) {
+                return CommandOutcome::DecksReindexed { channels };
+            }
+        }
+        CommandOutcome::Plain(result)
+    }
+
+    /// Undo/redo on behalf of the windowed GUI. Uses the UI `layout` to source
+    /// cosmetic/dome prefs for the "current" snapshot (the API path uses
+    /// defaults), and returns a typed [`CommandOutcome::HistoryRestored`] so the
+    /// runner can re-register textures and sync dome flags. Replaces the runner's
+    /// bespoke inline undo branch (see [`/spec/ui-engine-boundary.md`] Decision #10).
+    pub(crate) fn history_gui(
+        &mut self,
+        layout: &crate::usecases::ui::UILayoutState,
+        undo: bool,
+    ) -> CommandOutcome {
+        let current = self.history_snapshot(layout);
+        let restore = if undo {
+            self.history_undo(current)
+        } else {
+            self.history_redo(current)
+        };
+        match restore {
+            Some(r) => CommandOutcome::HistoryRestored {
+                structural_changed: r.structural_changed,
+                dome_layout: DomeLayoutFields {
+                    dome_mode_active: r.snapshot.stage.dome_mode_active,
+                    dome_preset: r.snapshot.stage.dome_preset,
+                    dome_geometry: r.snapshot.stage.dome_geometry,
+                },
+            },
+            None => CommandOutcome::Plain(CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: if undo {
+                    "Nothing to undo".into()
+                } else {
+                    "Nothing to redo".into()
+                },
+            }),
+        }
+    }
+
+    /// True if any command in the batch is undoable. Used by the windowed
+    /// runner to make one snapshot decision over the GUI's command stream,
+    /// sharing the single compiler-checked [`command_is_undoable`] predicate
+    /// with the bus consumers.
+    pub(crate) fn batch_has_undoable(&self, cmds: &[EngineCommand]) -> bool {
+        cmds.iter().any(command_is_undoable)
+    }
+
     /// Execute a single command and return the result.
     pub(crate) fn execute_command(&mut self, cmd: EngineCommand) -> CommandResult {
         use crate::engine::traits::*;
@@ -49,7 +190,7 @@ impl VardaApp {
                 channel_idx,
                 shader_name,
             } => match self.add_deck(channel_idx, &shader_name) {
-                Ok(_) => CommandResult::Ok,
+                Ok(uuid) => CommandResult::OkWithId { uuid },
                 Err(e) => CommandResult::Err {
                     code: ErrorCode::InvalidInput,
                     message: e.to_string(),
@@ -57,7 +198,7 @@ impl VardaApp {
             },
             EngineCommand::AddImageDeck { channel_idx, path } => {
                 match self.add_image_deck(channel_idx, &path) {
-                    Ok(_) => CommandResult::Ok,
+                    Ok(uuid) => CommandResult::OkWithId { uuid },
                     Err(e) => CommandResult::Err {
                         code: ErrorCode::InvalidInput,
                         message: e.to_string(),
@@ -66,7 +207,7 @@ impl VardaApp {
             }
             EngineCommand::AddVideoDeck { channel_idx, path } => {
                 match self.add_video_deck(channel_idx, &path) {
-                    Ok(_) => CommandResult::Ok,
+                    Ok(uuid) => CommandResult::OkWithId { uuid },
                     Err(e) => CommandResult::Err {
                         code: ErrorCode::InvalidInput,
                         message: e.to_string(),
@@ -75,7 +216,7 @@ impl VardaApp {
             }
             EngineCommand::AddSolidColorDeck { channel_idx, color } => {
                 match self.add_solid_color_deck(channel_idx, color) {
-                    Ok(_) => CommandResult::Ok,
+                    Ok(uuid) => CommandResult::OkWithId { uuid },
                     Err(e) => CommandResult::Err {
                         code: ErrorCode::InvalidInput,
                         message: e.to_string(),
@@ -86,7 +227,7 @@ impl VardaApp {
                 channel_idx,
                 camera_id,
             } => match self.add_camera_deck(channel_idx, camera_id) {
-                Ok(_) => CommandResult::Ok,
+                Ok(uuid) => CommandResult::OkWithId { uuid },
                 Err(e) => CommandResult::Err {
                     code: ErrorCode::InvalidInput,
                     message: e.to_string(),
@@ -255,6 +396,10 @@ impl VardaApp {
             }
             EngineCommand::SetParam { path, value } => {
                 self.set_param(&path, value);
+                CommandResult::Ok
+            }
+            EngineCommand::ToggleParam { path } => {
+                crate::keymap::apply_keyboard_toggle_param(&mut self.mixer, &path);
                 CommandResult::Ok
             }
 
@@ -507,6 +652,29 @@ impl VardaApp {
                 CommandResult::OkWithData {
                     data: serde_json::json!({ "surface_uuids": uuids }),
                 }
+            }
+            EngineCommand::ImportSurfacesFromFile { path } => {
+                let params = crate::surface::detect::DetectionParams::default();
+                match crate::surface::import::detect_from_file(&path, &params) {
+                    Ok(result) => {
+                        let uuids = self.confirm_detected_contours(&result.contours);
+                        log::info!("Imported {} surfaces from {}", uuids.len(), path.display());
+                        CommandResult::OkWithData {
+                            data: serde_json::json!({ "surface_uuids": uuids }),
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Surface import failed: {}", e);
+                        CommandResult::Err {
+                            code: ErrorCode::InvalidInput,
+                            message: e.to_string(),
+                        }
+                    }
+                }
+            }
+            EngineCommand::GenerateDomeSlices { setup } => {
+                self.generate_dome_slices(&setup);
+                CommandResult::Ok
             }
             EngineCommand::DetectFromCamera { camera_id, params } => {
                 match self.detect_from_camera(camera_id, &params) {
@@ -893,6 +1061,10 @@ impl VardaApp {
             }
             EngineCommand::RemoveRtmpLibraryEntry { url } => {
                 self.cmd_remove_rtmp_library_entry(url)
+            }
+            EngineCommand::AddHtmlLibraryEntry { url } => self.cmd_add_html_library_entry(url),
+            EngineCommand::RemoveHtmlLibraryEntry { url } => {
+                self.cmd_remove_html_library_entry(url)
             }
 
             // ── Output Management ─────────────────────────────────
@@ -1528,6 +1700,24 @@ impl VardaApp {
                 CommandResult::Ok
             }
 
+            // ── Presets ───────────────────────────────────────────
+            EngineCommand::LoadDeckPreset {
+                channel_idx,
+                preset_idx,
+            } => self.cmd_load_deck_preset(channel_idx, preset_idx),
+            EngineCommand::LoadChannelPreset {
+                target_channel,
+                preset_idx,
+            } => self.cmd_load_channel_preset(target_channel, preset_idx),
+            EngineCommand::SaveDeckPreset {
+                channel_idx,
+                deck_idx,
+                name,
+            } => self.cmd_save_deck_preset(channel_idx, deck_idx, &name),
+            EngineCommand::SaveChannelPreset { channel_idx, name } => {
+                self.cmd_save_channel_preset(channel_idx, &name)
+            }
+
             // ── Persistence ───────────────────────────────────────
             EngineCommand::SaveWorkspace => {
                 let layout = crate::usecases::ui::UILayoutState::default();
@@ -1595,6 +1785,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
         C::SetCrossfader(..)
             | C::AutoCrossfade { .. }
             | C::BeatCrossfade { .. }
+            // Live macro-knob turn (fans out to targets; config edits stay undoable).
+            | C::SetMacroValue { .. }
             // Audio device lifecycle / scanning.
             | C::OpenAudioSource { .. }
             | C::CloseAudioSource { .. }
@@ -1629,6 +1821,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::RemoveDashLibraryEntry { .. }
             | C::AddRtmpLibraryEntry { .. }
             | C::RemoveRtmpLibraryEntry { .. }
+            | C::AddHtmlLibraryEntry { .. }
+            | C::RemoveHtmlLibraryEntry { .. }
             // Output-window lifecycle / device config (spec: ❌, excluded).
             // Surface→output *assignments* remain undoable (default true).
             | C::CreateOutput
@@ -1668,6 +1862,12 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::SetRenderResolution { .. }
             | C::SetTargetFps { .. }
             | C::StartPerfProfile { .. }
+            // Param toggle is a live keyboard/shortcut affordance (SetParam edits
+            // stay undoable; the two-value toggle does not pollute the timeline).
+            | C::ToggleParam { .. }
+            // Saving a preset writes to disk; loading one (structural) is undoable.
+            | C::SaveDeckPreset { .. }
+            | C::SaveChannelPreset { .. }
             // Persistence, history control, and shutdown are never undoable.
             | C::SaveWorkspace
             | C::LoadWorkspace
@@ -1716,5 +1916,123 @@ mod tests {
         assert!(!command_is_undoable(&C::Redo));
         assert!(!command_is_undoable(&C::SaveWorkspace));
         assert!(!command_is_undoable(&C::Shutdown));
+    }
+
+    // ── WS1: typed return channel (ui-engine-boundary.md) ──────────────
+    //
+    // These need a GPU adapter to build a real deck; they early-return when
+    // none is available (CI / sandbox), matching the engine_impl.rs tests.
+
+    use crate::engine::{CommandOutcome, CommandResult};
+    use clap::Parser as _;
+
+    fn headless_app() -> Option<super::VardaApp> {
+        let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
+        let config = super::super::AppConfig::parse_from([
+            "varda",
+            "--headless",
+            "--no-osc",
+            "--no-ndi",
+            "--no-syphon",
+        ]);
+        super::VardaApp::new(gpu, &config).ok()
+    }
+
+    #[test]
+    fn deck_add_command_returns_resolvable_uuid() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let result = app.execute_command(C::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [1.0, 0.0, 0.0, 1.0],
+        });
+        let CommandResult::OkWithId { uuid } = result else {
+            panic!("expected OkWithId, got {result:?}");
+        };
+        assert!(
+            app.mixer_ref().find_deck_by_uuid(&uuid).is_some(),
+            "created deck must be findable by the returned uuid"
+        );
+    }
+
+    #[test]
+    fn gui_deck_add_reports_location_and_matching_uuid() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let outcome = app.execute_command_gui(C::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [0.0, 1.0, 0.0, 1.0],
+        });
+        let CommandOutcome::DeckCreated {
+            channel_idx,
+            deck_idx,
+            uuid,
+        } = outcome
+        else {
+            panic!("expected DeckCreated, got {outcome:?}");
+        };
+        assert_eq!(channel_idx, 0);
+        assert_eq!(deck_idx, 0);
+        let slot_uuid = app.mixer_ref().channels()[channel_idx].decks[deck_idx]
+            .deck
+            .uuid()
+            .to_string();
+        assert_eq!(
+            slot_uuid, uuid,
+            "reported uuid must match the deck at the reported location"
+        );
+    }
+
+    #[test]
+    fn gui_undo_redo_roundtrips_a_structural_deck_add() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let layout = crate::usecases::ui::UILayoutState::default();
+        // Runner records the pre-mutation snapshot, then mutates.
+        let before = app.history_snapshot(&layout);
+        app.push_history(before);
+        app.execute_command(C::AddSolidColorDeck {
+            channel_idx: 0,
+            color: [0.0, 0.0, 1.0, 1.0],
+        });
+        assert_eq!(app.mixer_ref().channels()[0].decks.len(), 1);
+
+        let outcome = app.history_gui(&layout, true);
+        let CommandOutcome::HistoryRestored {
+            structural_changed, ..
+        } = outcome
+        else {
+            panic!("expected HistoryRestored, got {outcome:?}");
+        };
+        assert!(structural_changed, "adding a deck is a structural change");
+        assert_eq!(
+            app.mixer_ref().channels()[0].decks.len(),
+            0,
+            "undo must remove the added deck"
+        );
+
+        let outcome = app.history_gui(&layout, false);
+        assert!(matches!(outcome, CommandOutcome::HistoryRestored { .. }));
+        assert_eq!(
+            app.mixer_ref().channels()[0].decks.len(),
+            1,
+            "redo must restore the deck"
+        );
+    }
+
+    #[test]
+    fn gui_undo_on_empty_stack_is_plain_err() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let layout = crate::usecases::ui::UILayoutState::default();
+        let outcome = app.history_gui(&layout, true);
+        assert!(matches!(
+            outcome,
+            CommandOutcome::Plain(CommandResult::Err { .. })
+        ));
     }
 }

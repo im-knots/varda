@@ -1,14 +1,15 @@
 //! Surface editor and stage editor panels.
 
 use super::super::{
-    CameraDetectAction, CameraDetectMode, DomeAction, SurfaceAction, SurfaceUI, UIActions, UIData,
+    CameraDetectAction, CameraDetectMode, DomeAction, SurfaceUI, UIActions, UIData,
 };
 use super::geometry::polygon_shape;
+use crate::engine::EngineCommand;
 use crate::renderer::context::OutputSource;
 use crate::renderer::slicer::DomePreset;
 use crate::surface::detect::{DetectionMethod, HullMode};
 use crate::surface::{
-    CircleHint, ContentMapping, CubicHandle, PathSegment, SurfaceOutputType, SurfaceReorderOp,
+    ContentMapping, CubicHandle, PathSegment, SurfaceOutputType, SurfaceReorderOp,
 };
 
 /// Drag state for edge dragging:
@@ -182,7 +183,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             "✏ Open Editor"
         };
         if ui.button(editor_label).clicked() {
-            actions.toggle_stage_editor = true;
+            actions.session.toggle_stage_editor = true;
         }
     });
 
@@ -436,7 +437,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                     if data.surfaces.iter().any(|s| s.uuid == *uuid) {
                         let dx = nx - last_x;
                         let dy = ny - last_y;
-                        actions.surface_actions.push(SurfaceAction::MoveDelta {
+                        actions.commands.push(EngineCommand::MoveSurface {
                             uuid: uuid.clone(),
                             dx,
                             dy,
@@ -458,11 +459,13 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                         let mut new_verts = surface.vertices.clone();
                         if vert_idx < new_verts.len() {
                             new_verts[vert_idx] = [nx, ny];
-                            actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                uuid: uuid.clone(),
-                                contour: 0,
-                                vertices: new_verts,
-                            });
+                            actions
+                                .commands
+                                .push(EngineCommand::UpdateSurfaceContourVertices {
+                                    uuid: uuid.clone(),
+                                    contour: 0,
+                                    vertices: new_verts,
+                                });
                         }
                     }
                 }
@@ -495,7 +498,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("x").clicked() {
-                            actions.surface_actions.push(SurfaceAction::Remove {
+                            actions.commands.push(EngineCommand::RemoveSurface {
                                 uuid: surface.uuid.clone(),
                             });
                         }
@@ -508,7 +511,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 .on_hover_text("Move up (toward front)")
                                 .clicked()
                             {
-                                actions.surface_actions.push(SurfaceAction::Reorder {
+                                actions.commands.push(EngineCommand::ReorderSurface {
                                     uuid: surface.uuid.clone(),
                                     op: SurfaceReorderOp::Up,
                                 });
@@ -520,7 +523,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 .on_hover_text("Move down (toward back)")
                                 .clicked()
                             {
-                                actions.surface_actions.push(SurfaceAction::Reorder {
+                                actions.commands.push(EngineCommand::ReorderSurface {
                                     uuid: surface.uuid.clone(),
                                     op: SurfaceReorderOp::Down,
                                 });
@@ -551,7 +554,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 .selectable_label(surface.source == OutputSource::Master, "Master")
                                 .clicked()
                             {
-                                actions.surface_actions.push(SurfaceAction::SetSource {
+                                actions.commands.push(EngineCommand::SetSurfaceSource {
                                     uuid: surface.uuid.clone(),
                                     source: OutputSource::Master,
                                 });
@@ -582,7 +585,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                         1 => OutputSource::Channel(new_indices[0]),
                                         _ => OutputSource::Channels(new_indices),
                                     };
-                                    actions.surface_actions.push(SurfaceAction::SetSource {
+                                    actions.commands.push(EngineCommand::SetSurfaceSource {
                                         uuid: surface.uuid.clone(),
                                         source: new_source,
                                     });
@@ -607,8 +610,8 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 .clicked()
                             {
                                 actions
-                                    .surface_actions
-                                    .push(SurfaceAction::SetContentMapping {
+                                    .commands
+                                    .push(EngineCommand::SetSurfaceContentMapping {
                                         uuid: surface.uuid.clone(),
                                         mapping: ContentMapping::Fill,
                                     });
@@ -622,8 +625,8 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 .clicked()
                             {
                                 actions
-                                    .surface_actions
-                                    .push(SurfaceAction::SetContentMapping {
+                                    .commands
+                                    .push(EngineCommand::SetSurfaceContentMapping {
                                         uuid: surface.uuid.clone(),
                                         mapping: ContentMapping::Mapped,
                                     });
@@ -644,7 +647,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 )
                                 .clicked()
                             {
-                                actions.surface_actions.push(SurfaceAction::SetOutputType {
+                                actions.commands.push(EngineCommand::SetSurfaceOutputType {
                                     uuid: surface.uuid.clone(),
                                     output_type: SurfaceOutputType::Projection,
                                 });
@@ -656,7 +659,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                 )
                                 .clicked()
                             {
-                                actions.surface_actions.push(SurfaceAction::SetOutputType {
+                                actions.commands.push(EngineCommand::SetSurfaceOutputType {
                                     uuid: surface.uuid.clone(),
                                     output_type: SurfaceOutputType::LEDDirect,
                                 });
@@ -686,7 +689,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                             let ry =
                                 ui.add(egui::DragValue::new(&mut yv).speed(0.002).max_decimals(3));
                             if rx.changed() || ry.changed() {
-                                actions.surface_actions.push(SurfaceAction::MoveDelta {
+                                actions.commands.push(EngineCommand::MoveSurface {
                                     uuid: surface.uuid.clone(),
                                     dx: xv - x0,
                                     dy: yv - y0,
@@ -704,7 +707,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                             if rw.changed() || rh.changed() {
                                 let sx = if w0 > 1e-5 { wv.max(0.001) / w0 } else { 1.0 };
                                 let sy = if h0 > 1e-5 { hv.max(0.001) / h0 } else { 1.0 };
-                                actions.surface_actions.push(SurfaceAction::Scale {
+                                actions.commands.push(EngineCommand::ScaleSurface {
                                     uuid: surface.uuid.clone(),
                                     sx,
                                     sy,
@@ -846,7 +849,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         // Mode toggle + close stay on the tools row, pinned to the right.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("x Close Editor").clicked() {
-                actions.toggle_stage_editor = true;
+                actions.session.toggle_stage_editor = true;
             }
             ui.separator();
             let mode = if data.dome_mode_active {
@@ -859,14 +862,17 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .on_hover_text("2D Polygon mode")
                 .clicked()
             {
-                actions.dome_actions.push(DomeAction::SetMode(false));
+                actions
+                    .session
+                    .dome_actions
+                    .push(DomeAction::SetMode(false));
             }
             if ui
                 .selectable_label(mode == StageEditorMode::Dome3D, "🔮 3D Dome")
                 .on_hover_text("3D Dome mode")
                 .clicked()
             {
-                actions.dome_actions.push(DomeAction::SetMode(true));
+                actions.session.dome_actions.push(DomeAction::SetMode(true));
             }
         });
     });
@@ -891,8 +897,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
         {
             if let Some(source_uuid) = state.selected_surfaces.iter().next().cloned() {
                 actions
-                    .surface_actions
-                    .push(SurfaceAction::PunchHole { source_uuid });
+                    .commands
+                    .push(EngineCommand::PunchSurfaceHole { source_uuid });
                 state.selected_surfaces.clear();
             }
         }
@@ -906,7 +912,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             "🧲 Snap: OFF"
         };
         if ui.button(snap_label).clicked() {
-            actions.toggle_snap = true;
+            actions.session.toggle_snap = true;
         }
 
         // Grid size selector
@@ -922,7 +928,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             .show_ui(ui, |ui| {
                 for (size, label) in &grid_sizes {
                     if ui
-                        .selectable_value(&mut actions.set_grid_size, Some(*size), *label)
+                        .selectable_value(&mut actions.session.set_grid_size, Some(*size), *label)
                         .clicked()
                     {
                         // handled by set_grid_size
@@ -967,12 +973,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 )
                 .changed()
             {
-                actions
-                    .surface_actions
-                    .push(SurfaceAction::SetCircleRadius {
-                        uuid: sel_uuid.clone(),
-                        radius,
-                    });
+                actions.commands.push(EngineCommand::SetCircleRadius {
+                    uuid: sel_uuid.clone(),
+                    radius,
+                });
             }
             let mut sides = hint.sides;
             if ui
@@ -984,7 +988,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 )
                 .changed()
             {
-                actions.surface_actions.push(SurfaceAction::SetCircleSides {
+                actions.commands.push(EngineCommand::SetCircleSides {
                     uuid: sel_uuid.clone(),
                     sides,
                 });
@@ -995,8 +999,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .clicked()
             {
                 actions
-                    .surface_actions
-                    .push(SurfaceAction::ConvertToPolygon { uuid: sel_uuid });
+                    .commands
+                    .push(EngineCommand::ConvertSurfaceToPolygon { uuid: sel_uuid });
             }
         }
 
@@ -1011,8 +1015,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             {
                 for uuid in &state.selected_surfaces {
                     actions
-                        .surface_actions
-                        .push(SurfaceAction::Duplicate { uuid: uuid.clone() });
+                        .commands
+                        .push(EngineCommand::DuplicateSurface { uuid: uuid.clone() });
                 }
             }
             if ui
@@ -1022,8 +1026,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             {
                 for uuid in &state.selected_surfaces {
                     actions
-                        .surface_actions
-                        .push(SurfaceAction::FlipHorizontal { uuid: uuid.clone() });
+                        .commands
+                        .push(EngineCommand::FlipSurfaceHorizontal { uuid: uuid.clone() });
                 }
             }
             if ui
@@ -1033,8 +1037,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             {
                 for uuid in &state.selected_surfaces {
                     actions
-                        .surface_actions
-                        .push(SurfaceAction::FlipVertical { uuid: uuid.clone() });
+                        .commands
+                        .push(EngineCommand::FlipSurfaceVertical { uuid: uuid.clone() });
                 }
             }
             if state.selected_surfaces.len() >= 2
@@ -1045,8 +1049,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             {
                 let uuids: Vec<String> = state.selected_surfaces.iter().cloned().collect();
                 actions
-                    .surface_actions
-                    .push(SurfaceAction::Combine { uuids });
+                    .commands
+                    .push(EngineCommand::CombineSurfaces { uuids });
                 state.selected_surfaces.clear();
             }
             // Stacking order (8i.12): bring the selection to the very front/back.
@@ -1056,7 +1060,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .clicked()
             {
                 for uuid in &state.selected_surfaces {
-                    actions.surface_actions.push(SurfaceAction::Reorder {
+                    actions.commands.push(EngineCommand::ReorderSurface {
                         uuid: uuid.clone(),
                         op: SurfaceReorderOp::ToFront,
                     });
@@ -1068,7 +1072,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .clicked()
             {
                 for uuid in &state.selected_surfaces {
-                    actions.surface_actions.push(SurfaceAction::Reorder {
+                    actions.commands.push(EngineCommand::ReorderSurface {
                         uuid: uuid.clone(),
                         op: SurfaceReorderOp::ToBack,
                     });
@@ -1086,8 +1090,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .pick_file()
             {
                 actions
-                    .surface_actions
-                    .push(SurfaceAction::ImportFromFile { path });
+                    .commands
+                    .push(EngineCommand::ImportSurfacesFromFile { path });
             }
         }
 
@@ -1100,6 +1104,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .clicked()
             {
                 actions
+                    .session
                     .camera_detect_actions
                     .push(CameraDetectAction::Enter {
                         camera_id: active_cameras[0].1,
@@ -1125,6 +1130,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     for (name, cam_id) in active_cameras {
                         if ui.button(name).clicked() {
                             actions
+                                .session
                                 .camera_detect_actions
                                 .push(CameraDetectAction::Enter { camera_id: *cam_id });
                         }
@@ -1181,7 +1187,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             .selectable_value(&mut current_preset, *preset, format!("{}", preset))
                             .clicked()
                         {
-                            actions.dome_actions.push(DomeAction::SetPreset(*preset));
+                            actions
+                                .session
+                                .dome_actions
+                                .push(DomeAction::SetPreset(*preset));
                         }
                     }
                 });
@@ -1199,7 +1208,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 )
                 .changed()
             {
-                actions.dome_actions.push(DomeAction::SetRadius(radius));
+                actions
+                    .session
+                    .dome_actions
+                    .push(DomeAction::SetRadius(radius));
             }
 
             // Truncation angle slider
@@ -1214,7 +1226,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 )
                 .changed()
             {
-                actions.dome_actions.push(DomeAction::SetTruncation(trunc));
+                actions
+                    .session
+                    .dome_actions
+                    .push(DomeAction::SetTruncation(trunc));
             }
 
             // Tilt slider
@@ -1229,7 +1244,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 )
                 .changed()
             {
-                actions.dome_actions.push(DomeAction::SetTilt(tilt));
+                actions.session.dome_actions.push(DomeAction::SetTilt(tilt));
             }
 
             ui.separator();
@@ -1247,6 +1262,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .changed()
             {
                 actions
+                    .session
                     .dome_actions
                     .push(DomeAction::SetContentAzimuth(c_az));
             }
@@ -1263,6 +1279,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .changed()
             {
                 actions
+                    .session
                     .dome_actions
                     .push(DomeAction::SetContentElevation(c_el));
             }
@@ -1279,6 +1296,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .changed()
             {
                 actions
+                    .session
                     .dome_actions
                     .push(DomeAction::SetContentRoll(c_roll));
             }
@@ -1293,8 +1311,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             {
                 let setup = current_preset.to_setup_with_geometry(data.dome_geometry);
                 actions
-                    .surface_actions
-                    .push(SurfaceAction::GenerateDomeSlices { setup });
+                    .commands
+                    .push(EngineCommand::GenerateDomeSlices { setup });
             }
         });
     }
@@ -1907,7 +1925,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     let (_found_vertex, found_edge, _found_surface) = hit_test(nx, ny);
                     if let Some((uuid, _ci, ei, snap_pos)) = found_edge {
                         let snapped = [snap(snap_pos[0]), snap(snap_pos[1])];
-                        actions.surface_actions.push(SurfaceAction::InsertVertex {
+                        actions.commands.push(EngineCommand::InsertSurfaceVertex {
                             uuid: uuid.clone(),
                             after_vert_idx: ei,
                             position: snapped,
@@ -1977,8 +1995,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                     .is_some_and(|s| s.circle_hint.is_some())
                                 {
                                     actions
-                                        .surface_actions
-                                        .push(SurfaceAction::ConvertToPolygon {
+                                        .commands
+                                        .push(EngineCommand::ConvertSurfaceToPolygon {
                                             uuid: uuid.clone(),
                                         });
                                 }
@@ -2006,8 +2024,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                     let v1 = verts[ej];
                                     // Auto-convert circle to polygon before edge drag
                                     if surface.circle_hint.is_some() {
-                                        actions.surface_actions.push(
-                                            SurfaceAction::ConvertToPolygon { uuid: uuid.clone() },
+                                        actions.commands.push(
+                                            EngineCommand::ConvertSurfaceToPolygon {
+                                                uuid: uuid.clone(),
+                                            },
                                         );
                                     }
                                     if !shift_held {
@@ -2054,7 +2074,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     || state.dragging_edge.is_some()
                     || state.moving_surface.is_some()
                 {
-                    actions.gesture_active = true;
+                    actions.session.gesture_active = true;
                 }
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm(pos);
@@ -2069,7 +2089,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         }
                         for surf_uuid in &state.selected_surfaces {
                             if data.surfaces.iter().any(|s| s.uuid == *surf_uuid) {
-                                actions.surface_actions.push(SurfaceAction::Rotate {
+                                actions.commands.push(EngineCommand::RotateSurface {
                                     uuid: surf_uuid.clone(),
                                     angle: delta,
                                     pivot: rot.center,
@@ -2115,7 +2135,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         };
                         for surf_uuid in &state.selected_surfaces {
                             if data.surfaces.iter().any(|s| s.uuid == *surf_uuid) {
-                                actions.surface_actions.push(SurfaceAction::Scale {
+                                actions.commands.push(EngineCommand::ScaleSurface {
                                     uuid: surf_uuid.clone(),
                                     sx: dsx,
                                     sy: dsy,
@@ -2135,12 +2155,10 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                 let dx = nx - hint.center[0];
                                 let dy = ny - hint.center[1];
                                 let new_radius = (dx * dx + dy * dy).sqrt().max(0.01);
-                                actions
-                                    .surface_actions
-                                    .push(SurfaceAction::SetCircleRadius {
-                                        uuid: uuid.clone(),
-                                        radius: new_radius,
-                                    });
+                                actions.commands.push(EngineCommand::SetCircleRadius {
+                                    uuid: uuid.clone(),
+                                    radius: new_radius,
+                                });
                             }
                         }
                     } else if let Some((ref uuid, ci, vi)) = state.dragging_vertex {
@@ -2154,11 +2172,13 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                 let mut new_verts = verts.clone();
                                 if vi < new_verts.len() {
                                     new_verts[vi] = [nx, ny];
-                                    actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                        uuid: uuid.clone(),
-                                        contour: ci,
-                                        vertices: new_verts,
-                                    });
+                                    actions.commands.push(
+                                        EngineCommand::UpdateSurfaceContourVertices {
+                                            uuid: uuid.clone(),
+                                            contour: ci,
+                                            vertices: new_verts,
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -2186,11 +2206,13 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                     (orig_v1[0] + dx).clamp(0.0, 1.0),
                                     (orig_v1[1] + dy).clamp(0.0, 1.0),
                                 ];
-                                actions.surface_actions.push(SurfaceAction::UpdateVertices {
-                                    uuid: uuid.clone(),
-                                    contour: ci,
-                                    vertices: new_verts,
-                                });
+                                actions.commands.push(
+                                    EngineCommand::UpdateSurfaceContourVertices {
+                                        uuid: uuid.clone(),
+                                        contour: ci,
+                                        vertices: new_verts,
+                                    },
+                                );
                             }
                         }
                     } else if let Some((ref _uuid, lx, ly)) = state.moving_surface {
@@ -2199,7 +2221,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         // Move ALL selected surfaces by the same delta
                         for surf_uuid in &state.selected_surfaces {
                             if data.surfaces.iter().any(|s| s.uuid == *surf_uuid) {
-                                actions.surface_actions.push(SurfaceAction::MoveDelta {
+                                actions.commands.push(EngineCommand::MoveSurface {
                                     uuid: surf_uuid.clone(),
                                     dx,
                                     dy,
@@ -2297,7 +2319,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         let y1 = start[1].max(end[1]);
                         if (x1 - x0) > 0.01 && (y1 - y0) > 0.01 {
                             let idx = data.surfaces.len() + 1;
-                            actions.surface_actions.push(SurfaceAction::AddPolygon {
+                            actions.commands.push(EngineCommand::AddPolygonSurface {
                                 name: format!("Surface {}", idx),
                                 vertices: vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
                                 source: OutputSource::Master,
@@ -2333,7 +2355,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         if (dx * dx + dy * dy).sqrt() < close_threshold {
                             // Close polygon
                             let idx = data.surfaces.len() + 1;
-                            actions.surface_actions.push(SurfaceAction::AddPolygon {
+                            actions.commands.push(EngineCommand::AddPolygonSurface {
                                 name: format!("Surface {}", idx),
                                 vertices: state.polygon_verts.clone(),
                                 source: OutputSource::Master,
@@ -2351,7 +2373,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 // Finish polygon on double-click
                 if state.polygon_verts.len() >= 3 {
                     let idx = data.surfaces.len() + 1;
-                    actions.surface_actions.push(SurfaceAction::AddPolygon {
+                    actions.commands.push(EngineCommand::AddPolygonSurface {
                         name: format!("Surface {}", idx),
                         vertices: state.polygon_verts.clone(),
                         source: OutputSource::Master,
@@ -2385,14 +2407,12 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         let sides = state.circle_sides.max(3);
                         let aspect_ratio = canvas_width / canvas_height;
                         let idx = data.surfaces.len() + 1;
-                        actions.surface_actions.push(SurfaceAction::AddCircle {
+                        actions.commands.push(EngineCommand::AddCircleSurface {
                             name: format!("Surface {}", idx),
-                            hint: CircleHint {
-                                center,
-                                radius,
-                                sides,
-                                aspect_ratio,
-                            },
+                            center,
+                            radius,
+                            sides,
+                            aspect_ratio,
                             source: OutputSource::Master,
                         });
                     }
@@ -2498,7 +2518,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     let [nx, ny] = to_norm_raw(pos);
                     if hit_handle(nx, ny).is_none() && hit_anchor(nx, ny).is_none() {
                         if let Some((uuid, edge_idx, is_cubic)) = hit_edge(nx, ny) {
-                            actions.surface_actions.push(SurfaceAction::ConvertEdge {
+                            actions.commands.push(EngineCommand::ConvertSurfaceEdge {
                                 uuid: uuid.clone(),
                                 edge_idx,
                                 to_cubic: !is_cubic,
@@ -2532,19 +2552,19 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             if canvas_response.dragged() {
                 // Bezier anchor/handle drag is one undo gesture.
                 if state.dragging_handle.is_some() || state.dragging_anchor.is_some() {
-                    actions.gesture_active = true;
+                    actions.session.gesture_active = true;
                 }
                 if let Some(pos) = canvas_response.interact_pointer_pos() {
                     let [nx, ny] = to_norm_raw(pos);
                     if let Some((ref uuid, si, handle)) = state.dragging_handle {
-                        actions.surface_actions.push(SurfaceAction::MoveHandle {
+                        actions.commands.push(EngineCommand::MovePathHandle {
                             uuid: uuid.clone(),
                             segment_idx: si,
                             handle,
                             pos: [nx, ny],
                         });
                     } else if let Some((ref uuid, ai)) = state.dragging_anchor {
-                        actions.surface_actions.push(SurfaceAction::MoveAnchor {
+                        actions.commands.push(EngineCommand::MovePathAnchor {
                             uuid: uuid.clone(),
                             anchor_idx: ai,
                             pos: [nx, ny],
@@ -2584,7 +2604,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             let uuids: Vec<String> =
                                 state.selected_surfaces.iter().cloned().collect();
                             for uuid in uuids {
-                                actions.surface_actions.push(SurfaceAction::Remove { uuid });
+                                actions.commands.push(EngineCommand::RemoveSurface { uuid });
                             }
                             state.selected_surfaces.clear();
                         }
@@ -2592,22 +2612,22 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     KeyTarget::Action(ActionId::DuplicateSurface) => {
                         for uuid in &state.selected_surfaces {
                             actions
-                                .surface_actions
-                                .push(SurfaceAction::Duplicate { uuid: uuid.clone() });
+                                .commands
+                                .push(EngineCommand::DuplicateSurface { uuid: uuid.clone() });
                         }
                     }
                     KeyTarget::Action(ActionId::FlipHorizontal) => {
                         for uuid in &state.selected_surfaces {
                             actions
-                                .surface_actions
-                                .push(SurfaceAction::FlipHorizontal { uuid: uuid.clone() });
+                                .commands
+                                .push(EngineCommand::FlipSurfaceHorizontal { uuid: uuid.clone() });
                         }
                     }
                     KeyTarget::Action(ActionId::FlipVertical) => {
                         for uuid in &state.selected_surfaces {
                             actions
-                                .surface_actions
-                                .push(SurfaceAction::FlipVertical { uuid: uuid.clone() });
+                                .commands
+                                .push(EngineCommand::FlipSurfaceVertical { uuid: uuid.clone() });
                         }
                     }
                     KeyTarget::Action(ActionId::CombineSurfaces)
@@ -2615,8 +2635,8 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     {
                         let uuids: Vec<String> = state.selected_surfaces.iter().cloned().collect();
                         actions
-                            .surface_actions
-                            .push(SurfaceAction::Combine { uuids });
+                            .commands
+                            .push(EngineCommand::CombineSurfaces { uuids });
                         state.selected_surfaces.clear();
                     }
                     _ => {}
@@ -2675,7 +2695,7 @@ fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
             // Mouse interaction: orbit camera
             if response.dragged_by(egui::PointerButton::Primary) {
                 let delta = response.drag_delta();
-                actions.dome_actions.push(DomeAction::RotateCamera {
+                actions.session.dome_actions.push(DomeAction::RotateCamera {
                     delta_x: delta.x,
                     delta_y: delta.y,
                 });
@@ -2686,6 +2706,7 @@ fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll.abs() > 0.1 {
                     actions
+                        .session
                         .dome_actions
                         .push(DomeAction::ZoomCamera { delta: scroll });
                 }
@@ -2693,7 +2714,7 @@ fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions)
 
             // Right-click to reset camera
             if response.clicked_by(egui::PointerButton::Secondary) {
-                actions.dome_actions.push(DomeAction::ResetCamera);
+                actions.session.dome_actions.push(DomeAction::ResetCamera);
             }
 
             // Projector labels overlay
@@ -2918,8 +2939,12 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                 .show_ui(ui, |ui| {
                     for (name, cam_id) in &data.cameras {
                         if ui.selectable_label(*cam_id == *camera_id, name).clicked() {
-                            actions.camera_detect_actions.push(CameraDetectAction::Exit);
                             actions
+                                .session
+                                .camera_detect_actions
+                                .push(CameraDetectAction::Exit);
+                            actions
+                                .session
                                 .camera_detect_actions
                                 .push(CameraDetectAction::Enter { camera_id: *cam_id });
                         }
@@ -2934,6 +2959,7 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
             .clicked()
         {
             actions
+                .session
                 .camera_detect_actions
                 .push(CameraDetectAction::Capture);
         }
@@ -2942,12 +2968,16 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
             .on_hover_text("Exit detection mode")
             .clicked()
         {
-            actions.camera_detect_actions.push(CameraDetectAction::Exit);
+            actions
+                .session
+                .camera_detect_actions
+                .push(CameraDetectAction::Exit);
         }
     });
 
     if params_changed {
         actions
+            .session
             .camera_detect_actions
             .push(CameraDetectAction::UpdateParams(new_params));
     }
@@ -3046,6 +3076,7 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
             .clicked()
         {
             actions
+                .session
                 .camera_detect_actions
                 .push(CameraDetectAction::Accept);
         }
@@ -3054,7 +3085,10 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
             .on_hover_text("Return to live view")
             .clicked()
         {
-            actions.camera_detect_actions.push(CameraDetectAction::Exit);
+            actions
+                .session
+                .camera_detect_actions
+                .push(CameraDetectAction::Exit);
         }
         ui.separator();
 
@@ -3062,11 +3096,13 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
         if all_selected {
             if ui.button("Deselect All").clicked() {
                 actions
+                    .session
                     .camera_detect_actions
                     .push(CameraDetectAction::SelectAll(false));
             }
         } else if ui.button("Select All").clicked() {
             actions
+                .session
                 .camera_detect_actions
                 .push(CameraDetectAction::SelectAll(true));
         }
@@ -3142,6 +3178,7 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
                 );
                 if ui.checkbox(&mut is_sel, label).changed() {
                     actions
+                        .session
                         .camera_detect_actions
                         .push(CameraDetectAction::ToggleContour(i));
                 }
