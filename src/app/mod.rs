@@ -1045,8 +1045,9 @@ mod tests {
         .unwrap();
         app.process_commands();
         let result = reply_rx.blocking_recv().unwrap();
+        // Deck-creating commands report the new deck's UUID (ui-engine-boundary.md WS1).
         assert!(
-            matches!(result, crate::engine::CommandResult::Ok),
+            matches!(result, crate::engine::CommandResult::OkWithId { .. }),
             "command should succeed: {:?}",
             result
         );

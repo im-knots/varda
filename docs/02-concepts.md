@@ -2,7 +2,7 @@
 
 ## The Signal Flow
 
-Varda routes video through a five-layer hierarchy inspired by broadcast video switchers:
+Varda routes video through a five-layer hierarchy inspired by broadcast video switchers: **Sources → Decks → Channels → Mixer → Surfaces → Outputs**.
 
 ```
 [Deck] → [Deck FX] ─┐
@@ -14,25 +14,39 @@ Varda routes video through a five-layer hierarchy inspired by broadcast video sw
 [Deck] → [Deck FX] ─┘
 ```
 
+The simplest setup is two channels with a crossfader between them, output going fullscreen to a projector: load sources into decks, crossfade between channels. Add complexity — more channels, surfaces, sub-mixes — only as your use case needs it.
+
 ### Deck
 
-A single media source that produces a texture. Each deck has its own opacity, blend mode, and effect chain.
+A single media source (shader, video, image, solid color, camera, NDI stream, SRT stream, HLS/DASH stream, or RTMP stream) that produces a texture. Each deck has its own opacity, blend mode, effect chain, and auto-transition settings. Decks at zero opacity are culled from the render pass entirely — they cost nothing to render.
 
 ### Channel
 
-Composites multiple decks into a single layer. Each channel has its own effect chain applied after deck compositing. Channels are named numerically: 0, 1, 2, etc.
+Composites multiple decks into a single layer using per-deck opacity, blend modes, and optional auto-transitions. Each channel has its own effect chain applied after deck compositing. Channels are named numerically: 0, 1, 2, etc.
 
 ### Mixer
 
-Composites channels into the final output. With 2 channels, an A/B crossfader blends between them. With 3+ channels, per-channel opacity controls the mix. The mixer owns the master effect chain, tonemapping, and optional 3D LUT color grading.
+Composites channels into the final output. With 2 channels, an A/B crossfader blends between them. With 3+ channels, per-channel opacity and blend modes control the mix. The mixer owns the master effect chain, tonemapping, optional 3D LUT color grading, and a state-machine-driven multi-channel transition sequencer (see [Transition Sequences](04-performance.md#transition-sequences)).
 
 ### Surface
 
-A named polygon region in the stage editor. Each surface pulls content from a configurable source: Master (full mix), a specific Channel, a multi-Channel sub-mix, or the Domemaster output. Surfaces define *what content goes where* spatially.
+Surfaces are optional. Each is a named polygon region in the stage editor that pulls content from a configurable source: Master (full mix), a specific Channel, a multi-Channel sub-mix, or the Domemaster output. Surfaces define *what content goes where* spatially — they're how you map content onto physical screens, LED panels, or projection areas. When no surfaces are defined, outputs receive the full main mix directly.
 
 ### Output
 
-Renders assigned surfaces onto a display target — a monitor/projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. See [Outputs](07-outputs.md).
+Renders assigned surfaces onto a display target — a monitor/projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. Surfaces are assigned to outputs to complete the routing chain. See [Outputs](07-outputs.md).
+
+### Routing Flexibility
+
+At every junction you can branch, split, or re-route. Two channels feeding different surfaces on the same output. The main mix on one output, a single channel isolated on another. A sub-mix of specific channels to an NDI stream while the master goes to projection. You only use the complexity you need: simple A/B crossfading between two decks, a multi-channel mixing console with dedicated FX and transitions, or a complex multi-screen setup with individual content routing.
+
+### Clip Triggering Without Clip Triggering
+
+Most VJ software uses a clip-launch paradigm: press a button, a clip starts playing; press another, the previous one stops. Varda doesn't have clip triggers, but it doesn't need them, because the broadcast mixer model gives you the same result with more control.
+
+Load your sources into decks across your channels. What makes a deck live is its **opacity**. Map your MIDI controller buttons to deck mute or deck opacity. Press a button, a deck's opacity goes from 0 to 1, it's live. Press another, that deck goes to 0, it's gone. From the audience's perspective, you just triggered a clip. Under the hood, zero-opacity decks are **culled from the render pass entirely**, so they cost nothing. Only decks with non-zero opacity are actually rendered. When you bring a deck's opacity up, its source starts producing frames immediately. You're not "stopping and starting clips," you're mixing a live signal path where the GPU only pays for what's visible.
+
+This is how broadcast video works. A switcher doesn't start and stop cameras. Every camera is always hot, and the director cuts between them by routing signals onto buses. Varda applies the same idea: your decks are always ready, and you perform by controlling which signals are live in the mix. The result is instant transitions (no clip load latency), full MIDI control over the routing, and a mental model that scales.
 
 ---
 
@@ -135,20 +149,28 @@ Parameter paths use the format `deck/<uuid>/param/<name>`, `crossfader`, `ch/<uu
 
 ---
 
-## Persistence
+## The Varda workspace
+Varda treats the current working directory as a workspace. All state lives in a `.varda/` directory created automatically:
 
-All state is saved to the `.varda/` directory in the workspace root:
+```
+your-show/
+  .varda/
+    scene.json            # channels, decks, effects, modulation, crossfader, tonemap, LUT, transition sequences
+    stage.json            # surface layout, outputs, warp calibration
+    midi.json             # MIDI controller mappings that differ from the auto-mapped defaults
+    keymap.json           # keyboard shortcut bindings
+    osc.json              # OSC input port and feedback targets
+    presets/
+      decks/              # saved deck presets (JSON)
+      channels/           # saved channel presets (JSON)
+    shaders/              # ISF shaders
+    luts/                 # 3D LUT files (.cube, .3dl) for color grading
+    controller-profiles/  # MIDI controller profiles (JSON)
+    recordings/           # recording output files
+    streams/              # HLS/DASH output files
+```
 
-| File | Contents |
-|------|----------|
-| `scene.json` | Show state — channels, decks, effects, modulation, crossfader, tonemap mode, active LUT, transition sequences |
-| `stage.json` | Venue state — surface layout, outputs, warp calibration, editor preferences |
-| `midi.json` | MIDI controller mappings (device-name-keyed) |
-| `keymap.json` | Keyboard shortcut bindings |
-| `osc.json` | OSC input port and feedback targets |
-| `presets/` | Saved deck and channel presets |
-| `luts/` | 3D LUT files (.cube, .3dl) for color grading |
-| `controller-profiles/` | Custom MIDI controller profiles (JSON) |
+Run Varda from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
 
 Save with **Cmd+S** or auto-save on clean exit. Reload everything at a different venue — the scene (your show) is separate from the stage (the venue's physical layout).
 

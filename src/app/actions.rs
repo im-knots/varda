@@ -4,90 +4,49 @@
 //! since they mutate engine-owned state (mixer, surfaces, outputs, etc.).
 
 use super::VardaApp;
-use crate::deck::Deck;
-use crate::engine::EngineCommand;
+use crate::engine::{CommandOutcome, CommandResult, EngineCommand};
 use crate::usecases::ui;
+use std::collections::HashMap;
 
 impl VardaApp {
     /// Apply UI-driven engine state changes: MIDI learn, notifications.
     /// Selection and layout state is handled by the UI consumer (UIRunner).
     pub fn apply_ui_actions(&mut self, ui_actions: &ui::UIActions) {
         // MIDI learn
-        if ui_actions.midi_learn_toggle {
+        if ui_actions.session.midi_learn_toggle {
             self.input.midi_mappings.toggle_learn();
             // Mutually exclusive: exit keyboard learn when entering MIDI learn
             if self.input.midi_mappings.learn_mode {
                 self.input.keymap.cancel_learn();
             }
         }
-        if let Some(ref path) = ui_actions.midi_learn_select {
+        if let Some(ref path) = ui_actions.session.midi_learn_select {
             self.input.midi_mappings.select_learn_target(path.clone());
         }
 
         // Keyboard learn
-        if ui_actions.keyboard_learn_toggle {
+        if ui_actions.session.keyboard_learn_toggle {
             self.input.keymap.toggle_learn();
             // Mutually exclusive: exit MIDI learn when entering keyboard learn
             if self.input.keymap.learn_mode {
                 self.input.midi_mappings.cancel_learn();
             }
         }
-        if let Some(ref target) = ui_actions.keyboard_learn_select {
+        if let Some(ref target) = ui_actions.session.keyboard_learn_select {
             self.input.keymap.select_learn_target(target.clone());
         }
-        if let Some(ref combo) = ui_actions.keyboard_learn_bind {
+        if let Some(ref combo) = ui_actions.session.keyboard_learn_bind {
             self.input.keymap.process_learn(combo.clone());
         }
 
-        // Keyboard param toggle
-        if let Some(ref path) = ui_actions.keyboard_param_toggle {
-            crate::keymap::apply_keyboard_toggle_param(&mut self.mixer, path);
-        }
-
-        let mut dismissals = ui_actions.notifications_to_dismiss.clone();
+        let mut dismissals = ui_actions.session.notifications_to_dismiss.clone();
         dismissals.sort_unstable_by(|a, b| b.cmp(a));
         for idx in dismissals {
             self.session.notifications.dismiss(idx);
         }
 
-        for msg in &ui_actions.info_notifications {
+        for msg in &ui_actions.session.info_notifications {
             self.session.notifications.info(msg);
-        }
-    }
-
-    /// Apply macro-control intents from the macro strip. Config edits mutate the
-    /// macro bank (undo captured upstream via the scene snapshot); `SetValue`
-    /// drives the macro live through the parameter router.
-    fn apply_macro_actions(&mut self, ui_actions: &ui::UIActions) {
-        use crate::engine::traits::MacroCommands;
-        for action in &ui_actions.macro_actions {
-            match action {
-                ui::MacroAction::Add { kind } => {
-                    self.add_macro(*kind);
-                }
-                ui::MacroAction::Remove { uuid } => self.remove_macro(uuid),
-                ui::MacroAction::Rename { uuid, name } => self.rename_macro(uuid, name),
-                ui::MacroAction::SetKind { uuid, kind } => self.set_macro_kind(uuid, *kind),
-                ui::MacroAction::SetValue { uuid, value } => self.set_macro_value(uuid, *value),
-                ui::MacroAction::AddTarget { uuid, path } => self.add_macro_target(uuid, path),
-                ui::MacroAction::RemoveTarget { uuid, target_idx } => {
-                    self.remove_macro_target(uuid, *target_idx)
-                }
-                ui::MacroAction::UpdateTarget {
-                    uuid,
-                    target_idx,
-                    min,
-                    max,
-                    curve,
-                    invert,
-                } => self.update_macro_target(uuid, *target_idx, *min, *max, *curve, *invert),
-                ui::MacroAction::SetButtonBehavior { uuid, behavior } => {
-                    self.set_macro_button_behavior(uuid, *behavior)
-                }
-                ui::MacroAction::SetTriggers { uuid, actions } => {
-                    self.set_macro_triggers(uuid, actions.clone())
-                }
-            }
         }
     }
 
@@ -96,239 +55,169 @@ impl VardaApp {
     /// `egui_renderer` and `deck_preview_textures` are passed in because they are
     /// egui-specific state owned by the window layer.
     ///
-    /// Returns the index of a removed channel (if any) so the UI consumer can
-    /// fix up selection state.
+    /// Returns an [`EngineActionsOutcome`] carrying the GUI post-steps the runner
+    /// must apply after the drain: the removed channel index (selection fixup)
+    /// and whether the render resolution changed (egui texture re-point).
     pub fn apply_engine_actions(
         &mut self,
         ui_actions: &mut ui::UIActions,
         egui_renderer: &mut egui_wgpu::Renderer,
         deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
-    ) -> Option<usize> {
-        use crate::usecases::ui::CrossfaderAction;
-
-        // Crossfader — route through execute_command
-        if let Some(action) = &ui_actions.crossfader_action {
-            let cmd = match action {
-                CrossfaderAction::SetPosition(pos) => EngineCommand::SetCrossfader(*pos),
-                CrossfaderAction::SnapA => EngineCommand::SetCrossfader(0.0),
-                CrossfaderAction::SnapB => EngineCommand::SetCrossfader(1.0),
-                CrossfaderAction::AutoTransition {
-                    target,
-                    duration_secs,
-                    easing,
-                } => EngineCommand::AutoCrossfade {
-                    target: *target,
-                    duration_secs: *duration_secs,
-                    easing: *easing,
-                },
-                CrossfaderAction::BeatTransition { target, beats } => {
-                    EngineCommand::BeatCrossfade {
-                        target: *target,
-                        beats: *beats,
-                    }
-                }
-            };
-            self.execute_command(cmd);
-        }
-
-        // Tonemap mode
-        if let Some(mode) = ui_actions.set_tonemap_mode {
-            self.execute_command(EngineCommand::SetTonemapMode(mode));
-        }
-
-        // LUT load/unload
-        if let Some(filename) = ui_actions.load_lut.take() {
-            self.execute_command(EngineCommand::LoadLut { filename });
-        }
-        if ui_actions.unload_lut {
-            self.execute_command(EngineCommand::UnloadLut);
-        }
-
-        // Channel updates — route through execute_command
-        for &(ch_idx, opacity, blend_mode) in &ui_actions.channel_updates {
-            self.execute_command(EngineCommand::SetChannelOpacity {
-                channel_idx: ch_idx,
-                opacity,
-            });
-            self.execute_command(EngineCommand::SetChannelBlendMode {
-                channel_idx: ch_idx,
-                mode: blend_mode,
-            });
-        }
-
-        // Deck updates — route through execute_command
-        for &(ch_idx, deck_idx, opacity, blend_mode, solo, mute) in &ui_actions.deck_updates {
-            self.execute_command(EngineCommand::SetDeckOpacity {
-                channel_idx: ch_idx,
-                deck_idx,
-                opacity,
-            });
-            self.execute_command(EngineCommand::SetDeckBlendMode {
-                channel_idx: ch_idx,
-                deck_idx,
-                mode: blend_mode,
-            });
-            self.execute_command(EngineCommand::SetDeckSolo {
-                channel_idx: ch_idx,
-                deck_idx,
-                solo,
-            });
-            self.execute_command(EngineCommand::SetDeckMute {
-                channel_idx: ch_idx,
-                deck_idx,
-                mute,
-            });
-        }
-
-        // Scaling mode — route through execute_command
-        for &(ch_idx, deck_idx, mode) in &ui_actions.scaling_mode_updates {
-            self.execute_command(EngineCommand::SetDeckScalingMode {
-                channel_idx: ch_idx,
-                deck_idx,
-                mode,
-            });
-        }
-
-        // Transparent compositing toggle — route through execute_command
-        for &(ch_idx, deck_idx, transparent) in &ui_actions.transparent_updates {
-            self.execute_command(EngineCommand::SetDeckTransparent {
-                channel_idx: ch_idx,
-                deck_idx,
-                transparent,
-            });
-        }
-
-        // Render FPS updates — route through execute_command
-        for &(ch_idx, deck_idx, render_fps) in &ui_actions.render_fps_updates {
-            self.execute_command(EngineCommand::SetDeckRenderFps {
-                channel_idx: ch_idx,
-                deck_idx,
-                render_fps,
-            });
-        }
-
-        // HTML deck reload — route through execute_command
-        for &(ch_idx, deck_idx) in &ui_actions.html_to_reload {
-            self.execute_command(EngineCommand::ReloadHtmlDeck {
-                channel_idx: ch_idx,
-                deck_idx,
-            });
-        }
-
-        // HTML interactive window open/close — route through execute_command
-        for &(ch_idx, deck_idx, open) in &ui_actions.html_set_interactive {
-            let cmd = if open {
-                EngineCommand::OpenHtmlInteractive {
-                    channel_idx: ch_idx,
-                    deck_idx,
-                }
-            } else {
-                EngineCommand::CloseHtmlInteractive
-            };
-            self.execute_command(cmd);
-        }
-
-        // Complex mutations — VardaApp methods
-        self.apply_video_actions(ui_actions);
-        self.apply_auto_transition_actions(ui_actions);
-        self.apply_param_updates(ui_actions);
-        self.apply_modulation_actions(ui_actions);
-        self.apply_macro_actions(ui_actions);
-        self.apply_sequence_actions(ui_actions);
-
-        // Channel add first — new channel must exist before deck/effect adds target it
-        self.apply_add_channel(ui_actions);
-
-        // Deck/effect add/remove (needs egui texture management)
-        self.apply_deck_and_effect_actions(ui_actions, egui_renderer, deck_preview_textures);
-
-        // Transition shader — route through execute_command
-        if let Some(transition_opt) = &ui_actions.set_transition {
-            self.execute_command(EngineCommand::SetTransition {
-                shader_name: transition_opt.clone(),
-            });
-        }
-
-        // Camera add + channel remove
-        self.apply_camera_add(ui_actions, egui_renderer, deck_preview_textures);
-
-        self.apply_remove_channel(ui_actions)
-    }
-
-    fn apply_add_channel(&mut self, ui_actions: &ui::UIActions) {
-        if !ui_actions.add_channel {
-            return;
-        }
-        self.execute_command(EngineCommand::AddChannel);
-    }
-
-    fn apply_camera_add(
-        &mut self,
-        ui_actions: &mut ui::UIActions,
-        egui_renderer: &mut egui_wgpu::Renderer,
-        deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
-    ) {
-        let Some((ch_idx, camera_id)) = ui_actions.camera_to_add.take() else {
-            return;
-        };
-
-        let cam_name = self
-            .camera_manager
-            .devices()
-            .iter()
-            .find(|d| d.id == camera_id)
-            .map(|d| d.name.clone())
-            .unwrap_or_else(|| format!("Camera {}", camera_id));
-
-        match self
-            .camera_manager
-            .open_camera(camera_id, &self.context.device)
-        {
-            Ok((src_w, src_h)) => {
-                match Deck::new_from_camera(
-                    &self.context,
-                    camera_id,
-                    &cam_name,
-                    src_w,
-                    src_h,
-                    self.render_width,
-                    self.render_height,
-                ) {
-                    Ok(deck) => {
-                        if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                            let idx = ch.add_deck(deck);
-                            log::info!(
-                                "Added camera deck {} to channel {}: {}",
-                                idx,
-                                ch_idx,
-                                cam_name
-                            );
-                            let texture_id = egui_renderer.register_native_texture(
-                                &self.context.device,
-                                &ch.decks[idx].deck.texture_view,
-                                wgpu::FilterMode::Linear,
-                            );
-                            deck_preview_textures.insert((ch_idx, idx), texture_id);
-                            self.session.notifications.info(format!(
-                                "📹 Camera '{}' added to Ch {}",
-                                cam_name,
-                                ch_idx + 1
-                            ));
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to create camera deck: {}", e);
-                        self.session
-                            .notifications
-                            .error(format!("Failed to create camera deck: {}", e));
-                    }
-                }
+    ) -> EngineActionsOutcome {
+        // ── Unified command stream (WS2) ──────────────────────────────────
+        // Panels push `EngineCommand`s directly; drain them through the same
+        // dispatch as the bus. Ordering within the vec is preserved, so a
+        // new-channel library drop enqueues `AddChannel` before its `Add*Deck`
+        // and the deck resolves against the freshly created channel. Deck-
+        // creating commands register their preview texture + emit a toast;
+        // structural changes (remove/move/reorder, preset load) reindex the
+        // channel's textures — all via the typed `CommandOutcome`.
+        let mut resolution_changed = false;
+        let commands = std::mem::take(&mut ui_actions.commands);
+        for cmd in commands {
+            let is_deck_add = command_is_deck_add(&cmd);
+            // A resolution change recreates every GPU texture; flag it so the
+            // runner re-points its egui texture registrations after the drain.
+            let is_resolution_change = matches!(
+                &cmd,
+                EngineCommand::SetRenderResolution { width, height }
+                    if *width > 0
+                        && *height > 0
+                        && (*width != self.render_width || *height != self.render_height)
+            );
+            let outcome = self.execute_command_gui(cmd);
+            self.apply_deck_texture_outcome(&outcome, egui_renderer, deck_preview_textures);
+            if is_deck_add {
+                self.notify_deck_add_outcome(&outcome);
             }
-            Err(e) => {
-                log::error!("Failed to open camera '{}': {}", cam_name, e);
+            if is_resolution_change {
+                resolution_changed = true;
+            }
+        }
+
+        EngineActionsOutcome {
+            removed_channel: self.apply_remove_channel(ui_actions),
+            resolution_changed,
+        }
+    }
+
+    /// Emit the GUI toast for a deck-creating command's outcome — the egui-side
+    /// post-step that mirrors the old `dispatch_source_deck_add`. The engine
+    /// logic lives in the command; this only surfaces success/failure to the
+    /// notification center (texture registration is done separately by
+    /// `apply_deck_texture_outcome`).
+    fn notify_deck_add_outcome(&mut self, outcome: &CommandOutcome) {
+        match outcome {
+            CommandOutcome::DeckCreated {
+                channel_idx,
+                deck_idx,
+                ..
+            } => {
+                let name = self
+                    .mixer
+                    .channels()
+                    .get(*channel_idx)
+                    .and_then(|ch| ch.decks.get(*deck_idx))
+                    .map(|slot| slot.deck.source_name().to_string())
+                    .unwrap_or_default();
                 self.session
                     .notifications
-                    .error(format!("Failed to open camera '{}': {}", cam_name, e));
+                    .info(format!("➕ {} → Ch {}", name, channel_idx + 1));
+            }
+            CommandOutcome::Plain(CommandResult::Err { message, .. }) => {
+                log::error!("Failed to add deck: {}", message);
+                self.session
+                    .notifications
+                    .error(format!("Failed to add deck: {}", message));
+            }
+            _ => {}
+        }
+    }
+
+    /// Apply the egui texture post-step for a GUI command outcome: register the
+    /// created deck's preview, or refresh the index-keyed map for channels whose
+    /// deck indices shifted (remove/move/reorder).
+    pub(crate) fn apply_deck_texture_outcome(
+        &self,
+        outcome: &CommandOutcome,
+        egui_renderer: &mut egui_wgpu::Renderer,
+        deck_preview_textures: &mut HashMap<(usize, usize), egui::TextureId>,
+    ) {
+        match outcome {
+            CommandOutcome::DeckCreated {
+                channel_idx,
+                deck_idx,
+                ..
+            } => {
+                self.register_deck_preview_texture(
+                    *channel_idx,
+                    *deck_idx,
+                    egui_renderer,
+                    deck_preview_textures,
+                );
+            }
+            CommandOutcome::DecksReindexed { channels } => {
+                for &ch in channels {
+                    self.reregister_channel_preview_textures(
+                        ch,
+                        egui_renderer,
+                        deck_preview_textures,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Register a single deck's preview texture at `(channel_idx, deck_idx)`.
+    pub(crate) fn register_deck_preview_texture(
+        &self,
+        channel_idx: usize,
+        deck_idx: usize,
+        egui_renderer: &mut egui_wgpu::Renderer,
+        deck_preview_textures: &mut HashMap<(usize, usize), egui::TextureId>,
+    ) {
+        if let Some(slot) = self
+            .mixer
+            .channels()
+            .get(channel_idx)
+            .and_then(|ch| ch.decks.get(deck_idx))
+        {
+            let texture_id = egui_renderer.register_native_texture(
+                &self.context.device,
+                &slot.deck.texture_view,
+                wgpu::FilterMode::Linear,
+            );
+            deck_preview_textures.insert((channel_idx, deck_idx), texture_id);
+        }
+    }
+
+    /// Free and re-register every preview texture for `channel_idx`, keeping the
+    /// index-keyed map consistent after deck indices shift.
+    pub(crate) fn reregister_channel_preview_textures(
+        &self,
+        channel_idx: usize,
+        egui_renderer: &mut egui_wgpu::Renderer,
+        deck_preview_textures: &mut HashMap<(usize, usize), egui::TextureId>,
+    ) {
+        let stale: Vec<(usize, usize)> = deck_preview_textures
+            .keys()
+            .filter(|(c, _)| *c == channel_idx)
+            .copied()
+            .collect();
+        for key in stale {
+            if let Some(tex_id) = deck_preview_textures.remove(&key) {
+                egui_renderer.free_texture(&tex_id);
+            }
+        }
+        if let Some(ch) = self.mixer.channels().get(channel_idx) {
+            for (deck_idx, slot) in ch.decks.iter().enumerate() {
+                let texture_id = egui_renderer.register_native_texture(
+                    &self.context.device,
+                    &slot.deck.texture_view,
+                    wgpu::FilterMode::Linear,
+                );
+                deck_preview_textures.insert((channel_idx, deck_idx), texture_id);
             }
         }
     }
@@ -336,7 +225,7 @@ impl VardaApp {
     /// Returns the index of the removed channel (if any) so the UI consumer
     /// can fix up selection state.
     fn apply_remove_channel(&mut self, ui_actions: &ui::UIActions) -> Option<usize> {
-        let ch_idx = ui_actions.remove_channel?;
+        let ch_idx = ui_actions.session.remove_channel?;
         let result = self.execute_command(EngineCommand::RemoveChannel {
             channel_idx: ch_idx,
         });
@@ -345,80 +234,6 @@ impl VardaApp {
             _ => None,
         }
     }
-
-    /// Apply resolution change from UI. Returns true if resolution was changed
-    /// (caller must re-register egui textures).
-    pub fn apply_resolution_change(&mut self, ui_actions: &ui::UIActions) -> bool {
-        if let Some((w, h)) = ui_actions.resolution_change {
-            if w > 0 && h > 0 && (w != self.render_width || h != self.render_height) {
-                self.execute_command(EngineCommand::SetRenderResolution {
-                    width: w,
-                    height: h,
-                });
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Apply target FPS change from UI.
-    pub fn apply_target_fps_change(&mut self, ui_actions: &ui::UIActions) {
-        if let Some(fps) = ui_actions.target_fps_change {
-            self.execute_command(EngineCommand::SetTargetFps { fps });
-        }
-    }
-
-    /// Apply clock preference changes from UI.
-    pub fn apply_clock_actions(&mut self, ui_actions: &ui::UIActions) {
-        if let Some(ref pref) = ui_actions.clock_preference {
-            self.execute_command(EngineCommand::SetClockPreference {
-                preference: pref.clone(),
-            });
-        }
-        if let Some(bpm) = ui_actions.manual_bpm {
-            self.execute_command(EngineCommand::SetManualBpm { bpm });
-        }
-    }
-
-    /// Apply MIDI/audio/camera/NDI/Syphon device actions from UI.
-    pub fn apply_device_actions(&mut self, ui_actions: &ui::UIActions) {
-        if ui_actions.camera_rescan {
-            self.execute_command(EngineCommand::RescanCameras);
-        }
-        if ui_actions.audio_rescan {
-            self.execute_command(EngineCommand::RescanAudio);
-        }
-        for (source_id, enabled) in &ui_actions.audio_source_toggles {
-            self.execute_command(EngineCommand::ToggleAudioSource {
-                source_id: *source_id,
-                enabled: *enabled,
-            });
-        }
-        if ui_actions.midi_rescan {
-            self.execute_command(EngineCommand::RescanMidi);
-        }
-        for (dev_id, enabled) in &ui_actions.midi_device_toggles {
-            self.execute_command(EngineCommand::SetMidiDeviceEnabled {
-                device_id: *dev_id,
-                enabled: *enabled,
-            });
-        }
-        if ui_actions.midi_clear_mappings {
-            self.execute_command(EngineCommand::ClearMidiMappings);
-        }
-        for key in &ui_actions.midi_remove_mapping {
-            self.execute_command(EngineCommand::RemoveMidiMapping { key: *key });
-        }
-        if ui_actions.ndi_rescan {
-            self.execute_command(EngineCommand::RescanNdi);
-        }
-        #[cfg(target_os = "macos")]
-        if ui_actions.syphon_rescan {
-            self.execute_command(EngineCommand::RescanSyphon);
-        }
-    }
-
-    // Recording/SRT start/stop is now handled per-output in apply_output_actions()
 
     /// Update controller LEDs based on current state.
     pub fn update_controller_leds(&mut self) {
@@ -433,4 +248,34 @@ impl VardaApp {
             self.input.auto_map_engine.update_leds(mgr, &self.mixer);
         }
     }
+}
+
+/// GUI post-steps the runner applies after [`VardaApp::apply_engine_actions`]:
+/// selection fixup for a removed channel and egui texture re-point after a
+/// render-resolution change (both need window-layer state the engine can't touch).
+pub struct EngineActionsOutcome {
+    /// Index of a channel removed this frame (for UI selection fixup).
+    pub removed_channel: Option<usize>,
+    /// Whether the render resolution changed (recreated GPU textures).
+    pub resolution_changed: bool,
+}
+
+/// True for the deck-creating commands the GUI drain toasts + registers a
+/// preview texture for. Mirrors the deck-add arm list in `execute_command_gui`.
+fn command_is_deck_add(cmd: &EngineCommand) -> bool {
+    matches!(
+        cmd,
+        EngineCommand::AddDeck { .. }
+            | EngineCommand::AddImageDeck { .. }
+            | EngineCommand::AddVideoDeck { .. }
+            | EngineCommand::AddSolidColorDeck { .. }
+            | EngineCommand::AddCameraDeck { .. }
+            | EngineCommand::AddNdiDeck { .. }
+            | EngineCommand::AddSyphonDeck { .. }
+            | EngineCommand::AddSrtDeck { .. }
+            | EngineCommand::AddHlsDeck { .. }
+            | EngineCommand::AddDashDeck { .. }
+            | EngineCommand::AddRtmpDeck { .. }
+            | EngineCommand::AddHtmlDeck { .. }
+    )
 }

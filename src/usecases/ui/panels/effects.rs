@@ -1,11 +1,10 @@
 //! Master and channel effect detail panels.
 
-use super::super::{
-    widgets, EffectDrag, LibraryDrag, ModulationAction, ParamUpdate, UIActions, UIData,
-};
+use super::super::{widgets, EffectDrag, LibraryDrag, UIActions, UIData};
 use super::utils::{
     channel_color, render_effect_drag_ghost, render_effect_drag_handle, render_effect_drop_zone,
 };
+use crate::engine::{EffectTarget, EngineCommand};
 use crate::params::ParamValue;
 
 pub(super) fn render_master_effect_detail(
@@ -53,7 +52,12 @@ pub(super) fn render_master_effect_detail(
                                                 );
                                                 let mut enabled = *eff_enabled;
                                                 if ui.checkbox(&mut enabled, "").changed() {
-                                                    actions.master_effect_to_toggle = Some(eff_idx);
+                                                    actions.commands.push(
+                                                        EngineCommand::ToggleEffect {
+                                                            target: EffectTarget::Master,
+                                                            effect_idx: eff_idx,
+                                                        },
+                                                    );
                                                 }
                                                 ui.label(egui::RichText::new(eff_name).strong());
                                             });
@@ -66,57 +70,43 @@ pub(super) fn render_master_effect_detail(
                                                     ui,
                                                     &eff_params.params,
                                                     &data.modulation_sources,
-                                                    &|name: &str, val: ParamValue| match val {
-                                                        ParamValue::Float(v) => {
-                                                            ParamUpdate::MasterEffectFloat {
-                                                                effect_idx: eff_idx_copy,
-                                                                name: name.to_string(),
-                                                                value: v,
-                                                            }
+                                                    &|name: &str, val: ParamValue| {
+                                                        EngineCommand::SetMasterEffectParam {
+                                                            effect_idx: eff_idx_copy,
+                                                            name: name.to_string(),
+                                                            value: val,
                                                         }
-                                                        ParamValue::Bool(v) => {
-                                                            ParamUpdate::MasterEffectBool {
-                                                                effect_idx: eff_idx_copy,
-                                                                name: name.to_string(),
-                                                                value: v,
-                                                            }
-                                                        }
-                                                        ParamValue::Color(v) => {
-                                                            ParamUpdate::MasterEffectColor {
-                                                                effect_idx: eff_idx_copy,
-                                                                name: name.to_string(),
-                                                                value: v,
-                                                            }
-                                                        }
-                                                        _ => unreachable!(),
                                                     },
                                                     Some(&|name: &str, source_uuid: &str| {
-                                                        ModulationAction::AssignEffectModulation {
-                                                            effect_uuid: eff_uuid_master.clone(),
-                                                            param_name: name.to_string(),
+                                                        EngineCommand::AssignModulation {
+                                                            target: format!(
+                                                                "fx_{}:{}",
+                                                                eff_uuid_master, name
+                                                            ),
                                                             source_id: source_uuid.to_string(),
                                                             amount: 0.5,
                                                         }
                                                     }),
                                                     Some(&|name: &str| {
-                                                        ModulationAction::RemoveEffectAssignment {
-                                                            effect_uuid: eff_uuid_master_remove
-                                                                .clone(),
-                                                            param_name: name.to_string(),
+                                                        EngineCommand::ClearModulation {
+                                                            target: format!(
+                                                                "fx_{}:{}",
+                                                                eff_uuid_master_remove, name
+                                                            ),
                                                         }
                                                     }),
-                                                    &mut actions.param_updates,
-                                                    &mut actions.modulation_actions,
+                                                    &mut actions.commands,
+                                                    &mut actions.session.gesture_active,
                                                     &format!("master_fx_{}", eff_idx_copy),
                                                     Some(&midi_prefix),
                                                     data.midi_learn_active,
-                                                    &mut actions.midi_learn_select,
+                                                    &mut actions.session.midi_learn_select,
                                                     data.midi_learn_target.as_deref(),
                                                     &data.modulation_assignments,
                                                     &data.modulation_current_values,
                                                     &format!("fx_{}", eff_uuid),
                                                     data.keyboard_learn_active,
-                                                    &mut actions.keyboard_learn_select,
+                                                    &mut actions.session.keyboard_learn_select,
                                                     data.keyboard_learn_target.as_deref(),
                                                 );
                                             }
@@ -145,7 +135,10 @@ pub(super) fn render_master_effect_detail(
                                 color,
                             );
                             if btn_resp.clicked() {
-                                actions.master_effect_to_remove = Some(eff_idx);
+                                actions.commands.push(EngineCommand::RemoveEffect {
+                                    target: EffectTarget::Master,
+                                    effect_idx: eff_idx,
+                                });
                             }
                         }
                         render_effect_drag_ghost(
@@ -239,7 +232,10 @@ pub(super) fn render_channel_effect_detail(
                 ui.data_mut(|d| d.insert_temp(cleared_id, true));
             }
             if ui.small_button("✓ Save").clicked() && !name.is_empty() {
-                actions.save_channel_preset = Some((ch_idx, name.clone()));
+                actions.commands.push(EngineCommand::SaveChannelPreset {
+                    channel_idx: ch_idx,
+                    name: name.clone(),
+                });
                 ui.data_mut(|d| d.insert_temp(prompt_id, false));
             }
             if ui.small_button("✕").clicked() {
@@ -314,8 +310,12 @@ pub(super) fn render_channel_effect_detail(
                                                 );
                                                 let mut enabled = *eff_enabled;
                                                 if ui.checkbox(&mut enabled, "").changed() {
-                                                    actions.ch_effect_to_toggle =
-                                                        Some((ch_idx, eff_idx));
+                                                    actions.commands.push(
+                                                        EngineCommand::ToggleEffect {
+                                                            target: EffectTarget::Channel(ch_idx),
+                                                            effect_idx: eff_idx,
+                                                        },
+                                                    );
                                                 }
                                                 ui.label(
                                                     egui::RichText::new(eff_name)
@@ -335,59 +335,44 @@ pub(super) fn render_channel_effect_detail(
                                                     ui,
                                                     &eff_params.params,
                                                     &data.modulation_sources,
-                                                    &|name: &str, val: ParamValue| match val {
-                                                        ParamValue::Float(v) => {
-                                                            ParamUpdate::ChannelEffectFloat {
-                                                                ch_idx: ch_copy,
-                                                                effect_idx: eff_idx_copy,
-                                                                name: name.to_string(),
-                                                                value: v,
-                                                            }
+                                                    &|name: &str, val: ParamValue| {
+                                                        EngineCommand::SetChannelEffectParam {
+                                                            channel_idx: ch_copy,
+                                                            effect_idx: eff_idx_copy,
+                                                            name: name.to_string(),
+                                                            value: val,
                                                         }
-                                                        ParamValue::Bool(v) => {
-                                                            ParamUpdate::ChannelEffectBool {
-                                                                ch_idx: ch_copy,
-                                                                effect_idx: eff_idx_copy,
-                                                                name: name.to_string(),
-                                                                value: v,
-                                                            }
-                                                        }
-                                                        ParamValue::Color(v) => {
-                                                            ParamUpdate::ChannelEffectColor {
-                                                                ch_idx: ch_copy,
-                                                                effect_idx: eff_idx_copy,
-                                                                name: name.to_string(),
-                                                                value: v,
-                                                            }
-                                                        }
-                                                        _ => unreachable!(),
                                                     },
                                                     Some(&|name: &str, source_uuid: &str| {
-                                                        ModulationAction::AssignEffectModulation {
-                                                            effect_uuid: eff_uuid_ch_assign.clone(),
-                                                            param_name: name.to_string(),
+                                                        EngineCommand::AssignModulation {
+                                                            target: format!(
+                                                                "fx_{}:{}",
+                                                                eff_uuid_ch_assign, name
+                                                            ),
                                                             source_id: source_uuid.to_string(),
                                                             amount: 0.5,
                                                         }
                                                     }),
                                                     Some(&|name: &str| {
-                                                        ModulationAction::RemoveEffectAssignment {
-                                                            effect_uuid: eff_uuid_ch_remove.clone(),
-                                                            param_name: name.to_string(),
+                                                        EngineCommand::ClearModulation {
+                                                            target: format!(
+                                                                "fx_{}:{}",
+                                                                eff_uuid_ch_remove, name
+                                                            ),
                                                         }
                                                     }),
-                                                    &mut actions.param_updates,
-                                                    &mut actions.modulation_actions,
+                                                    &mut actions.commands,
+                                                    &mut actions.session.gesture_active,
                                                     &format!("ch_fx_{}_{}", ch_copy, eff_idx_copy),
                                                     Some(&midi_prefix),
                                                     data.midi_learn_active,
-                                                    &mut actions.midi_learn_select,
+                                                    &mut actions.session.midi_learn_select,
                                                     data.midi_learn_target.as_deref(),
                                                     &data.modulation_assignments,
                                                     &data.modulation_current_values,
                                                     &format!("fx_{}", eff_uuid),
                                                     data.keyboard_learn_active,
-                                                    &mut actions.keyboard_learn_select,
+                                                    &mut actions.session.keyboard_learn_select,
                                                     data.keyboard_learn_target.as_deref(),
                                                 );
                                             }
@@ -416,7 +401,10 @@ pub(super) fn render_channel_effect_detail(
                                 color,
                             );
                             if btn_resp.clicked() {
-                                actions.ch_effect_to_remove = Some((ch_idx, eff_idx));
+                                actions.commands.push(EngineCommand::RemoveEffect {
+                                    target: EffectTarget::Channel(ch_idx),
+                                    effect_idx: eff_idx,
+                                });
                             }
                         }
                         render_effect_drag_ghost(

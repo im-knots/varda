@@ -1,17 +1,18 @@
 //! Unified output management and warp calibration.
 
-use super::super::{OutputAction, UIActions, UIData};
+use super::super::{UIActions, UIData};
+use crate::engine::EngineCommand;
 use crate::renderer::context::OutputTarget;
 
 pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     // New output buttons
     ui.horizontal(|ui| {
         if ui.button("+ Windowed").clicked() {
-            actions.output_actions.push(OutputAction::Create);
+            actions.commands.push(EngineCommand::CreateOutput);
         }
         if ui.button("+ Recording").clicked() {
             use crate::renderer::context::RecordingCodec;
-            actions.output_actions.push(OutputAction::CreateHeadless {
+            actions.commands.push(EngineCommand::CreateHeadlessOutput {
                 target: OutputTarget::Recording {
                     path: "output.mp4".to_string(),
                     codec: RecordingCodec::H264,
@@ -20,7 +21,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
             });
         }
         if ui.button("+ Stream").clicked() {
-            actions.output_actions.push(OutputAction::CreateHeadless {
+            actions.commands.push(EngineCommand::CreateHeadlessOutput {
                 target: OutputTarget::NdiSend {
                     sender_name: "Varda NDI".to_string(),
                 },
@@ -55,7 +56,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         ui.label(egui::RichText::new(&output.name).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("x").on_hover_text("Close output").clicked() {
-                                actions.output_actions.push(OutputAction::Close { idx });
+                                actions.commands.push(EngineCommand::CloseOutput { idx });
                             }
                         });
                     });
@@ -142,7 +143,7 @@ fn render_windowed_controls(
             .show_ui(ui, |ui| {
                 let is_windowed = matches!(output.target, OutputTarget::Windowed);
                 if ui.selectable_label(is_windowed, "Windowed").clicked() {
-                    actions.output_actions.push(OutputAction::SetTarget {
+                    actions.commands.push(EngineCommand::SetOutputTarget {
                         idx,
                         target: OutputTarget::Windowed,
                     });
@@ -150,7 +151,7 @@ fn render_windowed_controls(
                 for monitor in &data.available_monitors {
                     let label = format!("{} ({}x{})", monitor.name, monitor.width, monitor.height);
                     if ui.selectable_label(false, &label).clicked() {
-                        actions.output_actions.push(OutputAction::SetTarget {
+                        actions.commands.push(EngineCommand::SetOutputTarget {
                             idx,
                             target: OutputTarget::Display {
                                 name: monitor.name.clone(),
@@ -175,8 +176,8 @@ fn render_windowed_controls(
                         .clicked()
                     {
                         actions
-                            .output_actions
-                            .push(OutputAction::SetRotation { idx, rotation: rot });
+                            .commands
+                            .push(EngineCommand::SetOutputRotation { idx, rotation: rot });
                     }
                 }
             });
@@ -197,8 +198,8 @@ fn render_windowed_controls(
                 .clicked()
             {
                 actions
-                    .output_actions
-                    .push(OutputAction::SetCalibrationMode { idx, mode });
+                    .commands
+                    .push(EngineCommand::SetCalibrationMode { idx, mode });
             }
         }
     });
@@ -217,10 +218,12 @@ fn render_windowed_controls(
                         .iter()
                         .any(|a| a.surface_uuid == surface.uuid);
                     if !already_assigned && ui.selectable_label(false, &surface.name).clicked() {
-                        actions.output_actions.push(OutputAction::AssignSurface {
-                            output_idx: idx,
-                            surface_uuid: surface.uuid.clone(),
-                        });
+                        actions
+                            .commands
+                            .push(EngineCommand::AssignSurfaceToOutputByIdx {
+                                output_idx: idx,
+                                surface_uuid: surface.uuid.clone(),
+                            });
                     }
                 }
             });
@@ -230,10 +233,12 @@ fn render_windowed_controls(
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
             if ui.small_button("x").on_hover_text("Unassign").clicked() {
-                actions.output_actions.push(OutputAction::UnassignSurface {
-                    output_idx: idx,
-                    assignment_idx: ai,
-                });
+                actions
+                    .commands
+                    .push(EngineCommand::UnassignSurfaceFromOutputByIdx {
+                        output_idx: idx,
+                        assignment_idx: ai,
+                    });
             }
         });
     }
@@ -279,7 +284,7 @@ fn render_headless_controls(
                             RecordingCodec::HapQ,
                         ] {
                             if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                                actions.output_actions.push(OutputAction::SetTarget {
+                                actions.commands.push(EngineCommand::SetOutputTarget {
                                     idx,
                                     target: OutputTarget::Recording {
                                         path: path.clone(),
@@ -306,7 +311,7 @@ fn render_headless_controls(
                 if response.lost_focus() || response.changed() {
                     ui.data_mut(|d| d.insert_temp(path_id, current_path.clone()));
                     if response.lost_focus() {
-                        actions.output_actions.push(OutputAction::SetTarget {
+                        actions.commands.push(EngineCommand::SetOutputTarget {
                             idx,
                             target: OutputTarget::Recording {
                                 path: current_path,
@@ -356,7 +361,7 @@ fn render_headless_controls(
                         .selectable_label(current.is_none(), "None (silent)")
                         .clicked()
                     {
-                        actions.output_actions.push(OutputAction::SetTarget {
+                        actions.commands.push(EngineCommand::SetOutputTarget {
                             idx,
                             target: output.target.with_audio_device(None),
                         });
@@ -364,7 +369,7 @@ fn render_headless_controls(
                     for dev in &data.audio.devices {
                         let selected = current == Some(dev.name.as_str());
                         if ui.selectable_label(selected, &dev.name).clicked() {
-                            actions.output_actions.push(OutputAction::SetTarget {
+                            actions.commands.push(EngineCommand::SetOutputTarget {
                                 idx,
                                 target: output.target.with_audio_device(Some(dev.name.clone())),
                             });
@@ -387,8 +392,8 @@ fn render_headless_controls(
                         .clicked()
                     {
                         actions
-                            .output_actions
-                            .push(OutputAction::SetRotation { idx, rotation: rot });
+                            .commands
+                            .push(EngineCommand::SetOutputRotation { idx, rotation: rot });
                     }
                 }
             });
@@ -408,10 +413,12 @@ fn render_headless_controls(
                         .iter()
                         .any(|a| a.surface_uuid == surface.uuid);
                     if !already_assigned && ui.selectable_label(false, &surface.name).clicked() {
-                        actions.output_actions.push(OutputAction::AssignSurface {
-                            output_idx: idx,
-                            surface_uuid: surface.uuid.clone(),
-                        });
+                        actions
+                            .commands
+                            .push(EngineCommand::AssignSurfaceToOutputByIdx {
+                                output_idx: idx,
+                                surface_uuid: surface.uuid.clone(),
+                            });
                     }
                 }
             });
@@ -421,10 +428,12 @@ fn render_headless_controls(
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
             if ui.small_button("x").on_hover_text("Unassign").clicked() {
-                actions.output_actions.push(OutputAction::UnassignSurface {
-                    output_idx: idx,
-                    assignment_idx: ai,
-                });
+                actions
+                    .commands
+                    .push(EngineCommand::UnassignSurfaceFromOutputByIdx {
+                        output_idx: idx,
+                        assignment_idx: ai,
+                    });
             }
         });
     }
@@ -439,10 +448,10 @@ fn render_headless_controls(
                     .color(egui::Color32::from_rgb(255, 80, 80)),
             );
             if ui.button("⏹ Stop").clicked() {
-                actions.output_actions.push(OutputAction::Stop { idx });
+                actions.commands.push(EngineCommand::StopOutput { idx });
             }
         } else if ui.button("▶ Start").clicked() {
-            actions.output_actions.push(OutputAction::Start { idx });
+            actions.commands.push(EngineCommand::StartOutput { idx });
         }
     });
 
@@ -535,7 +544,7 @@ fn render_stream_config(
                             .clicked()
                             && current_proto != *label
                         {
-                            actions.output_actions.push(OutputAction::SetTarget {
+                            actions.commands.push(EngineCommand::SetOutputTarget {
                                 idx,
                                 target: default_target.clone(),
                             });
@@ -567,7 +576,7 @@ fn render_stream_config(
                         .show_ui(ui, |ui| {
                             for c in &[SrtCodec::H264, SrtCodec::H265] {
                                 if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                                    actions.output_actions.push(OutputAction::SetTarget {
+                                    actions.commands.push(EngineCommand::SetOutputTarget {
                                         idx,
                                         target: OutputTarget::SrtStream {
                                             url: url.clone(),
@@ -593,7 +602,7 @@ fn render_stream_config(
                     if response.lost_focus() || response.changed() {
                         ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
                         if response.lost_focus() {
-                            actions.output_actions.push(OutputAction::SetTarget {
+                            actions.commands.push(EngineCommand::SetOutputTarget {
                                 idx,
                                 target: OutputTarget::SrtStream {
                                     url: current_url,
@@ -634,7 +643,7 @@ fn render_stream_config(
                         .checkbox(&mut ll, egui::RichText::new("LL-HLS (Low Latency)").small())
                         .changed()
                     {
-                        actions.output_actions.push(OutputAction::SetTarget {
+                        actions.commands.push(EngineCommand::SetOutputTarget {
                             idx,
                             target: OutputTarget::HlsStream {
                                 name: name.clone(),
@@ -693,7 +702,7 @@ fn render_stream_config(
                                 StreamingCodec::AV1,
                             ] {
                                 if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                                    actions.output_actions.push(OutputAction::SetTarget {
+                                    actions.commands.push(EngineCommand::SetOutputTarget {
                                         idx,
                                         target: OutputTarget::RtmpStream {
                                             url: url.clone(),
@@ -719,7 +728,7 @@ fn render_stream_config(
                     if response.lost_focus() || response.changed() {
                         ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
                         if response.lost_focus() {
-                            actions.output_actions.push(OutputAction::SetTarget {
+                            actions.commands.push(EngineCommand::SetOutputTarget {
                                 idx,
                                 target: OutputTarget::RtmpStream {
                                     url: current_url,
@@ -747,7 +756,7 @@ fn render_stream_config(
                 if response.lost_focus() || response.changed() {
                     ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
                     if response.lost_focus() {
-                        actions.output_actions.push(OutputAction::SetTarget {
+                        actions.commands.push(EngineCommand::SetOutputTarget {
                             idx,
                             target: OutputTarget::NdiSend {
                                 sender_name: current_name,
@@ -772,7 +781,7 @@ fn render_stream_config(
                 if response.lost_focus() || response.changed() {
                     ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
                     if response.lost_focus() {
-                        actions.output_actions.push(OutputAction::SetTarget {
+                        actions.commands.push(EngineCommand::SetOutputTarget {
                             idx,
                             target: OutputTarget::SyphonServer {
                                 server_name: current_name,
@@ -806,6 +815,7 @@ fn render_copyable_url(
     if response.clicked() {
         ui.ctx().copy_text(url.to_string());
         actions
+            .session
             .info_notifications
             .push(format!("📋 Copied to clipboard: {}", url));
     }
@@ -839,7 +849,7 @@ fn render_hls_dash_name_codec(
                         StreamingCodec::AV1,
                     ] {
                         if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
-                            actions.output_actions.push(OutputAction::SetTarget {
+                            actions.commands.push(EngineCommand::SetOutputTarget {
                                 idx,
                                 target: make_target(name.to_string(), c.clone()),
                             });
@@ -861,7 +871,7 @@ fn render_hls_dash_name_codec(
             if response.lost_focus() || response.changed() {
                 ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
                 if response.lost_focus() {
-                    actions.output_actions.push(OutputAction::SetTarget {
+                    actions.commands.push(EngineCommand::SetOutputTarget {
                         idx,
                         target: make_target(current_name, codec.clone()),
                     });
@@ -894,7 +904,7 @@ fn render_edge_blend_controls(
                     .clicked()
                     && is_auto
                 {
-                    actions.output_actions.push(OutputAction::SetEdgeBlendMode {
+                    actions.commands.push(EngineCommand::SetEdgeBlendMode {
                         output_idx: idx,
                         mode: EdgeBlendMode::Manual,
                     });
@@ -904,7 +914,7 @@ fn render_edge_blend_controls(
                     .clicked()
                     && !is_auto
                 {
-                    actions.output_actions.push(OutputAction::SetEdgeBlendMode {
+                    actions.commands.push(EngineCommand::SetEdgeBlendMode {
                         output_idx: idx,
                         mode: EdgeBlendMode::Auto,
                     });
@@ -1017,7 +1027,7 @@ fn render_edge_blend_controls(
             }
 
             if changed {
-                actions.output_actions.push(OutputAction::SetEdgeBlend {
+                actions.commands.push(EngineCommand::SetEdgeBlend {
                     output_idx: idx,
                     config: cfg,
                 });

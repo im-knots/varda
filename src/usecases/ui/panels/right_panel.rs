@@ -15,7 +15,7 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
                 .on_hover_text("Collapse panel")
                 .clicked()
             {
-                actions.toggle_right_panel = true;
+                actions.session.toggle_right_panel = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let heading_response = ui.add(
@@ -23,7 +23,7 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
                         .sense(egui::Sense::click()),
                 );
                 if heading_response.clicked() {
-                    actions.select_master = true;
+                    actions.session.select_master = true;
                 }
             });
         });
@@ -40,7 +40,7 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
                     .sense(egui::Sense::click()),
             );
             if img_response.clicked() {
-                actions.select_master = true;
+                actions.session.select_master = true;
             }
         } else {
             ui.allocate_ui(preview_size, |ui| {
@@ -55,7 +55,7 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
                     egui::Color32::GRAY,
                 );
                 if response.clicked() {
-                    actions.select_master = true;
+                    actions.session.select_master = true;
                 }
             });
         }
@@ -70,7 +70,7 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
             .sense(egui::Sense::click()),
         );
         if hint_resp.clicked() {
-            actions.select_master = true;
+            actions.session.select_master = true;
         }
 
         ui.add_space(6.0);
@@ -88,7 +88,7 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
         // Library panel toggle (if closed, show a button to reopen)
         if !data.library_panel_open {
             if ui.button("📚 Open Library (L)").clicked() {
-                actions.toggle_library_panel = true;
+                actions.session.toggle_library_panel = true;
             }
             ui.add_space(4.0);
         }

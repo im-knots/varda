@@ -1,11 +1,11 @@
 use super::{
-    modulator_color, AudioUIData, ModAssignmentUI, ModSourceUI, ModSourceUIEntry, ModulationAction,
-    ParamUIInfo, ParamUpdate,
+    modulator_color, AudioUIData, ModAssignmentUI, ModSourceUI, ModSourceUIEntry, ParamUIInfo,
 };
+use crate::engine::EngineCommand;
 use crate::params::ParamValue;
 
-/// Callback that builds a modulation-assignment action from (param_path, source_name).
-type MakeModAssign<'a> = &'a dyn Fn(&str, &str) -> ModulationAction;
+/// Callback that builds a modulation-assignment command from (param_path, source_name).
+type MakeModAssign<'a> = &'a dyn Fn(&str, &str) -> EngineCommand;
 
 /// Build a set of prefixes whose params should be hidden.
 /// Convention: a bool param named `<prefix>_mode` controls visibility of params
@@ -39,11 +39,11 @@ pub fn render_params(
     ui: &mut egui::Ui,
     params: &[ParamUIInfo],
     modulation_sources: &[ModSourceUIEntry],
-    make_update: &dyn Fn(&str, ParamValue) -> ParamUpdate,
+    make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
     make_mod_assign: Option<MakeModAssign>,
-    make_mod_remove: Option<&dyn Fn(&str) -> ModulationAction>,
-    param_updates: &mut Vec<ParamUpdate>,
-    modulation_actions: &mut Vec<ModulationAction>,
+    make_mod_remove: Option<&dyn Fn(&str) -> EngineCommand>,
+    commands: &mut Vec<EngineCommand>,
+    gesture_active: &mut bool,
     id_prefix: &str,
     midi_learn_path_prefix: Option<&str>,
     midi_learn_active: bool,
@@ -96,8 +96,13 @@ pub fn render_params(
                     } else {
                         let slider_response =
                             ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
+                        // A held slider drag is a single undo gesture (collapsed
+                        // by the runner's `gesture_active` edge).
+                        if slider_response.dragged() {
+                            *gesture_active = true;
+                        }
                         if slider_response.changed() {
-                            param_updates.push(make_update(&param.name, ParamValue::Float(v)));
+                            commands.push(make_update(&param.name, ParamValue::Float(v)));
                         }
                         slider_response.rect
                     };
@@ -200,13 +205,12 @@ pub fn render_params(
                                         .button(egui::RichText::new(&src_name).color(color))
                                         .clicked()
                                     {
-                                        modulation_actions
-                                            .push(assign_fn(&param.name, &entry.uuid));
+                                        commands.push(assign_fn(&param.name, &entry.uuid));
                                     }
                                 }
                                 ui.separator();
                                 if ui.button("Clear").clicked() {
-                                    modulation_actions.push(remove_fn(&param.name));
+                                    commands.push(remove_fn(&param.name));
                                 }
                             });
                         }
@@ -218,7 +222,7 @@ pub fn render_params(
                     .checkbox(&mut v, egui::RichText::new(label).small())
                     .changed()
                 {
-                    param_updates.push(make_update(&param.name, ParamValue::Bool(v)));
+                    commands.push(make_update(&param.name, ParamValue::Bool(v)));
                 }
             }
             ParamValue::Color(c) => {
@@ -226,7 +230,7 @@ pub fn render_params(
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(label).small());
                     if ui.color_edit_button_rgba_unmultiplied(&mut color).changed() {
-                        param_updates.push(make_update(&param.name, ParamValue::Color(color)));
+                        commands.push(make_update(&param.name, ParamValue::Color(color)));
                     }
                 });
             }
@@ -242,11 +246,11 @@ pub fn render_effect_params(
     ui: &mut egui::Ui,
     params: &[ParamUIInfo],
     modulation_sources: &[ModSourceUIEntry],
-    make_update: &dyn Fn(&str, ParamValue) -> ParamUpdate,
+    make_update: &dyn Fn(&str, ParamValue) -> EngineCommand,
     make_mod_assign: Option<MakeModAssign>,
-    make_mod_remove: Option<&dyn Fn(&str) -> ModulationAction>,
-    param_updates: &mut Vec<ParamUpdate>,
-    modulation_actions: &mut Vec<ModulationAction>,
+    make_mod_remove: Option<&dyn Fn(&str) -> EngineCommand>,
+    commands: &mut Vec<EngineCommand>,
+    gesture_active: &mut bool,
     id_prefix: &str,
     midi_learn_path_prefix: Option<&str>,
     midi_learn_active: bool,
@@ -296,8 +300,13 @@ pub fn render_effect_params(
                     } else {
                         let slider_resp =
                             ui.add(egui::Slider::new(&mut v, min..=max).show_value(false));
+                        // A held slider drag is a single undo gesture (collapsed
+                        // by the runner's `gesture_active` edge).
+                        if slider_resp.dragged() {
+                            *gesture_active = true;
+                        }
                         if slider_resp.changed() {
-                            param_updates.push(make_update(&param.name, ParamValue::Float(v)));
+                            commands.push(make_update(&param.name, ParamValue::Float(v)));
                         }
                         slider_resp.rect
                     };
@@ -399,13 +408,12 @@ pub fn render_effect_params(
                                         .button(egui::RichText::new(&src_name).color(color))
                                         .clicked()
                                     {
-                                        modulation_actions
-                                            .push(assign_fn(&param.name, &entry.uuid));
+                                        commands.push(assign_fn(&param.name, &entry.uuid));
                                     }
                                 }
                                 ui.separator();
                                 if ui.button("Clear").clicked() {
-                                    modulation_actions.push(remove_fn(&param.name));
+                                    commands.push(remove_fn(&param.name));
                                 }
                             });
                         }
@@ -417,7 +425,7 @@ pub fn render_effect_params(
                     .checkbox(&mut v, egui::RichText::new(label).small().weak())
                     .changed()
                 {
-                    param_updates.push(make_update(&param.name, ParamValue::Bool(v)));
+                    commands.push(make_update(&param.name, ParamValue::Bool(v)));
                 }
             }
             ParamValue::Color(c) => {
@@ -425,7 +433,7 @@ pub fn render_effect_params(
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(label).small().weak());
                     if ui.color_edit_button_rgba_unmultiplied(&mut color).changed() {
-                        param_updates.push(make_update(&param.name, ParamValue::Color(color)));
+                        commands.push(make_update(&param.name, ParamValue::Color(color)));
                     }
                 });
             }

@@ -207,7 +207,7 @@ HTML decks are persisted in `scene.json` by URL and reload automatically. The so
 
 HTML is rasterized on the **CPU** (Servo's software renderer) and uploaded to a GPU texture each frame. It is heavier than the GPU-native deck types.
 
-> **Platform support.** HTML decks are available on **Apple Silicon macOS** (arm64) and **Linux** (x86_64). They are **not** available on Intel (x86_64) macOS: Servo deck-creation hangs under Rosetta, so the macOS DMG ships HTML in the Apple Silicon slice only. It comfortably handles HTML/CSS/SVG, dashboards, and text overlays; heavy WebGL or full-screen Canvas animation at high resolution may not sustain 60 fps. Profile your pages with the `html_render` benchmark (see [Benchmarking](14-benchmarking.md)) if frame rate matters.
+> **Platform support.** HTML decks are available on **Apple Silicon macOS** (arm64) and **Linux** (x86_64). They are **not** available on Intel (x86_64) macOS: Servo deck-creation hangs under Rosetta, so the macOS DMG ships HTML in the Apple Silicon slice only. It comfortably handles HTML/CSS/SVG, dashboards, and text overlays; heavy WebGL or full-screen Canvas animation at high resolution may not sustain 60 fps. Profile your pages with the `html_render` benchmark (see [Benchmarking](../CONTRIBUTING.md#benchmarking)) if frame rate matters.
 
 > **Non-blocking, like the stream sources.** HTML rendering runs on a dedicated background thread (a shared Servo engine), the same way NDI/SRT/HLS/DASH/RTMP decode off the render loop. Finished frames are handed to the render thread and uploaded without blocking, so even a heavy page can't stall the 60 fps loop — it simply updates at whatever rate it can render.
 

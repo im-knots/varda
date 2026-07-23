@@ -26,9 +26,10 @@ impl VardaApp {
                     self.render_height,
                 ) {
                     Ok(deck) => {
+                        let uuid = deck.uuid().to_string();
                         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                             ch.add_deck(deck);
-                            CommandResult::Ok
+                            CommandResult::OkWithId { uuid }
                         } else {
                             CommandResult::Err {
                                 code: ErrorCode::NotFound,
@@ -96,9 +97,10 @@ impl VardaApp {
                         self.render_height,
                     ) {
                         Ok(deck) => {
+                            let uuid = deck.uuid().to_string();
                             if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                                 ch.add_deck(deck);
-                                CommandResult::Ok
+                                CommandResult::OkWithId { uuid }
                             } else {
                                 CommandResult::Err {
                                     code: ErrorCode::NotFound,
@@ -155,9 +157,10 @@ impl VardaApp {
                     self.render_height,
                 ) {
                     Ok(deck) => {
+                        let uuid = deck.uuid().to_string();
                         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                             ch.add_deck(deck);
-                            CommandResult::Ok
+                            CommandResult::OkWithId { uuid }
                         } else {
                             CommandResult::Err {
                                 code: ErrorCode::NotFound,
@@ -200,9 +203,10 @@ impl VardaApp {
                     self.render_height,
                 ) {
                     Ok(deck) => {
+                        let uuid = deck.uuid().to_string();
                         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                             ch.add_deck(deck);
-                            CommandResult::Ok
+                            CommandResult::OkWithId { uuid }
                         } else {
                             CommandResult::Err {
                                 code: ErrorCode::NotFound,
@@ -246,9 +250,10 @@ impl VardaApp {
                     self.render_height,
                 ) {
                     Ok(deck) => {
+                        let uuid = deck.uuid().to_string();
                         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                             ch.add_deck(deck);
-                            CommandResult::Ok
+                            CommandResult::OkWithId { uuid }
                         } else {
                             CommandResult::Err {
                                 code: ErrorCode::NotFound,
@@ -315,9 +320,10 @@ impl VardaApp {
                     self.render_height,
                 ) {
                     Ok(deck) => {
+                        let uuid = deck.uuid().to_string();
                         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                             ch.add_deck(deck);
-                            CommandResult::Ok
+                            CommandResult::OkWithId { uuid }
                         } else {
                             CommandResult::Err {
                                 code: ErrorCode::NotFound,
@@ -365,9 +371,10 @@ impl VardaApp {
                     self.render_height,
                 ) {
                     Ok(deck) => {
+                        let uuid = deck.uuid().to_string();
                         if let Some(ch) = self.mixer.channel_mut(channel_idx) {
                             ch.add_deck(deck);
-                            CommandResult::Ok
+                            CommandResult::OkWithId { uuid }
                         } else {
                             CommandResult::Err {
                                 code: ErrorCode::NotFound,

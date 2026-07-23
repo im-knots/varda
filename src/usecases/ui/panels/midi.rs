@@ -1,12 +1,13 @@
 //! MIDI devices and mappings panel.
 
 use super::super::{UIActions, UIData};
+use crate::engine::EngineCommand;
 
 pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.horizontal(|ui| {
         ui.label(format!("{} device(s)", data.midi_devices.len()));
         if ui.button("🔄 Rescan").clicked() {
-            actions.midi_rescan = true;
+            actions.commands.push(EngineCommand::RescanMidi);
         }
     });
 
@@ -17,7 +18,10 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 ui.horizontal(|ui| {
                     let mut enabled = dev.enabled;
                     if ui.checkbox(&mut enabled, "").changed() {
-                        actions.midi_device_toggles.push((dev.id, enabled));
+                        actions.commands.push(EngineCommand::SetMidiDeviceEnabled {
+                            device_id: dev.id,
+                            enabled,
+                        });
                     }
                     let status = if dev.enabled { "●" } else { "○" };
                     let color = if dev.enabled {
@@ -46,7 +50,7 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
         ui.collapsing(format!("Mappings ({})", data.midi_mappings.len()), |ui| {
             ui.horizontal(|ui| {
                 if ui.button("🗑 Clear All").clicked() {
-                    actions.midi_clear_mappings = true;
+                    actions.commands.push(EngineCommand::ClearMidiMappings);
                 }
             });
             egui::ScrollArea::vertical()
@@ -56,7 +60,9 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     for mapping in &data.midi_mappings {
                         ui.horizontal(|ui| {
                             if ui.small_button("x").clicked() {
-                                actions.midi_remove_mapping.push(mapping.key);
+                                actions
+                                    .commands
+                                    .push(EngineCommand::RemoveMidiMapping { key: mapping.key });
                             }
                             ui.label(
                                 egui::RichText::new(&mapping.device_name)

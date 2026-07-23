@@ -1049,7 +1049,7 @@ impl UIRunner {
         // 6a2. Dome camera actions — apply to renderer (not layout state)
         {
             let dome_resized = false;
-            for action in &ui_actions.dome_actions {
+            for action in &ui_actions.session.dome_actions {
                 match action {
                     ui::DomeAction::RotateCamera { delta_x, delta_y } => {
                         if let Some(renderer) = &mut self.dome_preview_renderer {
@@ -1084,7 +1084,7 @@ impl UIRunner {
 
         // 6a3. Camera detection actions
         {
-            let actions: Vec<_> = ui_actions.camera_detect_actions.drain(..).collect();
+            let actions: Vec<_> = ui_actions.session.camera_detect_actions.drain(..).collect();
             for action in actions {
                 match action {
                     ui::CameraDetectAction::Enter { camera_id } => {
@@ -1163,8 +1163,10 @@ impl UIRunner {
                                 .map(|(c, _)| c.clone())
                                 .collect();
                             if !chosen.is_empty() {
-                                ui_actions.surface_actions.push(
-                                    ui::SurfaceAction::ConfirmDetectedContours { contours: chosen },
+                                ui_actions.commands.push(
+                                    crate::engine::EngineCommand::ConfirmDetectedContours {
+                                        contours: chosen,
+                                    },
                                 );
                             }
                         }
@@ -1184,21 +1186,28 @@ impl UIRunner {
             };
 
             // ── Undo/redo: snapshot before undoable mutations ──
-            // Unified scene+stage timeline. A snapshot is pushed when the frame
-            // is scene-dirty, or stage-dirty AND not the *continuation* of a
-            // held drag — so a continuous stage/warp gesture collapses into a
-            // single undo step (snapshot taken on the drag's first frame).
-            let scene_dirty = ui_actions.has_undoable_action();
-            let stage_dirty = ui_actions.has_undoable_stage_action();
-            let gesture_continuation = ui_actions.gesture_active && self.prev_gesture_active;
-            if scene_dirty || (stage_dirty && !gesture_continuation) {
+            // Unified scene+stage timeline with general gesture coalescing
+            // (ui-engine-boundary.md WS3). A snapshot is pushed when the frame
+            // carries any undoable mutation AND it is not the *continuation* of a
+            // held drag — so a continuous gesture of any kind (warp drag, param
+            // slider) collapses into a single undo step (snapshot on the first
+            // frame). Undoability is decided by the single, compiler-checked
+            // `command_is_undoable` predicate (via `batch_has_undoable`) for
+            // migrated domains, plus the residual `has_undoable_*` gates for
+            // fields not yet migrated to `commands`.
+            let dirty = ui_actions.has_undoable_action()
+                || ui_actions.has_undoable_stage_action()
+                || varda.batch_has_undoable(&ui_actions.commands);
+            let gesture_continuation =
+                ui_actions.session.gesture_active && self.prev_gesture_active;
+            if dirty && !gesture_continuation {
                 let snapshot = varda.history_snapshot(&self.layout);
                 varda.push_history(snapshot);
             }
-            self.prev_gesture_active = ui_actions.gesture_active;
+            self.prev_gesture_active = ui_actions.session.gesture_active;
 
             // Intercept shader_to_add: resolve and route to background loading
-            if let Some((ch_idx, gen_idx)) = ui_actions.shader_to_add.take() {
+            if let Some((ch_idx, gen_idx)) = ui_actions.session.shader_to_add.take() {
                 if let Some(shader) = varda.resolve_generator(gen_idx) {
                     let context = varda.gpu_context();
                     VardaApp::spawn_deck_loads(
@@ -1214,7 +1223,7 @@ impl UIRunner {
                 }
             }
 
-            let removed_ch = varda.apply_engine_actions(
+            let engine_outcome = varda.apply_engine_actions(
                 &mut ui_actions,
                 egui_renderer,
                 &mut self.deck_preview_textures,
@@ -1222,13 +1231,13 @@ impl UIRunner {
 
             // ── Drain MIDI-triggered global actions ──
             if std::mem::take(&mut varda.midi_pending_undo) {
-                ui_actions.undo_requested = true;
+                ui_actions.session.undo_requested = true;
             }
             if std::mem::take(&mut varda.midi_pending_redo) {
-                ui_actions.redo_requested = true;
+                ui_actions.session.redo_requested = true;
             }
             if std::mem::take(&mut varda.midi_pending_save) {
-                ui_actions.save_requested = true;
+                ui_actions.session.save_requested = true;
             }
 
             // ── Undo/redo: restore via the engine's shared timeline ──
@@ -1236,25 +1245,20 @@ impl UIRunner {
             // windowed and headless/API consumers behave identically; the
             // runner only layers on UI-specific refresh (dome layout flags +
             // GPU preview texture re-registration).
-            if ui_actions.undo_requested || ui_actions.redo_requested {
-                let current = varda.history_snapshot(&self.layout);
-                let restore = if ui_actions.undo_requested {
-                    varda.history_undo(current)
-                } else {
-                    varda.history_redo(current)
-                };
-                if let Some(restore) = restore {
-                    let structural_changed = restore.structural_changed;
+            if ui_actions.session.undo_requested || ui_actions.session.redo_requested {
+                let undo = ui_actions.session.undo_requested;
+                let outcome = varda.history_gui(&self.layout, undo);
+                if let crate::engine::CommandOutcome::HistoryRestored {
+                    structural_changed,
+                    dome_layout,
+                } = outcome
+                {
                     // Dome layout flags live in UI layout, not engine state.
-                    self.layout.dome_mode_active = restore.snapshot.stage.dome_mode_active;
-                    self.layout.dome_preset = restore.snapshot.stage.dome_preset;
-                    self.layout.dome_geometry = restore.snapshot.stage.dome_geometry;
+                    self.layout.dome_mode_active = dome_layout.dome_mode_active;
+                    self.layout.dome_preset = dome_layout.dome_preset;
+                    self.layout.dome_geometry = dome_layout.dome_geometry;
 
-                    let label = if ui_actions.undo_requested {
-                        "↩ Undo"
-                    } else {
-                        "↪ Redo"
-                    };
+                    let label = if undo { "↩ Undo" } else { "↪ Redo" };
                     varda.notify_info(label);
 
                     if structural_changed {
@@ -1304,13 +1308,7 @@ impl UIRunner {
             }
 
             varda.apply_ui_actions(&ui_actions);
-            varda.apply_output_actions(&ui_actions);
-            varda.apply_surface_actions(&ui_actions, self.layout.stage_editor_grid_size);
-            varda.apply_device_actions(&ui_actions);
-            // Recording/SRT now handled per-output in apply_output_actions()
-            varda.apply_clock_actions(&ui_actions);
-            let resolution_changed = varda.apply_resolution_change(&ui_actions);
-            varda.apply_target_fps_change(&ui_actions);
+            let resolution_changed = engine_outcome.resolution_changed;
             varda.update_controller_leds();
 
             // After resolution change, all GPU textures were recreated —
@@ -1362,20 +1360,20 @@ impl UIRunner {
             }
 
             // Fix up selection state after channel removal
-            if let Some(ch_idx) = removed_ch {
+            if let Some(ch_idx) = engine_outcome.removed_channel {
                 self.layout.fixup_channel_removal(ch_idx);
             }
 
-            if ui_actions.save_requested {
+            if ui_actions.session.save_requested {
                 varda.save_workspace(&self.layout);
                 varda.notify_info("💾 Workspace saved");
             }
 
             // Spawn file dialogs on background threads (non-blocking)
-            if let Some(ch_idx) = ui_actions.open_image_dialog_for_channel.take() {
+            if let Some(ch_idx) = ui_actions.session.open_image_dialog_for_channel.take() {
                 VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Image, ch_idx);
             }
-            if let Some(ch_idx) = ui_actions.open_video_dialog_for_channel.take() {
+            if let Some(ch_idx) = ui_actions.session.open_video_dialog_for_channel.take() {
                 VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Video, ch_idx);
             }
 

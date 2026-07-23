@@ -1,8 +1,10 @@
 # Varda
 
-Varda is a free, open-source live visual mixer and broadcast router for Linux, macOS, and Windows, written in Rust. It routes video sources — shaders, video files, cameras, NDI, SRT, HLS/DASH streams, HTML/web pages — through a broadcast-style signal matrix (Deck → Channel → Mixer → Surface → Output), composites them with per-parameter modulation and ISF effect chains, and delivers the result to projectors, network streams, recordings, and the web.
+Varda is a free, open-source live visual mixer and broadcast router for Linux, macOS, and Windows, written in Rust. It routes video sources like shaders, video files, cameras, NDI, SRT, HLS/DASH streams, and HTML/web pages through a broadcast-style signal matrix (Deck → Channel → Mixer → Surface → Output), composites them with per-parameter modulation and ISF effect chains, and delivers the result to projectors, network streams, recordings, and the web.
 
-Varda is built for live VJ performance, dome projection, multi-projector installations, and headless media serving — controlled via MIDI, OSC, keyboard shortcuts, or a full REST/WebSocket API.
+Varda is built for live VJ performance, dome projection, multi-projector installations, and headless media serving and is controlled via MIDI, OSC, keyboard shortcuts, or a full REST/WebSocket API.
+
+Here you will find everything you need to start throwing those pixels. 
 
 ---
 
@@ -21,7 +23,7 @@ Varda is built for live VJ performance, dome projection, multi-projector install
   - [Next Steps](01-getting-started.md#next-steps)
   - [CLI Flags](01-getting-started.md#cli-flags)
 - **2. [Core Concepts](02-concepts.md)**
-  - [The Signal Flow](02-concepts.md#the-signal-flow) — Deck, Channel, Mixer, Surface, Output
+  - [The Signal Flow](02-concepts.md#the-signal-flow) — Deck, Channel, Mixer, Surface, Output, routing flexibility, clip triggering without clip triggering
   - [Source Types](02-concepts.md#source-types) — ISF shaders, video, camera, NDI, SRT, HLS, DASH, RTMP, compute, Syphon, HTML
   - [Blend Modes](02-concepts.md#blend-modes) — 15 compositing modes
   - [Effect Chains](02-concepts.md#effect-chains) — deck, channel, and master FX levels
@@ -97,13 +99,13 @@ Varda is built for live VJ performance, dome projection, multi-projector install
   - [Multi-Pass Rendering](12-isf-authoring.md#multi-pass-rendering) — persistent buffers, feedback loops
   - [Compute Shaders](12-isf-authoring.md#compute-shaders) — `.comp` shaders, storage buffers, dispatch
   - [Hot-Reload](12-isf-authoring.md#hot-reload) — live editing workflow
+  - [File Location](12-isf-authoring.md#file-location) — shader directory precedence hierarchy, `--shader-dir`
 - **13. [HTTP API & Headless Mode](13-api.md)**
   - [Swagger UI](13-api.md#swagger-ui)
   - [Headless Mode](13-api.md#headless-mode)
   - [WebSocket](13-api.md#websocket)
   - [Common Patterns](13-api.md#common-patterns)
   - [Route Groups](13-api.md#route-groups)
-- **14. [Benchmarking](14-benchmarking.md)** — criterion harness, GPU/CPU suites, before/after comparison
 
 ---
 
@@ -111,3 +113,4 @@ Varda is built for live VJ performance, dome projection, multi-projector install
 
 - **API Reference** — interactive Swagger UI at [`http://localhost:8080/api/docs`](http://localhost:8080/api/docs) (when Varda is running)
 - **ISF Shader Format** — [isf.video](https://isf.video) (external)
+- **Contributing** — architecture overview, entity/address scheme, engineering conventions, and the benchmarking harness live in [`CONTRIBUTING.md`](../CONTRIBUTING.md)

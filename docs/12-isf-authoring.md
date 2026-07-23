@@ -513,7 +513,17 @@ No restart required. Edit shaders in any external editor and see results immedia
 
 ## File Location
 
-Place shader files in `shaders/` at the workspace root. They are automatically discovered on startup and appear in the **Library** panel under Generators, Effects, or Transitions based on their type.
+Varda loads shaders from a fixed hierarchy, lowest to highest precedence:
+
+1. Bundled shaders (shipped inside the `.app` / AppImage / tarball)
+2. `./shaders/` in the working directory
+3. The workspace `.varda/shaders/`
+4. The platform user shader dir (`~/.local/share/varda/shaders`, `~/Library/Application Support/Varda/Shaders`, `%APPDATA%\Varda\Shaders`)
+5. Any `--shader-dir <DIR>` flags (repeatable), in the order given
+
+On a name collision the higher-precedence directory wins, so a `--shader-dir` shader overrides a built-in of the same name. The order holds for the whole session: shaders hot-reload as you edit them, and deleting an override restores the shadowed built-in instead of dropping the shader. A `--shader-dir` that doesn't exist is skipped with a warning, not created.
+
+Shaders are automatically discovered on startup from every directory in the hierarchy and appear in the **Library** panel under Generators, Effects, or Transitions based on their type.
 
 ---
 

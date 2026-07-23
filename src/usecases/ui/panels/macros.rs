@@ -8,12 +8,10 @@
 //!   button behavior/triggers — exactly like selecting a deck or sequence.
 //!
 //! The UI is a pure view over `UIData.macros`: it reads the snapshot and emits
-//! `MacroAction`s / selection actions. All state mutation happens in the engine.
+//! `EngineCommand`s / selection actions. All state mutation happens in the engine.
 
-use super::super::{
-    modulator_color, widgets, MacroAction, ModSourceUI, ModSourceUIEntry, ModulationAction,
-    UIActions, UIData,
-};
+use super::super::{modulator_color, widgets, ModSourceUI, ModSourceUIEntry, UIActions, UIData};
+use crate::engine::EngineCommand;
 use crate::macros::{ButtonBehavior, GlobalAction, Macro, MacroCurve, MacroKind, TriggerAction};
 use crate::params::ParamValue;
 
@@ -48,7 +46,7 @@ pub(super) fn render_macro_column(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .on_hover_text("Add a knob macro")
                 .clicked()
             {
-                actions.macro_actions.push(MacroAction::Add {
+                actions.commands.push(EngineCommand::AddMacro {
                     kind: MacroKind::Knob,
                 });
             }
@@ -57,7 +55,7 @@ pub(super) fn render_macro_column(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .on_hover_text("Add a fader macro")
                 .clicked()
             {
-                actions.macro_actions.push(MacroAction::Add {
+                actions.commands.push(EngineCommand::AddMacro {
                     kind: MacroKind::Fader,
                 });
             }
@@ -66,7 +64,7 @@ pub(super) fn render_macro_column(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 .on_hover_text("Add a button macro")
                 .clicked()
             {
-                actions.macro_actions.push(MacroAction::Add {
+                actions.commands.push(EngineCommand::AddMacro {
                     kind: MacroKind::Button,
                 });
             }
@@ -145,11 +143,11 @@ fn render_macro_compact(
             .on_hover_text("Delete macro")
             .clicked()
         {
-            actions.macro_actions.push(MacroAction::Remove {
+            actions.commands.push(EngineCommand::RemoveMacro {
                 uuid: m.uuid.clone(),
             });
             if selected {
-                actions.deselect_macro = true;
+                actions.session.deselect_macro = true;
             }
         }
     });
@@ -160,7 +158,7 @@ fn render_macro_compact(
 
     // Click on the card (but not on the control) selects it for editing.
     if !data.midi_learn_active && card_resp.clicked() {
-        actions.select_macro = Some(m.uuid.clone());
+        actions.session.select_macro = Some(m.uuid.clone());
     }
     card_resp.on_hover_text("Click to edit this macro in the bottom bar");
 
@@ -197,7 +195,7 @@ pub(super) fn render_macro_detail(
         }
         if resp.lost_focus() {
             if name != m.name {
-                actions.macro_actions.push(MacroAction::Rename {
+                actions.commands.push(EngineCommand::RenameMacro {
                     uuid: m.uuid.clone(),
                     name: name.clone(),
                 });
@@ -208,15 +206,15 @@ pub(super) fn render_macro_detail(
         render_kind_selector(ui, m, actions);
 
         if ui.button("Delete").clicked() {
-            actions.macro_actions.push(MacroAction::Remove {
+            actions.commands.push(EngineCommand::RemoveMacro {
                 uuid: m.uuid.clone(),
             });
-            actions.deselect_macro = true;
+            actions.session.deselect_macro = true;
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("x Close").clicked() {
-                actions.deselect_macro = true;
+                actions.session.deselect_macro = true;
             }
         });
     });
@@ -285,7 +283,7 @@ fn render_macro_value(
                 })
                 .inner;
             if resp.changed() {
-                actions.macro_actions.push(MacroAction::SetValue {
+                actions.commands.push(EngineCommand::SetMacroValue {
                     uuid: m.uuid.clone(),
                     value: v,
                 });
@@ -300,7 +298,7 @@ fn render_macro_value(
                 })
                 .inner;
             if resp.changed() {
-                actions.macro_actions.push(MacroAction::SetValue {
+                actions.commands.push(EngineCommand::SetMacroValue {
                     uuid: m.uuid.clone(),
                     value: v,
                 });
@@ -334,11 +332,11 @@ fn render_macro_value(
                 // Fire once: rising edge (1.0) then release (0.0) so the next
                 // click is a fresh rising edge.
                 if resp.clicked() {
-                    actions.macro_actions.push(MacroAction::SetValue {
+                    actions.commands.push(EngineCommand::SetMacroValue {
                         uuid: m.uuid.clone(),
                         value: 1.0,
                     });
-                    actions.macro_actions.push(MacroAction::SetValue {
+                    actions.commands.push(EngineCommand::SetMacroValue {
                         uuid: m.uuid.clone(),
                         value: 0.0,
                     });
@@ -350,7 +348,7 @@ fn render_macro_value(
                 let prev = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
                 if down != prev {
                     ui.data_mut(|d| d.insert_temp(id, down));
-                    actions.macro_actions.push(MacroAction::SetValue {
+                    actions.commands.push(EngineCommand::SetMacroValue {
                         uuid: m.uuid.clone(),
                         value: if down { 1.0 } else { 0.0 },
                     });
@@ -371,7 +369,7 @@ fn render_kind_selector(ui: &mut egui::Ui, m: &Macro, actions: &mut UIActions) {
                     .clicked()
                     && m.kind != kind
                 {
-                    actions.macro_actions.push(MacroAction::SetKind {
+                    actions.commands.push(EngineCommand::SetMacroKind {
                         uuid: m.uuid.clone(),
                         kind,
                     });
@@ -396,10 +394,12 @@ fn render_button_behavior_selector(ui: &mut egui::Ui, m: &Macro, actions: &mut U
                     .clicked()
                     && behavior != b
                 {
-                    actions.macro_actions.push(MacroAction::SetButtonBehavior {
-                        uuid: m.uuid.clone(),
-                        behavior: b,
-                    });
+                    actions
+                        .commands
+                        .push(EngineCommand::SetMacroButtonBehavior {
+                            uuid: m.uuid.clone(),
+                            behavior: b,
+                        });
                 }
             }
         });
@@ -442,12 +442,10 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
                         .on_hover_text("Remove this modulation")
                         .clicked()
                     {
-                        actions.modulation_actions.push(
-                            ModulationAction::RemoveMacroModulationSource {
-                                macro_uuid: m.uuid.clone(),
-                                source_id: a.source_id.clone(),
-                            },
-                        );
+                        actions.commands.push(EngineCommand::ClearModulationSource {
+                            target: Macro::value_mod_key(&m.uuid),
+                            source_id: a.source_id.clone(),
+                        });
                     }
                 });
             });
@@ -468,13 +466,11 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
                     )
                     .clicked()
                 {
-                    actions
-                        .modulation_actions
-                        .push(ModulationAction::AssignMacroModulation {
-                            macro_uuid: m.uuid.clone(),
-                            source_id: entry.uuid.clone(),
-                            amount: 0.5,
-                        });
+                    actions.commands.push(EngineCommand::AssignModulation {
+                        target: Macro::value_mod_key(&m.uuid),
+                        source_id: entry.uuid.clone(),
+                        amount: 0.5,
+                    });
                 }
             }
         });
@@ -614,7 +610,7 @@ fn render_targets_editor(
                 });
 
             if changed {
-                actions.macro_actions.push(MacroAction::UpdateTarget {
+                actions.commands.push(EngineCommand::UpdateMacroTarget {
                     uuid: m.uuid.clone(),
                     target_idx: ti,
                     min,
@@ -629,7 +625,7 @@ fn render_targets_editor(
                 .on_hover_text("Remove target")
                 .clicked()
             {
-                actions.macro_actions.push(MacroAction::RemoveTarget {
+                actions.commands.push(EngineCommand::RemoveMacroTarget {
                     uuid: m.uuid.clone(),
                     target_idx: ti,
                 });
@@ -670,7 +666,7 @@ fn render_trigger_editor(
                 } else {
                     next.retain(|t| !matches!(t, TriggerAction::Global(g) if *g == ga));
                 }
-                actions.macro_actions.push(MacroAction::SetTriggers {
+                actions.commands.push(EngineCommand::SetMacroTriggers {
                     uuid: m.uuid.clone(),
                     actions: next,
                 });
@@ -686,7 +682,7 @@ fn render_trigger_editor(
                 if ui.small_button("x").clicked() {
                     let mut next = triggers.clone();
                     next.remove(i);
-                    actions.macro_actions.push(MacroAction::SetTriggers {
+                    actions.commands.push(EngineCommand::SetMacroTriggers {
                         uuid: m.uuid.clone(),
                         actions: next,
                     });
@@ -698,7 +694,7 @@ fn render_trigger_editor(
     if let Some(path) = target_picker_combo(ui, &m.uuid, paths, true) {
         let mut next = triggers.clone();
         next.push(TriggerAction::Param { path, value: 1.0 });
-        actions.macro_actions.push(MacroAction::SetTriggers {
+        actions.commands.push(EngineCommand::SetMacroTriggers {
             uuid: m.uuid.clone(),
             actions: next,
         });
@@ -714,7 +710,7 @@ fn add_target_combo(
     trigger: bool,
 ) {
     if let Some(path) = target_picker_combo(ui, uuid, paths, trigger) {
-        actions.macro_actions.push(MacroAction::AddTarget {
+        actions.commands.push(EngineCommand::AddMacroTarget {
             uuid: uuid.to_string(),
             path,
         });
@@ -776,7 +772,7 @@ fn macro_learn_overlay(
     }
     let id = ui.id().with(("macro_midi_learn", path.as_str()));
     if ui.interact(rect, id, egui::Sense::click()).clicked() {
-        actions.midi_learn_select = Some(path);
+        actions.session.midi_learn_select = Some(path);
     }
 }
 

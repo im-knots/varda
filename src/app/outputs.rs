@@ -4,70 +4,8 @@ use super::VardaApp;
 use crate::renderer::context::{
     HeadlessOutput, OutputSource, OutputTarget, OutputWindow, SurfaceAssignment, UnifiedOutput,
 };
-use crate::usecases::ui;
 
 impl VardaApp {
-    /// Apply output-related UI actions.
-    pub fn apply_output_actions(&mut self, ui_actions: &ui::UIActions) {
-        use crate::engine::EngineCommand;
-        for action in &ui_actions.output_actions {
-            let cmd = match action {
-                ui::OutputAction::Create => EngineCommand::CreateOutput,
-                ui::OutputAction::CreateHeadless { target } => {
-                    EngineCommand::CreateHeadlessOutput {
-                        target: target.clone(),
-                    }
-                }
-                ui::OutputAction::Close { idx } => EngineCommand::CloseOutput { idx: *idx },
-                ui::OutputAction::SetTarget { idx, target } => EngineCommand::SetOutputTarget {
-                    idx: *idx,
-                    target: target.clone(),
-                },
-                ui::OutputAction::Start { idx } => EngineCommand::StartOutput { idx: *idx },
-                ui::OutputAction::Stop { idx } => EngineCommand::StopOutput { idx: *idx },
-                ui::OutputAction::AssignSurface {
-                    output_idx,
-                    surface_uuid,
-                } => EngineCommand::AssignSurfaceToOutputByIdx {
-                    output_idx: *output_idx,
-                    surface_uuid: surface_uuid.clone(),
-                },
-                ui::OutputAction::UnassignSurface {
-                    output_idx,
-                    assignment_idx,
-                } => EngineCommand::UnassignSurfaceFromOutputByIdx {
-                    output_idx: *output_idx,
-                    assignment_idx: *assignment_idx,
-                },
-                ui::OutputAction::SetCalibrationMode { idx, mode } => {
-                    EngineCommand::SetCalibrationMode {
-                        idx: *idx,
-                        mode: *mode,
-                    }
-                }
-                ui::OutputAction::SetEdgeBlend { output_idx, config } => {
-                    EngineCommand::SetEdgeBlend {
-                        output_idx: *output_idx,
-                        config: *config,
-                    }
-                }
-                ui::OutputAction::SetEdgeBlendMode { output_idx, mode } => {
-                    EngineCommand::SetEdgeBlendMode {
-                        output_idx: *output_idx,
-                        mode: *mode,
-                    }
-                }
-                ui::OutputAction::SetRotation { idx, rotation } => {
-                    EngineCommand::SetOutputRotation {
-                        idx: *idx,
-                        rotation: *rotation,
-                    }
-                }
-            };
-            self.execute_command(cmd);
-        }
-    }
-
     /// Create pending outputs (deferred from UI actions).
     /// Windowed/Display outputs need the event loop; headless outputs are created directly.
     pub fn create_pending_outputs(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {

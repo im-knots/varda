@@ -48,7 +48,8 @@ fn multi_step_add_deck_set_opacity_verify() {
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
-    assert!(matches!(r, CommandResult::Ok), "{r:?}");
+    // Deck-creating commands report the new deck's UUID (see ui-engine-boundary.md WS1).
+    assert!(matches!(r, CommandResult::OkWithId { .. }), "{r:?}");
     // Channels start empty, so the first added deck is at index 0
     fire(
         &mut app,

@@ -19,6 +19,7 @@ mod stage;
 pub(crate) mod utils;
 
 use super::{EffectDrag, LibraryDrag, UIActions, UIData};
+use crate::engine::{EffectTarget, EngineCommand};
 use deck_detail::render_bottom_panel;
 use library::render_library_panel;
 use mixer::render_central_panel;
@@ -55,7 +56,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         .on_hover_text("Open library (L)")
                         .clicked()
                     {
-                        actions.toggle_library_panel = true;
+                        actions.session.toggle_library_panel = true;
                     }
                 });
             });
@@ -82,7 +83,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         .on_hover_text("Open master panel")
                         .clicked()
                     {
-                        actions.toggle_right_panel = true;
+                        actions.session.toggle_right_panel = true;
                     }
                 });
             });
@@ -123,7 +124,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 super::widgets::draw_midi_learn_glow(ui, undo_resp.rect);
                             }
                             if undo_resp.clicked() {
-                                actions.midi_learn_select = Some("action/undo".to_string());
+                                actions.session.midi_learn_select = Some("action/undo".to_string());
                             }
                         } else {
                             let is_target = data.keyboard_learn_target.as_deref() == Some("Undo");
@@ -133,13 +134,13 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 super::widgets::draw_keyboard_learn_glow(ui, undo_resp.rect);
                             }
                             if undo_resp.clicked() {
-                                actions.keyboard_learn_select = Some(
+                                actions.session.keyboard_learn_select = Some(
                                     crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Undo),
                                 );
                             }
                         }
                     } else if undo_resp.clicked() {
-                        actions.undo_requested = true;
+                        actions.session.undo_requested = true;
                     }
                 }
                 {
@@ -157,7 +158,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 super::widgets::draw_midi_learn_glow(ui, redo_resp.rect);
                             }
                             if redo_resp.clicked() {
-                                actions.midi_learn_select = Some("action/redo".to_string());
+                                actions.session.midi_learn_select = Some("action/redo".to_string());
                             }
                         } else {
                             let is_target = data.keyboard_learn_target.as_deref() == Some("Redo");
@@ -167,13 +168,13 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 super::widgets::draw_keyboard_learn_glow(ui, redo_resp.rect);
                             }
                             if redo_resp.clicked() {
-                                actions.keyboard_learn_select = Some(
+                                actions.session.keyboard_learn_select = Some(
                                     crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Redo),
                                 );
                             }
                         }
                     } else if redo_resp.clicked() {
-                        actions.redo_requested = true;
+                        actions.session.redo_requested = true;
                     }
                 }
                 {
@@ -188,7 +189,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 super::widgets::draw_midi_learn_glow(ui, save_resp.rect);
                             }
                             if save_resp.clicked() {
-                                actions.midi_learn_select = Some("action/save".to_string());
+                                actions.session.midi_learn_select = Some("action/save".to_string());
                             }
                         } else {
                             let is_target = data.keyboard_learn_target.as_deref() == Some("Save");
@@ -198,13 +199,13 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 super::widgets::draw_keyboard_learn_glow(ui, save_resp.rect);
                             }
                             if save_resp.clicked() {
-                                actions.keyboard_learn_select = Some(
+                                actions.session.keyboard_learn_select = Some(
                                     crate::keymap::KeyTarget::Action(crate::keymap::ActionId::Save),
                                 );
                             }
                         }
                     } else if save_resp.clicked() {
-                        actions.save_requested = true;
+                        actions.session.save_requested = true;
                     }
                 }
 
@@ -218,7 +219,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         .on_hover_text("Click to exit MIDI learn mode")
                         .clicked()
                     {
-                        actions.midi_learn_toggle = true;
+                        actions.session.midi_learn_toggle = true;
                     }
                 }
                 if data.keyboard_learn_active {
@@ -230,7 +231,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         .on_hover_text("Click to exit keyboard learn mode")
                         .clicked()
                     {
-                        actions.keyboard_learn_toggle = true;
+                        actions.session.keyboard_learn_toggle = true;
                     }
                 }
 
@@ -435,7 +436,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
             // In learn mode: intercept key presses for binding, don't dispatch normally
             if let Some((key, mods)) = pressed.first() {
                 let combo = KeyCombo::from_egui(*key, mods);
-                actions.keyboard_learn_bind = Some(combo);
+                actions.session.keyboard_learn_bind = Some(combo);
             }
         } else {
             // Normal dispatch: look up each pressed key in the keymap
@@ -443,25 +444,27 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                 let combo = KeyCombo::from_egui(*key, mods);
                 if let Some(target) = data.keymap_bindings.get(&combo) {
                     match target {
-                        KeyTarget::Action(ActionId::Undo) => actions.undo_requested = true,
-                        KeyTarget::Action(ActionId::Redo) => actions.redo_requested = true,
-                        KeyTarget::Action(ActionId::Save) => actions.save_requested = true,
+                        KeyTarget::Action(ActionId::Undo) => actions.session.undo_requested = true,
+                        KeyTarget::Action(ActionId::Redo) => actions.session.redo_requested = true,
+                        KeyTarget::Action(ActionId::Save) => actions.session.save_requested = true,
                         KeyTarget::Action(ActionId::ToggleLibrary) => {
                             if !ui.egui_wants_keyboard_input() {
-                                actions.toggle_library_panel = true;
+                                actions.session.toggle_library_panel = true;
                             }
                         }
                         KeyTarget::Action(ActionId::ToggleStageEditor) => {
-                            actions.toggle_stage_editor = true;
+                            actions.session.toggle_stage_editor = true;
                         }
                         KeyTarget::Action(ActionId::ToggleMidiLearn) => {
-                            actions.midi_learn_toggle = true;
+                            actions.session.midi_learn_toggle = true;
                         }
                         KeyTarget::Action(ActionId::ToggleKeyboardLearn) => {
-                            actions.keyboard_learn_toggle = true;
+                            actions.session.keyboard_learn_toggle = true;
                         }
                         KeyTarget::ParamPath(path) => {
-                            actions.keyboard_param_toggle = Some(path.clone());
+                            actions
+                                .commands
+                                .push(EngineCommand::ToggleParam { path: path.clone() });
                         }
                         // Stage-context actions are handled in stage.rs
                         _ => {}
@@ -477,6 +480,15 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 /// Deferred library drag-and-drop handler.
 /// Each frame while a LibraryDrag payload is active, find which drop target the pointer is over.
 /// When the payload disappears (mouse released), apply the drop action.
+/// Resolve a filter registry index (as stashed by the library drag source) to
+/// its shader name, so the panel can push a canonical `AddEffect` command.
+fn resolve_filter_name(data: &UIData, filter_idx: usize) -> Option<String> {
+    data.filters
+        .iter()
+        .find(|(_, ri)| *ri == filter_idx)
+        .map(|(name, _)| name.clone())
+}
+
 fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions) {
     let had_payload_id = egui::Id::new("__lib_dnd_had_payload");
     let hover_ch_id = egui::Id::new("__lib_dnd_hover_ch");
@@ -562,7 +574,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         gen_idx,
                         ch_idx
                     );
-                    actions.shader_to_add = Some((ch_idx, gen_idx));
+                    actions.session.shader_to_add = Some((ch_idx, gen_idx));
                 }
 
                 let cam_key = egui::Id::new("__lib_dnd_cam_id");
@@ -570,7 +582,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     ctx.memory(|mem| mem.data.get_temp(cam_key));
                 if let Some(cam_id) = cam_id {
                     log::info!("Library drop (deferred): camera {} -> ch{}", cam_id, ch_idx);
-                    actions.camera_to_add = Some((ch_idx, cam_id));
+                    actions.commands.push(EngineCommand::AddCameraDeck {
+                        channel_idx: ch_idx,
+                        camera_id: cam_id,
+                    });
                 }
 
                 let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
@@ -581,7 +596,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         ndi_name,
                         ch_idx
                     );
-                    actions.ndi_to_add = Some((ch_idx, ndi_name));
+                    actions.commands.push(EngineCommand::AddNdiDeck {
+                        channel_idx: ch_idx,
+                        source_name: ndi_name,
+                    });
                 }
 
                 let syph_key = egui::Id::new("__lib_dnd_syph_name");
@@ -592,7 +610,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         syph_name,
                         ch_idx
                     );
-                    actions.syphon_to_add = Some((ch_idx, syph_name));
+                    actions.commands.push(EngineCommand::AddSyphonDeck {
+                        channel_idx: ch_idx,
+                        server_name: syph_name,
+                    });
                 }
 
                 let srt_key = egui::Id::new("__lib_dnd_srt_config");
@@ -605,19 +626,29 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         mode,
                         ch_idx
                     );
-                    actions.srt_to_add = Some((ch_idx, url, mode));
+                    actions.commands.push(EngineCommand::AddSrtDeck {
+                        channel_idx: ch_idx,
+                        url,
+                        mode,
+                    });
                 }
 
                 let hls_key = egui::Id::new("__lib_dnd_hls_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(hls_key)) {
                     log::info!("Library drop (deferred): HLS '{}' -> ch{}", url, ch_idx);
-                    actions.hls_to_add = Some((ch_idx, url));
+                    actions.commands.push(EngineCommand::AddHlsDeck {
+                        channel_idx: ch_idx,
+                        url,
+                    });
                 }
 
                 let dash_key = egui::Id::new("__lib_dnd_dash_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
                     log::info!("Library drop (deferred): DASH '{}' -> ch{}", url, ch_idx);
-                    actions.dash_to_add = Some((ch_idx, url));
+                    actions.commands.push(EngineCommand::AddDashDeck {
+                        channel_idx: ch_idx,
+                        url,
+                    });
                 }
 
                 let rtmp_key = egui::Id::new("__lib_dnd_rtmp_config");
@@ -631,13 +662,20 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         mode,
                         ch_idx
                     );
-                    actions.rtmp_to_add = Some((ch_idx, url, mode));
+                    actions.commands.push(EngineCommand::AddRtmpDeck {
+                        channel_idx: ch_idx,
+                        url,
+                        mode,
+                    });
                 }
 
                 let html_key = egui::Id::new("__lib_dnd_html_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(html_key)) {
                     log::info!("Library drop (deferred): HTML '{}' -> ch{}", url, ch_idx);
-                    actions.html_to_add = Some((ch_idx, url));
+                    actions.commands.push(EngineCommand::AddHtmlDeck {
+                        channel_idx: ch_idx,
+                        url,
+                    });
                 }
 
                 // Deck preset dropped on a channel
@@ -650,12 +688,17 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         preset_idx,
                         ch_idx
                     );
-                    actions.deck_preset_to_add = Some((ch_idx, preset_idx));
+                    actions.commands.push(EngineCommand::LoadDeckPreset {
+                        channel_idx: ch_idx,
+                        preset_idx,
+                    });
                 }
             } else if on_new_ch_zone {
-                // Dropped on empty space — create a new channel and add the source to it
+                // Dropped on empty space — create a new channel and add the source to it.
+                // AddChannel is pushed first so the subsequent Add*Deck command
+                // (targeting `new_ch_idx`) resolves against the created channel.
                 let new_ch_idx = data.channels.len();
-                actions.add_channel = true;
+                actions.commands.push(EngineCommand::AddChannel);
 
                 let gen_key = egui::Id::new("__lib_dnd_gen_idx");
                 if let Some(gen_idx) = ctx.memory(|mem| mem.data.get_temp::<usize>(gen_key)) {
@@ -664,7 +707,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         gen_idx,
                         new_ch_idx
                     );
-                    actions.shader_to_add = Some((new_ch_idx, gen_idx));
+                    actions.session.shader_to_add = Some((new_ch_idx, gen_idx));
                 }
 
                 let cam_key = egui::Id::new("__lib_dnd_cam_id");
@@ -676,7 +719,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         cam_id,
                         new_ch_idx
                     );
-                    actions.camera_to_add = Some((new_ch_idx, cam_id));
+                    actions.commands.push(EngineCommand::AddCameraDeck {
+                        channel_idx: new_ch_idx,
+                        camera_id: cam_id,
+                    });
                 }
 
                 let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
@@ -686,7 +732,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         ndi_name,
                         new_ch_idx
                     );
-                    actions.ndi_to_add = Some((new_ch_idx, ndi_name));
+                    actions.commands.push(EngineCommand::AddNdiDeck {
+                        channel_idx: new_ch_idx,
+                        source_name: ndi_name,
+                    });
                 }
 
                 let syph_key = egui::Id::new("__lib_dnd_syph_name");
@@ -696,7 +745,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         syph_name,
                         new_ch_idx
                     );
-                    actions.syphon_to_add = Some((new_ch_idx, syph_name));
+                    actions.commands.push(EngineCommand::AddSyphonDeck {
+                        channel_idx: new_ch_idx,
+                        server_name: syph_name,
+                    });
                 }
 
                 let srt_key = egui::Id::new("__lib_dnd_srt_config");
@@ -710,7 +762,11 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         mode,
                         new_ch_idx
                     );
-                    actions.srt_to_add = Some((new_ch_idx, url, mode));
+                    actions.commands.push(EngineCommand::AddSrtDeck {
+                        channel_idx: new_ch_idx,
+                        url,
+                        mode,
+                    });
                 }
 
                 let hls_key = egui::Id::new("__lib_dnd_hls_url");
@@ -720,7 +776,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         url,
                         new_ch_idx
                     );
-                    actions.hls_to_add = Some((new_ch_idx, url));
+                    actions.commands.push(EngineCommand::AddHlsDeck {
+                        channel_idx: new_ch_idx,
+                        url,
+                    });
                 }
 
                 let dash_key = egui::Id::new("__lib_dnd_dash_url");
@@ -730,7 +789,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         url,
                         new_ch_idx
                     );
-                    actions.dash_to_add = Some((new_ch_idx, url));
+                    actions.commands.push(EngineCommand::AddDashDeck {
+                        channel_idx: new_ch_idx,
+                        url,
+                    });
                 }
 
                 let rtmp_key = egui::Id::new("__lib_dnd_rtmp_config");
@@ -744,7 +806,11 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         mode,
                         new_ch_idx
                     );
-                    actions.rtmp_to_add = Some((new_ch_idx, url, mode));
+                    actions.commands.push(EngineCommand::AddRtmpDeck {
+                        channel_idx: new_ch_idx,
+                        url,
+                        mode,
+                    });
                 }
 
                 let html_key = egui::Id::new("__lib_dnd_html_url");
@@ -754,7 +820,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         url,
                         new_ch_idx
                     );
-                    actions.html_to_add = Some((new_ch_idx, url));
+                    actions.commands.push(EngineCommand::AddHtmlDeck {
+                        channel_idx: new_ch_idx,
+                        url,
+                    });
                 }
 
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
@@ -766,7 +835,10 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         preset_idx,
                         new_ch_idx
                     );
-                    actions.deck_preset_to_add = Some((new_ch_idx, preset_idx));
+                    actions.commands.push(EngineCommand::LoadDeckPreset {
+                        channel_idx: new_ch_idx,
+                        preset_idx,
+                    });
                 }
             }
 
@@ -780,13 +852,19 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         preset_idx,
                         ch_idx
                     );
-                    actions.channel_preset_to_add = Some((Some(ch_idx), preset_idx));
+                    actions.commands.push(EngineCommand::LoadChannelPreset {
+                        target_channel: Some(ch_idx),
+                        preset_idx,
+                    });
                 } else {
                     log::info!(
                         "Library drop (deferred): channel preset {} -> new channel",
                         preset_idx
                     );
-                    actions.channel_preset_to_add = Some((None, preset_idx));
+                    actions.commands.push(EngineCommand::LoadChannelPreset {
+                        target_channel: None,
+                        preset_idx,
+                    });
                 }
             }
 
@@ -802,7 +880,12 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                                 ch_idx,
                                 deck_idx
                             );
-                            actions.effect_to_add = Some((ch_idx, deck_idx, filter_idx));
+                            if let Some(shader_name) = resolve_filter_name(data, filter_idx) {
+                                actions.commands.push(EngineCommand::AddEffect {
+                                    target: EffectTarget::Deck(ch_idx, deck_idx),
+                                    shader_name,
+                                });
+                            }
                         }
                         "channel" => {
                             log::info!(
@@ -810,14 +893,24 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                                 filter_idx,
                                 ch_idx
                             );
-                            actions.ch_effect_to_add = Some((ch_idx, filter_idx));
+                            if let Some(shader_name) = resolve_filter_name(data, filter_idx) {
+                                actions.commands.push(EngineCommand::AddEffect {
+                                    target: EffectTarget::Channel(ch_idx),
+                                    shader_name,
+                                });
+                            }
                         }
                         "master" => {
                             log::info!(
                                 "Library drop (deferred): effect {} -> master fx",
                                 filter_idx
                             );
-                            actions.master_effect_to_add = Some(filter_idx);
+                            if let Some(shader_name) = resolve_filter_name(data, filter_idx) {
+                                actions.commands.push(EngineCommand::AddEffect {
+                                    target: EffectTarget::Master,
+                                    shader_name,
+                                });
+                            }
                         }
                         _ => {}
                     }
@@ -938,7 +1031,11 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                                     src_eff,
                                     to
                                 );
-                                actions.effect_to_move = Some((src_ch, src_dk, src_eff, to));
+                                actions.commands.push(EngineCommand::MoveEffect {
+                                    target: EffectTarget::Deck(src_ch, src_dk),
+                                    from_idx: src_eff,
+                                    to_idx: to,
+                                });
                             }
                         }
                     }
@@ -957,7 +1054,11 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                                     src_eff,
                                     to
                                 );
-                                actions.ch_effect_to_move = Some((src_ch, src_eff, to));
+                                actions.commands.push(EngineCommand::MoveEffect {
+                                    target: EffectTarget::Channel(src_ch),
+                                    from_idx: src_eff,
+                                    to_idx: to,
+                                });
                             }
                         }
                     }
@@ -974,7 +1075,11 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                                     src_eff,
                                     to
                                 );
-                                actions.master_effect_to_move = Some((src_eff, to));
+                                actions.commands.push(EngineCommand::MoveEffect {
+                                    target: EffectTarget::Master,
+                                    from_idx: src_eff,
+                                    to_idx: to,
+                                });
                             }
                         }
                     }
@@ -1017,8 +1122,8 @@ fn handle_sequence_step_dnd(ctx: &egui::Context, _data: &UIData, actions: &mut U
                 let insert_idx = if to > payload.step_idx { to - 1 } else { to };
                 if insert_idx != payload.step_idx {
                     actions
-                        .sequence_actions
-                        .push(super::SequenceAction::MoveStep {
+                        .commands
+                        .push(crate::engine::EngineCommand::MoveStep {
                             seq_idx: payload.seq_idx,
                             from: payload.step_idx,
                             to: insert_idx,
@@ -1073,7 +1178,7 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_min_width(200.0);
                     if ui.button(label).clicked() {
-                        actions.midi_learn_toggle = true;
+                        actions.session.midi_learn_toggle = true;
                         ctx.memory_mut(|mem| {
                             mem.data.remove::<egui::Pos2>(popup_id);
                             mem.data.remove::<bool>(popup_fresh_id);
@@ -1085,7 +1190,7 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
                         "⌨ Enter Keyboard Learn"
                     };
                     if ui.button(kb_label).clicked() {
-                        actions.keyboard_learn_toggle = true;
+                        actions.session.keyboard_learn_toggle = true;
                         ctx.memory_mut(|mem| {
                             mem.data.remove::<egui::Pos2>(popup_id);
                             mem.data.remove::<bool>(popup_fresh_id);
@@ -1251,7 +1356,9 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
 
     // Auto option
     if ui.radio(is_auto, "Auto (recommended)").clicked() && !is_auto {
-        actions.clock_preference = Some(crate::clock::ClockPreference::Auto);
+        actions.commands.push(EngineCommand::SetClockPreference {
+            preference: crate::clock::ClockPreference::Auto,
+        });
     }
 
     // Detected MIDI devices
@@ -1260,8 +1367,10 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
         let bpm_str = src.bpm.map_or("--".to_string(), |b| format!("{:.0}", b));
         let label = format!("🟣 {}  {} BPM", src.device_name, bpm_str);
         if ui.radio(is_selected, label).clicked() && !is_selected {
-            actions.clock_preference = Some(crate::clock::ClockPreference::ForceMidi {
-                device_id: src.device_id,
+            actions.commands.push(EngineCommand::SetClockPreference {
+                preference: crate::clock::ClockPreference::ForceMidi {
+                    device_id: src.device_id,
+                },
             });
         }
     }
@@ -1274,7 +1383,9 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
             .map_or("--".to_string(), |b| format!("{:.0}", b));
         let label = format!("🔵 OSC  {} BPM", bpm_str);
         if ui.radio(is_osc, label).clicked() && !is_osc {
-            actions.clock_preference = Some(crate::clock::ClockPreference::ForceOsc);
+            actions.commands.push(EngineCommand::SetClockPreference {
+                preference: crate::clock::ClockPreference::ForceOsc,
+            });
         }
     }
 
@@ -1285,7 +1396,9 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
         .map_or("--".to_string(), |b| format!("{:.0}", b));
     let label = format!("🟢 Audio only  {} BPM", audio_bpm_str);
     if ui.radio(is_audio, label).clicked() && !is_audio {
-        actions.clock_preference = Some(crate::clock::ClockPreference::ForceAudio);
+        actions.commands.push(EngineCommand::SetClockPreference {
+            preference: crate::clock::ClockPreference::ForceAudio,
+        });
     }
 
     // Manual BPM option
@@ -1293,8 +1406,9 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     let mut manual_bpm = data.clock_manual_bpm.unwrap_or(120.0);
     ui.horizontal(|ui| {
         if ui.radio(is_manual, "🟠 Manual").clicked() && !is_manual {
-            actions.clock_preference =
-                Some(crate::clock::ClockPreference::ForceManual { bpm: manual_bpm });
+            actions.commands.push(EngineCommand::SetClockPreference {
+                preference: crate::clock::ClockPreference::ForceManual { bpm: manual_bpm },
+            });
         }
         if is_manual {
             let drag = ui.add(
@@ -1304,7 +1418,9 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
                     .suffix(" BPM"),
             );
             if drag.changed() {
-                actions.manual_bpm = Some(manual_bpm);
+                actions
+                    .commands
+                    .push(EngineCommand::SetManualBpm { bpm: manual_bpm });
             }
         }
     });
@@ -1355,7 +1471,10 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
         let is_current = current_w == w && current_h == h;
         let text = format!("{} ({}×{})", label, w, h);
         if ui.radio(is_current, text).clicked() && !is_current {
-            actions.resolution_change = Some((w, h));
+            actions.commands.push(EngineCommand::SetRenderResolution {
+                width: w,
+                height: h,
+            });
         }
     }
 
@@ -1399,7 +1518,10 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
         )
         .clicked()
     {
-        actions.resolution_change = Some((custom_w, custom_h));
+        actions.commands.push(EngineCommand::SetRenderResolution {
+            width: custom_w,
+            height: custom_h,
+        });
     }
 
     ui.separator();
@@ -1428,7 +1550,7 @@ fn render_target_fps_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
     for &(label, fps) in presets {
         let is_current = current == fps;
         if ui.radio(is_current, label).clicked() && !is_current {
-            actions.target_fps_change = Some(fps);
+            actions.commands.push(EngineCommand::SetTargetFps { fps });
         }
     }
 
@@ -1486,7 +1608,7 @@ fn render_tonemap_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActi
 
     for &(label, mode) in TONEMAP_PRESETS {
         if ui.radio(current == mode, label).clicked() && current != mode {
-            actions.set_tonemap_mode = Some(mode);
+            actions.commands.push(EngineCommand::SetTonemapMode(mode));
         }
     }
 
@@ -1515,14 +1637,16 @@ fn render_tonemap_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActi
 
     // "None" option
     if ui.radio(active_lut.is_none(), "None").clicked() && active_lut.is_some() {
-        actions.unload_lut = true;
+        actions.commands.push(EngineCommand::UnloadLut);
     }
 
     // Available LUT files
     for lut_name in &data.available_luts {
         let is_active = active_lut == Some(lut_name.as_str());
         if ui.radio(is_active, lut_name).clicked() && !is_active {
-            actions.load_lut = Some(lut_name.clone());
+            actions.commands.push(EngineCommand::LoadLut {
+                filename: lut_name.clone(),
+            });
         }
     }
 

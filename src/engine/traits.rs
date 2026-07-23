@@ -16,11 +16,13 @@ pub trait MixerCommands {
     fn set_crossfader(&mut self, position: f32);
     fn start_auto_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing);
     fn start_beat_crossfade(&mut self, target: f32, beats: f32);
-    fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<()>;
-    fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()>;
-    fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()>;
-    fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<()>;
-    fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<()>;
+    /// Deck-creating commands return the new deck's stable UUID so callers can
+    /// report it (`CommandResult::OkWithId`) and register a preview texture.
+    fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<String>;
+    fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String>;
+    fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String>;
+    fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<String>;
+    fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<String>;
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()>;
     fn move_deck(&mut self, src_ch: usize, src_deck: usize, dst_ch: usize) -> Result<()>;
     fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize);

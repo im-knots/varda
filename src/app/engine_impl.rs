@@ -38,7 +38,7 @@ impl MixerCommands for VardaApp {
         self.mixer.start_beat_crossfade(target, beats);
     }
 
-    fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<()> {
+    fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<String> {
         let generators = self.registry.generators();
         let shader = generators
             .iter()
@@ -62,6 +62,7 @@ impl MixerCommands for VardaApp {
             )?
         };
         deck.ensure_preprocessor_analyzers(&self.analyzer_registry);
+        let uuid = deck.uuid().to_string();
         let ch = self
             .mixer
             .channel_mut(channel_idx)
@@ -73,12 +74,13 @@ impl MixerCommands for VardaApp {
             channel_idx,
             shader_name
         );
-        Ok(())
+        Ok(uuid)
     }
 
-    fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()> {
+    fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String> {
         let deck =
             Deck::new_from_image(&self.context, path, self.render_width, self.render_height)?;
+        let uuid = deck.uuid().to_string();
         let ch = self
             .mixer
             .channel_mut(channel_idx)
@@ -91,12 +93,13 @@ impl MixerCommands for VardaApp {
             channel_idx,
             name
         );
-        Ok(())
+        Ok(uuid)
     }
 
-    fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<()> {
+    fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String> {
         let deck =
             Deck::new_from_video(&self.context, path, self.render_width, self.render_height)?;
+        let uuid = deck.uuid().to_string();
         let ch = self
             .mixer
             .channel_mut(channel_idx)
@@ -109,12 +112,13 @@ impl MixerCommands for VardaApp {
             channel_idx,
             name
         );
-        Ok(())
+        Ok(uuid)
     }
 
-    fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<()> {
+    fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<String> {
         let deck =
             Deck::new_solid_color(&self.context, color, self.render_width, self.render_height)?;
+        let uuid = deck.uuid().to_string();
         let ch = self
             .mixer
             .channel_mut(channel_idx)
@@ -127,10 +131,10 @@ impl MixerCommands for VardaApp {
             channel_idx,
             name
         );
-        Ok(())
+        Ok(uuid)
     }
 
-    fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<()> {
+    fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<String> {
         let cam_name = self
             .camera_manager
             .devices()
@@ -150,6 +154,7 @@ impl MixerCommands for VardaApp {
             self.render_width,
             self.render_height,
         )?;
+        let uuid = deck.uuid().to_string();
         let ch = self
             .mixer
             .channel_mut(channel_idx)
@@ -161,7 +166,7 @@ impl MixerCommands for VardaApp {
             channel_idx,
             cam_name
         );
-        Ok(())
+        Ok(uuid)
     }
 
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()> {

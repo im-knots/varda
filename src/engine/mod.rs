@@ -26,6 +26,46 @@ pub enum CommandResult {
     Err { code: ErrorCode, message: String },
 }
 
+/// Typed, in-process result of executing a command through the GUI drain.
+///
+/// Distinct from [`CommandResult`] (the serializable HTTP/WS wire type): the
+/// windowed consumer needs same-frame, strongly-typed data to complete a
+/// mutation (register a preview texture by UUID, refresh state after undo).
+/// The bus consumers never see this — they get `CommandResult` over the
+/// oneshot reply. See [`/spec/ui-engine-boundary.md`] Decision #9.
+#[derive(Debug, Clone)]
+pub enum CommandOutcome {
+    /// No GUI side-channel data; carries the wire result verbatim.
+    Plain(CommandResult),
+    /// A deck was created. The GUI registers its preview texture from the
+    /// deck at `(channel_idx, deck_idx)`; `uuid` mirrors `OkWithId`.
+    DeckCreated {
+        channel_idx: usize,
+        deck_idx: usize,
+        uuid: String,
+    },
+    /// Undo/redo restored engine state. `structural_changed` tells the GUI to
+    /// re-register all preview textures; `dome_layout` carries the UI-local
+    /// dome flags to sync back into layout state.
+    HistoryRestored {
+        structural_changed: bool,
+        dome_layout: DomeLayoutFields,
+    },
+    /// A structural deck change (remove/move/reorder) shifted deck indices in
+    /// these channels. The GUI frees and re-registers preview textures for each
+    /// listed channel so the index-keyed texture map stays in sync.
+    DecksReindexed { channels: Vec<usize> },
+}
+
+/// Dome layout flags that live in UI layout state (not engine state) and must
+/// be synced back after an undo/redo restore.
+#[derive(Debug, Clone, Copy)]
+pub struct DomeLayoutFields {
+    pub dome_mode_active: bool,
+    pub dome_preset: crate::renderer::slicer::DomePreset,
+    pub dome_geometry: crate::renderer::slicer::DomeGeometry,
+}
+
 /// Error codes for command failures.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum ErrorCode {
@@ -169,6 +209,12 @@ pub enum EngineCommand {
     SetParam {
         path: String,
         value: ParamValue,
+    },
+    /// Toggle a parameter between its two extremes by path (keyboard-shortcut
+    /// affordance): crossfader 0↔1, opacity 0↔1, mute/solo flip, etc. The
+    /// two-value logic lives in `keymap::apply_keyboard_toggle_param`.
+    ToggleParam {
+        path: String,
     },
 
     // ── Audio ──────────────────────────────────────────────────
@@ -453,6 +499,12 @@ pub enum EngineCommand {
     RemoveRtmpLibraryEntry {
         url: String,
     },
+    AddHtmlLibraryEntry {
+        url: String,
+    },
+    RemoveHtmlLibraryEntry {
+        url: String,
+    },
 
     // ── Output ─────────────────────────────────────────────────
     CreateOutput,
@@ -723,6 +775,16 @@ pub enum EngineCommand {
     ConfirmDetectedContours {
         contours: Vec<crate::surface::detect::DetectedContour>,
     },
+    /// Import surfaces from a stage-plan file (image/SVG/DXF): detect contours
+    /// and create surfaces. Composite of detect + confirm.
+    ImportSurfacesFromFile {
+        path: std::path::PathBuf,
+    },
+    /// Generate per-projector dome surfaces with warp meshes from a dome setup.
+    /// Removes existing "Dome P*" surfaces, computes meshes, creates new ones.
+    GenerateDomeSlices {
+        setup: crate::renderer::slicer::DomeSetup,
+    },
     /// Detect contours from a camera snapshot.
     DetectFromCamera {
         camera_id: CameraId,
@@ -986,6 +1048,30 @@ pub enum EngineCommand {
     /// GPU execution time per category. Logs every frame.
     StartPerfProfile {
         frames: u32,
+    },
+
+    // ── Presets ────────────────────────────────────────────────
+    /// Load a deck preset (by library index) as a new deck appended to a channel.
+    LoadDeckPreset {
+        channel_idx: usize,
+        preset_idx: usize,
+    },
+    /// Load a channel preset (by library index). Fills `target_channel` if it is
+    /// given and empty; otherwise appends a new channel.
+    LoadChannelPreset {
+        target_channel: Option<usize>,
+        preset_idx: usize,
+    },
+    /// Save a deck's current config as a named deck preset (writes to disk).
+    SaveDeckPreset {
+        channel_idx: usize,
+        deck_idx: usize,
+        name: String,
+    },
+    /// Save a channel's current config as a named channel preset (writes to disk).
+    SaveChannelPreset {
+        channel_idx: usize,
+        name: String,
     },
 
     // ── Persistence ────────────────────────────────────────────
