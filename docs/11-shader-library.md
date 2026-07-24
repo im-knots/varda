@@ -14,14 +14,21 @@ Shaders are classified automatically by type:
 | Shader | Description |
 |--------|-------------|
 | `abstract_field.fs` | Abstract generative field — flowing organic patterns |
+| `apollonian_glow.fs` | Raymarched Kali-fold + Apollonian fractal tunnel lit entirely by an accumulated glow trail, with reflection pass |
+| `aurora_borealis.fs` | Northern lights — fake-volumetric raymarch through folded noise sheets, green-to-violet curtains with starfield |
 | `bars.fs` | Animated bars/stripes generator |
+| `bicycle_day.fs` | Raymarched "Amazing Surface" fractal tunnel shaded by normals + dark edge lines, low sun, procedural rainbow trail, with fractal trees lining the roadside |
 | `big_bang.fs` | Cyclical cosmic evolution with fluid-sim galaxy dust, stellar lifecycle, expansion/crunch |
+| `biomine.fs` | Raymarched biotube lattice (gyroid surfaces) pumping fluid through a mine tunnel, with cellular bump mapping and fake reflective/refractive fluid glow |
 | `black_hole.fs` | Particle-streak shell with emergent accretion disk, jets, orbiting crystals (black & white) |
 | `char_cycle.fs` | Cycles through glyphs from a selected script |
 | `checkerboard.fs` | Checkerboard pattern generator |
+| `clouds.fs` | Raymarched volumetric cloud layer flythrough with sun glow and rim-lit shadowing |
 | `crystal_cave.fs` | Fly through a 3D cave filled with growing crystal formations |
 | `cymatics.fs` | Chladni plate and Faraday wave vibration pattern generator |
 | `dark_matter.fs` | Cosmic web filament network (neuro noise) |
+| `digital_brain.fs` | Glowing voronoi-noise plasma with drifting camera and pulsing "moving electrons" octaves |
+| `eyes.fs` | Tiled grid of procedural cartoon eyes — autonomous blink, drifting gaze, IQ cosine-palette irises |
 | `fire.fs` | Procedural animated fire effect |
 | `fractal.fs` | Mandelbrot / Julia set generator |
 | `fractal_mandelbox.fs` | Raymarched 3D Mandelbox explorer with flythrough camera and orbit-trap coloring |
@@ -41,18 +48,23 @@ Shaders are classified automatically by type:
 | `particle.fs` | Procedural particle field generator |
 | `particle_collider.fs` | ATLAS/CERN-style collision with cascading fission tracks |
 | `plasma.fs` | Simple plasma effect |
+| `plasma_globe.fs` | Raymarched electrical arcs writhing inside a glowing plasma sphere, seen through a reflective outer shell |
 | `quantum_membrane.fs` | Rolling wave-mesh terrain with rainbow grid flyover |
 | `radar.fs` | Radar sweep generator |
 | `rings.fs` | Concentric animated rings generator |
 | `sacred_geometry.fs` | Flower of Life, Metatron's Cube, Sri Yantra, Fibonacci spiral, and more |
 | `shaper.fs` | Geometric shape generator — circle, triangle, square, star, polygon |
 | `solid_color.fs` | Solid color fill generator |
+| `star_nest.fs` | Volumetric raymarched star-field/nebula tunnel via an iterated absolute-inversion fractal, with look_at camera rotation |
 | `starfield.fs` | Classic parallax star tunnel |
+| `steel_lattice.fs` | Raymarched gyroid-like lattice of interlocking steel tubes with cellular bump mapping and a subtle blackbody-tinted fire-reflection glow |
 | `tas_psychedelic.fs` | Layered psychedelic bilateral ornamental art |
+| `truchet_tube.fs` | Raymarched superquadric truchet-tube tunnel flythrough with randomly-oriented arc cells |
 | `tunnelines.fs` | Infinite tunnel with animated lines |
 | `turing_3d.fs` | Ray-marched volumetric reaction-diffusion |
 | `turing_patterns.fs` | Brain-coral reaction-diffusion (Gray-Scott model) |
 | `voronoi.fs` | Animated cellular/organic Voronoi pattern |
+| `warped_grid.fs` | Raymarched pinwheel-skewed extruded grid of pylons along a warped/twisted tunnel path, early-2000s demoscene style, with per-cell glow-blink trail |
 
 ## Filters
 
