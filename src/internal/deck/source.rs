@@ -364,6 +364,11 @@ impl Deck {
             frame_count: 0,
             last_frame_time: now,
             external_source_view: None,
+            depth_rgb_view: None,
+            depth_intrinsics: None,
+            depth_source_size: None,
+            point_cloud_params: crate::depth::point_cloud::PointCloudParams::default(),
+            point_cloud_pipeline: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,
@@ -760,6 +765,33 @@ impl Deck {
         Self::build_media_deck(context, source_name, None, source, width, height)
     }
 
+    /// Create a new deck from a depth sensor (Kinect/LIDAR point cloud).
+    /// The sensor is managed by DepthSensorManager; this deck reprojects the
+    /// shared depth texture as a point cloud. See spec/depth-sensors.md.
+    pub fn new_from_depth_sensor(
+        context: &GpuContext,
+        sensor_id: crate::depth::DepthSensorId,
+        sensor_name: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name = format!("🛰 {}", sensor_name);
+        let (blit_pipeline, blit_pipeline_over_black) = external_blit_pipelines(context)?;
+
+        let source = DeckSource::ExternalSource {
+            kind: ExternalSourceKind::DepthSensor(sensor_id),
+            blit_pipeline,
+            blit_pipeline_over_black,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        Self::build_media_deck(context, source_name, None, source, width, height)
+    }
+
     /// Shared helper to build a Deck from a pre-built DeckSource with standard render targets.
     fn build_media_deck(
         context: &GpuContext,
@@ -830,6 +862,11 @@ impl Deck {
             frame_count: 0,
             last_frame_time: now,
             external_source_view: None,
+            depth_rgb_view: None,
+            depth_intrinsics: None,
+            depth_source_size: None,
+            point_cloud_params: crate::depth::point_cloud::PointCloudParams::default(),
+            point_cloud_pipeline: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs: None,
@@ -1119,6 +1156,11 @@ impl Deck {
             frame_count: 0,
             last_frame_time: now,
             external_source_view: None,
+            depth_rgb_view: None,
+            depth_intrinsics: None,
+            depth_source_size: None,
+            point_cloud_params: crate::depth::point_cloud::PointCloudParams::default(),
+            point_cloud_pipeline: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,

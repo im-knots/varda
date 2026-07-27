@@ -425,6 +425,11 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                                 .to_string();
                             SourceConfig::Html { url }
                         }
+                        "depth_sensor" => {
+                            // Store the sensor display name (strip the 🛰 prefix we add)
+                            let name = slot.deck.source_name().trim_start_matches("🛰 ").to_string();
+                            SourceConfig::DepthSensor { name }
+                        }
                         _ => return None,
                     };
 
@@ -856,6 +861,7 @@ pub fn restore_scene(
     context: &GpuContext,
     registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    depth_manager: &mut crate::depth::DepthSensorManager,
     ndi_manager: &mut crate::ndi::NdiManager,
     stream_manager: &mut crate::stream::StreamManager,
     html_manager: &mut crate::html::HtmlManager,
@@ -918,6 +924,7 @@ pub fn restore_scene(
                 context,
                 registry,
                 camera_manager,
+                depth_manager,
                 ndi_manager,
                 stream_manager,
                 html_manager,
@@ -1149,6 +1156,7 @@ pub(crate) fn restore_deck(
     context: &GpuContext,
     _registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    depth_manager: &mut crate::depth::DepthSensorManager,
     ndi_manager: &mut crate::ndi::NdiManager,
     stream_manager: &mut crate::stream::StreamManager,
     html_manager: &mut crate::html::HtmlManager,
@@ -1391,6 +1399,30 @@ pub(crate) fn restore_deck(
                 }
             }
         }
+        SourceConfig::DepthSensor { name } => {
+            // Match the sensor by name in the manager's device list, then open it.
+            // If absent (e.g. `depth` feature off or unplugged), skip with error.
+            let device = depth_manager
+                .devices()
+                .iter()
+                .find(|d| d.name == *name)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Depth sensor '{}' not found — is it connected?", name)
+                })?;
+            let (src_w, src_h) =
+                crate::depth::open_depth_sensor(depth_manager, device.id, &context.device)
+                    .with_context(|| format!("Failed to open depth sensor '{}'", name))?;
+            Deck::new_from_depth_sensor(
+                context,
+                device.id,
+                &device.name,
+                src_w,
+                src_h,
+                render_width,
+                render_height,
+            )?
+        }
     };
 
     // Restore UUID from config
@@ -1453,6 +1485,9 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
             deck.source_name().trim_start_matches("📺 ") == url
         }
         ("html", SourceConfig::Html { url }) => deck.source_name().trim_start_matches("🌐 ") == url,
+        ("depth_sensor", SourceConfig::DepthSensor { name }) => {
+            deck.source_name().trim_start_matches("🛰 ") == name
+        }
         _ => false,
     }
 }

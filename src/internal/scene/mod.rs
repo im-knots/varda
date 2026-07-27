@@ -369,6 +369,8 @@ pub enum SourceConfig {
     Rtmp { url: String, mode: String },
     /// HTML content source (URL or file path, rendered via Servo)
     Html { url: String },
+    /// Depth sensor (Kinect/LIDAR point cloud, matched by name on restore)
+    DepthSensor { name: String },
 }
 
 // ── Effect ─────────────────────────────────────────────────────────
@@ -655,6 +657,11 @@ impl SourceConfig {
             SourceConfig::Html { url } => {
                 if url.trim().is_empty() {
                     errors.push(format!("{}: HTML url is empty", prefix));
+                }
+            }
+            SourceConfig::DepthSensor { name } => {
+                if name.trim().is_empty() {
+                    errors.push(format!("{}: depth sensor name is empty", prefix));
                 }
             }
         }
@@ -1304,6 +1311,19 @@ mod tests {
                 assert_eq!(url, "https://example.com/visuals.html");
             }
             _ => panic!("Expected Html source"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_depth_sensor_source() {
+        let source = SourceConfig::DepthSensor {
+            name: "Kinect v1 (#0)".to_string(),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::DepthSensor { name } => assert_eq!(name, "Kinect v1 (#0)"),
+            _ => panic!("Expected DepthSensor source"),
         }
     }
 

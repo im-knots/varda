@@ -1,6 +1,6 @@
 //! Bottom panel and deck detail.
 
-use super::super::{widgets, EffectDrag, LibraryDrag, SurfaceUI, UIActions, UIData};
+use super::super::{widgets, DeckUIInfo, EffectDrag, LibraryDrag, SurfaceUI, UIActions, UIData};
 use super::effects::{render_channel_effect_detail, render_master_effect_detail};
 use super::sequence::{render_sequence_step_editor, render_timeline_strip};
 use super::utils::{
@@ -43,6 +43,80 @@ fn learn_overlay(
             actions.session.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
         }
     }
+}
+
+/// Render point-cloud controls for a depth-sensor deck. Values are sent
+/// normalized (0.0–1.0) through the generic `deck/<uuid>/depth/<name>` param
+/// path, matching the router in src/internal/param_router.rs. See
+/// spec/depth-sensors.md.
+fn render_depth_controls(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    _ch_idx: usize,
+    _deck_idx: usize,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    ui.separator();
+    ui.label(egui::RichText::new("🛰 Point Cloud").strong().size(12.0));
+
+    // (label, param name, default normalized value)
+    let sliders: [(&str, &str, f32); 6] = [
+        ("Yaw", "orbit_yaw", 0.5),
+        ("Pitch", "orbit_pitch", 0.5),
+        ("Zoom", "zoom", 0.18),
+        ("Points", "point_size", 0.07),
+        ("Near", "depth_min", 0.05),
+        ("Far", "depth_max", 0.5),
+    ];
+    for (label, name, default) in sliders {
+        let id = ui.id().with(("depth_ctrl", &deck.uuid, name));
+        let mut v: f32 = ui.ctx().memory(|m| m.data.get_temp(id)).unwrap_or(default);
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+            if resp.changed() {
+                ui.ctx().memory_mut(|m| m.data.insert_temp(id, v));
+                actions.commands.push(EngineCommand::SetParam {
+                    path: format!("deck/{}/depth/{}", deck.uuid, name),
+                    value: ParamValue::Float(v),
+                });
+            }
+            learn_overlay(
+                ui,
+                resp.rect,
+                format!("deck/{}/depth/{}", deck.uuid, name),
+                data,
+                actions,
+            );
+        });
+    }
+
+    // Color mode: 3 buckets mapped into the normalized 0..1 range.
+    ui.horizontal(|ui| {
+        ui.label("Color:");
+        let modes = ["RGB", "Depth", "Solid"];
+        let id = ui.id().with(("depth_color", &deck.uuid));
+        let mut idx: usize = ui.ctx().memory(|m| m.data.get_temp(id)).unwrap_or(1);
+        let before = idx;
+        egui::ComboBox::from_id_salt("depth_color_combo")
+            .selected_text(modes[idx.min(2)])
+            .width(70.0)
+            .show_ui(ui, |ui| {
+                for (i, m) in modes.iter().enumerate() {
+                    ui.selectable_value(&mut idx, i, *m);
+                }
+            });
+        if idx != before {
+            ui.ctx().memory_mut(|m| m.data.insert_temp(id, idx));
+            // Map bucket index to a normalized value that lands in that bucket.
+            let norm = (idx as f32 + 0.5) / 3.0;
+            actions.commands.push(EngineCommand::SetParam {
+                path: format!("deck/{}/depth/color_mode", deck.uuid),
+                value: ParamValue::Float(norm),
+            });
+        }
+    });
 }
 
 pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
@@ -1246,6 +1320,11 @@ pub(super) fn render_selected_deck_detail(
                                             mode: new_scaling,
                                         });
                                     }
+                                }
+
+                                // Depth-sensor point-cloud controls
+                                if deck.is_depth_sensor {
+                                    render_depth_controls(ui, deck, ch_idx, deck_idx, data, actions);
                                 }
 
                                 // Render FPS

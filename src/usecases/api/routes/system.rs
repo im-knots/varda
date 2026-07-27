@@ -206,6 +206,13 @@ pub async fn scan_cameras(State(state): State<SharedState>) -> impl IntoResponse
         Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
+#[utoipa::path(post, path = "/api/devices/depth/scan", responses((status = 200, body = CommandResult)), tag = "Depth Sensors")]
+pub async fn scan_depth_sensors(State(state): State<SharedState>) -> impl IntoResponse {
+    match state.send_command(EngineCommand::RescanDepthSensors).await {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
 #[utoipa::path(post, path = "/api/devices/midi/scan", responses((status = 200, body = CommandResult)), tag = "Devices")]
 pub async fn scan_midi(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::RescanMidi).await {

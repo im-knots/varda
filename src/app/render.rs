@@ -285,6 +285,10 @@ impl VardaApp {
             .html_manager
             .update(&self.context.device, &self.context.queue);
 
+        // Upload depth-sensor frames (off-render-thread capture; this only
+        // does the GPU texture upload). See spec/depth-sensors.md.
+        self.depth_manager.update(&self.context.queue);
+
         for channel in self.mixer.channels_mut() {
             for slot in &mut channel.decks {
                 if let Some(kind) = slot.deck.external_source_kind() {
@@ -310,6 +314,16 @@ impl VardaApp {
                         }
                         ExternalSourceKind::Html(idx) => {
                             self.external_io.html_manager.texture_view(idx).cloned()
+                        }
+                        ExternalSourceKind::DepthSensor(id) => {
+                            // Depth decks read the R16Uint depth view + RGB view
+                            // and reproject via the point-cloud pass rather than
+                            // blitting a single RGBA texture.
+                            let depth = self.depth_manager.depth_view(id).cloned();
+                            slot.deck.depth_rgb_view = self.depth_manager.rgb_view(id).cloned();
+                            slot.deck.depth_intrinsics = self.depth_manager.intrinsics(id);
+                            slot.deck.depth_source_size = self.depth_manager.resolution(id);
+                            depth
                         }
                     };
                 }

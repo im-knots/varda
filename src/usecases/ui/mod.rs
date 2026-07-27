@@ -387,6 +387,8 @@ pub struct DeckUIInfo {
     pub name: String,
     /// True when this deck's source is an HTML/Servo instance.
     pub is_html: bool,
+    /// True when this deck's source is a depth sensor (point-cloud) source.
+    pub is_depth_sensor: bool,
     /// True when the interactive window is currently open for this deck.
     pub is_html_interactive: bool,
     pub opacity: f32,
@@ -608,6 +610,8 @@ pub struct UIData {
     pub midi_mappings: Vec<MidiMappingUI>,
     /// Available camera devices (name, id)
     pub cameras: Vec<(String, crate::camera::CameraId)>,
+    /// Detected depth sensors (name, id)
+    pub depth_sensors: Vec<(String, crate::depth::DepthSensorId)>,
     /// Discovered NDI sources (name)
     pub ndi_sources: Vec<String>,
     /// Whether NDI runtime is available
@@ -1070,6 +1074,8 @@ pub enum LibraryDrag {
     Effect(usize),
     /// Camera device from library (CameraId)
     Camera(crate::camera::CameraId),
+    /// Depth sensor from library (DepthSensorId)
+    DepthSensor(crate::depth::DepthSensorId),
     /// NDI network source (source name)
     Ndi(String),
     /// Syphon server (server name)
@@ -1142,6 +1148,7 @@ impl UIData {
             uuid: "a0000001".to_string(),
             name: "test_generator_a".to_string(),
             is_html: false,
+            is_depth_sensor: false,
             is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
@@ -1188,6 +1195,7 @@ impl UIData {
             uuid: "a0000002".to_string(),
             name: "test_generator_b".to_string(),
             is_html: false,
+            is_depth_sensor: false,
             is_html_interactive: false,
             opacity: 0.8,
             effective_opacity: 0.8,
@@ -1232,6 +1240,7 @@ impl UIData {
             uuid: "b0000001".to_string(),
             name: "test_generator_c".to_string(),
             is_html: false,
+            is_depth_sensor: false,
             is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
@@ -1258,6 +1267,7 @@ impl UIData {
             uuid: "b0000002".to_string(),
             name: "test_generator_d".to_string(),
             is_html: false,
+            is_depth_sensor: false,
             is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
@@ -1394,6 +1404,7 @@ impl UIData {
             midi_devices: vec![],
             midi_mappings: vec![],
             cameras: vec![],
+            depth_sensors: vec![],
             ndi_sources: vec![],
             ndi_available: false,
             syphon_sources: vec![],

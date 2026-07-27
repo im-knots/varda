@@ -48,6 +48,9 @@ state_route!(registry, |s: &crate::engine::EngineState| s
 state_route!(macros, |s: &crate::engine::EngineState| s.macros.clone());
 state_route!(midi, |s: &crate::engine::EngineState| s.midi.clone());
 state_route!(cameras, |s: &crate::engine::EngineState| s.cameras.clone());
+state_route!(depth, |s: &crate::engine::EngineState| s
+    .depth_sensors
+    .clone());
 state_route!(clock, |s: &crate::engine::EngineState| s.clock.clone());
 state_route!(streams, |s: &crate::engine::EngineState| s
     .stream_receivers

@@ -136,6 +136,7 @@ impl AppConfig {
 
 use crate::audio::AudioManager;
 use crate::camera::CameraManager;
+use crate::depth::DepthSensorManager;
 use crate::keymap::KeymapStore;
 use crate::midi;
 use crate::mixer::Mixer;
@@ -231,6 +232,8 @@ pub struct VardaApp {
     mixer: Mixer,
     audio_manager: AudioManager,
     camera_manager: CameraManager,
+    /// Depth-sensor capture manager (Kinect/LIDAR point-cloud sources).
+    depth_manager: DepthSensorManager,
     registry: ShaderRegistry,
     analyzer_registry: crate::analyzer::AnalyzerRegistry,
     context: GpuContext,
@@ -425,6 +428,7 @@ impl VardaApp {
             mixer,
             audio_manager,
             camera_manager: CameraManager::new(),
+            depth_manager: DepthSensorManager::new(),
             registry,
             analyzer_registry: crate::analyzer::default_registry(),
             context: gpu,
@@ -622,6 +626,16 @@ impl VardaApp {
     /// by accessing both `camera_manager` and `context` internally.
     pub fn open_camera(&mut self, id: crate::camera::CameraId) -> anyhow::Result<(u32, u32)> {
         self.camera_manager.open_camera(id, &self.context.device)
+    }
+
+    /// Read-only access to the depth-sensor manager.
+    pub fn depth_manager(&self) -> &DepthSensorManager {
+        &self.depth_manager
+    }
+
+    /// Mutable access to the depth-sensor manager (open/release sensors).
+    pub fn depth_manager_mut(&mut self) -> &mut DepthSensorManager {
+        &mut self.depth_manager
     }
 
     /// Read-only access to the outputs.

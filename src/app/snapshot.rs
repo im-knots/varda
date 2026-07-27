@@ -90,6 +90,10 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                             slot.deck.external_source_kind(),
                             Some(crate::deck::ExternalSourceKind::Html(_))
                         ),
+                        is_depth_sensor: matches!(
+                            slot.deck.external_source_kind(),
+                            Some(crate::deck::ExternalSourceKind::DepthSensor(_))
+                        ),
                         is_html_interactive: {
                             #[cfg(feature = "html")]
                             {
@@ -390,6 +394,18 @@ pub(crate) fn build_camera_snapshot(app: &VardaApp) -> CameraSnapshot {
     }
 }
 
+/// Build a DepthSensorSnapshot from the current VardaApp state.
+pub(crate) fn build_depth_sensor_snapshot(app: &VardaApp) -> crate::engine::DepthSensorSnapshot {
+    crate::engine::DepthSensorSnapshot {
+        devices: app
+            .depth_manager()
+            .devices()
+            .iter()
+            .map(|d| (d.name.clone(), d.id))
+            .collect(),
+    }
+}
+
 /// Build a ClockSnapshot from the current clock manager state.
 pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
     use crate::engine::types::DetectedClockSourceSnapshot;
@@ -458,6 +474,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         registry: build_registry_snapshot(app),
         midi: build_midi_snapshot(app),
         cameras: build_camera_snapshot(app),
+        depth_sensors: build_depth_sensor_snapshot(app),
         clock: build_clock_snapshot(app),
         fps: app.frame_stats.fps_smoothed,
         frame_count: app.frame_stats.frame_count,

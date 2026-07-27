@@ -169,6 +169,47 @@ impl MixerCommands for VardaApp {
         Ok(uuid)
     }
 
+    fn add_depth_sensor_deck(
+        &mut self,
+        channel_idx: usize,
+        depth_sensor_id: crate::depth::DepthSensorId,
+    ) -> Result<String> {
+        let name = self
+            .depth_manager
+            .devices()
+            .iter()
+            .find(|d| d.id == depth_sensor_id)
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| format!("Depth Sensor {}", depth_sensor_id));
+        let (src_w, src_h) = crate::depth::open_depth_sensor(
+            &mut self.depth_manager,
+            depth_sensor_id,
+            &self.context.device,
+        )?;
+        let deck = Deck::new_from_depth_sensor(
+            &self.context,
+            depth_sensor_id,
+            &name,
+            src_w,
+            src_h,
+            self.render_width,
+            self.render_height,
+        )?;
+        let uuid = deck.uuid().to_string();
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
+        let idx = ch.add_deck(deck);
+        log::info!(
+            "Added depth sensor deck {} to channel {}: {}",
+            idx,
+            channel_idx,
+            name
+        );
+        Ok(uuid)
+    }
+
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()> {
         // Capture deck UUID before removal for modulation cleanup
         let deck_uuid = self

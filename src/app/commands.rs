@@ -24,6 +24,7 @@ impl VardaApp {
             | EngineCommand::AddVideoDeck { channel_idx, .. }
             | EngineCommand::AddSolidColorDeck { channel_idx, .. }
             | EngineCommand::AddCameraDeck { channel_idx, .. }
+            | EngineCommand::AddDepthSensorDeck { channel_idx, .. }
             | EngineCommand::AddNdiDeck { channel_idx, .. }
             | EngineCommand::AddSyphonDeck { channel_idx, .. }
             | EngineCommand::AddSrtDeck { channel_idx, .. }
@@ -227,6 +228,16 @@ impl VardaApp {
                 channel_idx,
                 camera_id,
             } => match self.add_camera_deck(channel_idx, camera_id) {
+                Ok(uuid) => CommandResult::OkWithId { uuid },
+                Err(e) => CommandResult::Err {
+                    code: ErrorCode::InvalidInput,
+                    message: e.to_string(),
+                },
+            },
+            EngineCommand::AddDepthSensorDeck {
+                channel_idx,
+                depth_sensor_id,
+            } => match self.add_depth_sensor_deck(channel_idx, depth_sensor_id) {
                 Ok(uuid) => CommandResult::OkWithId { uuid },
                 Err(e) => CommandResult::Err {
                     code: ErrorCode::InvalidInput,
@@ -1553,6 +1564,10 @@ impl VardaApp {
             }
             EngineCommand::RescanCameras => {
                 self.camera_manager.scan_devices();
+                CommandResult::Ok
+            }
+            EngineCommand::RescanDepthSensors => {
+                self.depth_manager.scan_devices();
                 CommandResult::Ok
             }
             EngineCommand::RescanMidi => {

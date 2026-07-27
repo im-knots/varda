@@ -21,6 +21,7 @@ pub use crate::audio::AudioSourceId;
 pub use crate::camera::CameraId;
 pub use crate::channel::{BlendMode, DeckRenderFps};
 pub use crate::deck::ScalingMode;
+pub use crate::depth::DepthSensorId;
 pub use crate::mixer::CrossfadeEasing;
 pub use crate::modulation::{
     ADSRStage, AudioBandPreset, AudioReactMode, LFOWaveform, StepInterpolation,
@@ -58,6 +59,7 @@ pub struct EngineState {
     pub registry: RegistrySnapshot,
     pub midi: MidiSnapshot,
     pub cameras: CameraSnapshot,
+    pub depth_sensors: DepthSensorSnapshot,
     pub clock: ClockSnapshot,
     pub fps: f32,
     pub frame_count: u64,
@@ -181,6 +183,8 @@ pub struct DeckSnapshot {
     pub is_html: bool,
     /// True when the interactive window is currently open for this deck.
     pub is_html_interactive: bool,
+    /// True when this deck's source is a depth sensor (point-cloud) source.
+    pub is_depth_sensor: bool,
     pub opacity: f32,
     pub effective_opacity: f32,
     pub blend_mode: BlendMode,
@@ -480,6 +484,16 @@ pub struct CameraSnapshot {
     pub devices: Vec<(String, CameraId)>,
 }
 
+// ── Depth Sensor Snapshot ───────────────────────────────────────────
+
+/// Per-sensor runtime state for GUI/API/WS consumers. Plain data — no GPU
+/// types. See spec/depth-sensors.md.
+#[derive(Clone, Serialize)]
+pub struct DepthSensorSnapshot {
+    /// Detected sensors as `(name, id)`, for the Library panel.
+    pub devices: Vec<(String, DepthSensorId)>,
+}
+
 // ── Analyzer Snapshot ──────────────────────────────────────────────
 
 /// Info about an available analyzer type (for UI discovery).
@@ -599,6 +613,7 @@ mod tests {
                 learn_target: None,
             },
             cameras: CameraSnapshot { devices: vec![] },
+            depth_sensors: DepthSensorSnapshot { devices: vec![] },
             clock: ClockSnapshot {
                 bpm: None,
                 beat_phase: 0.0,
@@ -679,6 +694,7 @@ mod tests {
                 learn_target: None,
             },
             cameras: CameraSnapshot { devices: vec![] },
+            depth_sensors: DepthSensorSnapshot { devices: vec![] },
             clock: ClockSnapshot {
                 bpm: Some(120.0),
                 beat_phase: 0.0,
@@ -787,6 +803,7 @@ mod tests {
             name: "Sine Wave".into(),
             is_html: false,
             is_html_interactive: false,
+            is_depth_sensor: false,
             opacity: 1.0,
             effective_opacity: 0.5,
             blend_mode: BlendMode::Normal,

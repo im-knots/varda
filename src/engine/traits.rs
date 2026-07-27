@@ -23,6 +23,11 @@ pub trait MixerCommands {
     fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String>;
     fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<String>;
     fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<String>;
+    fn add_depth_sensor_deck(
+        &mut self,
+        channel_idx: usize,
+        depth_sensor_id: DepthSensorId,
+    ) -> Result<String>;
     fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()>;
     fn move_deck(&mut self, src_ch: usize, src_deck: usize, dst_ch: usize) -> Result<()>;
     fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize);

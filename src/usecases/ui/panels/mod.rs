@@ -588,6 +588,21 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     });
                 }
 
+                let depth_key = egui::Id::new("__lib_dnd_depth_sensor_id");
+                let depth_id: Option<crate::depth::DepthSensorId> =
+                    ctx.memory(|mem| mem.data.get_temp(depth_key));
+                if let Some(depth_id) = depth_id {
+                    log::info!(
+                        "Library drop (deferred): depth sensor {} -> ch{}",
+                        depth_id,
+                        ch_idx
+                    );
+                    actions.commands.push(EngineCommand::AddDepthSensorDeck {
+                        channel_idx: ch_idx,
+                        depth_sensor_id: depth_id,
+                    });
+                }
+
                 let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
                 let ndi_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(ndi_key));
                 if let Some(ndi_name) = ndi_name {
@@ -722,6 +737,21 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     actions.commands.push(EngineCommand::AddCameraDeck {
                         channel_idx: new_ch_idx,
                         camera_id: cam_id,
+                    });
+                }
+
+                let depth_key = egui::Id::new("__lib_dnd_depth_sensor_id");
+                if let Some(depth_id) =
+                    ctx.memory(|mem| mem.data.get_temp::<crate::depth::DepthSensorId>(depth_key))
+                {
+                    log::info!(
+                        "Library drop (deferred): depth sensor {} -> new ch{}",
+                        depth_id,
+                        new_ch_idx
+                    );
+                    actions.commands.push(EngineCommand::AddDepthSensorDeck {
+                        channel_idx: new_ch_idx,
+                        depth_sensor_id: depth_id,
                     });
                 }
 

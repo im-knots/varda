@@ -183,6 +183,42 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
 
             ui.add_space(4.0);
 
+            // === DEPTH SENSORS ===
+            let depth_header =
+                egui::RichText::new(format!("🛰 Depth Sensors ({})", data.depth_sensors.len()))
+                    .strong();
+            egui::CollapsingHeader::new(depth_header)
+                .id_salt("lib_depth_sensors")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if ui.small_button("🔄 Rescan").clicked() {
+                        actions.commands.push(EngineCommand::RescanDepthSensors);
+                    }
+                    if data.depth_sensors.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No depth sensors detected")
+                                .small()
+                                .weak(),
+                        );
+                    }
+                    for (name, sensor_id) in &data.depth_sensors {
+                        let item_id = egui::Id::new(("lib_depth", *sensor_id));
+                        ui.dnd_drag_source(item_id, LibraryDrag::DepthSensor(*sensor_id), |ui| {
+                            ui.label(egui::RichText::new(format!("  🛰 {}", name)).size(12.0));
+                        });
+                        if ui.ctx().is_being_dragged(item_id) {
+                            ui.ctx().memory_mut(|mem| {
+                                mem.data.insert_temp(
+                                    egui::Id::new("__lib_dnd_depth_sensor_id"),
+                                    *sensor_id,
+                                );
+                            });
+                        }
+                    }
+                });
+
+            ui.add_space(4.0);
+
             // === STREAM SOURCES (grouped) ===
             {
                 let total_streams = data.ndi_sources.len()

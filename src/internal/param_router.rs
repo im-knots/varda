@@ -291,6 +291,15 @@ pub fn apply_param_by_path(
                 .set_scaling_mode(scaling_mode_from_value(value));
             Ok(())
         }
+        ["deck", uuid, "depth", name] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let applied = mixer.channels_mut()[ch].decks[dk]
+                .deck
+                .set_depth_param(name, clamp_norm(value));
+            ok_or_state(applied, path, "deck is not a depth sensor source")
+        }
         ["deck", uuid, "param", name] => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)

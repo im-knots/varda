@@ -29,6 +29,8 @@ use utoipa_swagger_ui::SwaggerUi;
         // Devices
         routes::system::scan_ndi, routes::system::scan_syphon,
         routes::system::scan_cameras, routes::system::scan_midi,
+        // Depth Sensors
+        routes::system::scan_depth_sensors, routes::decks::add_depth_sensor_deck,
         routes::system::scan_audio, routes::system::set_audio_source_enabled,
         routes::system::set_midi_device_enabled, routes::system::clear_midi_mappings,
         routes::system::remove_midi_mapping,
@@ -164,6 +166,7 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Outputs", description = "Output window management and warp"),
         (name = "Sequences", description = "Transition sequence automation"),
         (name = "Params", description = "Shader parameter control"),
+        (name = "Depth Sensors", description = "Depth sensor (Kinect/LIDAR) scanning, listing, and point-cloud deck creation"),
     )
 )]
 struct ApiDoc;
@@ -191,6 +194,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/registry", get(routes::state::registry))
         .route("/api/state/midi", get(routes::state::midi))
         .route("/api/state/cameras", get(routes::state::cameras))
+        .route("/api/state/depth", get(routes::state::depth))
         .route("/api/state/clock", get(routes::state::clock))
         .route("/api/state/ndi", get(routes::state::ndi))
         .route("/api/state/syphon", get(routes::state::syphon))
@@ -256,6 +260,11 @@ pub fn build_router(shared: SharedState) -> Router {
             get(routes::library::transitions),
         )
         .route("/api/library/cameras", get(routes::library::cameras))
+        .route("/api/library/depth", get(routes::library::depth))
+        .route(
+            "/api/devices/depth/scan",
+            axum::routing::post(routes::system::scan_depth_sensors),
+        )
         .route("/api/library/ndi", get(routes::library::ndi))
         .route("/api/library/syphon", get(routes::library::syphon))
         .route("/api/library/monitors", get(routes::library::monitors))
@@ -350,6 +359,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/channels/{ch_idx}/decks/camera",
             axum::routing::post(routes::decks::add_camera_deck),
+        )
+        .route(
+            "/api/channels/{ch_idx}/decks/depth",
+            axum::routing::post(routes::decks::add_depth_sensor_deck),
         )
         .route(
             "/api/decks/move",

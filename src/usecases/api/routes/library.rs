@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 
 use crate::usecases::api::projection::{
-    self, CameraEntry, MonitorEntry, NdiSourceEntry, ShaderEntry, StateReadError,
+    self, CameraEntry, DepthSensorEntry, MonitorEntry, NdiSourceEntry, ShaderEntry, StateReadError,
     SyphonSourceEntry, TransitionEntry,
 };
 use crate::usecases::api::SharedState;
@@ -82,6 +82,24 @@ pub async fn cameras(State(state): State<SharedState>) -> impl IntoResponse {
                 .devices
                 .iter()
                 .map(|(name, id)| CameraEntry {
+                    name: name.clone(),
+                    id: *id,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
+    }
+}
+
+/// GET /api/library/depth
+pub async fn depth(State(state): State<SharedState>) -> impl IntoResponse {
+    match read_or_error(&state) {
+        Ok(s) => Json(
+            s.depth_sensors
+                .devices
+                .iter()
+                .map(|(name, id)| DepthSensorEntry {
                     name: name.clone(),
                     id: *id,
                 })

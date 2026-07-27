@@ -187,6 +187,7 @@ fn command_is_deck_add(cmd: &EngineCommand) -> bool {
             | EngineCommand::AddVideoDeck { .. }
             | EngineCommand::AddSolidColorDeck { .. }
             | EngineCommand::AddCameraDeck { .. }
+            | EngineCommand::AddDepthSensorDeck { .. }
             | EngineCommand::AddNdiDeck { .. }
             | EngineCommand::AddSyphonDeck { .. }
             | EngineCommand::AddSrtDeck { .. }

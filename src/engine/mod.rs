@@ -126,6 +126,10 @@ pub enum EngineCommand {
         channel_idx: usize,
         camera_id: CameraId,
     },
+    AddDepthSensorDeck {
+        channel_idx: usize,
+        depth_sensor_id: DepthSensorId,
+    },
     RemoveDeck {
         channel_idx: usize,
         deck_idx: usize,
@@ -977,6 +981,7 @@ pub enum EngineCommand {
     RescanNdi,
     RescanSyphon,
     RescanCameras,
+    RescanDepthSensors,
     RescanMidi,
     RescanAudio,
     ToggleAudioSource {

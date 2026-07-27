@@ -185,6 +185,12 @@ pub struct AddCameraDeckBody {
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct AddDepthSensorDeckBody {
+    /// Numeric identifier of the depth sensor device.
+    pub depth_sensor_id: u32,
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct MoveDeckBody {
     /// Source channel index.
     pub src_ch: usize,
@@ -290,6 +296,24 @@ pub async fn add_camera_deck(
         .send_command(EngineCommand::AddCameraDeck {
             channel_idx: ch_idx,
             camera_id: body.camera_id,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/depth", params(("ch_idx" = usize, Path, description = "Channel index")), request_body = AddDepthSensorDeckBody, responses((status = 200, body = CommandResult)), tag = "Depth Sensors")]
+pub async fn add_depth_sensor_deck(
+    State(state): State<SharedState>,
+    Path(ch_idx): Path<usize>,
+    Json(body): Json<AddDepthSensorDeckBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::AddDepthSensorDeck {
+            channel_idx: ch_idx,
+            depth_sensor_id: body.depth_sensor_id,
         })
         .await
     {
