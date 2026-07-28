@@ -317,6 +317,72 @@ fn duration_config_to_spec(
     }
 }
 
+/// Convert persisted sequence steps into runtime steps, resolving fade steps'
+/// channel references against the channels as restored.
+///
+/// A fade whose channels no longer resolve degrades to a `Wait` of the same
+/// duration rather than being dropped. `GoTo` steps address other steps by
+/// position, so removing a step would silently retarget every jump past it —
+/// keeping the slot preserves both the jump targets and the sequence's timing.
+pub fn restore_sequence_steps(
+    steps: &[crate::scene::TransitionStepConfig],
+    channel_uuids: &[String],
+    warnings: &mut Vec<String>,
+) -> Vec<crate::mixer::TransitionStep> {
+    use crate::mixer::{StepKind, TransitionStep};
+    use crate::scene::TransitionStepConfig;
+
+    steps
+        .iter()
+        .map(|step| {
+            let kind = match step {
+                TransitionStepConfig::Fade {
+                    from_ch,
+                    to_ch,
+                    duration,
+                    easing,
+                    transition_shader,
+                    target_amount,
+                } => {
+                    let resolved = from_ch
+                        .resolve(channel_uuids)
+                        .zip(to_ch.resolve(channel_uuids))
+                        .filter(|(from, to)| {
+                            channel_uuids.contains(from) && channel_uuids.contains(to)
+                        });
+                    match resolved {
+                        Some((from_ch, to_ch)) => StepKind::Fade {
+                            from_ch,
+                            to_ch,
+                            duration: duration_config_to_spec(duration),
+                            easing: (*easing).into(),
+                            transition_shader: transition_shader.clone(),
+                            target_amount: *target_amount,
+                        },
+                        None => {
+                            let msg = "Fade step references a channel that no longer exists; \
+                                       kept as a wait so later GoTo targets stay valid"
+                                .to_string();
+                            log::warn!("{}", msg);
+                            warnings.push(msg);
+                            StepKind::Wait {
+                                duration: duration_config_to_spec(duration),
+                            }
+                        }
+                    }
+                }
+                TransitionStepConfig::Wait { duration } => StepKind::Wait {
+                    duration: duration_config_to_spec(duration),
+                },
+                TransitionStepConfig::GoTo { step_index } => StepKind::GoTo {
+                    step_index: *step_index,
+                },
+            };
+            TransitionStep { kind }
+        })
+        .collect()
+}
+
 /// Build a SceneConfig snapshot from live app state (show-specific: channels, effects, modulation).
 pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> SceneConfig {
     let channels = mixer
@@ -425,6 +491,11 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                                 .to_string();
                             SourceConfig::Html { url }
                         }
+                        "depth_sensor" => {
+                            // Store the sensor display name (strip the 🛰 prefix we add)
+                            let name = slot.deck.source_name().trim_start_matches("🛰 ").to_string();
+                            SourceConfig::DepthSensor { name }
+                        }
                         _ => return None,
                     };
 
@@ -521,6 +592,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
         .map(|seq| {
             use crate::scene::{TransitionSequenceConfig, TransitionStepConfig};
             TransitionSequenceConfig {
+                uuid: seq.uuid.clone(),
                 name: seq.name.clone(),
                 enabled: seq.enabled,
                 steps: seq
@@ -535,8 +607,8 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                             transition_shader,
                             target_amount,
                         } => TransitionStepConfig::Fade {
-                            from_ch: *from_ch,
-                            to_ch: *to_ch,
+                            from_ch: from_ch.clone().into(),
+                            to_ch: to_ch.clone().into(),
                             duration: duration_spec_to_config(duration),
                             easing: (*easing).into(),
                             transition_shader: transition_shader.clone(),
@@ -555,7 +627,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
         .collect();
 
     SceneConfig {
-        version: 4,
+        version: 5,
         channels,
         crossfader: mixer.crossfader(),
         active_transition,
@@ -832,8 +904,10 @@ use crate::renderer::GpuContext;
 /// the moment the server appears. Startup order becomes irrelevant.
 #[derive(Debug, Clone)]
 pub struct PendingSyphonDeck {
-    /// Channel index (position in the restored channel list) this deck belongs to.
-    pub channel_idx: usize,
+    /// UUID of the channel this deck belongs to. Binding happens seconds to
+    /// minutes after restore, by which point a positional index may point at a
+    /// different channel.
+    pub channel_uuid: String,
     /// Full persisted deck config (carries the `Syphon { name }` source plus
     /// opacity / blend / mute / solo / z-index to re-apply on bind).
     pub config: crate::scene::DeckConfig,
@@ -856,6 +930,7 @@ pub fn restore_scene(
     context: &GpuContext,
     registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    depth_manager: &mut crate::depth::DepthSensorManager,
     ndi_manager: &mut crate::ndi::NdiManager,
     stream_manager: &mut crate::stream::StreamManager,
     html_manager: &mut crate::html::HtmlManager,
@@ -872,7 +947,7 @@ pub fn restore_scene(
     // Clear default channels — we'll create from config
     mixer.channels_mut().clear();
 
-    for (ch_idx, ch_config) in config.channels.iter().enumerate() {
+    for ch_config in config.channels.iter() {
         let mut channel = crate::channel::Channel::new(
             ch_config.name.clone(),
             context,
@@ -899,16 +974,15 @@ pub fn restore_scene(
                         "Syphon deck '{}' on channel {} deferred to late-bind \
                          (auto-attaches when the server appears)",
                         name,
-                        ch_idx
+                        channel.name
                     );
                     pending_syphon.push(PendingSyphonDeck {
-                        channel_idx: ch_idx,
+                        channel_uuid: channel.uuid().to_string(),
                         config: deck_config.clone(),
                     });
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    let _ = ch_idx;
                     log::debug!("Skipping Syphon deck '{}' on non-macOS restore", name);
                 }
                 continue;
@@ -918,6 +992,7 @@ pub fn restore_scene(
                 context,
                 registry,
                 camera_manager,
+                depth_manager,
                 ndi_manager,
                 stream_manager,
                 html_manager,
@@ -1064,47 +1139,24 @@ pub fn restore_scene(
         }
     }
 
-    // Restore transition sequences
-    let channel_count = mixer.channels().len();
+    // Restore transition sequences. Fade steps address channels by UUID; scenes
+    // at v4 and earlier stored indices, which `ChannelRef::resolve` maps through
+    // the restored channel order.
+    let channel_uuids: Vec<String> = mixer
+        .channels()
+        .iter()
+        .map(|ch| ch.uuid().to_string())
+        .collect();
     for seq_config in &config.transition_sequences {
-        use crate::mixer::{SequencerState, StepKind, TransitionSequence, TransitionStep};
-        use crate::scene::TransitionStepConfig;
-        let steps = seq_config.steps.iter().filter_map(|step| {
-            let kind = match step {
-                TransitionStepConfig::Fade { from_ch, to_ch, duration, easing, transition_shader, target_amount } => {
-                    if *from_ch >= channel_count || *to_ch >= channel_count {
-                        log::warn!(
-                            "Transition step references channel {} or {} but only {} channels exist; skipping",
-                            from_ch, to_ch, channel_count
-                        );
-                        return None;
-                    }
-                    StepKind::Fade {
-                        from_ch: *from_ch,
-                        to_ch: *to_ch,
-                        duration: duration_config_to_spec(duration),
-                        easing: (*easing).into(),
-                        transition_shader: transition_shader.clone(),
-                        target_amount: *target_amount,
-                    }
-                }
-                TransitionStepConfig::Wait { duration } => {
-                    StepKind::Wait {
-                        duration: duration_config_to_spec(duration),
-                    }
-                }
-                TransitionStepConfig::GoTo { step_index } => {
-                    StepKind::GoTo { step_index: *step_index }
-                }
-            };
-            Some(TransitionStep { kind })
-        }).collect();
-        mixer.transition_sequences_mut().push(TransitionSequence {
-            name: seq_config.name.clone(),
-            steps,
-            enabled: seq_config.enabled,
-            state: SequencerState::new(),
-        });
+        let steps = restore_sequence_steps(&seq_config.steps, &channel_uuids, &mut warnings);
+        mixer
+            .transition_sequences_mut()
+            .push(crate::mixer::TransitionSequence::with_uuid(
+                seq_config.uuid.clone(),
+                seq_config.name.clone(),
+                steps,
+                seq_config.enabled,
+            ));
     }
 
     // Restore tonemap mode
@@ -1149,6 +1201,7 @@ pub(crate) fn restore_deck(
     context: &GpuContext,
     _registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    depth_manager: &mut crate::depth::DepthSensorManager,
     ndi_manager: &mut crate::ndi::NdiManager,
     stream_manager: &mut crate::stream::StreamManager,
     html_manager: &mut crate::html::HtmlManager,
@@ -1391,6 +1444,30 @@ pub(crate) fn restore_deck(
                 }
             }
         }
+        SourceConfig::DepthSensor { name } => {
+            // Match the sensor by name in the manager's device list, then open it.
+            // If absent (e.g. `depth` feature off or unplugged), skip with error.
+            let device = depth_manager
+                .devices()
+                .iter()
+                .find(|d| d.name == *name)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Depth sensor '{}' not found — is it connected?", name)
+                })?;
+            let (src_w, src_h) =
+                crate::depth::open_depth_sensor(depth_manager, device.id, &context.device)
+                    .with_context(|| format!("Failed to open depth sensor '{}'", name))?;
+            Deck::new_from_depth_sensor(
+                context,
+                device.id,
+                &device.name,
+                src_w,
+                src_h,
+                render_width,
+                render_height,
+            )?
+        }
     };
 
     // Restore UUID from config
@@ -1453,6 +1530,9 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
             deck.source_name().trim_start_matches("📺 ") == url
         }
         ("html", SourceConfig::Html { url }) => deck.source_name().trim_start_matches("🌐 ") == url,
+        ("depth_sensor", SourceConfig::DepthSensor { name }) => {
+            deck.source_name().trim_start_matches("🛰 ") == name
+        }
         _ => false,
     }
 }

@@ -1,14 +1,14 @@
 //! Bottom panel and deck detail.
 
-use super::super::{widgets, EffectDrag, LibraryDrag, SurfaceUI, UIActions, UIData};
+use super::super::{widgets, DeckUIInfo, EffectDrag, LibraryDrag, SurfaceUI, UIActions, UIData};
 use super::effects::{render_channel_effect_detail, render_master_effect_detail};
 use super::sequence::{render_sequence_step_editor, render_timeline_strip};
 use super::utils::{
     channel_color, format_time, render_collapsed_column, render_effect_drag_ghost,
-    render_effect_drag_handle, render_effect_drop_zone,
+    render_effect_drag_handle, render_effect_drop_zone, resolve_channel,
 };
 use crate::channel::DeckRenderFps;
-use crate::engine::{EffectTarget, EngineCommand};
+use crate::engine::EngineCommand;
 use crate::params::ParamValue;
 use crate::{BlendMode, ScalingMode};
 
@@ -43,6 +43,78 @@ fn learn_overlay(
             actions.session.keyboard_learn_select = Some(crate::keymap::KeyTarget::ParamPath(path));
         }
     }
+}
+
+/// Render point-cloud controls for a depth-sensor deck. Values are sent
+/// normalized (0.0–1.0) through the generic `deck/<uuid>/depth/<name>` param
+/// path, matching the router in src/internal/param_router.rs. See
+/// spec/depth-sensors.md.
+fn render_depth_controls(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    ui.separator();
+    ui.label(egui::RichText::new("🛰 Point Cloud").strong().size(12.0));
+
+    // (label, param name, default normalized value)
+    let sliders: [(&str, &str, f32); 6] = [
+        ("Yaw", "orbit_yaw", 0.5),
+        ("Pitch", "orbit_pitch", 0.5),
+        ("Zoom", "zoom", 0.18),
+        ("Points", "point_size", 0.07),
+        ("Near", "depth_min", 0.05),
+        ("Far", "depth_max", 0.5),
+    ];
+    for (label, name, default) in sliders {
+        let id = ui.id().with(("depth_ctrl", &deck.uuid, name));
+        let mut v: f32 = ui.ctx().memory(|m| m.data.get_temp(id)).unwrap_or(default);
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+            if resp.changed() {
+                ui.ctx().memory_mut(|m| m.data.insert_temp(id, v));
+                actions.commands.push(EngineCommand::SetParam {
+                    path: format!("deck/{}/depth/{}", deck.uuid, name),
+                    value: ParamValue::Float(v),
+                });
+            }
+            learn_overlay(
+                ui,
+                resp.rect,
+                format!("deck/{}/depth/{}", deck.uuid, name),
+                data,
+                actions,
+            );
+        });
+    }
+
+    // Color mode: 3 buckets mapped into the normalized 0..1 range.
+    ui.horizontal(|ui| {
+        ui.label("Color:");
+        let modes = ["RGB", "Depth", "Solid"];
+        let id = ui.id().with(("depth_color", &deck.uuid));
+        let mut idx: usize = ui.ctx().memory(|m| m.data.get_temp(id)).unwrap_or(1);
+        let before = idx;
+        egui::ComboBox::from_id_salt("depth_color_combo")
+            .selected_text(modes[idx.min(2)])
+            .width(70.0)
+            .show_ui(ui, |ui| {
+                for (i, m) in modes.iter().enumerate() {
+                    ui.selectable_value(&mut idx, i, *m);
+                }
+            });
+        if idx != before {
+            ui.ctx().memory_mut(|m| m.data.insert_temp(id, idx));
+            // Map bucket index to a normalized value that lands in that bucket.
+            let norm = (idx as f32 + 0.5) / 3.0;
+            actions.commands.push(EngineCommand::SetParam {
+                path: format!("deck/{}/depth/color_mode", deck.uuid),
+                value: ParamValue::Float(norm),
+            });
+        }
+    });
 }
 
 pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
@@ -743,8 +815,7 @@ pub(super) fn render_selected_deck_detail(
             }
             if ui.small_button("✓ Save").clicked() && !name.is_empty() {
                 actions.commands.push(EngineCommand::SaveDeckPreset {
-                    channel_idx: ch_idx,
-                    deck_idx,
+                    deck_uuid: deck.uuid.clone(),
                     name: name.clone(),
                 });
                 ui.data_mut(|d| d.insert_temp(prompt_id, false));
@@ -766,7 +837,7 @@ pub(super) fn render_selected_deck_detail(
     egui::ScrollArea::horizontal().id_salt("selected_deck_hscroll").show(ui, |ui| {
         ui.horizontal_top(|ui| {
             // Column 0: Deck preview — scales with bottom bar height
-            if let Some(tex_id) = data.deck_preview_textures.get(&(ch_idx, deck_idx)) {
+            if let Some(tex_id) = data.deck_preview_textures.get(&deck.uuid) {
                 let available_height = ui.available_height() - 12.0; // margin
                 let preview_height = available_height.max(60.0);
                 let preview_width = preview_height * 16.0 / 9.0;
@@ -799,8 +870,7 @@ pub(super) fn render_selected_deck_detail(
                             let reload_resp = ui.button("⟳ Reload");
                             if reload_resp.clicked() {
                                 actions.commands.push(EngineCommand::ReloadHtmlDeck {
-                                    channel_idx: ch_idx,
-                                    deck_idx,
+                                    deck_uuid: deck.uuid.clone(),
                                 });
                             }
                             learn_overlay(
@@ -821,8 +891,7 @@ pub(super) fn render_selected_deck_detail(
                                     EngineCommand::CloseHtmlInteractive
                                 } else {
                                     EngineCommand::OpenHtmlInteractive {
-                                        channel_idx: ch_idx,
-                                        deck_idx,
+                                        deck_uuid: deck.uuid.clone(),
                                     }
                                 };
                                 actions.commands.push(cmd);
@@ -839,8 +908,7 @@ pub(super) fn render_selected_deck_detail(
                                 ui.checkbox(&mut transparent, "Transparent BG");
                             if transparent_resp.changed() {
                                 actions.commands.push(EngineCommand::SetDeckTransparent {
-                                    channel_idx: ch_idx,
-                                    deck_idx,
+                                    deck_uuid: deck.uuid.clone(),
                                     transparent,
                                 });
                             }
@@ -872,7 +940,7 @@ pub(super) fn render_selected_deck_detail(
                             let play_label = if vp.playing { "⏸ Pause" } else { "▶ Play" };
                             let play_resp = ui.button(play_label);
                             if play_resp.clicked() {
-                                actions.commands.push(EngineCommand::VideoTogglePlay { channel_idx: ch_idx, deck_idx });
+                                actions.commands.push(EngineCommand::VideoTogglePlay { deck_uuid: deck.uuid.clone() });
                             }
                             learn_overlay(ui, play_resp.rect, format!("deck/{}/video/play", deck.uuid), data, actions);
 
@@ -886,7 +954,7 @@ pub(super) fn render_selected_deck_detail(
                                     .trailing_fill(true);
                                 let resp = ui.add(slider);
                                 if resp.changed() {
-                                    actions.commands.push(EngineCommand::VideoSeek { channel_idx: ch_idx, deck_idx, position_secs: pos as f64 });
+                                    actions.commands.push(EngineCommand::VideoSeek { deck_uuid: deck.uuid.clone(), position_secs: pos as f64 });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/seek", deck.uuid), data, actions);
                                 ui.label(format_time(duration));
@@ -898,7 +966,7 @@ pub(super) fn render_selected_deck_detail(
                                 ui.label("Speed:");
                                 let resp = ui.add(egui::Slider::new(&mut speed, 0.1..=4.0).step_by(0.05).suffix("x"));
                                 if resp.changed() {
-                                    actions.commands.push(EngineCommand::VideoSetSpeed { channel_idx: ch_idx, deck_idx, speed: speed as f64 });
+                                    actions.commands.push(EngineCommand::VideoSetSpeed { deck_uuid: deck.uuid.clone(), speed: speed as f64 });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/speed", deck.uuid), data, actions);
                             });
@@ -916,7 +984,7 @@ pub(super) fn render_selected_deck_detail(
                                     let selected = vp.loop_mode == *mode;
                                     let btn = egui::Button::new(*icon).selected(selected);
                                     if ui.add(btn).on_hover_text(*tooltip).clicked() && !selected {
-                                        actions.commands.push(EngineCommand::VideoSetLoopMode { channel_idx: ch_idx, deck_idx, mode: *mode });
+                                        actions.commands.push(EngineCommand::VideoSetLoopMode { deck_uuid: deck.uuid.clone(), mode: *mode });
                                     }
                                 }
                             });
@@ -936,7 +1004,7 @@ pub(super) fn render_selected_deck_detail(
                                     .show_value(false).trailing_fill(true));
                                 if resp.changed()
                                 {
-                                    actions.commands.push(EngineCommand::VideoSetInPoint { channel_idx: ch_idx, deck_idx, secs: in_pt as f64 });
+                                    actions.commands.push(EngineCommand::VideoSetInPoint { deck_uuid: deck.uuid.clone(), secs: in_pt as f64 });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/in_point", deck.uuid), data, actions);
                                 ui.label(format_time(in_pt as f64));
@@ -950,7 +1018,7 @@ pub(super) fn render_selected_deck_detail(
                                     .show_value(false).trailing_fill(true));
                                 if resp.changed()
                                 {
-                                    actions.commands.push(EngineCommand::VideoSetOutPoint { channel_idx: ch_idx, deck_idx, secs: out_pt as f64 });
+                                    actions.commands.push(EngineCommand::VideoSetOutPoint { deck_uuid: deck.uuid.clone(), secs: out_pt as f64 });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/out_point", deck.uuid), data, actions);
                                 ui.label(format_time(out_pt as f64));
@@ -959,17 +1027,17 @@ pub(super) fn render_selected_deck_detail(
                             // Set from current / clear buttons
                             ui.horizontal(|ui| {
                                 if ui.small_button("[ Set In").on_hover_text("Set in-point to current position").clicked() {
-                                    actions.commands.push(EngineCommand::VideoSetInPoint { channel_idx: ch_idx, deck_idx, secs: vp.position });
+                                    actions.commands.push(EngineCommand::VideoSetInPoint { deck_uuid: deck.uuid.clone(), secs: vp.position });
                                 }
                                 if ui.small_button("Set Out ]").on_hover_text("Set out-point to current position").clicked() {
-                                    actions.commands.push(EngineCommand::VideoSetOutPoint { channel_idx: ch_idx, deck_idx, secs: vp.position });
+                                    actions.commands.push(EngineCommand::VideoSetOutPoint { deck_uuid: deck.uuid.clone(), secs: vp.position });
                                 }
                                 // Clear is always shown (disabled when no range) so it stays MIDI/keyboard-mappable.
                                 let clear_resp = ui
                                     .add_enabled(has_range, egui::Button::new("x Clear").small())
                                     .on_hover_text("Reset to full clip");
                                 if clear_resp.clicked() {
-                                    actions.commands.push(EngineCommand::VideoClearInOutPoints { channel_idx: ch_idx, deck_idx });
+                                    actions.commands.push(EngineCommand::VideoClearInOutPoints { deck_uuid: deck.uuid.clone() });
                                 }
                                 learn_overlay(ui, clear_resp.rect, format!("deck/{}/video/clear", deck.uuid), data, actions);
                             });
@@ -1023,7 +1091,7 @@ pub(super) fn render_selected_deck_detail(
                                     let mut en = enabled;
                                     ui.checkbox(&mut en, "Enabled");
                                     if en != enabled {
-                                        actions.commands.push(EngineCommand::SetAutoTransitionEnabled { channel_idx: ch_idx, deck_idx, enabled: en });
+                                        actions.commands.push(EngineCommand::SetAutoTransitionEnabled { deck_uuid: deck.uuid.clone(), enabled: en });
                                     }
                                 });
 
@@ -1034,10 +1102,10 @@ pub(super) fn render_selected_deck_detail(
                                             let mut clip_end = at.trigger_is_clip_end;
                                             if ui.selectable_label(!clip_end, "Timer").clicked() && clip_end {
                                                 clip_end = false;
-                                                actions.commands.push(EngineCommand::SetAutoTransitionTrigger { channel_idx: ch_idx, deck_idx, clip_end: false });
+                                                actions.commands.push(EngineCommand::SetAutoTransitionTrigger { deck_uuid: deck.uuid.clone(), clip_end: false });
                                             }
                                             if ui.selectable_label(clip_end, "Clip End").clicked() && !clip_end {
-                                                actions.commands.push(EngineCommand::SetAutoTransitionTrigger { channel_idx: ch_idx, deck_idx, clip_end: true });
+                                                actions.commands.push(EngineCommand::SetAutoTransitionTrigger { deck_uuid: deck.uuid.clone(), clip_end: true });
                                             }
                                         });
                                         let any_learn = data.midi_learn_active || data.keyboard_learn_active;
@@ -1059,7 +1127,7 @@ pub(super) fn render_selected_deck_detail(
                                                     .logarithmic(true)
                                                     .suffix(if at.play_duration_is_beats { " beats" } else { " sec" }));
                                                 if resp.changed() {
-                                                    actions.commands.push(EngineCommand::SetAutoTransitionPlayDurationValue { channel_idx: ch_idx, deck_idx, value: val as f64 });
+                                                    actions.commands.push(EngineCommand::SetAutoTransitionPlayDurationValue { deck_uuid: deck.uuid.clone(), value: val as f64 });
                                                 }
                                                 resp.rect
                                             };
@@ -1085,7 +1153,7 @@ pub(super) fn render_selected_deck_detail(
                                                 && ui.small_button(if at.play_duration_is_beats { "♩" } else { "⏱" })
                                                     .on_hover_text("Toggle beats/seconds").clicked()
                                                 {
-                                                    actions.commands.push(EngineCommand::ToggleAutoTransitionPlayDurationUnit { channel_idx: ch_idx, deck_idx });
+                                                    actions.commands.push(EngineCommand::ToggleAutoTransitionPlayDurationUnit { deck_uuid: deck.uuid.clone() });
                                                 }
                                         });
                                         ui.horizontal(|ui| {
@@ -1106,7 +1174,7 @@ pub(super) fn render_selected_deck_detail(
                                                     .logarithmic(true)
                                                     .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" }));
                                                 if resp.changed() {
-                                                    actions.commands.push(EngineCommand::SetAutoTransitionDurationValue { channel_idx: ch_idx, deck_idx, value: val as f64 });
+                                                    actions.commands.push(EngineCommand::SetAutoTransitionDurationValue { deck_uuid: deck.uuid.clone(), value: val as f64 });
                                                 }
                                                 resp.rect
                                             };
@@ -1132,7 +1200,7 @@ pub(super) fn render_selected_deck_detail(
                                                 && ui.small_button(if at.transition_duration_is_beats { "♩" } else { "⏱" })
                                                     .on_hover_text("Toggle beats/seconds").clicked()
                                                 {
-                                                    actions.commands.push(EngineCommand::ToggleAutoTransitionDurationUnit { channel_idx: ch_idx, deck_idx });
+                                                    actions.commands.push(EngineCommand::ToggleAutoTransitionDurationUnit { deck_uuid: deck.uuid.clone() });
                                                 }
                                         });
                                         ui.horizontal(|ui| {
@@ -1143,12 +1211,12 @@ pub(super) fn render_selected_deck_detail(
                                                 .width(120.0)
                                                 .show_ui(ui, |ui| {
                                                     if ui.selectable_label(at.transition_shader_name.is_none(), "(fade)").clicked() {
-                                                        actions.commands.push(EngineCommand::SetAutoTransitionShader { channel_idx: ch_idx, deck_idx, shader_name: None });
+                                                        actions.commands.push(EngineCommand::SetAutoTransitionShader { deck_uuid: deck.uuid.clone(), shader_name: None });
                                                     }
                                                     for name in &data.transition_names {
                                                         let selected = at.transition_shader_name.as_deref() == Some(name.as_str());
                                                         if ui.selectable_label(selected, name).clicked() && !selected {
-                                                            actions.commands.push(EngineCommand::SetAutoTransitionShader { channel_idx: ch_idx, deck_idx, shader_name: Some(name.clone()) });
+                                                            actions.commands.push(EngineCommand::SetAutoTransitionShader { deck_uuid: deck.uuid.clone(), shader_name: Some(name.clone()) });
                                                         }
                                                     }
                                                 });
@@ -1209,8 +1277,7 @@ pub(super) fn render_selected_deck_detail(
                                 });
                                 if selected != current_blend {
                                     actions.commands.push(EngineCommand::SetDeckBlendMode {
-                                        channel_idx: ch_idx,
-                                        deck_idx,
+                                        deck_uuid: deck.uuid.clone(),
                                         mode: all_modes[selected],
                                     });
                                 }
@@ -1241,11 +1308,15 @@ pub(super) fn render_selected_deck_detail(
                                             3 => ScalingMode::Center, _ => ScalingMode::Fill,
                                         };
                                         actions.commands.push(EngineCommand::SetDeckScalingMode {
-                                            channel_idx: ch_idx,
-                                            deck_idx,
+                                            deck_uuid: deck.uuid.clone(),
                                             mode: new_scaling,
                                         });
                                     }
+                                }
+
+                                // Depth-sensor point-cloud controls
+                                if deck.is_depth_sensor {
+                                    render_depth_controls(ui, deck, data, actions);
                                 }
 
                                 // Render FPS
@@ -1276,8 +1347,7 @@ pub(super) fn render_selected_deck_detail(
                                             _ => DeckRenderFps::Auto,
                                         };
                                         actions.commands.push(EngineCommand::SetDeckRenderFps {
-                                            channel_idx: ch_idx,
-                                            deck_idx,
+                                            deck_uuid: deck.uuid.clone(),
                                             render_fps: new_fps,
                                         });
                                     }
@@ -1304,7 +1374,7 @@ pub(super) fn render_selected_deck_detail(
                                         ui,
                                         &gen_params.params,
                                         &data.modulation_sources,
-                                        &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam { channel_idx: ch_idx, deck_idx, name: name.to_string(), value: val },
+                                        &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam { deck_uuid: deck.uuid.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
                                             target: format!("deck_{}:{}", deck_uuid_assign, name), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
@@ -1327,7 +1397,7 @@ pub(super) fn render_selected_deck_detail(
                                     );
                                     ui.add_space(4.0);
                                     if ui.button("Reset").clicked() {
-                                        actions.commands.push(EngineCommand::ResetGeneratorParamsToDefaults { channel_idx: ch_idx, deck_idx });
+                                        actions.commands.push(EngineCommand::ResetGeneratorParamsToDefaults { deck_uuid: deck.uuid.clone() });
                                     }
                                 }
                             });
@@ -1345,7 +1415,7 @@ pub(super) fn render_selected_deck_detail(
             {
                 for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in deck.effects.iter().enumerate() {
                     // Drop zone before this effect (for reordering)
-                    render_effect_drop_zone(ui, &format!("deck_{}_{}", ch_idx, deck_idx), eff_idx);
+                    render_effect_drop_zone(ui, &format!("deck_{}", deck.uuid), eff_idx);
 
                     // Effect card with drag handle in header only
                     let card_resp = egui::Frame::default()
@@ -1357,24 +1427,21 @@ pub(super) fn render_selected_deck_detail(
                             ui.set_max_width(250.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             let max_h = (ui.available_height() - 8.0).max(100.0);
-                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}_{}",ch_idx,deck_idx,eff_idx)).max_height(max_h).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(format!("deck_fx_scroll_{}_{}", deck.uuid, eff_uuid)).max_height(max_h).scroll_source(egui::scroll_area::ScrollSource { drag: false, scroll_bar: true, mouse_wheel: true }).show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    render_effect_drag_handle(ui, EffectDrag::Deck(ch_idx, deck_idx, eff_idx));
+                                    render_effect_drag_handle(ui, EffectDrag::Deck(deck.uuid.clone(), eff_idx));
                                     let mut enabled = *eff_enabled;
                                     if ui.checkbox(&mut enabled, "").changed() {
                                         actions.commands.push(EngineCommand::ToggleEffect {
-                                            target: EffectTarget::Deck(ch_idx, deck_idx),
-                                            effect_idx: eff_idx,
+                                            effect_uuid: eff_uuid.clone(),
                                         });
                                     }
                                     ui.label(egui::RichText::new(eff_name).strong());
                                 });
 
                                 if !eff_params.params.is_empty() {
-                                    let ch_copy = ch_idx;
-                                    let deck_copy = deck_idx;
-                                    let eff_idx_copy = eff_idx;
                                     let deck_uuid_eff = deck.uuid.clone();
+                                    let eff_uuid_param = eff_uuid.clone();
                                     let eff_uuid_assign = eff_uuid.clone();
                                     let eff_uuid_remove = eff_uuid.clone();
                                     let eff_midi_prefix = format!("deck/{}/effect/{}", deck_uuid_eff, eff_uuid);
@@ -1382,7 +1449,7 @@ pub(super) fn render_selected_deck_detail(
                                         ui,
                                         &eff_params.params,
                                         &data.modulation_sources,
-                                        &|name: &str, val: ParamValue| EngineCommand::SetEffectParam { channel_idx: ch_copy, deck_idx: deck_copy, effect_idx: eff_idx_copy, name: name.to_string(), value: val },
+                                        &|name: &str, val: ParamValue| EngineCommand::SetEffectParam { effect_uuid: eff_uuid_param.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
                                             target: format!("fx_{}:{}", eff_uuid_assign, name), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
@@ -1391,7 +1458,7 @@ pub(super) fn render_selected_deck_detail(
                                         }),
                                         &mut actions.commands,
                                         &mut actions.session.gesture_active,
-                                        &format!("fx_{}_{}_{}", ch_copy, deck_copy, eff_idx_copy),
+                                        &format!("fx_{}_{}", deck_uuid_eff, eff_uuid),
                                         Some(&eff_midi_prefix),
                                         data.midi_learn_active,
                                         &mut actions.session.midi_learn_select,
@@ -1418,15 +1485,14 @@ pub(super) fn render_selected_deck_detail(
                         ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, "x", egui::FontId::proportional(12.0), color);
                         if btn_resp.clicked() {
                             actions.commands.push(EngineCommand::RemoveEffect {
-                                target: EffectTarget::Deck(ch_idx, deck_idx),
-                                effect_idx: eff_idx,
+                                effect_uuid: eff_uuid.clone(),
                             });
                         }
                     }
                     render_effect_drag_ghost(
                         ui,
-                        egui::Id::new(("eff_ghost", ch_idx, deck_idx, eff_idx)),
-                        EffectDrag::Deck(ch_idx, deck_idx, eff_idx),
+                        egui::Id::new(("eff_ghost", &deck.uuid, eff_uuid)),
+                        EffectDrag::Deck(deck.uuid.clone(), eff_idx),
                         eff_name,
                     );
                     ui.separator();
@@ -1435,7 +1501,7 @@ pub(super) fn render_selected_deck_detail(
                 // Drop zone after last effect (for reordering to end)
                 if !deck.effects.is_empty() {
                     let num_effects = deck.effects.len();
-                    render_effect_drop_zone(ui, &format!("deck_{}_{}", ch_idx, deck_idx), num_effects);
+                    render_effect_drop_zone(ui, &format!("deck_{}", deck.uuid), num_effects);
                 }
 
                 // Remaining space: always present drop target that fills remaining width
@@ -1460,7 +1526,7 @@ pub(super) fn render_selected_deck_detail(
 
             // Store the entire horizontal_top area as the drop rect for deferred library effect drops
             let chain_rect = ui.min_rect();
-            let deck_chain_key = format!("deck_{}_{}", ch_idx, deck_idx);
+            let deck_chain_key = format!("deck_{}", deck.uuid);
             ui.ctx().memory_mut(|mem| {
                 mem.data.insert_temp(egui::Id::new("deck_fx_drop_rect").with((ch_idx, deck_idx)), chain_rect);
                 mem.data.insert_temp(egui::Id::new("eff_dz_count").with(deck_chain_key), deck.effects.len() + 1);
@@ -1502,16 +1568,16 @@ fn render_sequence_detail(
             .on_hover_text("Toggle enabled")
             .clicked()
         {
-            actions
-                .commands
-                .push(EngineCommand::ToggleSequence { idx: seq_idx });
+            actions.commands.push(EngineCommand::ToggleSequence {
+                sequence_uuid: seq.uuid.clone(),
+            });
         }
 
         if seq.playing {
             if ui.button("⏹ Stop").on_hover_text("Stop playback").clicked() {
-                actions
-                    .commands
-                    .push(EngineCommand::StopSequence { idx: seq_idx });
+                actions.commands.push(EngineCommand::StopSequence {
+                    sequence_uuid: seq.uuid.clone(),
+                });
             }
         } else if seq.enabled
             && !seq.steps.is_empty()
@@ -1520,9 +1586,9 @@ fn render_sequence_detail(
                 .on_hover_text("Start playback")
                 .clicked()
         {
-            actions
-                .commands
-                .push(EngineCommand::PlaySequence { idx: seq_idx });
+            actions.commands.push(EngineCommand::PlaySequence {
+                sequence_uuid: seq.uuid.clone(),
+            });
         }
 
         if ui
@@ -1530,9 +1596,9 @@ fn render_sequence_detail(
             .on_hover_text("Delete sequence")
             .clicked()
         {
-            actions
-                .commands
-                .push(EngineCommand::DeleteSequence { idx: seq_idx });
+            actions.commands.push(EngineCommand::DeleteSequence {
+                sequence_uuid: seq.uuid.clone(),
+            });
         }
     });
 
@@ -1550,7 +1616,7 @@ fn render_sequence_detail(
         let (clicked_step, _) = render_timeline_strip(
             ui,
             seq,
-            &data.channel_names,
+            &data.channels,
             true,
             selected_step_idx,
             data.clock_bpm,
@@ -1661,16 +1727,10 @@ fn render_sequence_detail(
                                 duration_unit,
                                 ..
                             } => {
-                                let from_name = data
-                                    .channel_names
-                                    .get(*from_ch)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("?");
-                                let to_name = data
-                                    .channel_names
-                                    .get(*to_ch)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("?");
+                                let from_name = resolve_channel(&data.channels, from_ch)
+                                    .map_or_else(|| "?".to_string(), |(_, name)| name);
+                                let to_name = resolve_channel(&data.channels, to_ch)
+                                    .map_or_else(|| "?".to_string(), |(_, name)| name);
                                 (
                                     "🔀",
                                     format!(
@@ -1719,10 +1779,10 @@ fn render_sequence_detail(
                             }
                             if handle_resp.dragged() {
                                 let drag = SequenceStepDrag {
-                                    seq_idx,
+                                    sequence_uuid: seq.uuid.clone(),
                                     step_idx: i,
                                 };
-                                egui::DragAndDrop::set_payload(ui.ctx(), drag);
+                                egui::DragAndDrop::set_payload(ui.ctx(), drag.clone());
                                 ui.ctx().memory_mut(|mem| {
                                     mem.data
                                         .insert_temp(egui::Id::new("__seq_step_dnd_src"), drag);
@@ -1772,23 +1832,31 @@ fn render_sequence_detail(
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let from = 0;
-                let to = 1.min(data.channel_count.saturating_sub(1));
-                if ui.small_button("+Fade").clicked() {
-                    actions.commands.push(EngineCommand::AddFadeStep {
-                        seq_idx,
-                        from_ch: from,
-                        to_ch: to,
-                    });
+                // A fade needs two channels to name; with one channel it fades
+                // onto itself, which is what the previous index clamp did too.
+                let from_uuid = data.channels.first().map(|c| c.uuid.clone());
+                let to_uuid = data
+                    .channels
+                    .get(1)
+                    .or_else(|| data.channels.first())
+                    .map(|c| c.uuid.clone());
+                if let (Some(from_ch), Some(to_ch)) = (from_uuid, to_uuid) {
+                    if ui.small_button("+Fade").clicked() {
+                        actions.commands.push(EngineCommand::AddFadeStep {
+                            sequence_uuid: seq.uuid.clone(),
+                            from_channel_uuid: from_ch,
+                            to_channel_uuid: to_ch,
+                        });
+                    }
                 }
                 if ui.small_button("+Wait").clicked() {
-                    actions
-                        .commands
-                        .push(EngineCommand::AddWaitStep { seq_idx });
+                    actions.commands.push(EngineCommand::AddWaitStep {
+                        sequence_uuid: seq.uuid.clone(),
+                    });
                 }
                 if ui.small_button("+Loop").clicked() {
                     actions.commands.push(EngineCommand::AddGoToStep {
-                        seq_idx,
+                        sequence_uuid: seq.uuid.clone(),
                         step_index: 0,
                     });
                 }
@@ -1812,13 +1880,14 @@ fn render_sequence_detail(
                             .on_hover_text("Remove this step")
                             .clicked()
                         {
-                            actions
-                                .commands
-                                .push(EngineCommand::RemoveStep { seq_idx, step_idx });
+                            actions.commands.push(EngineCommand::RemoveStep {
+                                sequence_uuid: seq.uuid.clone(),
+                                step_idx,
+                            });
                         }
                     });
                     ui.add_space(4.0);
-                    render_sequence_step_editor(ui, seq_idx, step_idx, step, data, actions);
+                    render_sequence_step_editor(ui, seq, step_idx, step, data, actions);
                 } else {
                     ui.label(egui::RichText::new("Step not found").weak());
                 }
@@ -1890,6 +1959,7 @@ mod tests {
         let mut data = UIData::test_fixture();
         data.selected_deck = None;
         data.sequences.push(SequenceUIData {
+            uuid: "seq00001".to_string(),
             name: "Test Seq".to_string(),
             enabled: true,
             playing: false,
@@ -1898,8 +1968,8 @@ mod tests {
             steps: vec![SequenceStepUI {
                 label: "Fade".into(),
                 kind: SequenceStepKindUI::Fade {
-                    from_ch: 0,
-                    to_ch: 1,
+                    from_ch: "ca000001".to_string(),
+                    to_ch: "cb000001".to_string(),
                     duration_val: 5.0,
                     duration_unit: DurationUnit::Seconds,
                     easing: "Linear".into(),
@@ -1922,6 +1992,7 @@ mod tests {
         let mut data = UIData::test_fixture();
         data.selected_deck = None;
         data.sequences.push(SequenceUIData {
+            uuid: "seq00001".to_string(),
             name: "Test Seq".to_string(),
             enabled: true,
             playing: false,
@@ -1931,8 +2002,8 @@ mod tests {
                 SequenceStepUI {
                     label: "Fade".into(),
                     kind: SequenceStepKindUI::Fade {
-                        from_ch: 0,
-                        to_ch: 1,
+                        from_ch: "ca000001".to_string(),
+                        to_ch: "cb000001".to_string(),
                         duration_val: 5.0,
                         duration_unit: DurationUnit::Seconds,
                         easing: "Linear".into(),

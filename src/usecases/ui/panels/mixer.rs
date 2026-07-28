@@ -1,6 +1,6 @@
 //! Central panel, mixer box, channel columns, deck thumbnails.
 
-use super::super::{widgets, ChannelUIInfo, DeckUIInfo, LibraryDrag, UIActions, UIData};
+use super::super::{widgets, ChannelUIInfo, DeckDrag, DeckUIInfo, LibraryDrag, UIActions, UIData};
 use super::macros::render_macro_column;
 use super::sequence::render_sequence_builder;
 use super::stage::render_stage_editor;
@@ -335,7 +335,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
             for (ch_idx, ch) in data.channels.iter().enumerate() {
                 if (opacities[ch_idx] - ch.opacity).abs() > f32::EPSILON {
                     actions.commands.push(EngineCommand::SetChannelOpacity {
-                        channel_idx: ch_idx,
+                        channel_uuid: ch.uuid.clone(),
                         opacity: opacities[ch_idx],
                     });
                 }
@@ -527,7 +527,7 @@ pub(super) fn render_channel_column(
         let has_source_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
             .map(|p| !matches!(&*p, LibraryDrag::Effect(_)))
             .unwrap_or(false);
-        let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx());
+        let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
         let has_relevant_drag = has_source_drag || has_deck_drag;
         let is_hovering = has_relevant_drag && ui.rect_contains_pointer(ui.max_rect());
         let is_ch_selected = data.selected_channel == Some(ch_idx);
@@ -607,7 +607,7 @@ pub(super) fn render_channel_column(
                         });
                         if selected != current {
                             actions.commands.push(EngineCommand::SetChannelBlendMode {
-                                channel_idx: ch_idx,
+                                channel_uuid: ch.uuid.clone(),
                                 mode: all_modes[selected],
                             });
                         }
@@ -650,11 +650,10 @@ pub(super) fn render_channel_column(
                             }
                         }
                         let is_deck_drag_active =
-                            egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx());
-                        let drag_is_same_ch =
-                            egui::DragAndDrop::payload::<(usize, usize)>(ui.ctx())
-                                .map(|p| p.0 == ch_idx)
-                                .unwrap_or(false);
+                            egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
+                        let drag_is_same_ch = egui::DragAndDrop::payload::<DeckDrag>(ui.ctx())
+                            .map(|p| ch.decks.iter().any(|d| d.uuid == p.deck_uuid))
+                            .unwrap_or(false);
 
                         for (i, deck) in ch.decks.iter().enumerate() {
                             // Drop zone BEFORE each deck (for reordering within channel)
@@ -670,16 +669,18 @@ pub(super) fn render_channel_column(
                                         accent.linear_multiply(0.5),
                                     );
                                 }
-                                if let Some(payload) =
-                                    drop_zone.dnd_release_payload::<(usize, usize)>()
-                                {
-                                    let (src_ch, src_deck) = *payload;
-                                    if src_ch == ch_idx && src_deck != i {
-                                        let to = if src_deck < i { i - 1 } else { i };
-                                        if to != src_deck {
+                                if let Some(payload) = drop_zone.dnd_release_payload::<DeckDrag>() {
+                                    // The ordinal is read here, not at drag
+                                    // start, so a reorder mid-drag can't send
+                                    // the wrong deck.
+                                    let from_idx =
+                                        ch.decks.iter().position(|d| d.uuid == payload.deck_uuid);
+                                    if let Some(from_idx) = from_idx {
+                                        let to = if from_idx < i { i - 1 } else { i };
+                                        if to != from_idx {
                                             actions.commands.push(EngineCommand::ReorderDeck {
-                                                ch: ch_idx,
-                                                from_idx: src_deck,
+                                                channel_uuid: ch.uuid.clone(),
+                                                from_idx,
                                                 to_idx: to,
                                             });
                                         }
@@ -704,16 +705,18 @@ pub(super) fn render_channel_column(
                                     accent.linear_multiply(0.5),
                                 );
                             }
-                            if let Some(payload) = drop_zone.dnd_release_payload::<(usize, usize)>()
-                            {
-                                let (src_ch, src_deck) = *payload;
+                            if let Some(payload) = drop_zone.dnd_release_payload::<DeckDrag>() {
                                 let last = ch.decks.len() - 1;
-                                if src_ch == ch_idx && src_deck != last {
-                                    actions.commands.push(EngineCommand::ReorderDeck {
-                                        ch: ch_idx,
-                                        from_idx: src_deck,
-                                        to_idx: last,
-                                    });
+                                let from_idx =
+                                    ch.decks.iter().position(|d| d.uuid == payload.deck_uuid);
+                                if let Some(from_idx) = from_idx {
+                                    if from_idx != last {
+                                        actions.commands.push(EngineCommand::ReorderDeck {
+                                            channel_uuid: ch.uuid.clone(),
+                                            from_idx,
+                                            to_idx: last,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -735,13 +738,11 @@ pub(super) fn render_channel_column(
                         if drop_resp.clicked() {
                             actions.session.select_channel = Some(ch_idx);
                         }
-                        if let Some(payload) = drop_resp.dnd_release_payload::<(usize, usize)>() {
-                            let (src_ch, src_deck) = *payload;
-                            if src_ch != ch_idx && src_ch < data.channels.len() {
+                        if let Some(payload) = drop_resp.dnd_release_payload::<DeckDrag>() {
+                            if !ch.decks.iter().any(|d| d.uuid == payload.deck_uuid) {
                                 actions.commands.push(EngineCommand::MoveDeck {
-                                    src_ch,
-                                    src_deck,
-                                    dst_ch: ch_idx,
+                                    deck_uuid: payload.deck_uuid.clone(),
+                                    dst_channel_uuid: ch.uuid.clone(),
                                 });
                             }
                         }
@@ -799,8 +800,28 @@ fn render_new_channel_drop_zone(
     let has_library_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
         .map(|p| !matches!(&*p, LibraryDrag::Effect(_)))
         .unwrap_or(false);
-    let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx());
+    let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
     let relevant_drag = has_library_drag || has_deck_drag;
+    // A deck dropped here needs a channel that does not exist yet, so the move
+    // is held until `AddChannel` has been applied and the new channel has a
+    // UUID to address. See `/spec/api-addressing.md`.
+    let pending_move_id = egui::Id::new("__new_ch_pending_deck_move");
+    if let Some((deck_uuid, expected_len)) = ui
+        .ctx()
+        .memory(|mem| mem.data.get_temp::<(String, usize)>(pending_move_id))
+    {
+        ui.ctx()
+            .memory_mut(|mem| mem.data.remove::<(String, usize)>(pending_move_id));
+        match data.channels.last() {
+            Some(ch) if data.channels.len() >= expected_len => {
+                actions.commands.push(EngineCommand::MoveDeck {
+                    deck_uuid,
+                    dst_channel_uuid: ch.uuid.clone(),
+                });
+            }
+            _ => log::warn!("Dropping deck move: the new channel was never created"),
+        }
+    }
     // Pre-compute the zone rect from the cursor — ui.max_rect() is too broad
     // (it spans the full remaining horizontal space including adjacent channels)
     let hint_height = ui.available_height().max(60.0);
@@ -863,23 +884,15 @@ fn render_new_channel_drop_zone(
             .insert_temp(egui::Id::new("new_ch_drop_rect").with(side), zone_rect);
     });
 
-    // Handle immediate deck drag (not deferred — egui native DnD)
-    if let Some(payload) = resp.response.dnd_release_payload::<(usize, usize)>() {
-        let (src_ch, src_deck) = *payload;
-        let new_ch_idx = data.channels.len();
-        // AddChannel first so the MoveDeck target index resolves.
+    if let Some(payload) = resp.response.dnd_release_payload::<DeckDrag>() {
         actions.commands.push(EngineCommand::AddChannel);
-        actions.commands.push(EngineCommand::MoveDeck {
-            src_ch,
-            src_deck,
-            dst_ch: new_ch_idx,
+        ui.ctx().memory_mut(|mem| {
+            mem.data.insert_temp(
+                pending_move_id,
+                (payload.deck_uuid.clone(), data.channels.len() + 1),
+            );
         });
-        log::info!(
-            "Deck drag -> new channel: ch{} deck{} -> new ch{}",
-            src_ch,
-            src_deck,
-            new_ch_idx
-        );
+        log::info!("Deck drag -> new channel: deck {}", payload.deck_uuid);
     }
 }
 
@@ -956,7 +969,12 @@ pub(super) fn render_deck_thumbnail(
 
         // Start drag: set payload for deck move between channels
         if card_resp.drag_started() {
-            egui::DragAndDrop::set_payload(ui.ctx(), (ch_idx, idx));
+            egui::DragAndDrop::set_payload(
+                ui.ctx(),
+                DeckDrag {
+                    deck_uuid: deck.uuid.clone(),
+                },
+            );
         }
 
         // While dragging, show a translucent ghost at the cursor
@@ -1006,7 +1024,7 @@ pub(super) fn render_deck_thumbnail(
         );
 
         // Draw preview
-        if let Some(&texture_id) = data.deck_preview_textures.get(&(ch_idx, idx)) {
+        if let Some(&texture_id) = data.deck_preview_textures.get(&deck.uuid) {
             ui.painter().image(
                 texture_id,
                 preview_rect,
@@ -1240,8 +1258,7 @@ pub(super) fn render_deck_thumbnail(
             }
             if !any_learn && ui.small_button(egui::RichText::new("x").small()).clicked() {
                 actions.commands.push(EngineCommand::RemoveDeck {
-                    channel_idx: ch_idx,
-                    deck_idx: idx,
+                    deck_uuid: deck.uuid.clone(),
                 });
             }
         });
@@ -1251,22 +1268,19 @@ pub(super) fn render_deck_thumbnail(
         // a blend-mode edit made in the detail panel.
         if (opacity - deck.opacity).abs() > f32::EPSILON {
             actions.commands.push(EngineCommand::SetDeckOpacity {
-                channel_idx: ch_idx,
-                deck_idx: idx,
+                deck_uuid: deck.uuid.clone(),
                 opacity,
             });
         }
         if solo != deck.solo {
             actions.commands.push(EngineCommand::SetDeckSolo {
-                channel_idx: ch_idx,
-                deck_idx: idx,
+                deck_uuid: deck.uuid.clone(),
                 solo,
             });
         }
         if mute != deck.mute {
             actions.commands.push(EngineCommand::SetDeckMute {
-                channel_idx: ch_idx,
-                deck_idx: idx,
+                deck_uuid: deck.uuid.clone(),
                 mute,
             });
         }

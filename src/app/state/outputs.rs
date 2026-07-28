@@ -71,7 +71,11 @@ impl VardaApp {
     }
 
     /// Start a headless output (spawn ffmpeg subprocess or activate NDI/Syphon).
-    pub fn cmd_start_output(&mut self, idx: usize) -> CommandResult {
+    pub fn cmd_start_output(&mut self, output_uuid: &str) -> CommandResult {
+        let idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         // Snapshot what we need so no borrow of `self.output` is held across the
         // audio-subscription and spawn work (which borrow other `self` fields).
         // Also take any stale subscription left by a prior delivery failure.
@@ -233,7 +237,11 @@ impl VardaApp {
     }
 
     /// Stop a headless output (kill subprocess and deactivate).
-    pub fn cmd_stop_output(&mut self, idx: usize) -> CommandResult {
+    pub fn cmd_stop_output(&mut self, output_uuid: &str) -> CommandResult {
+        let idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
             if h.active {
                 if let Some(mut sub) = h.subprocess.take() {
@@ -259,7 +267,15 @@ impl VardaApp {
     }
 
     /// Set the calibration display mode on a windowed output.
-    pub fn cmd_set_calibration_mode(&mut self, idx: usize, mode: CalibrationMode) -> CommandResult {
+    pub fn cmd_set_calibration_mode(
+        &mut self,
+        output_uuid: &str,
+        mode: CalibrationMode,
+    ) -> CommandResult {
+        let idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         if let Some(UnifiedOutput::Window(w)) = self.output.outputs.get_mut(idx) {
             w.calibration_mode = mode;
             CommandResult::Ok
@@ -434,9 +450,13 @@ impl VardaApp {
     /// Set edge blend configuration for an output.
     pub fn cmd_set_edge_blend(
         &mut self,
-        output_idx: usize,
+        output_uuid: &str,
         config: crate::renderer::edge_blend::EdgeBlendConfig,
     ) -> CommandResult {
+        let output_idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         if let Some(output) = self.output.outputs.get_mut(output_idx) {
             match output {
                 UnifiedOutput::Window(w) => {
@@ -458,9 +478,13 @@ impl VardaApp {
     /// Set edge blend mode for an output; triggers auto-recompute if mode is Auto.
     pub fn cmd_set_edge_blend_mode(
         &mut self,
-        output_idx: usize,
+        output_uuid: &str,
         mode: EdgeBlendMode,
     ) -> CommandResult {
+        let output_idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         if let Some(output) = self.output.outputs.get_mut(output_idx) {
             match output {
                 UnifiedOutput::Window(w) => {
@@ -485,9 +509,13 @@ impl VardaApp {
     /// Set output rotation and rebuild intermediate textures.
     pub fn cmd_set_output_rotation(
         &mut self,
-        idx: usize,
+        output_uuid: &str,
         rotation: crate::renderer::context::OutputRotation,
     ) -> CommandResult {
+        let idx = match self.resolve_output(output_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         if let Some(output) = self.output.outputs.get_mut(idx) {
             match output {
                 UnifiedOutput::Window(w) => {

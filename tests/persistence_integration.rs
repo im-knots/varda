@@ -39,12 +39,17 @@ fn fire(app: &mut VardaApp, cmd: EngineCommand) {
     app.process_commands();
 }
 
+/// UUID of the channel currently at `idx`.
+fn channel_uuid(app: &mut VardaApp, idx: usize) -> String {
+    app.build_engine_state().mixer.channels[idx].uuid.clone()
+}
+
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[test]
 fn save_load_empty_workspace() {
     let tmp = TempDir::new().unwrap();
-    let Some(app) = headless_app_in(tmp.path()) else {
+    let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
     app.save_workspace(&UILayoutState::default());
@@ -63,10 +68,11 @@ fn save_load_with_decks() {
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
@@ -168,10 +174,11 @@ fn load_missing_assets_graceful() {
         return;
     };
     // Add a video deck with a non-existent path
+    let ch = channel_uuid(&mut app, 0);
     let _ = send_cmd(
         &mut app,
         EngineCommand::AddVideoDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             path: std::path::PathBuf::from("/nonexistent/path/video.mp4"),
         },
     );
@@ -188,7 +195,7 @@ fn save_creates_varda_directory() {
     let tmp = TempDir::new().unwrap();
     let varda_dir = tmp.path().join(".varda");
     assert!(!varda_dir.exists());
-    let Some(app) = headless_app_in(tmp.path()) else {
+    let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
     app.save_workspace(&UILayoutState::default());
@@ -198,7 +205,7 @@ fn save_creates_varda_directory() {
 #[test]
 fn scene_json_valid_format() {
     let tmp = TempDir::new().unwrap();
-    let Some(app) = headless_app_in(tmp.path()) else {
+    let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
     app.save_workspace(&UILayoutState::default());
@@ -215,10 +222,11 @@ fn save_load_channel_opacity() {
     let Some(mut app) = headless_app_in(tmp.path()) else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
     fire(
         &mut app,
         EngineCommand::SetChannelOpacity {
-            channel_idx: 0,
+            channel_uuid: ch,
             opacity: 0.5,
         },
     );

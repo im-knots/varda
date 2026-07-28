@@ -16,10 +16,9 @@ use crate::engine::{CommandResult, ErrorCode};
 use crate::html::HtmlInputEvent;
 
 /// Resolved address + size of the HTML instance an interactive window drives.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct InteractiveTarget {
-    pub channel_idx: usize,
-    pub deck_idx: usize,
+    pub deck_uuid: String,
     pub html_idx: usize,
     pub width: u32,
     pub height: u32,
@@ -37,13 +36,13 @@ pub(crate) struct InteractiveHtmlState {
 }
 
 impl super::VardaApp {
-    /// Open (or re-target) the interactive window for the HTML deck at
-    /// `(channel_idx, deck_idx)`. Window creation is deferred to the render loop.
-    pub(crate) fn cmd_open_html_interactive(
-        &mut self,
-        channel_idx: usize,
-        deck_idx: usize,
-    ) -> CommandResult {
+    /// Open (or re-target) the interactive window for the HTML deck identified by
+    /// `deck_uuid`. Window creation is deferred to the render loop.
+    pub(crate) fn cmd_open_html_interactive(&mut self, deck_uuid: &str) -> CommandResult {
+        let (channel_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+            Ok(loc) => loc,
+            Err(e) => return e.into(),
+        };
         let kind = self
             .mixer
             .channels()
@@ -54,7 +53,7 @@ impl super::VardaApp {
             Some(Some(ExternalSourceKind::Html(html_idx))) => {
                 // Already showing this deck → no-op.
                 if let Some(win) = &self.interactive.window {
-                    if win.target.channel_idx == channel_idx && win.target.deck_idx == deck_idx {
+                    if win.target.deck_uuid == deck_uuid {
                         return CommandResult::Ok;
                     }
                 }
@@ -66,21 +65,16 @@ impl super::VardaApp {
                 // One at a time: close any existing window, then open the new one.
                 self.interactive.pending_close = true;
                 self.interactive.pending_open = Some(InteractiveTarget {
-                    channel_idx,
-                    deck_idx,
+                    deck_uuid: deck_uuid.to_string(),
                     html_idx,
                     width,
                     height,
                 });
                 CommandResult::Ok
             }
-            Some(_) => CommandResult::Err {
+            _ => CommandResult::Err {
                 code: ErrorCode::InvalidInput,
                 message: "Deck is not an HTML source".into(),
-            },
-            None => CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Deck not found".into(),
             },
         }
     }
@@ -92,13 +86,13 @@ impl super::VardaApp {
         CommandResult::Ok
     }
 
-    /// The `(channel_idx, deck_idx)` of the deck the interactive window is bound
-    /// to, if one is open. Used to reflect the toggle state in snapshots.
-    pub(crate) fn interactive_active_deck(&self) -> Option<(usize, usize)> {
+    /// UUID of the deck the interactive window is bound to, if one is open. Used
+    /// to reflect the toggle state in snapshots.
+    pub(crate) fn interactive_active_deck(&self) -> Option<&str> {
         self.interactive
             .window
             .as_ref()
-            .map(|w| (w.target.channel_idx, w.target.deck_idx))
+            .map(|w| w.target.deck_uuid.as_str())
     }
 
     /// Apply pending interactive open/close requests. Runs in the render loop so
@@ -135,18 +129,23 @@ impl super::VardaApp {
             }
         };
         let window_static: &'static Window = Box::leak(Box::new(window));
+        let (deck_uuid, html_idx, width, height) = (
+            target.deck_uuid.clone(),
+            target.html_idx,
+            target.width,
+            target.height,
+        );
         match window::InteractiveWindow::new(&self.context, window_static, target) {
             Ok(win) => {
                 window_static.set_ime_allowed(true);
                 self.external_io
                     .html_manager
-                    .send_input(target.html_idx, HtmlInputEvent::Focus(true));
+                    .send_input(html_idx, HtmlInputEvent::Focus(true));
                 log::info!(
-                    "Opened interactive HTML window for deck {}/{} ({}x{})",
-                    target.channel_idx,
-                    target.deck_idx,
-                    target.width,
-                    target.height
+                    "Opened interactive HTML window for deck {} ({}x{})",
+                    deck_uuid,
+                    width,
+                    height
                 );
                 self.interactive.window = Some(win);
             }

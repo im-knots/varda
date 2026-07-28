@@ -573,4 +573,94 @@ void main() {
         }
         println!("WGSL output length: {}", wgsl.unwrap().len());
     }
+
+    #[test]
+    fn test_compile_mandelbrot_deco_naga() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let shader_path = manifest_dir.join("shaders/mandelbrot_deco.fs");
+        let source = match std::fs::read_to_string(&shader_path) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Skipping: shader file not found");
+                return;
+            }
+        };
+        let json_end = source.find("}*/").expect("JSON header");
+        let glsl = source[json_end + 3..].trim();
+
+        let spirv = compile_glsl_to_spirv(glsl, "mandelbrot_deco.fs");
+        if let Err(ref e) = spirv {
+            panic!("GLSL compilation failed: {}", e);
+        }
+        let spirv_data = spirv.unwrap();
+
+        let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let module =
+            naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
+                .expect("naga SPIR-V parse should succeed");
+
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module);
+        if let Err(ref e) = info {
+            panic!("Naga validation failed: {:?}", e);
+        }
+
+        let wgsl = naga::back::wgsl::write_string(
+            &module,
+            &info.unwrap(),
+            naga::back::wgsl::WriterFlags::empty(),
+        );
+        if let Err(ref e) = wgsl {
+            panic!("WGSL output failed: {:?}", e);
+        }
+        println!("WGSL output length: {}", wgsl.unwrap().len());
+    }
+
+    #[test]
+    fn test_compile_dull_skull_naga() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let shader_path = manifest_dir.join("shaders/dull_skull.fs");
+        let source = match std::fs::read_to_string(&shader_path) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Skipping: shader file not found");
+                return;
+            }
+        };
+        let json_end = source.find("}*/").expect("JSON header");
+        let glsl = source[json_end + 3..].trim();
+
+        let spirv = compile_glsl_to_spirv(glsl, "dull_skull.fs");
+        if let Err(ref e) = spirv {
+            panic!("GLSL compilation failed: {}", e);
+        }
+        let spirv_data = spirv.unwrap();
+
+        let spirv_bytes: Vec<u8> = spirv_data.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let module =
+            naga::front::spv::parse_u8_slice(&spirv_bytes, &naga::front::spv::Options::default())
+                .expect("naga SPIR-V parse should succeed");
+
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module);
+        if let Err(ref e) = info {
+            panic!("Naga validation failed: {:?}", e);
+        }
+
+        let wgsl = naga::back::wgsl::write_string(
+            &module,
+            &info.unwrap(),
+            naga::back::wgsl::WriterFlags::empty(),
+        );
+        if let Err(ref e) = wgsl {
+            panic!("WGSL output failed: {:?}", e);
+        }
+        println!("WGSL output length: {}", wgsl.unwrap().len());
+    }
 }

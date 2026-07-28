@@ -80,10 +80,7 @@ impl VardaApp {
                         && (*width != self.render_width || *height != self.render_height)
             );
             let outcome = self.execute_command_gui(cmd);
-            if matches!(
-                outcome,
-                CommandOutcome::DeckCreated { .. } | CommandOutcome::DecksReindexed { .. }
-            ) {
+            if matches!(outcome, CommandOutcome::DecksCreated { .. }) {
                 texture_outcomes.push(outcome.clone());
             }
             if is_deck_add {
@@ -108,21 +105,19 @@ impl VardaApp {
     /// `EngineActionsOutcome::texture_outcomes`).
     fn notify_deck_add_outcome(&mut self, outcome: &CommandOutcome) {
         match outcome {
-            CommandOutcome::DeckCreated {
-                channel_idx,
-                deck_idx,
-                ..
-            } => {
-                let name = self
-                    .mixer
-                    .channels()
-                    .get(*channel_idx)
-                    .and_then(|ch| ch.decks.get(*deck_idx))
-                    .map(|slot| slot.deck.source_name().to_string())
-                    .unwrap_or_default();
-                self.session
-                    .notifications
-                    .info(format!("➕ {} → Ch {}", name, channel_idx + 1));
+            CommandOutcome::DecksCreated { uuids } => {
+                for uuid in uuids {
+                    let Ok((ch_idx, deck_idx)) = self.resolve_deck(uuid) else {
+                        continue;
+                    };
+                    let name = self.mixer.channels()[ch_idx].decks[deck_idx]
+                        .deck
+                        .source_name()
+                        .to_string();
+                    self.session
+                        .notifications
+                        .info(format!("➕ {} → Ch {}", name, ch_idx + 1));
+                }
             }
             CommandOutcome::Plain(CommandResult::Err { message, .. }) => {
                 log::error!("Failed to add deck: {}", message);
@@ -138,9 +133,8 @@ impl VardaApp {
     /// can fix up selection state.
     fn apply_remove_channel(&mut self, ui_actions: &ui::UIActions) -> Option<usize> {
         let ch_idx = ui_actions.session.remove_channel?;
-        let result = self.execute_command(EngineCommand::RemoveChannel {
-            channel_idx: ch_idx,
-        });
+        let channel_uuid = self.mixer.channels().get(ch_idx)?.uuid().to_string();
+        let result = self.execute_command(EngineCommand::RemoveChannel { channel_uuid });
         match result {
             crate::engine::CommandResult::Ok => Some(ch_idx),
             _ => None,
@@ -172,14 +166,14 @@ pub struct EngineActionsOutcome {
     pub removed_channel: Option<usize>,
     /// Whether the render resolution changed (recreated GPU textures).
     pub resolution_changed: bool,
-    /// `DeckCreated` / `DecksReindexed` outcomes from this frame's command
-    /// drain, in order — the caller registers/frees preview textures for each.
+    /// `DecksCreated` outcomes from this frame's command drain, in order — the
+    /// caller registers a preview texture for each new deck UUID.
     pub texture_outcomes: Vec<CommandOutcome>,
 }
 
 /// True for the deck-creating commands the GUI drain toasts + registers a
 /// preview texture for. Mirrors the deck-add arm list in `execute_command_gui`.
-fn command_is_deck_add(cmd: &EngineCommand) -> bool {
+pub(crate) fn command_is_deck_add(cmd: &EngineCommand) -> bool {
     matches!(
         cmd,
         EngineCommand::AddDeck { .. }
@@ -187,6 +181,7 @@ fn command_is_deck_add(cmd: &EngineCommand) -> bool {
             | EngineCommand::AddVideoDeck { .. }
             | EngineCommand::AddSolidColorDeck { .. }
             | EngineCommand::AddCameraDeck { .. }
+            | EngineCommand::AddDepthSensorDeck { .. }
             | EngineCommand::AddNdiDeck { .. }
             | EngineCommand::AddSyphonDeck { .. }
             | EngineCommand::AddSrtDeck { .. }

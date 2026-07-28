@@ -1,4 +1,7 @@
 //! Transition sequence write routes.
+//!
+//! Sequences are addressed by UUID. Steps are positional within their sequence,
+//! so `step_idx` stays an ordinal — see `/spec/api-addressing.md`.
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -16,30 +19,54 @@ pub async fn create(State(s): State<SharedState>) -> impl IntoResponse {
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(delete, path = "/api/sequences/{idx}", params(("idx" = usize, Path, description = "Sequence index")), responses((status = 200, body = CommandResult)), tag = "Sequences")]
-pub async fn delete(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::DeleteSequence { idx }).await {
+#[utoipa::path(delete, path = "/api/sequences/{sequence_uuid}", params(("sequence_uuid" = String, Path, description = "Sequence UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Sequence not found")), tag = "Sequences")]
+pub async fn delete(
+    State(s): State<SharedState>,
+    Path(sequence_uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::DeleteSequence { sequence_uuid })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(post, path = "/api/sequences/{idx}/play", params(("idx" = usize, Path, description = "Sequence index")), responses((status = 200, body = CommandResult)), tag = "Sequences")]
-pub async fn play(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::PlaySequence { idx }).await {
+#[utoipa::path(post, path = "/api/sequences/{sequence_uuid}/play", params(("sequence_uuid" = String, Path, description = "Sequence UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Sequence not found")), tag = "Sequences")]
+pub async fn play(
+    State(s): State<SharedState>,
+    Path(sequence_uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::PlaySequence { sequence_uuid })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(post, path = "/api/sequences/{idx}/stop", params(("idx" = usize, Path, description = "Sequence index")), responses((status = 200, body = CommandResult)), tag = "Sequences")]
-pub async fn stop(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::StopSequence { idx }).await {
+#[utoipa::path(post, path = "/api/sequences/{sequence_uuid}/stop", params(("sequence_uuid" = String, Path, description = "Sequence UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Sequence not found")), tag = "Sequences")]
+pub async fn stop(
+    State(s): State<SharedState>,
+    Path(sequence_uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::StopSequence { sequence_uuid })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(post, path = "/api/sequences/{idx}/toggle", params(("idx" = usize, Path, description = "Sequence index")), responses((status = 200, body = CommandResult)), tag = "Sequences")]
-pub async fn toggle(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::ToggleSequence { idx }).await {
+#[utoipa::path(post, path = "/api/sequences/{sequence_uuid}/toggle", params(("sequence_uuid" = String, Path, description = "Sequence UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Sequence not found")), tag = "Sequences")]
+pub async fn toggle(
+    State(s): State<SharedState>,
+    Path(sequence_uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::ToggleSequence { sequence_uuid })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
@@ -47,22 +74,22 @@ pub async fn toggle(State(s): State<SharedState>, Path(idx): Path<usize>) -> imp
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddFadeStepBody {
-    /// Source channel index for the crossfade.
-    pub from_ch: usize,
-    /// Destination channel index for the crossfade.
-    pub to_ch: usize,
+    /// UUID of the channel to fade from.
+    pub from_channel_uuid: String,
+    /// UUID of the channel to fade to.
+    pub to_channel_uuid: String,
 }
-#[utoipa::path(post, path = "/api/sequences/{idx}/steps/fade", params(("idx" = usize, Path, description = "Sequence index")), request_body = AddFadeStepBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(post, path = "/api/sequences/{sequence_uuid}/steps/fade", params(("sequence_uuid" = String, Path, description = "Sequence UUID")), request_body = AddFadeStepBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence or channel not found")), tag = "Sequences")]
 pub async fn add_fade_step(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(sequence_uuid): Path<String>,
     Json(b): Json<AddFadeStepBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddFadeStep {
-            seq_idx: idx,
-            from_ch: b.from_ch,
-            to_ch: b.to_ch,
+            sequence_uuid,
+            from_channel_uuid: b.from_channel_uuid,
+            to_channel_uuid: b.to_channel_uuid,
         })
         .await
     {
@@ -70,13 +97,13 @@ pub async fn add_fade_step(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(post, path = "/api/sequences/{idx}/steps/wait", params(("idx" = usize, Path, description = "Sequence index")), responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(post, path = "/api/sequences/{sequence_uuid}/steps/wait", params(("sequence_uuid" = String, Path, description = "Sequence UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Sequence not found")), tag = "Sequences")]
 pub async fn add_wait_step(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(sequence_uuid): Path<String>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::AddWaitStep { seq_idx: idx })
+        .send_command(EngineCommand::AddWaitStep { sequence_uuid })
         .await
     {
         Ok(r) => command_response(r),
@@ -89,15 +116,15 @@ pub struct AddGoToStepBody {
     /// Index of the step to jump to.
     pub step_index: usize,
 }
-#[utoipa::path(post, path = "/api/sequences/{idx}/steps/goto", params(("idx" = usize, Path, description = "Sequence index")), request_body = AddGoToStepBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(post, path = "/api/sequences/{sequence_uuid}/steps/goto", params(("sequence_uuid" = String, Path, description = "Sequence UUID")), request_body = AddGoToStepBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence not found")), tag = "Sequences")]
 pub async fn add_goto_step(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(sequence_uuid): Path<String>,
     Json(b): Json<AddGoToStepBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddGoToStep {
-            seq_idx: idx,
+            sequence_uuid,
             step_index: b.step_index,
         })
         .await
@@ -106,13 +133,16 @@ pub async fn add_goto_step(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(delete, path = "/api/sequences/{seq_idx}/steps/{step_idx}", params(("seq_idx" = usize, Path, description = "Sequence index"), ("step_idx" = usize, Path, description = "Step index within the sequence")), responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(delete, path = "/api/sequences/{sequence_uuid}/steps/{step_idx}", params(("sequence_uuid" = String, Path, description = "Sequence UUID"), ("step_idx" = usize, Path, description = "Step position within the sequence")), responses((status = 200, body = CommandResult), (status = 404, description = "Sequence or step not found")), tag = "Sequences")]
 pub async fn remove_step(
     State(s): State<SharedState>,
-    Path((seq_idx, step_idx)): Path<(usize, usize)>,
+    Path((sequence_uuid, step_idx)): Path<(String, usize)>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::RemoveStep { seq_idx, step_idx })
+        .send_command(EngineCommand::RemoveStep {
+            sequence_uuid,
+            step_idx,
+        })
         .await
     {
         Ok(r) => command_response(r),
@@ -127,15 +157,15 @@ pub struct StepDurationBody {
     /// Unit of the duration (seconds or beats).
     pub unit: crate::channel::DurationUnit,
 }
-#[utoipa::path(put, path = "/api/sequences/{seq_idx}/steps/{step_idx}/duration", params(("seq_idx" = usize, Path, description = "Sequence index"), ("step_idx" = usize, Path, description = "Step index")), request_body = StepDurationBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(put, path = "/api/sequences/{sequence_uuid}/steps/{step_idx}/duration", params(("sequence_uuid" = String, Path, description = "Sequence UUID"), ("step_idx" = usize, Path, description = "Step position within the sequence")), request_body = StepDurationBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence or step not found")), tag = "Sequences")]
 pub async fn set_step_duration(
     State(s): State<SharedState>,
-    Path((seq_idx, step_idx)): Path<(usize, usize)>,
+    Path((sequence_uuid, step_idx)): Path<(String, usize)>,
     Json(b): Json<StepDurationBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetStepDuration {
-            seq_idx,
+            sequence_uuid,
             step_idx,
             value: b.value,
             unit: b.unit,
@@ -152,15 +182,15 @@ pub struct StepEasingBody {
     /// Name of the easing curve.
     pub easing: String,
 }
-#[utoipa::path(put, path = "/api/sequences/{seq_idx}/steps/{step_idx}/easing", params(("seq_idx" = usize, Path, description = "Sequence index"), ("step_idx" = usize, Path, description = "Step index")), request_body = StepEasingBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(put, path = "/api/sequences/{sequence_uuid}/steps/{step_idx}/easing", params(("sequence_uuid" = String, Path, description = "Sequence UUID"), ("step_idx" = usize, Path, description = "Step position within the sequence")), request_body = StepEasingBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence or step not found")), tag = "Sequences")]
 pub async fn set_step_easing(
     State(s): State<SharedState>,
-    Path((seq_idx, step_idx)): Path<(usize, usize)>,
+    Path((sequence_uuid, step_idx)): Path<(String, usize)>,
     Json(b): Json<StepEasingBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetStepEasing {
-            seq_idx,
+            sequence_uuid,
             step_idx,
             easing: b.easing,
         })
@@ -176,15 +206,15 @@ pub struct StepShaderBody {
     /// Shader name for the transition, or null to clear.
     pub shader_name: Option<String>,
 }
-#[utoipa::path(put, path = "/api/sequences/{seq_idx}/steps/{step_idx}/shader", params(("seq_idx" = usize, Path, description = "Sequence index"), ("step_idx" = usize, Path, description = "Step index")), request_body = StepShaderBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(put, path = "/api/sequences/{sequence_uuid}/steps/{step_idx}/shader", params(("sequence_uuid" = String, Path, description = "Sequence UUID"), ("step_idx" = usize, Path, description = "Step position within the sequence")), request_body = StepShaderBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence or step not found")), tag = "Sequences")]
 pub async fn set_step_shader(
     State(s): State<SharedState>,
-    Path((seq_idx, step_idx)): Path<(usize, usize)>,
+    Path((sequence_uuid, step_idx)): Path<(String, usize)>,
     Json(b): Json<StepShaderBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetStepTransitionShader {
-            seq_idx,
+            sequence_uuid,
             step_idx,
             shader_name: b.shader_name,
         })
@@ -199,8 +229,8 @@ pub async fn set_step_shader(
 
 #[derive(Deserialize, ToSchema)]
 pub struct StepChBody {
-    /// Channel index.
-    pub ch: usize,
+    /// UUID of the channel the step references.
+    pub channel_uuid: String,
 }
 #[derive(Deserialize, ToSchema)]
 pub struct GoToTargetBody {
@@ -215,17 +245,17 @@ pub struct MoveStepBody {
     pub to: usize,
 }
 
-#[utoipa::path(put, path = "/api/sequences/{seq_idx}/steps/{step_idx}/from-ch", params(("seq_idx" = usize, Path, description = "Sequence index"), ("step_idx" = usize, Path, description = "Step index")), request_body = StepChBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(put, path = "/api/sequences/{sequence_uuid}/steps/{step_idx}/from-ch", params(("sequence_uuid" = String, Path, description = "Sequence UUID"), ("step_idx" = usize, Path, description = "Step position within the sequence")), request_body = StepChBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence, step, or channel not found")), tag = "Sequences")]
 pub async fn set_step_from_ch(
     State(s): State<SharedState>,
-    Path((seq_idx, step_idx)): Path<(usize, usize)>,
+    Path((sequence_uuid, step_idx)): Path<(String, usize)>,
     Json(b): Json<StepChBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetStepFromCh {
-            seq_idx,
+            sequence_uuid,
             step_idx,
-            ch: b.ch,
+            channel_uuid: b.channel_uuid,
         })
         .await
     {
@@ -233,17 +263,17 @@ pub async fn set_step_from_ch(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(put, path = "/api/sequences/{seq_idx}/steps/{step_idx}/to-ch", params(("seq_idx" = usize, Path, description = "Sequence index"), ("step_idx" = usize, Path, description = "Step index")), request_body = StepChBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(put, path = "/api/sequences/{sequence_uuid}/steps/{step_idx}/to-ch", params(("sequence_uuid" = String, Path, description = "Sequence UUID"), ("step_idx" = usize, Path, description = "Step position within the sequence")), request_body = StepChBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence, step, or channel not found")), tag = "Sequences")]
 pub async fn set_step_to_ch(
     State(s): State<SharedState>,
-    Path((seq_idx, step_idx)): Path<(usize, usize)>,
+    Path((sequence_uuid, step_idx)): Path<(String, usize)>,
     Json(b): Json<StepChBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetStepToCh {
-            seq_idx,
+            sequence_uuid,
             step_idx,
-            ch: b.ch,
+            channel_uuid: b.channel_uuid,
         })
         .await
     {
@@ -251,15 +281,15 @@ pub async fn set_step_to_ch(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(put, path = "/api/sequences/{seq_idx}/steps/{step_idx}/goto-target", params(("seq_idx" = usize, Path, description = "Sequence index"), ("step_idx" = usize, Path, description = "Step index")), request_body = GoToTargetBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(put, path = "/api/sequences/{sequence_uuid}/steps/{step_idx}/goto-target", params(("sequence_uuid" = String, Path, description = "Sequence UUID"), ("step_idx" = usize, Path, description = "Step position within the sequence")), request_body = GoToTargetBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence or step not found")), tag = "Sequences")]
 pub async fn set_goto_target(
     State(s): State<SharedState>,
-    Path((seq_idx, step_idx)): Path<(usize, usize)>,
+    Path((sequence_uuid, step_idx)): Path<(String, usize)>,
     Json(b): Json<GoToTargetBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetGoToTarget {
-            seq_idx,
+            sequence_uuid,
             step_idx,
             target: b.target,
         })
@@ -269,15 +299,15 @@ pub async fn set_goto_target(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(post, path = "/api/sequences/{idx}/steps/move", params(("idx" = usize, Path, description = "Sequence index")), request_body = MoveStepBody, responses((status = 200, body = CommandResult)), tag = "Sequences")]
+#[utoipa::path(post, path = "/api/sequences/{sequence_uuid}/steps/move", params(("sequence_uuid" = String, Path, description = "Sequence UUID")), request_body = MoveStepBody, responses((status = 200, body = CommandResult), (status = 404, description = "Sequence not found")), tag = "Sequences")]
 pub async fn move_step(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(sequence_uuid): Path<String>,
     Json(b): Json<MoveStepBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::MoveStep {
-            seq_idx: idx,
+            sequence_uuid,
             from: b.from,
             to: b.to,
         })

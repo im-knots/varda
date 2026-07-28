@@ -310,6 +310,10 @@ pub enum ExternalSourceKind {
     Dash(usize),
     Rtmp(usize),
     Html(usize),
+    /// Depth sensor (Kinect/LIDAR). Unlike other external sources, this is
+    /// reprojected as a point cloud into the deck texture rather than blitted.
+    /// See spec/depth-sensors.md.
+    DepthSensor(crate::depth::DepthSensorId),
 }
 
 impl ExternalSourceKind {
@@ -324,6 +328,7 @@ impl ExternalSourceKind {
             Self::Dash(_) => "dash",
             Self::Rtmp(_) => "rtmp",
             Self::Html(_) => "html",
+            Self::DepthSensor(_) => "depth_sensor",
         }
     }
 
@@ -335,6 +340,15 @@ impl ExternalSourceKind {
             Self::Syphon(_) => "Syphon",
             Self::Srt(_) | Self::Hls(_) | Self::Dash(_) | Self::Rtmp(_) => "Stream",
             Self::Html(_) => "HTML",
+            Self::DepthSensor(_) => "Depth Sensor",
+        }
+    }
+
+    /// Depth-sensor id if this is a depth source.
+    pub fn depth_sensor_id(&self) -> Option<crate::depth::DepthSensorId> {
+        match self {
+            Self::DepthSensor(id) => Some(*id),
+            _ => None,
         }
     }
 }
@@ -454,8 +468,24 @@ pub struct Deck {
     /// Last wall-clock render instant (for FPS measurement only, not for TIME uniform)
     last_frame_time: Instant,
 
-    /// External source texture view (set each frame for ExternalSource decks)
+    /// External source texture view (set each frame for ExternalSource decks).
+    /// For DepthSensor decks this holds the R16Uint depth view.
     pub external_source_view: Option<wgpu::TextureView>,
+
+    /// Depth-sensor RGB view (set each frame for DepthSensor decks).
+    pub depth_rgb_view: Option<wgpu::TextureView>,
+
+    /// Depth-sensor intrinsics (set each frame for DepthSensor decks).
+    pub depth_intrinsics: Option<crate::depth::backend::DepthIntrinsics>,
+
+    /// Native depth-sensor resolution `(w, h)` (set each frame).
+    pub depth_source_size: Option<(u32, u32)>,
+
+    /// Point-cloud reprojection params for DepthSensor decks (router-driven).
+    pub point_cloud_params: crate::depth::point_cloud::PointCloudParams,
+
+    /// Lazily-built point-cloud pipeline for DepthSensor decks.
+    point_cloud_pipeline: Option<crate::depth::point_cloud::PointCloudPipeline>,
 
     /// Smoothed FPS derived from actual render pipeline timing (EMA of 1/time_delta)
     fps_smoothed: f32,
@@ -634,6 +664,39 @@ impl Deck {
             | DeckSource::ExternalSource { scaling_mode, .. } => *scaling_mode = mode,
             _ => {}
         }
+    }
+
+    /// Set a depth point-cloud parameter from a normalized value (0.0–1.0).
+    /// Returns `false` if this deck is not a depth-sensor source. Continuous
+    /// params map linearly to their range; `color_mode` buckets into 3 modes.
+    /// See spec/depth-sensors.md.
+    pub fn set_depth_param(&mut self, name: &str, value: f32) -> bool {
+        use crate::depth::point_cloud::ColorMode;
+        if !matches!(
+            self.external_source_kind(),
+            Some(ExternalSourceKind::DepthSensor(_))
+        ) {
+            return false;
+        }
+        let p = &mut self.point_cloud_params;
+        let v = value.clamp(0.0, 1.0);
+        match name {
+            "orbit_yaw" => p.orbit_yaw = (v - 0.5) * std::f32::consts::TAU,
+            "orbit_pitch" => p.orbit_pitch = (v - 0.5) * std::f32::consts::PI,
+            "zoom" => p.zoom = 0.1 + v * 4.9,
+            "point_size" => p.point_size = 1.0 + v * 15.0,
+            "color_mode" => {
+                p.color_mode = match (v * 3.0) as u32 {
+                    0 => ColorMode::Rgb,
+                    1 => ColorMode::DepthRamp,
+                    _ => ColorMode::Solid,
+                }
+            }
+            "depth_min" => p.depth_min_mm = v * 8000.0,
+            "depth_max" => p.depth_max_mm = (v * 8000.0).max(p.depth_min_mm + 1.0),
+            _ => return false,
+        }
+        true
     }
 
     /// Whether this deck preserves source alpha (transparent compositing).

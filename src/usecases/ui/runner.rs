@@ -4,7 +4,7 @@
 //! The engine (`VardaApp`) is owned here and driven each frame.
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
-use crate::app::render::{DeckLoadResult, FileDialogKind, FileDialogResult};
+use crate::app::render::{DeckLoadResult, DeckLoadToken, FileDialogKind, FileDialogResult};
 use crate::app::{AppConfig, VardaApp};
 use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::{GpuContext, WindowSurface};
@@ -86,7 +86,7 @@ fn spawn_detect_thread(
     result_rx
 }
 
-/// Register a single deck's preview texture at `(channel_idx, deck_idx)`.
+/// Register a single deck's preview texture, keyed by its UUID.
 ///
 /// Lives here, not on `VardaApp`, because egui texture handles are a
 /// presentation concern the engine never touches — see
@@ -95,13 +95,16 @@ fn register_deck_preview_texture(
     egui_renderer: &mut egui_wgpu::Renderer,
     context: &GpuContext,
     mixer: &crate::mixer::Mixer,
-    channel_idx: usize,
-    deck_idx: usize,
-    deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
+    deck_uuid: &str,
+    deck_preview_textures: &mut std::collections::HashMap<String, egui::TextureId>,
 ) {
+    let Some((ch_idx, deck_idx)) = mixer.find_deck_by_uuid(deck_uuid) else {
+        log::warn!("No deck {} to register a preview texture for", deck_uuid);
+        return;
+    };
     if let Some(slot) = mixer
         .channels()
-        .get(channel_idx)
+        .get(ch_idx)
         .and_then(|ch| ch.decks.get(deck_idx))
     {
         let texture_id = egui_renderer.register_native_texture(
@@ -109,80 +112,61 @@ fn register_deck_preview_texture(
             &slot.deck.texture_view,
             wgpu::FilterMode::Linear,
         );
-        deck_preview_textures.insert((channel_idx, deck_idx), texture_id);
+        deck_preview_textures.insert(deck_uuid.to_string(), texture_id);
     }
 }
 
-/// Free and re-register every preview texture for `channel_idx`, keeping the
-/// index-keyed map consistent after deck indices shift (remove/move/reorder).
-fn reregister_channel_preview_textures(
-    egui_renderer: &mut egui_wgpu::Renderer,
-    context: &GpuContext,
-    mixer: &crate::mixer::Mixer,
-    channel_idx: usize,
-    deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
-) {
-    let stale: Vec<(usize, usize)> = deck_preview_textures
-        .keys()
-        .filter(|(c, _)| *c == channel_idx)
-        .copied()
-        .collect();
-    for key in stale {
-        if let Some(tex_id) = deck_preview_textures.remove(&key) {
-            egui_renderer.free_texture(&tex_id);
-        }
-    }
-    if let Some(ch) = mixer.channels().get(channel_idx) {
-        for (deck_idx, slot) in ch.decks.iter().enumerate() {
-            let texture_id = egui_renderer.register_native_texture(
-                &context.device,
-                &slot.deck.texture_view,
-                wgpu::FilterMode::Linear,
-            );
-            deck_preview_textures.insert((channel_idx, deck_idx), texture_id);
-        }
-    }
-}
-
-/// Apply the egui texture post-step for a frame's `apply_engine_actions` outcomes:
-/// register newly-created decks' previews, or refresh the index-keyed map for
-/// channels whose deck indices shifted (remove/move/reorder).
+/// Apply the egui texture post-step for a frame's `apply_engine_actions`
+/// outcomes: register a preview for each newly-created deck. Reorder and
+/// removal need no repair pass — the map is UUID-keyed, so positions shifting
+/// cannot invalidate an entry.
 fn apply_deck_texture_outcomes(
     outcomes: &[crate::engine::CommandOutcome],
     egui_renderer: &mut egui_wgpu::Renderer,
     context: &GpuContext,
     mixer: &crate::mixer::Mixer,
-    deck_preview_textures: &mut std::collections::HashMap<(usize, usize), egui::TextureId>,
+    deck_preview_textures: &mut std::collections::HashMap<String, egui::TextureId>,
 ) {
     for outcome in outcomes {
-        match outcome {
-            crate::engine::CommandOutcome::DeckCreated {
-                channel_idx,
-                deck_idx,
-                ..
-            } => {
+        if let crate::engine::CommandOutcome::DecksCreated { uuids } = outcome {
+            for uuid in uuids {
                 register_deck_preview_texture(
                     egui_renderer,
                     context,
                     mixer,
-                    *channel_idx,
-                    *deck_idx,
+                    uuid,
                     deck_preview_textures,
                 );
             }
-            crate::engine::CommandOutcome::DecksReindexed { channels } => {
-                for &ch in channels {
-                    reregister_channel_preview_textures(
-                        egui_renderer,
-                        context,
-                        mixer,
-                        ch,
-                        deck_preview_textures,
-                    );
-                }
-            }
-            _ => {}
         }
+    }
+}
+
+/// Target channel of each in-flight background deck load, keyed by the token
+/// handed to `spawn_deck_loads` and echoed back in `DeckLoadResult::token`.
+///
+/// A decode or shader compile can outlive the channel it was aimed at, so the
+/// target is stored as a UUID and resolved when the load lands, never at spawn.
+/// See [`/spec/api-addressing.md`].
+#[derive(Default)]
+struct DeckLoadTargets {
+    by_token: std::collections::HashMap<DeckLoadToken, String>,
+    next_token: usize,
+}
+
+impl DeckLoadTargets {
+    /// Record a load's target channel and return the token that carries it back.
+    fn record(&mut self, channel_uuid: String) -> DeckLoadToken {
+        let token = DeckLoadToken(self.next_token);
+        self.next_token += 1;
+        self.by_token.insert(token, channel_uuid);
+        token
+    }
+
+    /// Claim a completed load's target. `None` means the token was never issued
+    /// or has already been claimed.
+    fn claim(&mut self, token: DeckLoadToken) -> Option<String> {
+        self.by_token.remove(&token)
     }
 }
 
@@ -197,7 +181,7 @@ pub struct UIRunner {
     egui_ctx: egui::Context,
     egui_state: Option<egui_winit::State>,
     egui_renderer: Option<egui_wgpu::Renderer>,
-    deck_preview_textures: std::collections::HashMap<(usize, usize), egui::TextureId>,
+    deck_preview_textures: std::collections::HashMap<String, egui::TextureId>,
     channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
@@ -225,6 +209,7 @@ pub struct UIRunner {
     deck_load_rx: std::sync::mpsc::Receiver<DeckLoadResult>,
     /// Number of deck loads currently in-flight on background threads
     pending_deck_loads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    deck_load_targets: DeckLoadTargets,
 
     // ── Engine (created after GPU init in resumed()) ─────────────────
     varda: Option<VardaApp>,
@@ -302,6 +287,7 @@ impl UIRunner {
             deck_load_tx,
             deck_load_rx,
             pending_deck_loads: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            deck_load_targets: DeckLoadTargets::default(),
             varda: None,
             gpu_init_handle: None,
             startup_t0: None,
@@ -696,13 +682,14 @@ impl UIRunner {
         let mixer = varda.mixer_ref();
 
         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-            for (deck_idx, slot) in ch.decks.iter().enumerate() {
+            for slot in ch.decks.iter() {
                 let tid = egui_renderer.register_native_texture(
                     &context.device,
                     &slot.deck.texture_view,
                     wgpu::FilterMode::Linear,
                 );
-                self.deck_preview_textures.insert((ch_idx, deck_idx), tid);
+                self.deck_preview_textures
+                    .insert(slot.deck.uuid().to_string(), tid);
             }
             // Channel composite preview
             let ch_tid = egui_renderer.register_native_texture(
@@ -803,16 +790,19 @@ impl UIRunner {
                 wgpu::FilterMode::Linear,
             ));
         }
+        let mut live_deck_count = 0usize;
         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-            for (deck_idx, slot) in ch.decks.iter().enumerate() {
-                let key = (ch_idx, deck_idx);
-                self.deck_preview_textures.entry(key).or_insert_with(|| {
-                    egui_renderer.register_native_texture(
+            for slot in ch.decks.iter() {
+                live_deck_count += 1;
+                if !self.deck_preview_textures.contains_key(slot.deck.uuid()) {
+                    let tid = egui_renderer.register_native_texture(
                         &context.device,
                         &slot.deck.texture_view,
                         wgpu::FilterMode::Linear,
-                    )
-                });
+                    );
+                    self.deck_preview_textures
+                        .insert(slot.deck.uuid().to_string(), tid);
+                }
             }
             self.channel_preview_textures
                 .entry(ch_idx)
@@ -823,6 +813,28 @@ impl UIRunner {
                         wgpu::FilterMode::Linear,
                     )
                 });
+        }
+        // Free registrations whose deck is gone. This pass is the only thing
+        // that retires them, so skipping it would leak a texture per removed
+        // deck. Every live deck was inserted above, so a surplus entry count is
+        // an exact test for "some key is stale".
+        if self.deck_preview_textures.len() > live_deck_count {
+            let live: std::collections::HashSet<&str> = mixer
+                .channels()
+                .iter()
+                .flat_map(|ch| ch.decks.iter().map(|slot| slot.deck.uuid()))
+                .collect();
+            let stale: Vec<String> = self
+                .deck_preview_textures
+                .keys()
+                .filter(|uuid| !live.contains(uuid.as_str()))
+                .cloned()
+                .collect();
+            for uuid in stale {
+                if let Some(tid) = self.deck_preview_textures.remove(&uuid) {
+                    egui_renderer.free_texture(&tid);
+                }
+            }
         }
         // Register any new output preview textures
         for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
@@ -1308,8 +1320,9 @@ impl UIRunner {
             self.prev_gesture_active = ui_actions.session.gesture_active;
 
             // Intercept shader_to_add: resolve and route to background loading
-            if let Some((ch_idx, gen_idx)) = ui_actions.session.shader_to_add.take() {
+            if let Some((channel_uuid, gen_idx)) = ui_actions.session.shader_to_add.take() {
                 if let Some(shader) = varda.resolve_generator(gen_idx) {
+                    let token = self.deck_load_targets.record(channel_uuid);
                     let context = varda.gpu_context();
                     VardaApp::spawn_deck_loads(
                         &self.deck_load_tx,
@@ -1319,7 +1332,7 @@ impl UIRunner {
                         varda.render_height(),
                         Vec::new(),
                         Vec::new(),
-                        vec![(ch_idx, shader)],
+                        vec![(token, shader)],
                     );
                 }
             }
@@ -1372,14 +1385,14 @@ impl UIRunner {
                         let context = varda.gpu_context();
                         let mixer = varda.mixer_ref();
                         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-                            for (deck_idx, slot) in ch.decks.iter().enumerate() {
+                            for slot in ch.decks.iter() {
                                 let tex_id = egui_renderer.register_native_texture(
                                     &context.device,
                                     &slot.deck.texture_view,
                                     wgpu::FilterMode::Linear,
                                 );
                                 self.deck_preview_textures
-                                    .insert((ch_idx, deck_idx), tex_id);
+                                    .insert(slot.deck.uuid().to_string(), tex_id);
                             }
                             let ch_tid = egui_renderer.register_native_texture(
                                 &context.device,
@@ -1421,9 +1434,8 @@ impl UIRunner {
                 let context = varda.gpu_context();
                 let mixer = varda.mixer_ref();
                 for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-                    for (deck_idx, slot) in ch.decks.iter().enumerate() {
-                        let key = (ch_idx, deck_idx);
-                        if let Some(&tex_id) = self.deck_preview_textures.get(&key) {
+                    for slot in ch.decks.iter() {
+                        if let Some(&tex_id) = self.deck_preview_textures.get(slot.deck.uuid()) {
                             egui_renderer.update_egui_texture_from_wgpu_texture(
                                 &context.device,
                                 &slot.deck.texture_view,
@@ -1474,21 +1486,36 @@ impl UIRunner {
             }
 
             // Spawn file dialogs on background threads (non-blocking)
-            if let Some(ch_idx) = ui_actions.session.open_image_dialog_for_channel.take() {
-                VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Image, ch_idx);
+            if let Some(uuid) = ui_actions.session.open_image_dialog_for_channel.take() {
+                VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Image, uuid);
             }
-            if let Some(ch_idx) = ui_actions.session.open_video_dialog_for_channel.take() {
-                VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Video, ch_idx);
+            if let Some(uuid) = ui_actions.session.open_video_dialog_for_channel.take() {
+                VardaApp::open_file_dialog(&self.file_dialog_tx, FileDialogKind::Video, uuid);
             }
 
-            // Poll completed file dialog results → spawn background deck loads
+            // Poll completed file dialog results → spawn background deck loads.
+            // The dialog carries a channel UUID rather than an index: the user
+            // may have spent minutes browsing while the UI stayed live.
             while let Ok(result) = self.file_dialog_rx.try_recv() {
+                if varda
+                    .mixer_ref()
+                    .find_channel_by_uuid(&result.channel_uuid)
+                    .is_none()
+                {
+                    log::warn!(
+                        "Dropping {} file dialog result(s): channel {} no longer exists",
+                        result.paths.len(),
+                        result.channel_uuid
+                    );
+                    continue;
+                }
                 let mut images = Vec::new();
                 let mut videos = Vec::new();
                 for path in result.paths {
+                    let token = self.deck_load_targets.record(result.channel_uuid.clone());
                     match result.kind {
-                        FileDialogKind::Image => images.push((result.ch_idx, path)),
-                        FileDialogKind::Video => videos.push((result.ch_idx, path)),
+                        FileDialogKind::Image => images.push((token, path)),
+                        FileDialogKind::Video => videos.push((token, path)),
                     }
                 }
                 if !images.is_empty() || !videos.is_empty() {
@@ -1508,28 +1535,47 @@ impl UIRunner {
 
             // Poll completed background deck loads (non-blocking)
             while let Ok(result) = self.deck_load_rx.try_recv() {
+                let target = self.deck_load_targets.claim(result.token);
                 match result.deck {
                     Ok(deck) => {
-                        let ch_idx = result.ch_idx;
+                        // Resolve the target here, not at spawn: the channel list
+                        // can change while a decode or shader compile runs, and an
+                        // index captured back then would now name a different
+                        // channel. See `/spec/api-addressing.md`.
+                        let Some(channel_uuid) = target else {
+                            log::warn!(
+                                "Dropping background load '{}': no target channel was recorded",
+                                result.name
+                            );
+                            continue;
+                        };
+                        let Some(ch_idx) = varda.mixer_ref().find_channel_by_uuid(&channel_uuid)
+                        else {
+                            log::warn!(
+                                "Dropping background load '{}': channel {} no longer exists",
+                                result.name,
+                                channel_uuid
+                            );
+                            continue;
+                        };
+                        let deck_uuid = deck.uuid().to_string();
                         if let Some(ch) = varda.mixer_mut().channel_mut(ch_idx) {
                             let idx = ch.add_deck(deck);
                             log::info!(
                                 "Background load complete: deck {} to channel {}: {}",
                                 idx,
-                                ch_idx,
+                                channel_uuid,
                                 result.name
                             );
                         }
                         // Re-borrow for texture registration (separate from mixer borrow)
-                        if let Some(ch) = varda.mixer_ref().channels().get(ch_idx) {
-                            let idx = ch.decks.len() - 1;
-                            let texture_id = egui_renderer.register_native_texture(
-                                &varda.gpu_context().device,
-                                &ch.decks[idx].deck.texture_view,
-                                wgpu::FilterMode::Linear,
-                            );
-                            self.deck_preview_textures.insert((ch_idx, idx), texture_id);
-                        }
+                        register_deck_preview_texture(
+                            egui_renderer,
+                            varda.gpu_context(),
+                            varda.mixer_ref(),
+                            &deck_uuid,
+                            &mut self.deck_preview_textures,
+                        );
                     }
                     Err(e) => {
                         log::error!("Background deck load failed for '{}': {}", result.name, e)

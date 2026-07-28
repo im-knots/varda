@@ -22,6 +22,7 @@ use utoipa_swagger_ui::SwaggerUi;
         // System
         routes::system::health, routes::system::get_state,
         routes::system::shutdown, routes::system::undo, routes::system::redo,
+        routes::decks::generic_command,
         routes::system::set_resolution, routes::system::set_target_fps, routes::system::start_perf_profile,
         routes::system::set_clock_preference,
         routes::system::set_manual_bpm, routes::system::save_workspace,
@@ -29,6 +30,8 @@ use utoipa_swagger_ui::SwaggerUi;
         // Devices
         routes::system::scan_ndi, routes::system::scan_syphon,
         routes::system::scan_cameras, routes::system::scan_midi,
+        // Depth Sensors
+        routes::system::scan_depth_sensors, routes::decks::add_depth_sensor_deck,
         routes::system::scan_audio, routes::system::set_audio_source_enabled,
         routes::system::set_midi_device_enabled, routes::system::clear_midi_mappings,
         routes::system::remove_midi_mapping,
@@ -68,8 +71,11 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::decks::set_auto_transition_play_duration, routes::decks::set_auto_transition_duration,
         routes::decks::set_auto_transition_shader,
         // Effects
-        routes::effects::add_effect, routes::effects::remove_effect,
-        routes::effects::toggle_effect, routes::effects::move_effect,
+        routes::effects::add_channel_effect, routes::effects::add_deck_effect,
+        routes::effects::add_master_effect,
+        routes::effects::remove_effect, routes::effects::toggle_effect,
+        routes::effects::reorder_channel_effect, routes::effects::reorder_deck_effect,
+        routes::effects::reorder_master_effect,
         // Audio
         routes::audio::scan_devices, routes::audio::open_source,
         routes::audio::close_source,
@@ -101,6 +107,30 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::macros::set_button_behavior, routes::macros::set_triggers,
         routes::macros::assign_modulation, routes::macros::clear_modulation,
         routes::macros::clear_modulation_source,
+        // Runtime state
+        routes::state::mixer, routes::state::audio,
+        routes::state::modulation, routes::state::macros,
+        routes::state::outputs, routes::state::surfaces,
+        routes::state::registry, routes::state::midi,
+        routes::state::cameras, routes::state::depth,
+        routes::state::clock, routes::state::ndi,
+        routes::state::syphon, routes::state::streams,
+        routes::state::performance,
+        // Scene
+        routes::scene::scene, routes::scene::channels,
+        routes::scene::channel_by_uuid, routes::scene::channel_decks,
+        routes::scene::deck_by_uuid, routes::scene::modulation,
+        routes::scene::macros, routes::scene::sequences,
+        routes::scene::streams,
+        // Stage
+        routes::stage::stage, routes::stage::surfaces,
+        routes::stage::surface_by_uuid, routes::stage::outputs,
+        routes::stage::output_by_uuid,
+        // Library
+        routes::library::generators, routes::library::effects,
+        routes::library::transitions, routes::library::cameras,
+        routes::library::depth, routes::library::ndi,
+        routes::library::syphon, routes::library::monitors,
         // Analyzers
         routes::library::analyzers,
         routes::decks::request_analyzer, routes::decks::release_analyzer,
@@ -148,6 +178,10 @@ use utoipa_swagger_ui::SwaggerUi;
     ),
     tags(
         (name = "System", description = "Health, state, shutdown, undo/redo, resolution, workspace"),
+        (name = "State", description = "Read-only runtime state, one subtree of the engine snapshot per route"),
+        (name = "Scene", description = "Read-only scene structure — channels, decks, effects, modulation, macros, sequences"),
+        (name = "Stage", description = "Read-only stage structure and contour detection from images, SVG, DXF, and cameras"),
+        (name = "Library", description = "What is available to load — shaders, transitions, and discovered sources"),
         (name = "Devices", description = "Device scanning, MIDI mappings, audio sources"),
         (name = "Streams", description = "Stream library management (SRT, HLS, DASH)"),
         (name = "Mixer", description = "Crossfader and transition controls"),
@@ -164,9 +198,12 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Outputs", description = "Output window management and warp"),
         (name = "Sequences", description = "Transition sequence automation"),
         (name = "Params", description = "Shader parameter control"),
+        (name = "Depth Sensors", description = "Depth sensor (Kinect/LIDAR) scanning, listing, and point-cloud deck creation"),
     )
 )]
-struct ApiDoc;
+/// The assembled OpenAPI spec. Public so `tests/api_docs.rs` can render the
+/// route reference in `docs/13-api.md` from it.
+pub struct ApiDoc;
 
 /// Build the axum router with all routes and middleware.
 pub fn build_router(shared: SharedState) -> Router {
@@ -191,6 +228,7 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/state/registry", get(routes::state::registry))
         .route("/api/state/midi", get(routes::state::midi))
         .route("/api/state/cameras", get(routes::state::cameras))
+        .route("/api/state/depth", get(routes::state::depth))
         .route("/api/state/clock", get(routes::state::clock))
         .route("/api/state/ndi", get(routes::state::ndi))
         .route("/api/state/syphon", get(routes::state::syphon))
@@ -200,15 +238,15 @@ pub fn build_router(shared: SharedState) -> Router {
         .route("/api/scene", get(routes::scene::scene))
         .route("/api/scene/channels", get(routes::scene::channels))
         .route(
-            "/api/scene/channels/{uuid}",
+            "/api/scene/channels/{channel_uuid}",
             get(routes::scene::channel_by_uuid),
         )
         .route(
-            "/api/scene/channels/{uuid}/decks",
+            "/api/scene/channels/{channel_uuid}/decks",
             get(routes::scene::channel_decks),
         )
         .route(
-            "/api/scene/channels/{ch_uuid}/decks/{deck_uuid}",
+            "/api/scene/channels/{channel_uuid}/decks/{deck_uuid}",
             get(routes::scene::deck_by_uuid),
         )
         .route("/api/scene/modulation", get(routes::scene::modulation))
@@ -256,6 +294,11 @@ pub fn build_router(shared: SharedState) -> Router {
             get(routes::library::transitions),
         )
         .route("/api/library/cameras", get(routes::library::cameras))
+        .route("/api/library/depth", get(routes::library::depth))
+        .route(
+            "/api/devices/depth/scan",
+            axum::routing::post(routes::system::scan_depth_sensors),
+        )
         .route("/api/library/ndi", get(routes::library::ndi))
         .route("/api/library/syphon", get(routes::library::syphon))
         .route("/api/library/monitors", get(routes::library::monitors))
@@ -287,90 +330,114 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::post(routes::channels::add_channel),
         )
         .route(
-            "/api/channels/{idx}",
+            "/api/channels/{channel_uuid}",
             axum::routing::delete(routes::channels::remove_channel),
         )
         .route(
-            "/api/channels/{idx}/opacity",
+            "/api/channels/{channel_uuid}/opacity",
             axum::routing::put(routes::channels::set_opacity),
         )
         .route(
-            "/api/channels/{idx}/blend-mode",
+            "/api/channels/{channel_uuid}/blend-mode",
             axum::routing::put(routes::channels::set_blend_mode),
         )
         // ── Write: Decks ────────────────────────────────────────
         .route(
-            "/api/channels/{ch_idx}/decks/shader",
+            "/api/channels/{channel_uuid}/decks/shader",
             axum::routing::post(routes::decks::add_shader_deck),
         )
         .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}",
-            axum::routing::delete(routes::decks::remove_deck),
-        )
-        .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/opacity",
-            axum::routing::put(routes::decks::set_opacity),
-        )
-        .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/blend-mode",
-            axum::routing::put(routes::decks::set_blend_mode),
-        )
-        .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/solo",
-            axum::routing::put(routes::decks::set_solo),
-        )
-        .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/mute",
-            axum::routing::put(routes::decks::set_mute),
-        )
-        .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/scaling-mode",
-            axum::routing::put(routes::decks::set_scaling_mode),
-        )
-        .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/transparent",
-            axum::routing::put(routes::decks::set_transparent),
-        )
-        .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/render-fps",
-            axum::routing::put(routes::decks::set_render_fps),
-        )
-        .route(
-            "/api/channels/{ch_idx}/decks/image",
+            "/api/channels/{channel_uuid}/decks/image",
             axum::routing::post(routes::decks::add_image_deck),
         )
         .route(
-            "/api/channels/{ch_idx}/decks/video",
+            "/api/channels/{channel_uuid}/decks/video",
             axum::routing::post(routes::decks::add_video_deck),
         )
         .route(
-            "/api/channels/{ch_idx}/decks/solid",
+            "/api/channels/{channel_uuid}/decks/solid",
             axum::routing::post(routes::decks::add_solid_color_deck),
         )
         .route(
-            "/api/channels/{ch_idx}/decks/camera",
+            "/api/channels/{channel_uuid}/decks/camera",
             axum::routing::post(routes::decks::add_camera_deck),
         )
         .route(
-            "/api/decks/move",
-            axum::routing::post(routes::decks::move_deck),
+            "/api/channels/{channel_uuid}/decks/depth",
+            axum::routing::post(routes::decks::add_depth_sensor_deck),
         )
         .route(
-            "/api/decks/reorder",
-            axum::routing::post(routes::decks::reorder_deck),
+            "/api/channels/{channel_uuid}/decks/reorder",
+            axum::routing::put(routes::decks::reorder_deck),
+        )
+        .route(
+            "/api/decks/{deck_uuid}",
+            axum::routing::delete(routes::decks::remove_deck),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/opacity",
+            axum::routing::put(routes::decks::set_opacity),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/blend-mode",
+            axum::routing::put(routes::decks::set_blend_mode),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/solo",
+            axum::routing::put(routes::decks::set_solo),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/mute",
+            axum::routing::put(routes::decks::set_mute),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/scaling-mode",
+            axum::routing::put(routes::decks::set_scaling_mode),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/transparent",
+            axum::routing::put(routes::decks::set_transparent),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/render-fps",
+            axum::routing::put(routes::decks::set_render_fps),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/move",
+            axum::routing::post(routes::decks::move_deck),
         )
         // ── Write: Effects ─────────────────────────────────────
         .route(
-            "/api/effects",
-            axum::routing::post(routes::effects::add_effect).delete(routes::effects::remove_effect),
+            "/api/channels/{channel_uuid}/effects",
+            axum::routing::post(routes::effects::add_channel_effect),
         )
         .route(
-            "/api/effects/toggle",
+            "/api/channels/{channel_uuid}/effects/reorder",
+            axum::routing::put(routes::effects::reorder_channel_effect),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/effects",
+            axum::routing::post(routes::effects::add_deck_effect),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/effects/reorder",
+            axum::routing::put(routes::effects::reorder_deck_effect),
+        )
+        .route(
+            "/api/master/effects",
+            axum::routing::post(routes::effects::add_master_effect),
+        )
+        .route(
+            "/api/master/effects/reorder",
+            axum::routing::put(routes::effects::reorder_master_effect),
+        )
+        .route(
+            "/api/effects/{effect_uuid}",
+            axum::routing::delete(routes::effects::remove_effect),
+        )
+        .route(
+            "/api/effects/{effect_uuid}/toggle",
             axum::routing::post(routes::effects::toggle_effect),
-        )
-        .route(
-            "/api/effects/move",
-            axum::routing::post(routes::effects::move_effect),
         )
         // ── Write: Audio ───────────────────────────────────────
         .route(
@@ -450,11 +517,11 @@ pub fn build_router(shared: SharedState) -> Router {
         // ── Write: Outputs ─────────────────────────────────────
         .route("/api/outputs", axum::routing::post(routes::outputs::create))
         .route(
-            "/api/outputs/{idx}",
+            "/api/outputs/{output_uuid}",
             axum::routing::delete(routes::outputs::close),
         )
         .route(
-            "/api/outputs/{idx}/display",
+            "/api/outputs/{output_uuid}/display",
             axum::routing::put(routes::outputs::set_display),
         )
         .route(
@@ -462,94 +529,94 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::post(routes::outputs::assign_surface),
         )
         .route(
-            "/api/outputs/{output_uuid}/surfaces/{assignment_idx}",
+            "/api/outputs/{output_uuid}/surfaces/{surface_uuid}",
             axum::routing::delete(routes::outputs::unassign_surface),
         )
         // ── Write: Video Playback ────────────────────────────────
         .route(
-            "/api/channels/{ch}/decks/{dk}/video/toggle-play",
+            "/api/decks/{deck_uuid}/video/toggle-play",
             axum::routing::post(routes::decks::video_toggle_play),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/video/seek",
+            "/api/decks/{deck_uuid}/video/seek",
             axum::routing::put(routes::decks::video_seek),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/video/speed",
+            "/api/decks/{deck_uuid}/video/speed",
             axum::routing::put(routes::decks::video_set_speed),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/video/loop-mode",
+            "/api/decks/{deck_uuid}/video/loop-mode",
             axum::routing::put(routes::decks::video_set_loop_mode),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/video/in-point",
+            "/api/decks/{deck_uuid}/video/in-point",
             axum::routing::put(routes::decks::video_set_in_point),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/video/out-point",
+            "/api/decks/{deck_uuid}/video/out-point",
             axum::routing::put(routes::decks::video_set_out_point),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/video/in-out-points",
+            "/api/decks/{deck_uuid}/video/in-out-points",
             axum::routing::delete(routes::decks::video_clear_in_out),
         )
         // ── Write: Auto-Transitions ──────────────────────────────
         .route(
-            "/api/channels/{ch}/decks/{dk}/auto-transition/enabled",
+            "/api/decks/{deck_uuid}/auto-transition/enabled",
             axum::routing::put(routes::decks::set_auto_transition_enabled),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/auto-transition/trigger",
+            "/api/decks/{deck_uuid}/auto-transition/trigger",
             axum::routing::put(routes::decks::set_auto_transition_trigger),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/auto-transition/play-duration",
+            "/api/decks/{deck_uuid}/auto-transition/play-duration",
             axum::routing::put(routes::decks::set_auto_transition_play_duration),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/auto-transition/duration",
+            "/api/decks/{deck_uuid}/auto-transition/duration",
             axum::routing::put(routes::decks::set_auto_transition_duration),
         )
         .route(
-            "/api/channels/{ch}/decks/{dk}/auto-transition/shader",
+            "/api/decks/{deck_uuid}/auto-transition/shader",
             axum::routing::put(routes::decks::set_auto_transition_shader),
         )
         // ── Write: External I/O Sources ──────────────────────────
         .route(
-            "/api/channels/{ch}/decks/ndi",
+            "/api/channels/{channel_uuid}/decks/ndi",
             axum::routing::post(routes::decks::add_ndi_deck),
         )
         .route(
-            "/api/channels/{ch}/decks/syphon",
+            "/api/channels/{channel_uuid}/decks/syphon",
             axum::routing::post(routes::decks::add_syphon_deck),
         )
         .route(
-            "/api/channels/{ch}/decks/srt",
+            "/api/channels/{channel_uuid}/decks/srt",
             axum::routing::post(routes::decks::add_srt_deck),
         )
         .route(
-            "/api/channels/{ch}/decks/hls",
+            "/api/channels/{channel_uuid}/decks/hls",
             axum::routing::post(routes::decks::add_hls_deck),
         )
         .route(
-            "/api/channels/{ch}/decks/dash",
+            "/api/channels/{channel_uuid}/decks/dash",
             axum::routing::post(routes::decks::add_dash_deck),
         )
         .route(
-            "/api/channels/{ch}/decks/rtmp",
+            "/api/channels/{channel_uuid}/decks/rtmp",
             axum::routing::post(routes::decks::add_rtmp_deck),
         )
         .route(
-            "/api/channels/{ch}/decks/html",
+            "/api/channels/{channel_uuid}/decks/html",
             axum::routing::post(routes::decks::add_html_deck),
         )
         .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/html/reload",
+            "/api/decks/{deck_uuid}/html/reload",
             axum::routing::post(routes::decks::reload_html_deck),
         )
         .route(
-            "/api/channels/{ch_idx}/decks/{deck_idx}/html/interactive",
+            "/api/decks/{deck_uuid}/html/interactive",
             axum::routing::post(routes::decks::set_html_interactive),
         )
         // ── Write: Modulation Updates ────────────────────────────
@@ -704,11 +771,11 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::delete(routes::macros::clear_modulation_source),
         )
         .route(
-            "/api/decks/{deck_id}/analyzers",
+            "/api/decks/{deck_uuid}/analyzers",
             axum::routing::post(routes::decks::request_analyzer),
         )
         .route(
-            "/api/decks/{deck_id}/analyzers/{analyzer_type}",
+            "/api/decks/{deck_uuid}/analyzers/{analyzer_type}",
             axum::routing::delete(routes::decks::release_analyzer),
         )
         .route(
@@ -842,27 +909,27 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::post(routes::outputs::create_headless),
         )
         .route(
-            "/api/outputs/{idx}/start",
+            "/api/outputs/{output_uuid}/start",
             axum::routing::post(routes::outputs::start),
         )
         .route(
-            "/api/outputs/{idx}/stop",
+            "/api/outputs/{output_uuid}/stop",
             axum::routing::post(routes::outputs::stop),
         )
         .route(
-            "/api/outputs/{idx}/calibration",
+            "/api/outputs/{output_uuid}/calibration",
             axum::routing::put(routes::outputs::set_calibration_mode),
         )
         .route(
-            "/api/outputs/{idx}/target",
+            "/api/outputs/{output_uuid}/target",
             axum::routing::put(routes::outputs::set_target),
         )
         .route(
-            "/api/outputs/{idx}/edge-blend",
+            "/api/outputs/{output_uuid}/edge-blend",
             axum::routing::put(routes::outputs::set_edge_blend),
         )
         .route(
-            "/api/outputs/{idx}/edge-blend-mode",
+            "/api/outputs/{output_uuid}/edge-blend-mode",
             axum::routing::put(routes::outputs::set_edge_blend_mode),
         )
         // ── Write: Sequences ────────────────────────────────────
@@ -871,64 +938,64 @@ pub fn build_router(shared: SharedState) -> Router {
             axum::routing::post(routes::sequences::create),
         )
         .route(
-            "/api/sequences/{idx}",
+            "/api/sequences/{sequence_uuid}",
             axum::routing::delete(routes::sequences::delete),
         )
         .route(
-            "/api/sequences/{idx}/play",
+            "/api/sequences/{sequence_uuid}/play",
             axum::routing::post(routes::sequences::play),
         )
         .route(
-            "/api/sequences/{idx}/stop",
+            "/api/sequences/{sequence_uuid}/stop",
             axum::routing::post(routes::sequences::stop),
         )
         .route(
-            "/api/sequences/{idx}/toggle",
+            "/api/sequences/{sequence_uuid}/toggle",
             axum::routing::post(routes::sequences::toggle),
         )
         .route(
-            "/api/sequences/{idx}/steps/fade",
+            "/api/sequences/{sequence_uuid}/steps/fade",
             axum::routing::post(routes::sequences::add_fade_step),
         )
         .route(
-            "/api/sequences/{idx}/steps/wait",
+            "/api/sequences/{sequence_uuid}/steps/wait",
             axum::routing::post(routes::sequences::add_wait_step),
         )
         .route(
-            "/api/sequences/{idx}/steps/goto",
+            "/api/sequences/{sequence_uuid}/steps/goto",
             axum::routing::post(routes::sequences::add_goto_step),
         )
         .route(
-            "/api/sequences/{seq_idx}/steps/{step_idx}",
+            "/api/sequences/{sequence_uuid}/steps/move",
+            axum::routing::post(routes::sequences::move_step),
+        )
+        .route(
+            "/api/sequences/{sequence_uuid}/steps/{step_idx}",
             axum::routing::delete(routes::sequences::remove_step),
         )
         .route(
-            "/api/sequences/{seq_idx}/steps/{step_idx}/duration",
+            "/api/sequences/{sequence_uuid}/steps/{step_idx}/duration",
             axum::routing::put(routes::sequences::set_step_duration),
         )
         .route(
-            "/api/sequences/{seq_idx}/steps/{step_idx}/easing",
+            "/api/sequences/{sequence_uuid}/steps/{step_idx}/easing",
             axum::routing::put(routes::sequences::set_step_easing),
         )
         .route(
-            "/api/sequences/{seq_idx}/steps/{step_idx}/shader",
+            "/api/sequences/{sequence_uuid}/steps/{step_idx}/shader",
             axum::routing::put(routes::sequences::set_step_shader),
         )
         .route(
-            "/api/sequences/{seq_idx}/steps/{step_idx}/from-ch",
+            "/api/sequences/{sequence_uuid}/steps/{step_idx}/from-ch",
             axum::routing::put(routes::sequences::set_step_from_ch),
         )
         .route(
-            "/api/sequences/{seq_idx}/steps/{step_idx}/to-ch",
+            "/api/sequences/{sequence_uuid}/steps/{step_idx}/to-ch",
             axum::routing::put(routes::sequences::set_step_to_ch),
         )
         .route(
-            "/api/sequences/{seq_idx}/steps/{step_idx}/goto-target",
+            "/api/sequences/{sequence_uuid}/steps/{step_idx}/goto-target",
             axum::routing::put(routes::sequences::set_goto_target),
-        )
-        .route(
-            "/api/sequences/{idx}/steps/move",
-            axum::routing::post(routes::sequences::move_step),
         )
         // ── Write: System / Clock / Resolution / Persistence ────
         .route(
@@ -1031,7 +1098,7 @@ pub fn build_router(shared: SharedState) -> Router {
         // ── Write: Params ──────────────────────────────────────
         .route("/api/params", axum::routing::put(routes::decks::set_param))
         .route(
-            "/api/params/reset",
+            "/api/decks/{deck_uuid}/params/reset",
             axum::routing::post(routes::decks::reset_generator_params),
         )
         // ── Write: Generic ─────────────────────────────────────

@@ -17,6 +17,38 @@ pub use crate::renderer::tonemap::TonemapMode;
 use crate::renderer::{BlitPipeline, CompositeBlitPipeline, GpuContext, TonemapPipeline};
 use anyhow::Result;
 
+/// Where an effect lives, resolved from its globally-unique UUID.
+///
+/// The indices are transient — valid only until the owning chain is mutated.
+/// Resolve immediately before use; never store or hand one to a client. See
+/// [`/spec/api-addressing.md`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectLocation {
+    Deck {
+        channel_idx: usize,
+        deck_idx: usize,
+        effect_idx: usize,
+    },
+    Channel {
+        channel_idx: usize,
+        effect_idx: usize,
+    },
+    Master {
+        effect_idx: usize,
+    },
+}
+
+impl EffectLocation {
+    /// Index of the effect within its own chain.
+    pub fn effect_idx(&self) -> usize {
+        match *self {
+            EffectLocation::Deck { effect_idx, .. }
+            | EffectLocation::Channel { effect_idx, .. }
+            | EffectLocation::Master { effect_idx } => effect_idx,
+        }
+    }
+}
+
 /// Per-frame GPU timing allocation context.
 /// Hands out (begin_query, end_query) index pairs from a shared QuerySet.
 pub struct GpuTimingFrame {
@@ -519,6 +551,59 @@ impl Mixer {
     /// Find a channel index by channel UUID.
     pub fn find_channel_by_uuid(&self, uuid: &str) -> Option<usize> {
         self.channels.iter().position(|ch| ch.uuid() == uuid)
+    }
+
+    /// Locate an effect by UUID anywhere in the mixer — deck chains, channel
+    /// chains, or the master chain. Effect UUIDs are globally unique, so the
+    /// UUID alone determines both the owner and the position.
+    pub fn find_effect_by_uuid(&self, uuid: &str) -> Option<EffectLocation> {
+        for (ch_idx, ch) in self.channels.iter().enumerate() {
+            for (dk_idx, slot) in ch.decks.iter().enumerate() {
+                if let Some(fx_idx) = slot.deck.effects.iter().position(|e| e.uuid == uuid) {
+                    return Some(EffectLocation::Deck {
+                        channel_idx: ch_idx,
+                        deck_idx: dk_idx,
+                        effect_idx: fx_idx,
+                    });
+                }
+            }
+            if let Some(fx_idx) = ch.effects.iter().position(|e| e.uuid == uuid) {
+                return Some(EffectLocation::Channel {
+                    channel_idx: ch_idx,
+                    effect_idx: fx_idx,
+                });
+            }
+        }
+        self.master_effects
+            .iter()
+            .position(|e| e.uuid == uuid)
+            .map(|effect_idx| EffectLocation::Master { effect_idx })
+    }
+
+    /// Mutable access to the effect chain that owns `location`, paired with the
+    /// effect's index within it.
+    pub fn effect_chain_at_mut(&mut self, location: EffectLocation) -> (&mut Vec<Effect>, usize) {
+        match location {
+            EffectLocation::Deck {
+                channel_idx,
+                deck_idx,
+                effect_idx,
+            } => (
+                &mut self.channels[channel_idx].decks[deck_idx].deck.effects,
+                effect_idx,
+            ),
+            EffectLocation::Channel {
+                channel_idx,
+                effect_idx,
+            } => (&mut self.channels[channel_idx].effects, effect_idx),
+            EffectLocation::Master { effect_idx } => (&mut self.master_effects, effect_idx),
+        }
+    }
+
+    /// Mutable access to a single effect by resolved location.
+    pub fn effect_at_mut(&mut self, location: EffectLocation) -> Option<&mut Effect> {
+        let (chain, idx) = self.effect_chain_at_mut(location);
+        chain.get_mut(idx)
     }
 
     // ── Persistence restore helpers ──────────────────────────────────

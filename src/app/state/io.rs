@@ -4,7 +4,11 @@ use super::super::VardaApp;
 use crate::engine::{CommandResult, ErrorCode};
 
 impl VardaApp {
-    pub fn cmd_add_ndi_deck(&mut self, channel_idx: usize, source_name: String) -> CommandResult {
+    pub fn cmd_add_ndi_deck(&mut self, channel_uuid: &str, source_name: String) -> CommandResult {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         match self
             .external_io
             .ndi_manager
@@ -52,9 +56,14 @@ impl VardaApp {
 
     pub fn cmd_add_syphon_deck(
         &mut self,
-        channel_idx: usize,
+        channel_uuid: &str,
         server_name: String,
     ) -> CommandResult {
+        #[cfg(target_os = "macos")]
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         #[cfg(target_os = "macos")]
         {
             // Idempotency: if this channel already carries a Syphon deck for this
@@ -122,7 +131,7 @@ impl VardaApp {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (channel_idx, server_name);
+            let _ = (channel_uuid, server_name);
             CommandResult::Err {
                 code: ErrorCode::Unavailable,
                 message: "Syphon is only available on macOS".into(),
@@ -132,10 +141,14 @@ impl VardaApp {
 
     pub fn cmd_add_srt_deck(
         &mut self,
-        channel_idx: usize,
+        channel_uuid: &str,
         url: String,
         mode: crate::stream::SrtMode,
     ) -> CommandResult {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         match self
             .external_io
             .stream_manager
@@ -181,7 +194,11 @@ impl VardaApp {
         }
     }
 
-    pub fn cmd_add_hls_deck(&mut self, channel_idx: usize, url: String) -> CommandResult {
+    pub fn cmd_add_hls_deck(&mut self, channel_uuid: &str, url: String) -> CommandResult {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         match self.external_io.stream_manager.start_receive(
             &url,
             crate::stream::StreamProtocol::Hls,
@@ -227,7 +244,11 @@ impl VardaApp {
         }
     }
 
-    pub fn cmd_add_html_deck(&mut self, channel_idx: usize, url: String) -> CommandResult {
+    pub fn cmd_add_html_deck(&mut self, channel_uuid: &str, url: String) -> CommandResult {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         match self.external_io.html_manager.start_render(
             &url,
             self.render_width,
@@ -275,7 +296,11 @@ impl VardaApp {
     }
 
     /// Reload the HTML deck at `(channel_idx, deck_idx)`, re-fetching its URL.
-    pub fn cmd_reload_html_deck(&mut self, channel_idx: usize, deck_idx: usize) -> CommandResult {
+    pub fn cmd_reload_html_deck(&mut self, deck_uuid: &str) -> CommandResult {
+        let (channel_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+            Ok(loc) => loc,
+            Err(e) => return e.into(),
+        };
         let kind = self
             .mixer
             .channels()
@@ -287,18 +312,18 @@ impl VardaApp {
                 self.external_io.html_manager.reload(idx);
                 CommandResult::Ok
             }
-            Some(_) => CommandResult::Err {
+            _ => CommandResult::Err {
                 code: ErrorCode::InvalidInput,
                 message: "Deck is not an HTML source".into(),
-            },
-            None => CommandResult::Err {
-                code: ErrorCode::NotFound,
-                message: "Deck not found".into(),
             },
         }
     }
 
-    pub fn cmd_add_dash_deck(&mut self, channel_idx: usize, url: String) -> CommandResult {
+    pub fn cmd_add_dash_deck(&mut self, channel_uuid: &str, url: String) -> CommandResult {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         match self.external_io.stream_manager.start_receive(
             &url,
             crate::stream::StreamProtocol::Dash,
@@ -346,10 +371,14 @@ impl VardaApp {
 
     pub fn cmd_add_rtmp_deck(
         &mut self,
-        channel_idx: usize,
+        channel_uuid: &str,
         url: String,
         mode: crate::stream::RtmpMode,
     ) -> CommandResult {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         match self
             .external_io
             .stream_manager
@@ -526,38 +555,51 @@ impl VardaApp {
                 continue;
             };
             let server_name = name.clone();
-            let ch_idx = p.channel_idx;
-            match self.cmd_add_syphon_deck(ch_idx, server_name.clone()) {
+            let channel_uuid = p.channel_uuid.clone();
+            match self.cmd_add_syphon_deck(&channel_uuid, server_name.clone()) {
                 CommandResult::Ok
                 | CommandResult::OkWithId { .. }
                 | CommandResult::OkWithData { .. } => {
                     // Re-apply the persisted slot props onto the deck we just bound
                     // (matched by name so an idempotent no-op doesn't mis-target).
                     let display_name = format!("🔗 {}", server_name);
-                    if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                        if let Some(slot) = ch
-                            .decks
-                            .iter_mut()
-                            .find(|s| s.deck.source_name() == display_name)
-                        {
-                            slot.opacity = p.config.opacity;
-                            slot.blend_mode = p.config.blend_mode.into();
-                            slot.mute = p.config.mute;
-                            slot.solo = p.config.solo;
-                            slot.z_index = p.config.z_index;
+                    if let Ok(ch_idx) = self.resolve_channel(&channel_uuid) {
+                        if let Some(ch) = self.mixer.channel_mut(ch_idx) {
+                            if let Some(slot) = ch
+                                .decks
+                                .iter_mut()
+                                .find(|s| s.deck.source_name() == display_name)
+                            {
+                                slot.opacity = p.config.opacity;
+                                slot.blend_mode = p.config.blend_mode.into();
+                                slot.mute = p.config.mute;
+                                slot.solo = p.config.solo;
+                                slot.z_index = p.config.z_index;
+                            }
                         }
                     }
                     log::info!(
                         "Syphon deck '{}' late-bound to channel {}",
                         server_name,
-                        ch_idx
+                        channel_uuid
                     );
                 }
-                CommandResult::Err { message, .. } => {
+                CommandResult::Err { code, message } => {
+                    // A missing channel means the user deleted it after restore —
+                    // there is nothing left to bind to, so drop the pending deck
+                    // rather than retrying forever.
+                    if code == ErrorCode::NotFound {
+                        log::info!(
+                            "Dropping Syphon late-bind for '{}': channel {} no longer exists",
+                            server_name,
+                            channel_uuid
+                        );
+                        continue;
+                    }
                     log::warn!(
                         "Syphon late-bind for '{}' (channel {}) failed: {}; will retry",
                         server_name,
-                        ch_idx,
+                        channel_uuid,
                         message
                     );
                     // Requeue to retry on the next reconcile.

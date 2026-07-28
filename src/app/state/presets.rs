@@ -3,32 +3,43 @@
 //! Preset operations are pure engine mutations (build decks, create channels,
 //! read/write preset files) with no egui coupling: preset *loads* only ever
 //! append decks or channels, so the GUI drain reacts to the returned
-//! `CommandOutcome::DecksReindexed` (or the per-frame `refresh_textures` pass)
+//! `CommandOutcome::DecksCreated` (or the per-frame `refresh_textures` pass)
 //! to register the new previews — the handlers themselves never touch a texture.
 
 use super::super::VardaApp;
 use crate::engine::{CommandResult, ErrorCode};
 
 impl VardaApp {
-    /// Load a deck preset (by library index) as a new deck appended to `channel_idx`.
+    /// Load a deck preset by name as a new deck appended to the channel.
     pub(crate) fn cmd_load_deck_preset(
         &mut self,
-        channel_idx: usize,
-        preset_idx: usize,
+        channel_uuid: &str,
+        preset_name: &str,
     ) -> CommandResult {
-        if preset_idx >= self.session.preset_library.deck_presets.len() {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
+        let Some(preset) = self
+            .session
+            .preset_library
+            .deck_presets
+            .iter()
+            .find(|p| p.name == preset_name)
+            .cloned()
+        else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Deck preset index {} out of range", preset_idx),
+                message: format!("Deck preset '{}' not found", preset_name),
             };
-        }
-        let preset = self.session.preset_library.deck_presets[preset_idx].clone();
+        };
         match Self::restore_deck_into_channel(
             &preset.config,
             channel_idx,
             &self.context,
             &self.registry,
             &mut self.camera_manager,
+            &mut self.depth_manager,
             &mut self.external_io.ndi_manager,
             &mut self.external_io.stream_manager,
             &mut self.external_io.html_manager,
@@ -55,20 +66,33 @@ impl VardaApp {
         }
     }
 
-    /// Load a channel preset (by library index). Fills `target_channel` when it
-    /// is supplied and empty; otherwise appends a new channel.
+    /// Load a channel preset by name. Fills `target_channel_uuid` when it is
+    /// supplied and empty; otherwise appends a new channel.
     pub(crate) fn cmd_load_channel_preset(
         &mut self,
-        target_channel: Option<usize>,
-        preset_idx: usize,
+        target_channel_uuid: Option<&str>,
+        preset_name: &str,
     ) -> CommandResult {
-        if preset_idx >= self.session.preset_library.channel_presets.len() {
+        let target_channel = match target_channel_uuid {
+            Some(uuid) => match self.resolve_channel(uuid) {
+                Ok(idx) => Some(idx),
+                Err(e) => return e.into(),
+            },
+            None => None,
+        };
+        let Some(preset) = self
+            .session
+            .preset_library
+            .channel_presets
+            .iter()
+            .find(|p| p.name == preset_name)
+            .cloned()
+        else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Channel preset index {} out of range", preset_idx),
+                message: format!("Channel preset '{}' not found", preset_name),
             };
-        }
-        let preset = self.session.preset_library.channel_presets[preset_idx].clone();
+        };
 
         let context = &self.context;
         let mixer = &mut self.mixer;
@@ -158,6 +182,7 @@ impl VardaApp {
                 context,
                 &self.registry,
                 &mut self.camera_manager,
+                &mut self.depth_manager,
                 &mut self.external_io.ndi_manager,
                 &mut self.external_io.stream_manager,
                 &mut self.external_io.html_manager,
@@ -195,12 +220,11 @@ impl VardaApp {
     }
 
     /// Save a deck's current config as a named deck preset (writes to disk).
-    pub(crate) fn cmd_save_deck_preset(
-        &mut self,
-        channel_idx: usize,
-        deck_idx: usize,
-        name: &str,
-    ) -> CommandResult {
+    pub(crate) fn cmd_save_deck_preset(&mut self, deck_uuid: &str, name: &str) -> CommandResult {
+        let (channel_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+            Ok(loc) => loc,
+            Err(e) => return e.into(),
+        };
         let mixer = &mut self.mixer;
         let scene =
             crate::persistence::snapshot_scene(mixer, self.render_width, self.render_height);
@@ -218,11 +242,6 @@ impl VardaApp {
         };
         let mut preset_config = deck_config.clone();
         preset_config.name = name.to_string();
-        let deck_uuid = mixer
-            .channel(channel_idx)
-            .and_then(|ch| ch.decks.get(deck_idx))
-            .map(|slot| slot.deck.uuid().to_string())
-            .unwrap_or_default();
         let effect_uuids: Vec<String> = mixer
             .channel(channel_idx)
             .and_then(|ch| ch.decks.get(deck_idx))
@@ -265,9 +284,13 @@ impl VardaApp {
     /// Save a channel's current config as a named channel preset (writes to disk).
     pub(crate) fn cmd_save_channel_preset(
         &mut self,
-        channel_idx: usize,
+        channel_uuid: &str,
         name: &str,
     ) -> CommandResult {
+        let channel_idx = match self.resolve_channel(channel_uuid) {
+            Ok(idx) => idx,
+            Err(e) => return e.into(),
+        };
         let mixer = &mut self.mixer;
         let scene =
             crate::persistence::snapshot_scene(mixer, self.render_width, self.render_height);
@@ -329,6 +352,7 @@ impl VardaApp {
         context: &crate::renderer::GpuContext,
         registry: &crate::registry::ShaderRegistry,
         camera_manager: &mut crate::camera::CameraManager,
+        depth_manager: &mut crate::depth::DepthSensorManager,
         ndi_manager: &mut crate::ndi::NdiManager,
         stream_manager: &mut crate::stream::StreamManager,
         html_manager: &mut crate::html::HtmlManager,
@@ -341,6 +365,7 @@ impl VardaApp {
             context,
             registry,
             camera_manager,
+            depth_manager,
             ndi_manager,
             stream_manager,
             html_manager,

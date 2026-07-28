@@ -15,6 +15,7 @@ mod inputs;
 pub(crate) mod interactive;
 mod outputs;
 pub(crate) mod render;
+pub(crate) mod resolve;
 mod snapshot;
 pub(crate) mod state;
 mod surfaces;
@@ -136,6 +137,7 @@ impl AppConfig {
 
 use crate::audio::AudioManager;
 use crate::camera::CameraManager;
+use crate::depth::DepthSensorManager;
 use crate::keymap::KeymapStore;
 use crate::midi;
 use crate::mixer::Mixer;
@@ -210,6 +212,11 @@ pub(crate) struct SessionState {
     pub preset_library: crate::persistence::presets::PresetLibrary,
     pub history: history::HistoryManager,
     pub notifications: NotificationSystem,
+    /// Last UI layout the engine has seen, from either a load or a GUI-driven
+    /// save. `EngineCommand::SaveWorkspace` has no layout of its own to pass, so
+    /// without this a save from the API or a headless process would overwrite
+    /// `stage.json` with default panel state.
+    pub last_layout: crate::usecases::ui::UILayoutState,
 }
 
 /// Cross-thread message passing.
@@ -231,6 +238,8 @@ pub struct VardaApp {
     mixer: Mixer,
     audio_manager: AudioManager,
     camera_manager: CameraManager,
+    /// Depth-sensor capture manager (Kinect/LIDAR point-cloud sources).
+    depth_manager: DepthSensorManager,
     registry: ShaderRegistry,
     analyzer_registry: crate::analyzer::AnalyzerRegistry,
     context: GpuContext,
@@ -425,6 +434,7 @@ impl VardaApp {
             mixer,
             audio_manager,
             camera_manager: CameraManager::new(),
+            depth_manager: DepthSensorManager::new(),
             registry,
             analyzer_registry: crate::analyzer::default_registry(),
             context: gpu,
@@ -489,6 +499,7 @@ impl VardaApp {
                 preset_library,
                 history: history::HistoryManager::new(),
                 notifications: NotificationSystem::new(),
+                last_layout: crate::usecases::ui::UILayoutState::default(),
             },
             bus: MessageBus {
                 command_rx,
@@ -544,25 +555,50 @@ impl VardaApp {
     /// Helper: access auto-transition on a deck, creating if needed, then apply mutation.
     fn exec_auto_transition(
         &mut self,
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: &str,
         f: impl FnOnce(&mut crate::channel::DeckAutoTransition),
     ) -> CommandResult {
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            if deck_idx < ch.decks.len() {
-                let slot = &mut ch.decks[deck_idx];
-                if slot.auto_transition.is_none() {
-                    slot.auto_transition = Some(crate::channel::DeckAutoTransition::new());
+        let (ch_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+            Ok(loc) => loc,
+            Err(e) => {
+                return CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: e.to_string(),
                 }
-                if let Some(at) = slot.auto_transition.as_mut() {
-                    f(at);
-                }
-                return CommandResult::Ok;
             }
-        }
-        CommandResult::Err {
-            code: ErrorCode::NotFound,
-            message: "Deck not found".into(),
+        };
+        let slot = &mut self.mixer.channels_mut()[ch_idx].decks[deck_idx];
+        f(slot
+            .auto_transition
+            .get_or_insert_with(crate::channel::DeckAutoTransition::new));
+        CommandResult::Ok
+    }
+
+    /// Resolve `deck_uuid` and apply `f` to the deck. `f` returns false when the
+    /// deck exists but does not support the operation (for example a video
+    /// command on a shader deck) — that is `InvalidInput`, distinct from the
+    /// `NotFound` a stale UUID produces.
+    fn exec_on_deck(
+        &mut self,
+        deck_uuid: &str,
+        f: impl FnOnce(&mut crate::deck::Deck) -> bool,
+    ) -> CommandResult {
+        let (ch_idx, deck_idx) = match self.resolve_deck(deck_uuid) {
+            Ok(loc) => loc,
+            Err(e) => {
+                return CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    message: e.to_string(),
+                }
+            }
+        };
+        if f(&mut self.mixer.channels_mut()[ch_idx].decks[deck_idx].deck) {
+            CommandResult::Ok
+        } else {
+            CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: format!("Deck '{}' does not support this operation", deck_uuid),
+            }
         }
     }
 
@@ -622,6 +658,16 @@ impl VardaApp {
     /// by accessing both `camera_manager` and `context` internally.
     pub fn open_camera(&mut self, id: crate::camera::CameraId) -> anyhow::Result<(u32, u32)> {
         self.camera_manager.open_camera(id, &self.context.device)
+    }
+
+    /// Read-only access to the depth-sensor manager.
+    pub fn depth_manager(&self) -> &DepthSensorManager {
+        &self.depth_manager
+    }
+
+    /// Mutable access to the depth-sensor manager (open/release sensors).
+    pub fn depth_manager_mut(&mut self) -> &mut DepthSensorManager {
+        &mut self.depth_manager
     }
 
     /// Read-only access to the outputs.
@@ -951,6 +997,10 @@ mod tests {
         VardaApp::new(gpu, &config).ok()
     }
 
+    fn channel_uuid(app: &VardaApp, idx: usize) -> String {
+        app.build_engine_state().mixer.channels[idx].uuid.clone()
+    }
+
     #[test]
     fn smoke_engine_starts_with_two_channels() {
         let Some(app) = headless_app() else {
@@ -1011,12 +1061,13 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let ch0 = channel_uuid(&app, 0);
         let before = app.build_engine_state().mixer.channels[0].decks.len();
         let tx = app.command_sender();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         tx.send((
             crate::engine::EngineCommand::AddSolidColorDeck {
-                channel_idx: 0,
+                channel_uuid: ch0,
                 color: [1.0, 0.0, 0.0, 1.0],
             },
             Some(reply_tx),
@@ -1039,10 +1090,11 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let ch0 = channel_uuid(&app, 0);
         let tx = app.command_sender();
         tx.send((
             crate::engine::EngineCommand::SetChannelOpacity {
-                channel_idx: 0,
+                channel_uuid: ch0,
                 opacity: 0.5,
             },
             None,
@@ -1061,6 +1113,7 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let ch0 = channel_uuid(&app, 0);
         let tx = app.command_sender();
 
         // Baseline: no history yet, nothing to undo.
@@ -1075,7 +1128,7 @@ mod tests {
         };
         tx.send((
             crate::engine::EngineCommand::SetChannelOpacity {
-                channel_idx: 0,
+                channel_uuid: ch0,
                 opacity: new_opacity,
             },
             None,
@@ -1227,8 +1280,9 @@ mod tests {
         app.process_commands();
         assert_eq!(app.build_engine_state().mixer.channels.len(), 3);
         // Remove the third channel
+        let ch2 = channel_uuid(&app, 2);
         tx.send((
-            crate::engine::EngineCommand::RemoveChannel { channel_idx: 2 },
+            crate::engine::EngineCommand::RemoveChannel { channel_uuid: ch2 },
             None,
         ))
         .unwrap();
@@ -1241,29 +1295,29 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let tx = app.command_sender();
-        // Add a solid color deck first
-        tx.send((
+        let ch0 = channel_uuid(&app, 0);
+        let added = send_cmd(
+            &mut app,
             crate::engine::EngineCommand::AddSolidColorDeck {
-                channel_idx: 0,
+                channel_uuid: ch0,
                 color: [0.0, 1.0, 0.0, 1.0],
             },
-            None,
-        ))
-        .unwrap();
-        app.process_commands();
-        // Set its blend mode
-        tx.send((
+        );
+        let crate::engine::CommandResult::OkWithId { uuid } = added else {
+            panic!("expected OkWithId, got {added:?}");
+        };
+        fire(
+            &mut app,
             crate::engine::EngineCommand::SetDeckBlendMode {
-                channel_idx: 0,
-                deck_idx: 1,
+                deck_uuid: uuid,
                 mode: crate::engine::BlendMode::Add,
             },
-            None,
-        ))
-        .unwrap();
-        app.process_commands();
-        // Verify no crash — blend mode is GPU-level and verified through state
+        );
+        let state = app.build_engine_state();
+        assert_eq!(
+            state.mixer.channels[0].decks[0].blend_mode,
+            crate::engine::BlendMode::Add
+        );
     }
 
     #[test]
@@ -1371,11 +1425,12 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let ch0 = channel_uuid(&app, 0);
         // Bad path — should not panic
         let _ = send_cmd(
             &mut app,
             crate::engine::EngineCommand::AddVideoDeck {
-                channel_idx: 0,
+                channel_uuid: ch0,
                 path: std::path::PathBuf::from("/nonexistent/video.mp4"),
             },
         );
@@ -1386,13 +1441,21 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let ch0 = channel_uuid(&app, 0);
+        let added = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddSolidColorDeck {
+                channel_uuid: ch0,
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+        );
+        let crate::engine::CommandResult::OkWithId { uuid } = added else {
+            panic!("expected OkWithId, got {added:?}");
+        };
         // Toggle play on a non-video deck — should handle gracefully
         let _ = send_cmd(
             &mut app,
-            crate::engine::EngineCommand::VideoTogglePlay {
-                channel_idx: 0,
-                deck_idx: 0,
-            },
+            crate::engine::EngineCommand::VideoTogglePlay { deck_uuid: uuid },
         );
     }
 
@@ -1401,11 +1464,21 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let ch0 = channel_uuid(&app, 0);
+        let added = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::AddSolidColorDeck {
+                channel_uuid: ch0,
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+        );
+        let crate::engine::CommandResult::OkWithId { uuid } = added else {
+            panic!("expected OkWithId, got {added:?}");
+        };
         let _ = send_cmd(
             &mut app,
             crate::engine::EngineCommand::VideoSetSpeed {
-                channel_idx: 0,
-                deck_idx: 0,
+                deck_uuid: uuid,
                 speed: 2.0,
             },
         );
@@ -1417,9 +1490,12 @@ mod tests {
             return;
         };
         let r = send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
-        assert!(matches!(r, crate::engine::CommandResult::Ok));
+        let crate::engine::CommandResult::OkWithId { uuid } = r else {
+            panic!("expected OkWithId, got {r:?}");
+        };
         let state = app.build_engine_state();
         assert_eq!(state.mixer.sequences.len(), 1);
+        assert_eq!(state.mixer.sequences[0].uuid, uuid);
     }
 
     #[test]
@@ -1427,18 +1503,23 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
+        let ch0 = channel_uuid(&app, 0);
+        let ch1 = channel_uuid(&app, 1);
+        let created = send_cmd(&mut app, crate::engine::EngineCommand::CreateSequence);
+        let crate::engine::CommandResult::OkWithId { uuid: seq } = created else {
+            panic!("expected OkWithId, got {created:?}");
+        };
         send_cmd(
             &mut app,
             crate::engine::EngineCommand::AddFadeStep {
-                seq_idx: 0,
-                from_ch: 0,
-                to_ch: 1,
+                sequence_uuid: seq.clone(),
+                from_channel_uuid: ch0,
+                to_channel_uuid: ch1,
             },
         );
         send_cmd(
             &mut app,
-            crate::engine::EngineCommand::AddWaitStep { seq_idx: 0 },
+            crate::engine::EngineCommand::AddWaitStep { sequence_uuid: seq },
         );
         let state = app.build_engine_state();
         assert_eq!(state.mixer.sequences[0].steps.len(), 2);
@@ -1449,39 +1530,41 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        send_cmd(
+        let ch0 = channel_uuid(&app, 0);
+        let added = send_cmd(
             &mut app,
             crate::engine::EngineCommand::AddSolidColorDeck {
-                channel_idx: 0,
+                channel_uuid: ch0,
                 color: [1.0, 0.0, 0.0, 1.0],
             },
         );
-        let target = crate::engine::EffectTarget::Deck(0, 1);
+        let crate::engine::CommandResult::OkWithId { uuid: deck } = added else {
+            panic!("expected OkWithId, got {added:?}");
+        };
         let r = send_cmd(
             &mut app,
             crate::engine::EngineCommand::AddEffect {
-                target: target.clone(),
-                shader_name: "Invert".into(),
+                target: crate::engine::EffectTarget::Deck(deck),
+                shader_name: "invert".into(),
             },
         );
-        if matches!(r, crate::engine::CommandResult::Ok) {
-            // Toggle
-            let _ = send_cmd(
-                &mut app,
-                crate::engine::EngineCommand::ToggleEffect {
-                    target: target.clone(),
-                    effect_idx: 0,
-                },
-            );
-            // Remove
-            let _ = send_cmd(
-                &mut app,
-                crate::engine::EngineCommand::RemoveEffect {
-                    target,
-                    effect_idx: 0,
-                },
-            );
-        }
+        let crate::engine::CommandResult::OkWithId { uuid: effect } = r else {
+            panic!("expected OkWithId, got {r:?}");
+        };
+        let toggled = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::ToggleEffect {
+                effect_uuid: effect.clone(),
+            },
+        );
+        assert!(matches!(toggled, crate::engine::CommandResult::Ok));
+        let removed = send_cmd(
+            &mut app,
+            crate::engine::EngineCommand::RemoveEffect {
+                effect_uuid: effect,
+            },
+        );
+        assert!(matches!(removed, crate::engine::CommandResult::Ok));
     }
 
     #[test]
@@ -1555,10 +1638,11 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let ch0 = channel_uuid(&app, 0);
         fire(
             &mut app,
             crate::engine::EngineCommand::SetChannelBlendMode {
-                channel_idx: 0,
+                channel_uuid: ch0,
                 mode: crate::engine::BlendMode::Add,
             },
         );

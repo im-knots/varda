@@ -494,6 +494,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
     let hover_ch_id = egui::Id::new("__lib_dnd_hover_ch");
     let hover_fx_target_id = egui::Id::new("__lib_dnd_hover_fx_target");
     let on_new_ch_id = egui::Id::new("__lib_dnd_on_new_ch_zone");
+    let awaiting_new_ch_id = egui::Id::new("__lib_dnd_awaiting_new_ch");
     let has_payload = egui::DragAndDrop::has_payload_of_type::<LibraryDrag>(ctx);
 
     if has_payload {
@@ -523,26 +524,34 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 }
             }
 
-            let mut found_fx: Option<(String, usize, usize)> = None;
+            // The chain is recorded by UUID: the drop is applied after release,
+            // so an index recorded here could name another entity by then.
+            let mut found_fx: Option<(String, String)> = None;
             if data.selected_master {
                 let master_key = egui::Id::new("master_fx_drop_rect");
                 if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(master_key)) {
                     if rect.contains(pos) {
-                        found_fx = Some(("master".to_string(), 0, 0));
+                        found_fx = Some(("master".to_string(), String::new()));
                     }
                 }
-            } else if let Some(ch_idx) = data.selected_channel {
-                let key = egui::Id::new("ch_fx_drop_rect").with(ch_idx);
+            } else if let Some(ch) = data.selected_channel.and_then(|i| data.channels.get(i)) {
+                let key = egui::Id::new("ch_fx_drop_rect").with(ch.ch_idx);
                 if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
                     if rect.contains(pos) {
-                        found_fx = Some(("channel".to_string(), ch_idx, 0));
+                        found_fx = Some(("channel".to_string(), ch.uuid.clone()));
                     }
                 }
             } else if let Some((sel_ch, sel_dk)) = data.selected_deck {
                 let key = egui::Id::new("deck_fx_drop_rect").with((sel_ch, sel_dk));
                 if let Some(rect) = ctx.memory(|mem| mem.data.get_temp::<egui::Rect>(key)) {
                     if rect.contains(pos) {
-                        found_fx = Some(("deck".to_string(), sel_ch, sel_dk));
+                        if let Some(deck) = data
+                            .channels
+                            .get(sel_ch)
+                            .and_then(|ch| ch.decks.get(sel_dk))
+                        {
+                            found_fx = Some(("deck".to_string(), deck.uuid.clone()));
+                        }
                     }
                 }
             }
@@ -560,31 +569,85 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
         if had_payload {
             let hover_ch: Option<usize> =
                 ctx.memory(|mem| mem.data.get_temp(hover_ch_id).unwrap_or(None));
-            let hover_fx: Option<(String, usize, usize)> =
+            let hover_fx: Option<(String, String)> =
                 ctx.memory(|mem| mem.data.get_temp(hover_fx_target_id).unwrap_or(None));
             let on_new_ch_zone: bool =
                 ctx.memory(|mem| mem.data.get_temp(on_new_ch_id).unwrap_or(false));
 
-            if let Some(ch_idx) = hover_ch {
+            // Channel preset: if dropped on a channel, fill into it; otherwise create new
+            let ch_preset_key = egui::Id::new("__lib_dnd_ch_preset_idx");
+            let ch_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(ch_preset_key));
+
+            // Resolve the drop target to a channel UUID. A drop on empty space
+            // has to create the channel first, and no UUID for it exists until
+            // the engine has applied `AddChannel` — so that case parks the
+            // payload and resolves on the next frame instead of guessing an
+            // index. See `/spec/api-addressing.md`.
+            let awaiting_len: Option<usize> =
+                ctx.memory(|mem| mem.data.get_temp(awaiting_new_ch_id));
+            let mut parked = false;
+            let target_channel: Option<String> = if let Some(expected_len) = awaiting_len {
+                ctx.memory_mut(|mem| mem.data.remove::<usize>(awaiting_new_ch_id));
+                if data.channels.len() >= expected_len {
+                    data.channels.last().map(|ch| ch.uuid.clone())
+                } else {
+                    log::warn!("Dropping library payload: the new channel was never created");
+                    None
+                }
+            } else if let Some(ch_idx) = hover_ch {
+                data.channels.get(ch_idx).map(|ch| ch.uuid.clone())
+            } else if on_new_ch_zone && ch_preset_idx.is_none() {
+                actions.commands.push(EngineCommand::AddChannel);
+                ctx.memory_mut(|mem| {
+                    mem.data
+                        .insert_temp(awaiting_new_ch_id, data.channels.len() + 1);
+                    mem.data.insert_temp::<bool>(on_new_ch_id, false);
+                });
+                parked = true;
+                None
+            } else {
+                None
+            };
+
+            if let Some(channel_uuid) = target_channel {
                 let gen_key = egui::Id::new("__lib_dnd_gen_idx");
                 let gen_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(gen_key));
                 if let Some(gen_idx) = gen_idx {
                     log::info!(
-                        "Library drop (deferred): generator {} -> ch{}",
+                        "Library drop (deferred): generator {} -> ch {}",
                         gen_idx,
-                        ch_idx
+                        channel_uuid
                     );
-                    actions.session.shader_to_add = Some((ch_idx, gen_idx));
+                    actions.session.shader_to_add = Some((channel_uuid.clone(), gen_idx));
                 }
 
                 let cam_key = egui::Id::new("__lib_dnd_cam_id");
                 let cam_id: Option<crate::camera::CameraId> =
                     ctx.memory(|mem| mem.data.get_temp(cam_key));
                 if let Some(cam_id) = cam_id {
-                    log::info!("Library drop (deferred): camera {} -> ch{}", cam_id, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): camera {} -> ch {}",
+                        cam_id,
+                        channel_uuid
+                    );
                     actions.commands.push(EngineCommand::AddCameraDeck {
-                        channel_idx: ch_idx,
+                        channel_uuid: channel_uuid.clone(),
                         camera_id: cam_id,
+                    });
+                }
+
+                let depth_key = egui::Id::new("__lib_dnd_depth_sensor_id");
+                let depth_id: Option<crate::depth::DepthSensorId> =
+                    ctx.memory(|mem| mem.data.get_temp(depth_key));
+                if let Some(depth_id) = depth_id {
+                    log::info!(
+                        "Library drop (deferred): depth sensor {} -> ch {}",
+                        depth_id,
+                        channel_uuid
+                    );
+                    actions.commands.push(EngineCommand::AddDepthSensorDeck {
+                        channel_uuid: channel_uuid.clone(),
+                        depth_sensor_id: depth_id,
                     });
                 }
 
@@ -592,12 +655,12 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 let ndi_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(ndi_key));
                 if let Some(ndi_name) = ndi_name {
                     log::info!(
-                        "Library drop (deferred): NDI '{}' -> ch{}",
+                        "Library drop (deferred): NDI '{}' -> ch {}",
                         ndi_name,
-                        ch_idx
+                        channel_uuid
                     );
                     actions.commands.push(EngineCommand::AddNdiDeck {
-                        channel_idx: ch_idx,
+                        channel_uuid: channel_uuid.clone(),
                         source_name: ndi_name,
                     });
                 }
@@ -606,12 +669,12 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 let syph_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(syph_key));
                 if let Some(syph_name) = syph_name {
                     log::info!(
-                        "Library drop (deferred): Syphon '{}' -> ch{}",
+                        "Library drop (deferred): Syphon '{}' -> ch {}",
                         syph_name,
-                        ch_idx
+                        channel_uuid
                     );
                     actions.commands.push(EngineCommand::AddSyphonDeck {
-                        channel_idx: ch_idx,
+                        channel_uuid: channel_uuid.clone(),
                         server_name: syph_name,
                     });
                 }
@@ -621,13 +684,13 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     ctx.memory(|mem| mem.data.get_temp(srt_key));
                 if let Some((url, mode)) = srt_config {
                     log::info!(
-                        "Library drop (deferred): SRT '{}' ({:?}) -> ch{}",
+                        "Library drop (deferred): SRT '{}' ({:?}) -> ch {}",
                         url,
                         mode,
-                        ch_idx
+                        channel_uuid
                     );
                     actions.commands.push(EngineCommand::AddSrtDeck {
-                        channel_idx: ch_idx,
+                        channel_uuid: channel_uuid.clone(),
                         url,
                         mode,
                     });
@@ -635,18 +698,26 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
 
                 let hls_key = egui::Id::new("__lib_dnd_hls_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(hls_key)) {
-                    log::info!("Library drop (deferred): HLS '{}' -> ch{}", url, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): HLS '{}' -> ch {}",
+                        url,
+                        channel_uuid
+                    );
                     actions.commands.push(EngineCommand::AddHlsDeck {
-                        channel_idx: ch_idx,
+                        channel_uuid: channel_uuid.clone(),
                         url,
                     });
                 }
 
                 let dash_key = egui::Id::new("__lib_dnd_dash_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
-                    log::info!("Library drop (deferred): DASH '{}' -> ch{}", url, ch_idx);
+                    log::info!(
+                        "Library drop (deferred): DASH '{}' -> ch {}",
+                        url,
+                        channel_uuid
+                    );
                     actions.commands.push(EngineCommand::AddDashDeck {
-                        channel_idx: ch_idx,
+                        channel_uuid: channel_uuid.clone(),
                         url,
                     });
                 }
@@ -657,157 +728,13 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         .get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)
                 }) {
                     log::info!(
-                        "Library drop (deferred): RTMP '{}' ({}) -> ch{}",
+                        "Library drop (deferred): RTMP '{}' ({}) -> ch {}",
                         url,
                         mode,
-                        ch_idx
+                        channel_uuid
                     );
                     actions.commands.push(EngineCommand::AddRtmpDeck {
-                        channel_idx: ch_idx,
-                        url,
-                        mode,
-                    });
-                }
-
-                let html_key = egui::Id::new("__lib_dnd_html_url");
-                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(html_key)) {
-                    log::info!("Library drop (deferred): HTML '{}' -> ch{}", url, ch_idx);
-                    actions.commands.push(EngineCommand::AddHtmlDeck {
-                        channel_idx: ch_idx,
-                        url,
-                    });
-                }
-
-                // Deck preset dropped on a channel
-                let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
-                let deck_preset_idx: Option<usize> =
-                    ctx.memory(|mem| mem.data.get_temp(deck_preset_key));
-                if let Some(preset_idx) = deck_preset_idx {
-                    log::info!(
-                        "Library drop (deferred): deck preset {} -> ch{}",
-                        preset_idx,
-                        ch_idx
-                    );
-                    actions.commands.push(EngineCommand::LoadDeckPreset {
-                        channel_idx: ch_idx,
-                        preset_idx,
-                    });
-                }
-            } else if on_new_ch_zone {
-                // Dropped on empty space — create a new channel and add the source to it.
-                // AddChannel is pushed first so the subsequent Add*Deck command
-                // (targeting `new_ch_idx`) resolves against the created channel.
-                let new_ch_idx = data.channels.len();
-                actions.commands.push(EngineCommand::AddChannel);
-
-                let gen_key = egui::Id::new("__lib_dnd_gen_idx");
-                if let Some(gen_idx) = ctx.memory(|mem| mem.data.get_temp::<usize>(gen_key)) {
-                    log::info!(
-                        "Library drop (deferred): generator {} -> new ch{}",
-                        gen_idx,
-                        new_ch_idx
-                    );
-                    actions.session.shader_to_add = Some((new_ch_idx, gen_idx));
-                }
-
-                let cam_key = egui::Id::new("__lib_dnd_cam_id");
-                if let Some(cam_id) =
-                    ctx.memory(|mem| mem.data.get_temp::<crate::camera::CameraId>(cam_key))
-                {
-                    log::info!(
-                        "Library drop (deferred): camera {} -> new ch{}",
-                        cam_id,
-                        new_ch_idx
-                    );
-                    actions.commands.push(EngineCommand::AddCameraDeck {
-                        channel_idx: new_ch_idx,
-                        camera_id: cam_id,
-                    });
-                }
-
-                let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
-                if let Some(ndi_name) = ctx.memory(|mem| mem.data.get_temp::<String>(ndi_key)) {
-                    log::info!(
-                        "Library drop (deferred): NDI '{}' -> new ch{}",
-                        ndi_name,
-                        new_ch_idx
-                    );
-                    actions.commands.push(EngineCommand::AddNdiDeck {
-                        channel_idx: new_ch_idx,
-                        source_name: ndi_name,
-                    });
-                }
-
-                let syph_key = egui::Id::new("__lib_dnd_syph_name");
-                if let Some(syph_name) = ctx.memory(|mem| mem.data.get_temp::<String>(syph_key)) {
-                    log::info!(
-                        "Library drop (deferred): Syphon '{}' -> new ch{}",
-                        syph_name,
-                        new_ch_idx
-                    );
-                    actions.commands.push(EngineCommand::AddSyphonDeck {
-                        channel_idx: new_ch_idx,
-                        server_name: syph_name,
-                    });
-                }
-
-                let srt_key = egui::Id::new("__lib_dnd_srt_config");
-                if let Some((url, mode)) = ctx.memory(|mem| {
-                    mem.data
-                        .get_temp::<(String, crate::stream::SrtMode)>(srt_key)
-                }) {
-                    log::info!(
-                        "Library drop (deferred): SRT '{}' ({:?}) -> new ch{}",
-                        url,
-                        mode,
-                        new_ch_idx
-                    );
-                    actions.commands.push(EngineCommand::AddSrtDeck {
-                        channel_idx: new_ch_idx,
-                        url,
-                        mode,
-                    });
-                }
-
-                let hls_key = egui::Id::new("__lib_dnd_hls_url");
-                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(hls_key)) {
-                    log::info!(
-                        "Library drop (deferred): HLS '{}' -> new ch{}",
-                        url,
-                        new_ch_idx
-                    );
-                    actions.commands.push(EngineCommand::AddHlsDeck {
-                        channel_idx: new_ch_idx,
-                        url,
-                    });
-                }
-
-                let dash_key = egui::Id::new("__lib_dnd_dash_url");
-                if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
-                    log::info!(
-                        "Library drop (deferred): DASH '{}' -> new ch{}",
-                        url,
-                        new_ch_idx
-                    );
-                    actions.commands.push(EngineCommand::AddDashDeck {
-                        channel_idx: new_ch_idx,
-                        url,
-                    });
-                }
-
-                let rtmp_key = egui::Id::new("__lib_dnd_rtmp_config");
-                if let Some((url, mode)) = ctx.memory(|mem| {
-                    mem.data
-                        .get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)
-                }) {
-                    log::info!(
-                        "Library drop (deferred): RTMP '{}' ({}) -> new ch{}",
-                        url,
-                        mode,
-                        new_ch_idx
-                    );
-                    actions.commands.push(EngineCommand::AddRtmpDeck {
-                        channel_idx: new_ch_idx,
+                        channel_uuid: channel_uuid.clone(),
                         url,
                         mode,
                     });
@@ -816,112 +743,85 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 let html_key = egui::Id::new("__lib_dnd_html_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(html_key)) {
                     log::info!(
-                        "Library drop (deferred): HTML '{}' -> new ch{}",
+                        "Library drop (deferred): HTML '{}' -> ch {}",
                         url,
-                        new_ch_idx
+                        channel_uuid
                     );
                     actions.commands.push(EngineCommand::AddHtmlDeck {
-                        channel_idx: new_ch_idx,
+                        channel_uuid: channel_uuid.clone(),
                         url,
                     });
                 }
 
                 let deck_preset_key = egui::Id::new("__lib_dnd_deck_preset_idx");
-                if let Some(preset_idx) =
-                    ctx.memory(|mem| mem.data.get_temp::<usize>(deck_preset_key))
+                let deck_preset_idx: Option<usize> =
+                    ctx.memory(|mem| mem.data.get_temp(deck_preset_key));
+                if let Some(preset_name) =
+                    deck_preset_idx.and_then(|idx| data.deck_presets.get(idx))
                 {
                     log::info!(
-                        "Library drop (deferred): deck preset {} -> new ch{}",
-                        preset_idx,
-                        new_ch_idx
+                        "Library drop (deferred): deck preset '{}' -> ch {}",
+                        preset_name,
+                        channel_uuid
                     );
                     actions.commands.push(EngineCommand::LoadDeckPreset {
-                        channel_idx: new_ch_idx,
-                        preset_idx,
+                        channel_uuid: channel_uuid.clone(),
+                        preset_name: preset_name.clone(),
                     });
                 }
             }
 
-            // Channel preset: if dropped on a channel, fill into it; otherwise create new
-            let ch_preset_key = egui::Id::new("__lib_dnd_ch_preset_idx");
-            let ch_preset_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(ch_preset_key));
-            if let Some(preset_idx) = ch_preset_idx {
-                if let Some(ch_idx) = hover_ch {
-                    log::info!(
-                        "Library drop (deferred): channel preset {} -> existing ch{}",
-                        preset_idx,
-                        ch_idx
-                    );
-                    actions.commands.push(EngineCommand::LoadChannelPreset {
-                        target_channel: Some(ch_idx),
-                        preset_idx,
-                    });
-                } else {
-                    log::info!(
-                        "Library drop (deferred): channel preset {} -> new channel",
-                        preset_idx
-                    );
-                    actions.commands.push(EngineCommand::LoadChannelPreset {
-                        target_channel: None,
-                        preset_idx,
-                    });
-                }
+            if let Some(preset_name) = ch_preset_idx.and_then(|idx| data.channel_presets.get(idx)) {
+                let target_channel_uuid =
+                    hover_ch.and_then(|ch_idx| data.channels.get(ch_idx).map(|c| c.uuid.clone()));
+                log::info!(
+                    "Library drop (deferred): channel preset '{}' -> {}",
+                    preset_name,
+                    target_channel_uuid.as_deref().unwrap_or("new channel")
+                );
+                actions.commands.push(EngineCommand::LoadChannelPreset {
+                    target_channel_uuid,
+                    preset_name: preset_name.clone(),
+                });
             }
 
-            if let Some((target_type, ch_idx, deck_idx)) = hover_fx {
+            if let Some((target_type, target_uuid)) = hover_fx {
                 let fx_key = egui::Id::new("__lib_dnd_fx_idx");
                 let filter_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(fx_key));
                 if let Some(filter_idx) = filter_idx {
-                    match target_type.as_str() {
-                        "deck" => {
-                            log::info!(
-                                "Library drop (deferred): effect {} -> ch{} deck{}",
-                                filter_idx,
-                                ch_idx,
-                                deck_idx
-                            );
-                            if let Some(shader_name) = resolve_filter_name(data, filter_idx) {
-                                actions.commands.push(EngineCommand::AddEffect {
-                                    target: EffectTarget::Deck(ch_idx, deck_idx),
-                                    shader_name,
-                                });
-                            }
-                        }
-                        "channel" => {
-                            log::info!(
-                                "Library drop (deferred): effect {} -> ch{} channel fx",
-                                filter_idx,
-                                ch_idx
-                            );
-                            if let Some(shader_name) = resolve_filter_name(data, filter_idx) {
-                                actions.commands.push(EngineCommand::AddEffect {
-                                    target: EffectTarget::Channel(ch_idx),
-                                    shader_name,
-                                });
-                            }
-                        }
-                        "master" => {
-                            log::info!(
-                                "Library drop (deferred): effect {} -> master fx",
-                                filter_idx
-                            );
-                            if let Some(shader_name) = resolve_filter_name(data, filter_idx) {
-                                actions.commands.push(EngineCommand::AddEffect {
-                                    target: EffectTarget::Master,
-                                    shader_name,
-                                });
-                            }
-                        }
-                        _ => {}
+                    let target = match target_type.as_str() {
+                        "deck" => Some(EffectTarget::Deck(target_uuid)),
+                        "channel" => Some(EffectTarget::Channel(target_uuid)),
+                        "master" => Some(EffectTarget::Master),
+                        _ => None,
+                    };
+                    if let (Some(target), Some(shader_name)) =
+                        (target, resolve_filter_name(data, filter_idx))
+                    {
+                        log::info!(
+                            "Library drop (deferred): effect {} -> {:?}",
+                            filter_idx,
+                            target
+                        );
+                        actions.commands.push(EngineCommand::AddEffect {
+                            target,
+                            shader_name,
+                        });
                     }
                 }
+            }
+
+            // A parked payload keeps its keys so the next frame can re-enter and
+            // resolve the channel that `AddChannel` created.
+            if parked {
+                return;
             }
 
             ctx.memory_mut(|mem| {
                 mem.data.remove::<bool>(had_payload_id);
                 mem.data.remove::<Option<usize>>(hover_ch_id);
                 mem.data
-                    .remove::<Option<(String, usize, usize)>>(hover_fx_target_id);
+                    .remove::<Option<(String, String)>>(hover_fx_target_id);
                 mem.data.remove::<bool>(on_new_ch_id);
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_gen_idx"));
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
@@ -984,16 +884,19 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
             };
 
             if found_dz.is_none() {
-                if let Some((sel_ch, sel_dk)) = data.selected_deck {
-                    found_dz = check_chain(&format!("deck_{}_{}", sel_ch, sel_dk), ctx, pos);
+                if let Some(deck) = data
+                    .selected_deck
+                    .and_then(|(ch, dk)| data.channels.get(ch)?.decks.get(dk))
+                {
+                    found_dz = check_chain(&format!("deck_{}", deck.uuid), ctx, pos);
                 }
             }
             if found_dz.is_none() {
                 found_dz = check_chain("master", ctx, pos);
             }
             if found_dz.is_none() {
-                for ch_idx in 0..data.channels.len() {
-                    found_dz = check_chain(&format!("ch_{}", ch_idx), ctx, pos);
+                for ch in &data.channels {
+                    found_dz = check_chain(&format!("ch_{}", ch.uuid), ctx, pos);
                     if found_dz.is_some() {
                         break;
                     }
@@ -1015,8 +918,8 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
 
             if let (Some((chain_key, target_pos)), Some(src_drag)) = (hover_dz, src) {
                 match src_drag {
-                    EffectDrag::Deck(src_ch, src_dk, src_eff) => {
-                        let expected_key = format!("deck_{}_{}", src_ch, src_dk);
+                    EffectDrag::Deck(src_deck, src_eff) => {
+                        let expected_key = format!("deck_{}", src_deck);
                         if chain_key == expected_key {
                             let to = if src_eff < target_pos {
                                 target_pos - 1
@@ -1025,14 +928,13 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                             };
                             if to != src_eff {
                                 log::info!(
-                                    "Effect reorder (deferred): deck {}/{} effect {} -> {}",
-                                    src_ch,
-                                    src_dk,
+                                    "Effect reorder (deferred): deck {} effect {} -> {}",
+                                    src_deck,
                                     src_eff,
                                     to
                                 );
                                 actions.commands.push(EngineCommand::MoveEffect {
-                                    target: EffectTarget::Deck(src_ch, src_dk),
+                                    target: EffectTarget::Deck(src_deck),
                                     from_idx: src_eff,
                                     to_idx: to,
                                 });
@@ -1049,7 +951,7 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                             };
                             if to != src_eff {
                                 log::info!(
-                                    "Effect reorder (deferred): ch{} effect {} -> {}",
+                                    "Effect reorder (deferred): ch {} effect {} -> {}",
                                     src_ch,
                                     src_eff,
                                     to
@@ -1124,7 +1026,7 @@ fn handle_sequence_step_dnd(ctx: &egui::Context, _data: &UIData, actions: &mut U
                     actions
                         .commands
                         .push(crate::engine::EngineCommand::MoveStep {
-                            seq_idx: payload.seq_idx,
+                            sequence_uuid: payload.sequence_uuid,
                             from: payload.step_idx,
                             to: insert_idx,
                         });
@@ -1680,7 +1582,6 @@ mod tests {
         let mut data = UIData::test_fixture();
         data.channels.clear();
         data.channel_count = 0;
-        data.channel_names.clear();
         data.selected_deck = None;
         data.selected_channel = None;
         let harness = egui_kittest::Harness::new_ui(|ui| {

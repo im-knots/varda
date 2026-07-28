@@ -15,7 +15,7 @@ use crate::engine::types::*;
 pub(crate) fn build_ui_data(
     app: &VardaApp,
     layout: &crate::usecases::ui::UILayoutState,
-    deck_preview_textures: &std::collections::HashMap<(usize, usize), egui::TextureId>,
+    deck_preview_textures: &std::collections::HashMap<String, egui::TextureId>,
     channel_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
     output_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
@@ -64,6 +64,7 @@ pub(crate) fn build_ui_data(
                         uuid: d.uuid.clone(),
                         name: d.name.clone(),
                         is_html: d.is_html,
+                        is_depth_sensor: d.is_depth_sensor,
                         is_html_interactive: d.is_html_interactive,
                         opacity: d.opacity,
                         effective_opacity: d.effective_opacity,
@@ -406,8 +407,8 @@ pub(crate) fn build_ui_data(
                             transition_shader,
                             target_amount,
                         } => SequenceStepKindUI::Fade {
-                            from_ch: *from_ch,
-                            to_ch: *to_ch,
+                            from_ch: from_ch.clone(),
+                            to_ch: to_ch.clone(),
                             duration_val: *duration_val,
                             duration_unit: *duration_unit,
                             easing: easing.clone(),
@@ -432,6 +433,7 @@ pub(crate) fn build_ui_data(
                 })
                 .collect();
             SequenceUIData {
+                uuid: seq.uuid.clone(),
                 name: seq.name.clone(),
                 enabled: seq.enabled,
                 playing: seq.playing,
@@ -515,6 +517,7 @@ pub(crate) fn build_ui_data(
         midi_devices,
         midi_mappings,
         cameras: engine.cameras.devices,
+        depth_sensors: engine.depth_sensors.devices,
         ndi_sources: engine.ndi_sources.clone(),
         ndi_available: engine.ndi_available,
         syphon_sources: engine.syphon_sources.clone(),
@@ -584,12 +587,6 @@ pub(crate) fn build_ui_data(
 
         sequences,
         channel_count: engine.mixer.channels.len(),
-        channel_names: engine
-            .mixer
-            .channels
-            .iter()
-            .map(|c| c.name.clone())
-            .collect(),
         channel_render_stats: {
             let stats: Vec<crate::usecases::ui::ChannelRenderStats> = engine
                 .mixer

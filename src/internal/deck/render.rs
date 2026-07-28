@@ -1,6 +1,6 @@
 //! Deck rendering — source rendering, effect chain, video frame updates, and resize.
 
-use super::{Deck, DeckSource, PassBuffer, PreprocessorSlot, ScalingMode};
+use super::{Deck, DeckSource, ExternalSourceKind, PassBuffer, PreprocessorSlot, ScalingMode};
 use crate::analyzer::traits::TextureData;
 use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers};
 use crate::audio::AudioData;
@@ -283,6 +283,19 @@ impl Deck {
             .collect();
 
         let source_to_b = enabled_effects.len() % 2 == 1;
+
+        // Depth-sensor decks render via a point-cloud pass, which needs mutable
+        // access to `self.point_cloud_pipeline` (a field separate from
+        // `self.source`). Handle it before the `&mut self.source` match to avoid
+        // a split-borrow, then skip the ExternalSource blit arm below.
+        let is_depth = matches!(
+            self.external_source_kind(),
+            Some(super::ExternalSourceKind::DepthSensor(_))
+        );
+        if is_depth {
+            self.render_point_cloud(context, source_to_b, cmd_buffers);
+        }
+
         let generator_target = if source_to_b {
             &self.texture_b_view
         } else {
@@ -535,22 +548,26 @@ impl Deck {
                 source_height,
                 scaling_mode,
             } => {
-                if let Some(ext_view) = &self.external_source_view {
-                    Self::blit_external_source(
-                        context,
-                        blit_pipeline,
-                        blit_pipeline_over_black,
-                        self.transparent,
-                        ext_view,
-                        *source_width,
-                        *source_height,
-                        self.texture.width(),
-                        self.texture.height(),
-                        *scaling_mode,
-                        generator_target,
-                        kind.label(),
-                        cmd_buffers,
-                    );
+                // DepthSensor decks were already reprojected above via the
+                // point-cloud pass; the plain blit only applies to flat sources.
+                if !matches!(kind, ExternalSourceKind::DepthSensor(_)) {
+                    if let Some(ext_view) = &self.external_source_view {
+                        Self::blit_external_source(
+                            context,
+                            blit_pipeline,
+                            blit_pipeline_over_black,
+                            self.transparent,
+                            ext_view,
+                            *source_width,
+                            *source_height,
+                            self.texture.width(),
+                            self.texture.height(),
+                            *scaling_mode,
+                            generator_target,
+                            kind.label(),
+                            cmd_buffers,
+                        );
+                    }
                 }
             }
             DeckSource::ComputeShader { pipeline, .. } => {
@@ -1066,6 +1083,61 @@ impl Deck {
         }
 
         Ok(())
+    }
+
+    /// Reproject a depth-sensor deck's point cloud into `target`.
+    ///
+    /// Needs `self.external_source_view` (R16Uint depth), `self.depth_rgb_view`,
+    /// `self.depth_intrinsics`, and `self.depth_source_size` — all set once per
+    /// frame by the app render loop. Lazily builds the pipeline on first use.
+    /// No-op until a depth frame + intrinsics are available.
+    fn render_point_cloud(
+        &mut self,
+        context: &GpuContext,
+        source_to_b: bool,
+        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+    ) {
+        let (Some(intr), Some((sw, sh))) = (self.depth_intrinsics, self.depth_source_size) else {
+            return;
+        };
+        if self.external_source_view.is_none() || self.depth_rgb_view.is_none() {
+            return;
+        }
+
+        if self.point_cloud_pipeline.is_none() {
+            self.point_cloud_pipeline = Some(crate::depth::point_cloud::PointCloudPipeline::new(
+                &context.device,
+                self.texture.format(),
+            ));
+        }
+        // Take the pipeline out so we can borrow other `self` fields freely.
+        let pipeline = self.point_cloud_pipeline.take().unwrap();
+        let target = if source_to_b {
+            &self.texture_b_view
+        } else {
+            &self.texture_view
+        };
+        let depth_view = self.external_source_view.as_ref().unwrap();
+        let rgb_view = self.depth_rgb_view.as_ref().unwrap();
+
+        pipeline.update_uniform(
+            &context.queue,
+            intr,
+            sw,
+            sh,
+            self.texture.width(),
+            self.texture.height(),
+            &self.point_cloud_params,
+        );
+        pipeline.render(
+            &context.device,
+            depth_view,
+            rgb_view,
+            target,
+            sw * sh,
+            cmd_buffers,
+        );
+        self.point_cloud_pipeline = Some(pipeline);
     }
 
     /// Blit an external source (Camera, NDI, Syphon) with scaling to the generator target.

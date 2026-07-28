@@ -90,6 +90,8 @@ pub struct BeatSyncCrossfade {
 /// A named sequence of channel transition steps for automated shows/installations.
 #[derive(Debug, Clone)]
 pub struct TransitionSequence {
+    /// Stable 8-char hex UUID — the canonical address for this sequence.
+    pub uuid: String,
     pub name: String,
     pub steps: Vec<TransitionStep>,
     pub enabled: bool,
@@ -99,10 +101,21 @@ pub struct TransitionSequence {
 
 impl TransitionSequence {
     pub fn new(name: String) -> Self {
+        Self::with_uuid(crate::deck::generate_short_uuid(), name, Vec::new(), true)
+    }
+
+    /// Rebuild a sequence with a persisted UUID and step list.
+    pub fn with_uuid(
+        uuid: String,
+        name: String,
+        steps: Vec<TransitionStep>,
+        enabled: bool,
+    ) -> Self {
         Self {
+            uuid,
             name,
-            steps: Vec::new(),
-            enabled: true,
+            steps,
+            enabled,
             state: SequencerState::new(),
         }
     }
@@ -116,9 +129,13 @@ pub struct TransitionStep {
 #[derive(Debug, Clone)]
 pub enum StepKind {
     /// Fade from one channel to another over a duration.
+    ///
+    /// Channels are held by UUID so a reorder or deletion elsewhere cannot
+    /// silently repoint the fade at a different channel. Resolved to indices at
+    /// execution time. See [`/spec/api-addressing.md`].
     Fade {
-        from_ch: usize,
-        to_ch: usize,
+        from_ch: String,
+        to_ch: String,
         duration: crate::channel::DurationSpec,
         easing: CrossfadeEasing,
         /// Transition shader name (None = opacity fade). Only used in 2-channel mode.
@@ -331,6 +348,7 @@ impl Mixer {
                 continue;
             }
 
+            let channels = &self.channels;
             let step = &seq.steps[seq.state.current_step];
             let mutation = match &step.kind {
                 StepKind::Fade {
@@ -353,6 +371,10 @@ impl Mixer {
                     let progress = (seq.state.step_elapsed / duration_secs).clamp(0.0, 1.0) as f32;
                     let eased = easing.apply(progress);
                     let completed = seq.state.step_elapsed + dt as f64 >= duration_secs;
+                    // Resolve channel UUIDs against the live list every tick, so
+                    // a reorder mid-sequence keeps fading the same channels.
+                    let from = channels.iter().position(|c| c.uuid() == from_ch);
+                    let to = channels.iter().position(|c| c.uuid() == to_ch);
                     seq.state.step_elapsed += dt as f64;
                     if completed {
                         seq.state.current_step += 1;
@@ -361,7 +383,12 @@ impl Mixer {
                             seq.state.playing = false;
                         }
                     }
-                    Some((*from_ch, *to_ch, eased, completed, *target_amount))
+                    match (from, to) {
+                        (Some(from), Some(to)) => {
+                            Some((from, to, eased, completed, *target_amount))
+                        }
+                        _ => None,
+                    }
                 }
                 StepKind::Wait { duration } => {
                     let duration_secs = duration.to_seconds(bpm);

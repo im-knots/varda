@@ -111,6 +111,12 @@ pub struct CameraEntry {
 }
 
 #[derive(Serialize, ToSchema)]
+pub struct DepthSensorEntry {
+    pub name: String,
+    pub id: crate::depth::DepthSensorId,
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct NdiSourceEntry {
     pub name: String,
 }
@@ -164,6 +170,7 @@ pub(crate) mod tests {
                         uuid: "dk-001".into(),
                         name: "Sine".into(),
                         is_html: false,
+                        is_depth_sensor: false,
                         opacity: 1.0,
                         effective_opacity: 1.0,
                         blend_mode: BlendMode::Normal,
@@ -267,6 +274,7 @@ pub(crate) mod tests {
             cameras: CameraSnapshot {
                 devices: vec![("FaceTime".into(), 0u32)],
             },
+            depth_sensors: crate::engine::DepthSensorSnapshot { devices: vec![] },
             clock: ClockSnapshot {
                 bpm: Some(120.0),
                 beat_phase: 0.0,

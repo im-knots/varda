@@ -1,4 +1,9 @@
 //! Deck CRUD and property routes.
+//!
+//! Deck UUIDs are globally unique, so routes that name an existing deck are flat
+//! (`/api/decks/{deck_uuid}`). The owning channel stays in the path only for
+//! creation (no deck UUID exists yet) and for reorder (the ordinals are scoped
+//! to one channel).
 
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -47,15 +52,15 @@ pub struct DeckBoolBody {
     pub value: bool,
 }
 
-#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/shader", params(("ch_idx" = usize, Path, description = "Channel index")), request_body = AddShaderDeckBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/shader", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = AddShaderDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_shader_deck(
     State(state): State<SharedState>,
-    Path(ch_idx): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(body): Json<AddShaderDeckBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::AddDeck {
-            channel_idx: ch_idx,
+            channel_uuid,
             shader_name: body.shader_name,
         })
         .await
@@ -65,16 +70,13 @@ pub async fn add_shader_deck(
     }
 }
 
-#[utoipa::path(delete, path = "/api/channels/{ch_idx}/decks/{deck_idx}", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(delete, path = "/api/decks/{deck_uuid}", params(("deck_uuid" = String, Path, description = "Deck UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn remove_deck(
     State(state): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
 ) -> impl IntoResponse {
     match state
-        .send_command(EngineCommand::RemoveDeck {
-            channel_idx: ch_idx,
-            deck_idx,
-        })
+        .send_command(EngineCommand::RemoveDeck { deck_uuid })
         .await
     {
         Ok(result) => command_response(result),
@@ -82,16 +84,15 @@ pub async fn remove_deck(
     }
 }
 
-#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/opacity", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckOpacityBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/opacity", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DeckOpacityBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn set_opacity(
     State(state): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<DeckOpacityBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetDeckOpacity {
-            channel_idx: ch_idx,
-            deck_idx,
+            deck_uuid,
             opacity: body.opacity,
         })
         .await
@@ -101,16 +102,15 @@ pub async fn set_opacity(
     }
 }
 
-#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/blend-mode", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckBlendModeBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/blend-mode", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DeckBlendModeBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn set_blend_mode(
     State(state): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<DeckBlendModeBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetDeckBlendMode {
-            channel_idx: ch_idx,
-            deck_idx,
+            deck_uuid,
             mode: body.mode,
         })
         .await
@@ -120,16 +120,15 @@ pub async fn set_blend_mode(
     }
 }
 
-#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/solo", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckBoolBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/solo", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DeckBoolBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn set_solo(
     State(state): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<DeckBoolBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetDeckSolo {
-            channel_idx: ch_idx,
-            deck_idx,
+            deck_uuid,
             solo: body.value,
         })
         .await
@@ -139,16 +138,15 @@ pub async fn set_solo(
     }
 }
 
-#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/mute", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckBoolBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/mute", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DeckBoolBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn set_mute(
     State(state): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<DeckBoolBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetDeckMute {
-            channel_idx: ch_idx,
-            deck_idx,
+            deck_uuid,
             mute: body.value,
         })
         .await
@@ -185,22 +183,22 @@ pub struct AddCameraDeckBody {
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct AddDepthSensorDeckBody {
+    /// Numeric identifier of the depth sensor device.
+    pub depth_sensor_id: u32,
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct MoveDeckBody {
-    /// Source channel index.
-    pub src_ch: usize,
-    /// Source deck index within that channel.
-    pub src_deck: usize,
-    /// Destination channel index.
-    pub dst_ch: usize,
+    /// UUID of the channel to move the deck into.
+    pub dst_channel_uuid: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct ReorderDeckBody {
-    /// Channel index.
-    pub ch: usize,
-    /// Current deck index within the channel.
+    /// Current position of the deck within its channel.
     pub from_idx: usize,
-    /// Target deck index within the channel.
+    /// Target position of the deck within its channel.
     pub to_idx: usize,
 }
 
@@ -224,18 +222,15 @@ pub struct SetParamBody {
     pub value: crate::internal::params::ParamValue,
 }
 
-#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/image", params(("ch_idx" = usize, Path, description = "Channel index")), request_body = AddImageDeckBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/image", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = AddImageDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_image_deck(
     State(state): State<SharedState>,
-    Path(ch_idx): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(body): Json<AddImageDeckBody>,
 ) -> impl IntoResponse {
     let path = sanitize_path(body.path);
     match state
-        .send_command(EngineCommand::AddImageDeck {
-            channel_idx: ch_idx,
-            path,
-        })
+        .send_command(EngineCommand::AddImageDeck { channel_uuid, path })
         .await
     {
         Ok(r) => command_response(r),
@@ -243,18 +238,15 @@ pub async fn add_image_deck(
     }
 }
 
-#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/video", params(("ch_idx" = usize, Path, description = "Channel index")), request_body = AddVideoDeckBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/video", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = AddVideoDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_video_deck(
     State(state): State<SharedState>,
-    Path(ch_idx): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(body): Json<AddVideoDeckBody>,
 ) -> impl IntoResponse {
     let path = sanitize_path(body.path);
     match state
-        .send_command(EngineCommand::AddVideoDeck {
-            channel_idx: ch_idx,
-            path,
-        })
+        .send_command(EngineCommand::AddVideoDeck { channel_uuid, path })
         .await
     {
         Ok(r) => command_response(r),
@@ -262,15 +254,15 @@ pub async fn add_video_deck(
     }
 }
 
-#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/solid", params(("ch_idx" = usize, Path, description = "Channel index")), request_body = AddSolidColorDeckBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/solid", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = AddSolidColorDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_solid_color_deck(
     State(state): State<SharedState>,
-    Path(ch_idx): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(body): Json<AddSolidColorDeckBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::AddSolidColorDeck {
-            channel_idx: ch_idx,
+            channel_uuid,
             color: body.color,
         })
         .await
@@ -280,15 +272,15 @@ pub async fn add_solid_color_deck(
     }
 }
 
-#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/camera", params(("ch_idx" = usize, Path, description = "Channel index")), request_body = AddCameraDeckBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/camera", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = AddCameraDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_camera_deck(
     State(state): State<SharedState>,
-    Path(ch_idx): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(body): Json<AddCameraDeckBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::AddCameraDeck {
-            channel_idx: ch_idx,
+            channel_uuid,
             camera_id: body.camera_id,
         })
         .await
@@ -298,16 +290,16 @@ pub async fn add_camera_deck(
     }
 }
 
-#[utoipa::path(post, path = "/api/decks/move", request_body = MoveDeckBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
-pub async fn move_deck(
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/depth", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = AddDepthSensorDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Depth Sensors")]
+pub async fn add_depth_sensor_deck(
     State(state): State<SharedState>,
-    Json(body): Json<MoveDeckBody>,
+    Path(channel_uuid): Path<String>,
+    Json(body): Json<AddDepthSensorDeckBody>,
 ) -> impl IntoResponse {
     match state
-        .send_command(EngineCommand::MoveDeck {
-            src_ch: body.src_ch,
-            src_deck: body.src_deck,
-            dst_ch: body.dst_ch,
+        .send_command(EngineCommand::AddDepthSensorDeck {
+            channel_uuid,
+            depth_sensor_id: body.depth_sensor_id,
         })
         .await
     {
@@ -316,14 +308,33 @@ pub async fn move_deck(
     }
 }
 
-#[utoipa::path(post, path = "/api/decks/reorder", request_body = ReorderDeckBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/move", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = MoveDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck or destination channel not found")), tag = "Decks")]
+pub async fn move_deck(
+    State(state): State<SharedState>,
+    Path(deck_uuid): Path<String>,
+    Json(body): Json<MoveDeckBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::MoveDeck {
+            deck_uuid,
+            dst_channel_uuid: body.dst_channel_uuid,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(put, path = "/api/channels/{channel_uuid}/decks/reorder", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = ReorderDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn reorder_deck(
     State(state): State<SharedState>,
+    Path(channel_uuid): Path<String>,
     Json(body): Json<ReorderDeckBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::ReorderDeck {
-            ch: body.ch,
+            channel_uuid,
             from_idx: body.from_idx,
             to_idx: body.to_idx,
         })
@@ -339,16 +350,15 @@ pub struct DeckRenderFpsBody {
     pub render_fps: DeckRenderFps,
 }
 
-#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/render-fps", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckRenderFpsBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/render-fps", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DeckRenderFpsBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn set_render_fps(
     State(state): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<DeckRenderFpsBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetDeckRenderFps {
-            channel_idx: ch_idx,
-            deck_idx,
+            deck_uuid,
             render_fps: body.render_fps,
         })
         .await
@@ -358,16 +368,15 @@ pub async fn set_render_fps(
     }
 }
 
-#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/transparent", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckBoolBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/transparent", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DeckBoolBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn set_transparent(
     State(state): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<DeckBoolBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetDeckTransparent {
-            channel_idx: ch_idx,
-            deck_idx,
+            deck_uuid,
             transparent: body.value,
         })
         .await
@@ -377,16 +386,15 @@ pub async fn set_transparent(
     }
 }
 
-#[utoipa::path(put, path = "/api/channels/{ch_idx}/decks/{deck_idx}/scaling-mode", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = DeckScalingModeBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/scaling-mode", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DeckScalingModeBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn set_scaling_mode(
     State(state): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<DeckScalingModeBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetDeckScalingMode {
-            channel_idx: ch_idx,
-            deck_idx,
+            deck_uuid,
             mode: body.mode,
         })
         .await
@@ -429,7 +437,16 @@ pub async fn set_param(
     }
 }
 
-/// POST /api/command — generic command passthrough (not documented in OpenAPI due to large enum body)
+/// Applies any `EngineCommand` sent as JSON and returns its `CommandResult`.
+///
+/// The body is an externally-tagged `EngineCommand`, documented as unconstrained
+/// JSON: the enum has no `ToSchema` derive, and a hand-written approximation of
+/// several hundred variants would drift from the real vocabulary. Use the typed
+/// routes for a documented body.
+#[utoipa::path(post, path = "/api/command",
+    request_body = serde_json::Value,
+    responses((status = 200, body = CommandResult)),
+    tag = "System")]
 pub async fn generic_command(
     State(state): State<SharedState>,
     Json(cmd): Json<EngineCommand>,
@@ -442,16 +459,13 @@ pub async fn generic_command(
 
 // ── Video Playback ─────────────────────────────────────────────────
 
-#[utoipa::path(post, path = "/api/channels/{ch}/decks/{dk}/video/toggle-play", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), responses((status = 200, body = CommandResult)), tag = "Video")]
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/video/toggle-play", params(("deck_uuid" = String, Path, description = "Deck UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Video")]
 pub async fn video_toggle_play(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::VideoTogglePlay {
-            channel_idx: ch,
-            deck_idx: dk,
-        })
+        .send_command(EngineCommand::VideoTogglePlay { deck_uuid })
         .await
     {
         Ok(r) => command_response(r),
@@ -464,16 +478,15 @@ pub struct VideoSeekBody {
     /// Seek position in seconds from the start of the video.
     pub position_secs: f64,
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/video/seek", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = VideoSeekBody, responses((status = 200, body = CommandResult)), tag = "Video")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/video/seek", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = VideoSeekBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Video")]
 pub async fn video_seek(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<VideoSeekBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::VideoSeek {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             position_secs: b.position_secs,
         })
         .await
@@ -488,16 +501,15 @@ pub struct VideoSpeedBody {
     /// Playback speed multiplier (1.0 = normal speed).
     pub speed: f64,
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/video/speed", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = VideoSpeedBody, responses((status = 200, body = CommandResult)), tag = "Video")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/video/speed", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = VideoSpeedBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Video")]
 pub async fn video_set_speed(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<VideoSpeedBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::VideoSetSpeed {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             speed: b.speed,
         })
         .await
@@ -512,16 +524,15 @@ pub struct VideoLoopModeBody {
     /// Loop behaviour for the video.
     pub mode: crate::video::LoopMode,
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/video/loop-mode", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = VideoLoopModeBody, responses((status = 200, body = CommandResult)), tag = "Video")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/video/loop-mode", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = VideoLoopModeBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Video")]
 pub async fn video_set_loop_mode(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<VideoLoopModeBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::VideoSetLoopMode {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             mode: b.mode,
         })
         .await
@@ -536,16 +547,15 @@ pub struct VideoPointBody {
     /// Time position in seconds.
     pub secs: f64,
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/video/in-point", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = VideoPointBody, responses((status = 200, body = CommandResult)), tag = "Video")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/video/in-point", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = VideoPointBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Video")]
 pub async fn video_set_in_point(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<VideoPointBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::VideoSetInPoint {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             secs: b.secs,
         })
         .await
@@ -554,16 +564,15 @@ pub async fn video_set_in_point(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/video/out-point", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = VideoPointBody, responses((status = 200, body = CommandResult)), tag = "Video")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/video/out-point", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = VideoPointBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Video")]
 pub async fn video_set_out_point(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<VideoPointBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::VideoSetOutPoint {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             secs: b.secs,
         })
         .await
@@ -572,16 +581,13 @@ pub async fn video_set_out_point(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(delete, path = "/api/channels/{ch}/decks/{dk}/video/in-out-points", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), responses((status = 200, body = CommandResult)), tag = "Video")]
+#[utoipa::path(delete, path = "/api/decks/{deck_uuid}/video/in-out-points", params(("deck_uuid" = String, Path, description = "Deck UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Video")]
 pub async fn video_clear_in_out(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::VideoClearInOutPoints {
-            channel_idx: ch,
-            deck_idx: dk,
-        })
+        .send_command(EngineCommand::VideoClearInOutPoints { deck_uuid })
         .await
     {
         Ok(r) => command_response(r),
@@ -596,16 +602,15 @@ pub struct AutoTransBoolBody {
     /// Boolean toggle value.
     pub value: bool,
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/auto-transition/enabled", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = AutoTransBoolBody, responses((status = 200, body = CommandResult)), tag = "Auto Transitions")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/auto-transition/enabled", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = AutoTransBoolBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Auto Transitions")]
 pub async fn set_auto_transition_enabled(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<AutoTransBoolBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetAutoTransitionEnabled {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             enabled: b.value,
         })
         .await
@@ -614,16 +619,15 @@ pub async fn set_auto_transition_enabled(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/auto-transition/trigger", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = AutoTransBoolBody, responses((status = 200, body = CommandResult)), tag = "Auto Transitions")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/auto-transition/trigger", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = AutoTransBoolBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Auto Transitions")]
 pub async fn set_auto_transition_trigger(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<AutoTransBoolBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetAutoTransitionTrigger {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             clip_end: b.value,
         })
         .await
@@ -640,16 +644,15 @@ pub struct DurationBody {
     /// Unit of the duration (seconds or beats).
     pub unit: crate::channel::DurationUnit,
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/auto-transition/play-duration", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = DurationBody, responses((status = 200, body = CommandResult)), tag = "Auto Transitions")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/auto-transition/play-duration", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DurationBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Auto Transitions")]
 pub async fn set_auto_transition_play_duration(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<DurationBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetAutoTransitionPlayDuration {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             value: b.value,
             unit: b.unit,
         })
@@ -659,16 +662,15 @@ pub async fn set_auto_transition_play_duration(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/auto-transition/duration", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = DurationBody, responses((status = 200, body = CommandResult)), tag = "Auto Transitions")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/auto-transition/duration", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = DurationBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Auto Transitions")]
 pub async fn set_auto_transition_duration(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<DurationBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetAutoTransitionDuration {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             value: b.value,
             unit: b.unit,
         })
@@ -684,16 +686,15 @@ pub struct ShaderNameBody {
     /// Shader name, or null to clear.
     pub shader_name: Option<String>,
 }
-#[utoipa::path(put, path = "/api/channels/{ch}/decks/{dk}/auto-transition/shader", params(("ch" = usize, Path, description = "Channel index"), ("dk" = usize, Path, description = "Deck index")), request_body = ShaderNameBody, responses((status = 200, body = CommandResult)), tag = "Auto Transitions")]
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/auto-transition/shader", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = ShaderNameBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Auto Transitions")]
 pub async fn set_auto_transition_shader(
     State(s): State<SharedState>,
-    Path((ch, dk)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(b): Json<ShaderNameBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetAutoTransitionShader {
-            channel_idx: ch,
-            deck_idx: dk,
+            deck_uuid,
             shader_name: b.shader_name,
         })
         .await
@@ -710,15 +711,15 @@ pub struct NdiSourceBody {
     /// Name of the NDI source to receive.
     pub source_name: String,
 }
-#[utoipa::path(post, path = "/api/channels/{ch}/decks/ndi", params(("ch" = usize, Path, description = "Channel index")), request_body = NdiSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/ndi", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = NdiSourceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_ndi_deck(
     State(s): State<SharedState>,
-    Path(ch): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(b): Json<NdiSourceBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddNdiDeck {
-            channel_idx: ch,
+            channel_uuid,
             source_name: b.source_name,
         })
         .await
@@ -733,15 +734,15 @@ pub struct SyphonSourceBody {
     /// Name of the Syphon server to receive.
     pub server_name: String,
 }
-#[utoipa::path(post, path = "/api/channels/{ch}/decks/syphon", params(("ch" = usize, Path, description = "Channel index")), request_body = SyphonSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/syphon", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = SyphonSourceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_syphon_deck(
     State(s): State<SharedState>,
-    Path(ch): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(b): Json<SyphonSourceBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddSyphonDeck {
-            channel_idx: ch,
+            channel_uuid,
             server_name: b.server_name,
         })
         .await
@@ -758,15 +759,15 @@ pub struct SrtSourceBody {
     /// SRT connection mode (caller or listener).
     pub mode: crate::stream::SrtMode,
 }
-#[utoipa::path(post, path = "/api/channels/{ch}/decks/srt", params(("ch" = usize, Path, description = "Channel index")), request_body = SrtSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/srt", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = SrtSourceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_srt_deck(
     State(s): State<SharedState>,
-    Path(ch): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(b): Json<SrtSourceBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddSrtDeck {
-            channel_idx: ch,
+            channel_uuid,
             url: b.url,
             mode: b.mode,
         })
@@ -782,15 +783,15 @@ pub struct HlsSourceBody {
     /// HLS stream URL (.m3u8).
     pub url: String,
 }
-#[utoipa::path(post, path = "/api/channels/{ch}/decks/hls", params(("ch" = usize, Path, description = "Channel index")), request_body = HlsSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/hls", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = HlsSourceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_hls_deck(
     State(s): State<SharedState>,
-    Path(ch): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(b): Json<HlsSourceBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddHlsDeck {
-            channel_idx: ch,
+            channel_uuid,
             url: b.url,
         })
         .await
@@ -805,15 +806,15 @@ pub struct DashSourceBody {
     /// DASH stream URL (.mpd).
     pub url: String,
 }
-#[utoipa::path(post, path = "/api/channels/{ch}/decks/dash", params(("ch" = usize, Path, description = "Channel index")), request_body = DashSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/dash", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = DashSourceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_dash_deck(
     State(s): State<SharedState>,
-    Path(ch): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(b): Json<DashSourceBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddDashDeck {
-            channel_idx: ch,
+            channel_uuid,
             url: b.url,
         })
         .await
@@ -830,15 +831,15 @@ pub struct RtmpSourceBody {
     /// Connection mode (Pull or Listen).
     pub mode: crate::stream::RtmpMode,
 }
-#[utoipa::path(post, path = "/api/channels/{ch}/decks/rtmp", params(("ch" = usize, Path, description = "Channel index")), request_body = RtmpSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/rtmp", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = RtmpSourceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_rtmp_deck(
     State(s): State<SharedState>,
-    Path(ch): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(b): Json<RtmpSourceBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddRtmpDeck {
-            channel_idx: ch,
+            channel_uuid,
             url: b.url,
             mode: b.mode,
         })
@@ -854,15 +855,15 @@ pub struct HtmlSourceBody {
     /// HTML content URL or local file path.
     pub url: String,
 }
-#[utoipa::path(post, path = "/api/channels/{ch}/decks/html", params(("ch" = usize, Path, description = "Channel index")), request_body = HtmlSourceBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/html", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = HtmlSourceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
 pub async fn add_html_deck(
     State(s): State<SharedState>,
-    Path(ch): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(b): Json<HtmlSourceBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::AddHtmlDeck {
-            channel_idx: ch,
+            channel_uuid,
             url: b.url,
         })
         .await
@@ -872,16 +873,13 @@ pub async fn add_html_deck(
     }
 }
 
-#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/{deck_idx}/html/reload", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/html/reload", params(("deck_uuid" = String, Path, description = "Deck UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn reload_html_deck(
     State(s): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::ReloadHtmlDeck {
-            channel_idx: ch_idx,
-            deck_idx,
-        })
+        .send_command(EngineCommand::ReloadHtmlDeck { deck_uuid })
         .await
     {
         Ok(r) => command_response(r),
@@ -896,17 +894,14 @@ pub struct HtmlInteractiveBody {
     pub open: bool,
 }
 
-#[utoipa::path(post, path = "/api/channels/{ch_idx}/decks/{deck_idx}/html/interactive", params(("ch_idx" = usize, Path, description = "Channel index"), ("deck_idx" = usize, Path, description = "Deck index within the channel")), request_body = HtmlInteractiveBody, responses((status = 200, body = CommandResult)), tag = "Decks")]
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/html/interactive", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = HtmlInteractiveBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Decks")]
 pub async fn set_html_interactive(
     State(s): State<SharedState>,
-    Path((ch_idx, deck_idx)): Path<(usize, usize)>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<HtmlInteractiveBody>,
 ) -> impl IntoResponse {
     let cmd = if body.open {
-        EngineCommand::OpenHtmlInteractive {
-            channel_idx: ch_idx,
-            deck_idx,
-        }
+        EngineCommand::OpenHtmlInteractive { deck_uuid }
     } else {
         EngineCommand::CloseHtmlInteractive
     };
@@ -916,26 +911,15 @@ pub async fn set_html_interactive(
     }
 }
 
-// ── Missing Parity Routes ─────────────────────────────────────────
+// ── Generator parameters ──────────────────────────────────────────
 
-#[derive(Deserialize, ToSchema)]
-pub struct ResetParamsBody {
-    /// Channel index of the deck whose params to reset.
-    pub channel_idx: usize,
-    /// Deck index within the channel.
-    pub deck_idx: usize,
-}
-
-#[utoipa::path(post, path = "/api/params/reset", request_body = ResetParamsBody, responses((status = 200, body = CommandResult)), tag = "Params")]
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/params/reset", params(("deck_uuid" = String, Path, description = "Deck UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Params")]
 pub async fn reset_generator_params(
     State(s): State<SharedState>,
-    Json(b): Json<ResetParamsBody>,
+    Path(deck_uuid): Path<String>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::ResetGeneratorParamsToDefaults {
-            channel_idx: b.channel_idx,
-            deck_idx: b.deck_idx,
-        })
+        .send_command(EngineCommand::ResetGeneratorParamsToDefaults { deck_uuid })
         .await
     {
         Ok(r) => command_response(r),
@@ -952,19 +936,19 @@ pub struct RequestAnalyzerBody {
     pub options: serde_json::Value,
 }
 
-#[utoipa::path(post, path = "/api/decks/{deck_id}/analyzers",
-    params(("deck_id" = String, Path, description = "Deck UUID")),
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/analyzers",
+    params(("deck_uuid" = String, Path, description = "Deck UUID")),
     request_body = RequestAnalyzerBody,
-    responses((status = 200, body = CommandResult)),
+    responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")),
     tag = "Analyzers")]
 pub async fn request_analyzer(
     State(state): State<SharedState>,
-    Path(deck_id): Path<String>,
+    Path(deck_uuid): Path<String>,
     Json(body): Json<RequestAnalyzerBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::RequestAnalyzer {
-            deck_id,
+            deck_id: deck_uuid,
             analyzer_type: body.analyzer_type,
             options: body.options,
         })
@@ -975,20 +959,20 @@ pub async fn request_analyzer(
     }
 }
 
-#[utoipa::path(delete, path = "/api/decks/{deck_id}/analyzers/{analyzer_type}",
+#[utoipa::path(delete, path = "/api/decks/{deck_uuid}/analyzers/{analyzer_type}",
     params(
-        ("deck_id" = String, Path, description = "Deck UUID"),
+        ("deck_uuid" = String, Path, description = "Deck UUID"),
         ("analyzer_type" = String, Path, description = "Analyzer type to release"),
     ),
-    responses((status = 200, body = CommandResult)),
+    responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")),
     tag = "Analyzers")]
 pub async fn release_analyzer(
     State(state): State<SharedState>,
-    Path((deck_id, analyzer_type)): Path<(String, String)>,
+    Path((deck_uuid, analyzer_type)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::ReleaseAnalyzer {
-            deck_id,
+            deck_id: deck_uuid,
             analyzer_type,
         })
         .await

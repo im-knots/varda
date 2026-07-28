@@ -82,7 +82,9 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                         }
                         // Fallback: double-click adds to first channel
                         if resp.double_clicked() {
-                            actions.session.shader_to_add = Some((0, *gen_idx));
+                            if let Some(ch) = data.channels.first() {
+                                actions.session.shader_to_add = Some((ch.uuid.clone(), *gen_idx));
+                            }
                         }
                         resp.on_hover_text(
                             "Drag to a channel to create a deck, or double-click to add to Ch 0",
@@ -128,7 +130,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     );
                     for ch in &data.channels {
                         if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
-                            actions.session.open_image_dialog_for_channel = Some(ch.ch_idx);
+                            actions.session.open_image_dialog_for_channel = Some(ch.uuid.clone());
                         }
                     }
                 });
@@ -147,7 +149,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     );
                     for ch in &data.channels {
                         if ui.button(format!("📁 Load to {}", ch.name)).clicked() {
-                            actions.session.open_video_dialog_for_channel = Some(ch.ch_idx);
+                            actions.session.open_video_dialog_for_channel = Some(ch.uuid.clone());
                         }
                     }
                 });
@@ -176,6 +178,42 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             ui.ctx().memory_mut(|mem| {
                                 mem.data
                                     .insert_temp(egui::Id::new("__lib_dnd_cam_id"), *cam_id);
+                            });
+                        }
+                    }
+                });
+
+            ui.add_space(4.0);
+
+            // === DEPTH SENSORS ===
+            let depth_header =
+                egui::RichText::new(format!("🛰 Depth Sensors ({})", data.depth_sensors.len()))
+                    .strong();
+            egui::CollapsingHeader::new(depth_header)
+                .id_salt("lib_depth_sensors")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if ui.small_button("🔄 Rescan").clicked() {
+                        actions.commands.push(EngineCommand::RescanDepthSensors);
+                    }
+                    if data.depth_sensors.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No depth sensors detected")
+                                .small()
+                                .weak(),
+                        );
+                    }
+                    for (name, sensor_id) in &data.depth_sensors {
+                        let item_id = egui::Id::new(("lib_depth", *sensor_id));
+                        ui.dnd_drag_source(item_id, LibraryDrag::DepthSensor(*sensor_id), |ui| {
+                            ui.label(egui::RichText::new(format!("  🛰 {}", name)).size(12.0));
+                        });
+                        if ui.ctx().is_being_dragged(item_id) {
+                            ui.ctx().memory_mut(|mem| {
+                                mem.data.insert_temp(
+                                    egui::Id::new("__lib_dnd_depth_sensor_id"),
+                                    *sensor_id,
+                                );
                             });
                         }
                     }
@@ -796,10 +834,12 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                 });
                             }
                             if resp.double_clicked() {
-                                actions.commands.push(EngineCommand::LoadDeckPreset {
-                                    channel_idx: 0,
-                                    preset_idx: idx,
-                                });
+                                if let Some(ch) = data.channels.first() {
+                                    actions.commands.push(EngineCommand::LoadDeckPreset {
+                                        channel_uuid: ch.uuid.clone(),
+                                        preset_name: name.clone(),
+                                    });
+                                }
                             }
                             resp.on_hover_text("Drag to a channel to load this deck preset");
                         }
@@ -836,8 +876,8 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             }
                             if resp.double_clicked() {
                                 actions.commands.push(EngineCommand::LoadChannelPreset {
-                                    target_channel: None,
-                                    preset_idx: idx,
+                                    target_channel_uuid: None,
+                                    preset_name: name.clone(),
                                 });
                             }
                             resp.on_hover_text("Double-click to add this channel to the mixer");
