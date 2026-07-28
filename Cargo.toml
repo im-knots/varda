@@ -84,9 +84,10 @@ servo = { version = "0.1.0", optional = true }
 url = { version = "2.5", optional = true }
 euclid = { version = "0.22", optional = true }
 keyboard-types = { version = "0.8", optional = true }
-# Depth sensor backend (Kinect v1 via libfreenect). Optional native FFI dep;
-# see spec/depth-sensors.md. Gated behind the default-off `depth` feature so
-# builds without libfreenect installed still compile.
+# Depth sensor backend (Kinect v1 via libfreenect). Native FFI dep; see
+# spec/depth-sensors.md. Gated behind the default-on `depth` feature. Builds
+# without libfreenect installed must pass `--no-default-features` (or drop
+# `depth` from the feature set).
 freenectrs = { version = "0.1.0", optional = true }
 
 # Syphon client FFI (macOS only). The syphon module is compiled unconditionally
@@ -98,7 +99,7 @@ objc2-foundation = "0.3"
 objc2-metal      = "0.3"
 
 [features]
-default = ["face-detection", "html"]
+default = ["face-detection", "html", "depth"]
 # ML-backed analyzers (ONNX Runtime + ndarray). Disabled for the x86_64 macOS
 # slice to keep the Intel build ort-free. See spec/plugin-architecture.md (decision 5).
 face-detection = ["dep:ort", "dep:ndarray"]
@@ -116,10 +117,11 @@ face-detection = ["dep:ort", "dep:ndarray"]
 # profile. Disable with `--no-default-features` (re-add `face-detection` as needed).
 # See spec/html-source.md "Decision: html on by default".
 html = ["dep:servo", "dep:url", "dep:euclid", "dep:keyboard-types"]
-# Depth sensor / point-cloud input (Kinect v1 via libfreenect). Default-off:
-# only the FreenectBackend module is gated — the DepthSensorManager integration
-# surface (manager, deck integration, persistence, API, UI, tests) always
-# compiles via a mock backend. See spec/depth-sensors.md.
+# Depth sensor / point-cloud input (Kinect v1 via libfreenect). Default-on
+# (opt out with `--no-default-features`): only the FreenectBackend module is
+# gated — the DepthSensorManager integration surface (manager, deck integration,
+# persistence, API, UI, tests) always compiles via a mock backend when the
+# feature is off. See spec/depth-sensors.md.
 depth = ["dep:freenectrs"]
 test-fixtures = []
 url = ["dep:url"]

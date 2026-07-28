@@ -91,6 +91,7 @@ MEDIA_LIBS="
   liblzma libbz2 libsnappy
   libva libva-drm libva-x11 libva-wayland
   libOpenCL
+  libfreenect libusb-1.0
 "
 
 echo "==> Bundling media shared libraries..."

@@ -47,6 +47,7 @@ jobs:
             libsrt-gnutls-dev \
             libasound2-dev \
             libv4l-dev \
+            libfreenect-dev \
             libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev \
             libgtk-3-dev
 
@@ -97,6 +98,9 @@ jobs:
           brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
           brew install cmake pkg-config create-dmg nasm
           brew install --cask libndi
+          # libfreenect (Kinect v1) backs the default-on `depth` feature on the
+          # arm64 slice. See spec/depth-sensors.md.
+          brew install libfreenect
 
       - name: Build arm64 .app
         run: |
@@ -183,7 +187,11 @@ jobs:
 
       - name: Build release binary
         shell: pwsh
-        run: cargo build --release
+        # The `depth` feature (Kinect v1 via libfreenect) is excluded on Windows:
+        # libfreenect v1 has no vcpkg port and needs a manual libusb-win32/CMake
+        # build. The other defaults (face-detection, html) are re-added explicitly.
+        # See spec/depth-sensors.md ("Platform Support").
+        run: cargo build --release --no-default-features --features face-detection,html
 
       - name: Package portable ZIP
         shell: pwsh

@@ -53,6 +53,10 @@ if [ "$SKIP_DEPS" = false ]; then
   brew tap homebrew-ffmpeg/ffmpeg
   brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
   brew install cmake pkg-config create-dmg
+  # libfreenect (Kinect v1) backs the default-on `depth` feature on the arm64
+  # slice. See spec/depth-sensors.md. The x86_64 slice builds
+  # --no-default-features, so depth (and libfreenect) is excluded there.
+  brew install libfreenect
 fi
 
 # Cargo feature flags for a given target. The face-detection feature pulls in
@@ -70,14 +74,27 @@ cargo_features_for() {
   esac
 }
 
+# Homebrew's arm64 prefix (/opt/homebrew/lib) is not on the default linker
+# search path, so the `depth` feature's `-lfreenect` won't resolve without it.
+# Only the default-feature (arm64) slice pulls in libfreenect; the x86_64 slice
+# builds --no-default-features, so we scope the search path to the native build.
+link_env_for() {
+  case "$(cargo_features_for "$1")" in
+    *--no-default-features*) echo "" ;;
+    *) echo "LIBRARY_PATH=$(brew --prefix)/lib:${LIBRARY_PATH:-}" ;;
+  esac
+}
+
 # --- Build architectures ---
 if [ "$SKIP_BUILD" = false ]; then
   echo "==> Building $NATIVE_TARGET..."
-  cargo build --release --target "$NATIVE_TARGET" $(cargo_features_for "$NATIVE_TARGET")
+  env $(link_env_for "$NATIVE_TARGET") \
+    cargo build --release --target "$NATIVE_TARGET" $(cargo_features_for "$NATIVE_TARGET")
 
   if [ "$NATIVE_ONLY" = false ]; then
     echo "==> Building $CROSS_TARGET (cross)..."
-    cargo build --release --target "$CROSS_TARGET" $(cargo_features_for "$CROSS_TARGET")
+    env $(link_env_for "$CROSS_TARGET") \
+      cargo build --release --target "$CROSS_TARGET" $(cargo_features_for "$CROSS_TARGET")
   fi
 fi
 
@@ -129,7 +146,7 @@ FRAMEWORKS="Varda.app/Contents/Frameworks"
 # This is authoritative — we copy exactly the filenames the linker recorded,
 # not whatever find happens to return.
 BUNDLED_LIBS=()
-for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice libavfilter libsrt; do
+for lib in libavcodec libavformat libavutil libswscale libswresample libavdevice libavfilter libsrt libfreenect; do
   old_path=$(otool -L "$BINARY" | grep "$lib" | awk '{print $1}' | head -1 || true)
   [ -z "$old_path" ] && continue
   case "$old_path" in @*) continue ;; esac  # already relative — skip
