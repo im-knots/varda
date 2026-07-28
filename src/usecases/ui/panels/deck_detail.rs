@@ -63,7 +63,7 @@ fn render_depth_controls(
         ("Yaw", "orbit_yaw", 0.5),
         ("Pitch", "orbit_pitch", 0.5),
         ("Zoom", "zoom", 0.18),
-        ("Points", "point_size", 0.07),
+        ("Points", "point_size", 0.05),
         ("Near", "depth_min", 0.05),
         ("Far", "depth_max", 0.5),
         ("Seed", "seed", 0.0),

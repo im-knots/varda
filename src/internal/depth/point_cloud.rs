@@ -58,7 +58,7 @@ impl Default for PointCloudParams {
             orbit_yaw: 0.0,
             orbit_pitch: 0.0,
             zoom: 1.0,
-            point_size: 2.0,
+            point_size: 1.0,
             color_mode: ColorMode::DepthRamp,
             depth_min_mm: 400.0,
             depth_max_mm: 4000.0,
@@ -203,7 +203,7 @@ impl PointCloudPipeline {
                 params.orbit_yaw,
                 params.orbit_pitch,
                 params.zoom.max(0.01),
-                params.point_size.max(1.0),
+                params.point_size.max(0.0),
             ],
             misc: [
                 params.color_mode.as_f32(),
@@ -300,7 +300,7 @@ mod tests {
     fn default_params_are_sane() {
         let p = PointCloudParams::default();
         assert!(p.zoom > 0.0);
-        assert!(p.point_size >= 1.0);
+        assert!(p.point_size > 0.0);
         assert!(p.depth_min_mm < p.depth_max_mm);
         // New animation params default to off so legacy behaviour is unchanged.
         assert_eq!(p.seed, 0.0);

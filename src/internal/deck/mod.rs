@@ -684,7 +684,7 @@ impl Deck {
             "orbit_yaw" => p.orbit_yaw = (v - 0.5) * std::f32::consts::TAU,
             "orbit_pitch" => p.orbit_pitch = (v - 0.5) * std::f32::consts::PI,
             "zoom" => p.zoom = 0.1 + v * 4.9,
-            "point_size" => p.point_size = 1.0 + v * 15.0,
+            "point_size" => p.point_size = 0.25 + v * 9.75,
             "color_mode" => {
                 p.color_mode = match (v * 3.0) as u32 {
                     0 => ColorMode::Rgb,
