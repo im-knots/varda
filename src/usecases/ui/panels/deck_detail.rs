@@ -59,13 +59,16 @@ fn render_depth_controls(
     ui.label(egui::RichText::new("🛰 Point Cloud").strong().size(12.0));
 
     // (label, param name, default normalized value)
-    let sliders: [(&str, &str, f32); 6] = [
+    let sliders: [(&str, &str, f32); 9] = [
         ("Yaw", "orbit_yaw", 0.5),
         ("Pitch", "orbit_pitch", 0.5),
         ("Zoom", "zoom", 0.18),
-        ("Points", "point_size", 0.07),
+        ("Points", "point_size", 0.05),
         ("Near", "depth_min", 0.05),
         ("Far", "depth_max", 0.5),
+        ("Seed", "seed", 0.0),
+        ("Drift", "drift", 0.0),
+        ("Disruption", "disruption", 0.0),
     ];
     for (label, name, default) in sliders {
         let id = ui.id().with(("depth_ctrl", &deck.uuid, name));

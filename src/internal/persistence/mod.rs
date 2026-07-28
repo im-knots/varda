@@ -494,7 +494,21 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                         "depth_sensor" => {
                             // Store the sensor display name (strip the 🛰 prefix we add)
                             let name = slot.deck.source_name().trim_start_matches("🛰 ").to_string();
-                            SourceConfig::DepthSensor { name }
+                            let p = &slot.deck.point_cloud_params;
+                            let params = Some(crate::scene::DepthParamsConfig {
+                                orbit_yaw: p.orbit_yaw,
+                                orbit_pitch: p.orbit_pitch,
+                                zoom: p.zoom,
+                                point_size: p.point_size,
+                                color_mode: p.color_mode.as_f32() as u8,
+                                depth_min_mm: p.depth_min_mm,
+                                depth_max_mm: p.depth_max_mm,
+                                solid_color: p.solid_color,
+                                seed: p.seed,
+                                drift: p.drift,
+                                disruption: p.disruption,
+                            });
+                            SourceConfig::DepthSensor { name, params }
                         }
                         _ => return None,
                     };
@@ -1444,7 +1458,7 @@ pub(crate) fn restore_deck(
                 }
             }
         }
-        SourceConfig::DepthSensor { name } => {
+        SourceConfig::DepthSensor { name, params } => {
             // Match the sensor by name in the manager's device list, then open it.
             // If absent (e.g. `depth` feature off or unplugged), skip with error.
             let device = depth_manager
@@ -1458,7 +1472,7 @@ pub(crate) fn restore_deck(
             let (src_w, src_h) =
                 crate::depth::open_depth_sensor(depth_manager, device.id, &context.device)
                     .with_context(|| format!("Failed to open depth sensor '{}'", name))?;
-            Deck::new_from_depth_sensor(
+            let mut deck = Deck::new_from_depth_sensor(
                 context,
                 device.id,
                 &device.name,
@@ -1466,7 +1480,24 @@ pub(crate) fn restore_deck(
                 src_h,
                 render_width,
                 render_height,
-            )?
+            )?;
+            if let Some(p) = params {
+                use crate::depth::point_cloud::{ColorMode, PointCloudParams};
+                deck.point_cloud_params = PointCloudParams {
+                    orbit_yaw: p.orbit_yaw,
+                    orbit_pitch: p.orbit_pitch,
+                    zoom: p.zoom,
+                    point_size: p.point_size,
+                    color_mode: ColorMode::from_u8(p.color_mode),
+                    depth_min_mm: p.depth_min_mm,
+                    depth_max_mm: p.depth_max_mm,
+                    solid_color: p.solid_color,
+                    seed: p.seed,
+                    drift: p.drift,
+                    disruption: p.disruption,
+                };
+            }
+            deck
         }
     };
 
@@ -1530,7 +1561,7 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
             deck.source_name().trim_start_matches("📺 ") == url
         }
         ("html", SourceConfig::Html { url }) => deck.source_name().trim_start_matches("🌐 ") == url,
-        ("depth_sensor", SourceConfig::DepthSensor { name }) => {
+        ("depth_sensor", SourceConfig::DepthSensor { name, .. }) => {
             deck.source_name().trim_start_matches("🛰 ") == name
         }
         _ => false,
