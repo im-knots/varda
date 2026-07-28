@@ -293,7 +293,7 @@ impl Deck {
             Some(super::ExternalSourceKind::DepthSensor(_))
         );
         if is_depth {
-            self.render_point_cloud(context, source_to_b, cmd_buffers);
+            self.render_point_cloud(context, source_to_b, time, cmd_buffers);
         }
 
         let generator_target = if source_to_b {
@@ -1095,6 +1095,7 @@ impl Deck {
         &mut self,
         context: &GpuContext,
         source_to_b: bool,
+        time: f32,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) {
         let (Some(intr), Some((sw, sh))) = (self.depth_intrinsics, self.depth_source_size) else {
@@ -1127,6 +1128,7 @@ impl Deck {
             sh,
             self.texture.width(),
             self.texture.height(),
+            time,
             &self.point_cloud_params,
         );
         pipeline.render(

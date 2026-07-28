@@ -401,7 +401,43 @@ pub enum SourceConfig {
     /// HTML content source (URL or file path, rendered via Servo)
     Html { url: String },
     /// Depth sensor (Kinect/LIDAR point cloud, matched by name on restore)
-    DepthSensor { name: String },
+    DepthSensor {
+        name: String,
+        /// Point-cloud view params (None on legacy scenes → engine defaults)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        params: Option<DepthParamsConfig>,
+    },
+}
+
+/// Serializable point-cloud view params for depth-sensor decks. All fields are
+/// `#[serde(default)]` so older scenes (and scenes written before a field was
+/// added) deserialize cleanly. Stored denormalized (physical units), matching
+/// the runtime `PointCloudParams`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepthParamsConfig {
+    #[serde(default)]
+    pub orbit_yaw: f32,
+    #[serde(default)]
+    pub orbit_pitch: f32,
+    #[serde(default)]
+    pub zoom: f32,
+    #[serde(default)]
+    pub point_size: f32,
+    /// 0 = Rgb, 1 = DepthRamp, 2 = Solid
+    #[serde(default)]
+    pub color_mode: u8,
+    #[serde(default)]
+    pub depth_min_mm: f32,
+    #[serde(default)]
+    pub depth_max_mm: f32,
+    #[serde(default)]
+    pub solid_color: [f32; 3],
+    #[serde(default)]
+    pub seed: f32,
+    #[serde(default)]
+    pub drift: f32,
+    #[serde(default)]
+    pub disruption: f32,
 }
 
 // ── Effect ─────────────────────────────────────────────────────────
@@ -690,7 +726,7 @@ impl SourceConfig {
                     errors.push(format!("{}: HTML url is empty", prefix));
                 }
             }
-            SourceConfig::DepthSensor { name } => {
+            SourceConfig::DepthSensor { name, .. } => {
                 if name.trim().is_empty() {
                     errors.push(format!("{}: depth sensor name is empty", prefix));
                 }
@@ -1389,11 +1425,62 @@ mod tests {
     fn scene_config_roundtrip_depth_sensor_source() {
         let source = SourceConfig::DepthSensor {
             name: "Kinect v1 (#0)".to_string(),
+            params: None,
         };
         let json = serde_json::to_string(&source).unwrap();
         let restored: SourceConfig = serde_json::from_str(&json).unwrap();
         match restored {
-            SourceConfig::DepthSensor { name } => assert_eq!(name, "Kinect v1 (#0)"),
+            SourceConfig::DepthSensor { name, .. } => assert_eq!(name, "Kinect v1 (#0)"),
+            _ => panic!("Expected DepthSensor source"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_depth_sensor_params() {
+        let source = SourceConfig::DepthSensor {
+            name: "Kinect v1 (#0)".to_string(),
+            params: Some(DepthParamsConfig {
+                orbit_yaw: 0.3,
+                orbit_pitch: -0.2,
+                zoom: 1.5,
+                point_size: 4.0,
+                color_mode: 2,
+                depth_min_mm: 500.0,
+                depth_max_mm: 3500.0,
+                solid_color: [0.1, 0.2, 0.3],
+                seed: 0.05,
+                drift: 0.4,
+                disruption: 0.7,
+            }),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::DepthSensor {
+                params: Some(p), ..
+            } => {
+                assert_eq!(p.color_mode, 2);
+                assert_eq!(p.seed, 0.05);
+                assert_eq!(p.drift, 0.4);
+                assert_eq!(p.disruption, 0.7);
+            }
+            _ => panic!("Expected DepthSensor source with params"),
+        }
+    }
+
+    #[test]
+    fn scene_config_depth_sensor_legacy_json_has_no_params() {
+        // A scene written before point-cloud params existed omits the key entirely.
+        let json = r#"{"type":"DepthSensor","name":"Kinect v1 (#0)"}"#;
+        let restored: SourceConfig = serde_json::from_str(json).unwrap();
+        match restored {
+            SourceConfig::DepthSensor { name, params } => {
+                assert_eq!(name, "Kinect v1 (#0)");
+                assert!(
+                    params.is_none(),
+                    "legacy scenes must default params to None"
+                );
+            }
             _ => panic!("Expected DepthSensor source"),
         }
     }

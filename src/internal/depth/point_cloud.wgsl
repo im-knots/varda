@@ -19,6 +19,8 @@ struct Params {
     misc: vec4<f32>,
     // solid color rgb + unused
     solid: vec4<f32>,
+    // time (s), seed (jitter metres), drift, disruption
+    anim: vec4<f32>,
 };
 
 @group(0) @binding(0) var depth_tex: texture_2d<u32>;
@@ -30,6 +32,30 @@ struct VsOut {
     @location(0) color: vec3<f32>,
     @location(1) valid: f32,
 };
+
+// Stable per-point hash → 3 pseudo-random values in [0,1). Uses the point
+// index so every corner of a splat gets the identical offset (no tearing).
+fn hash3(n: u32) -> vec3<f32> {
+    var x = n * 747796405u + 2891336453u;
+    x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+    let a = (x >> 22u) ^ x;
+    let b = (a * 2246822519u) ^ a;
+    let c = (b * 3266489917u) ^ b;
+    return vec3<f32>(
+        f32(a & 0xffffffu) / 16777216.0,
+        f32(b & 0xffffffu) / 16777216.0,
+        f32(c & 0xffffffu) / 16777216.0,
+    );
+}
+
+// Cheap smooth vector field from position + time. Sums a few sines so points
+// sharing space are pushed coherently — reads as turbulence/mutual reaction.
+fn curl_field(pos: vec3<f32>, t: f32) -> vec3<f32> {
+    let fx = sin(pos.y * 3.1 + t * 1.3) + cos(pos.z * 2.7 - t * 0.9);
+    let fy = sin(pos.z * 2.9 + t * 1.1) + cos(pos.x * 3.3 - t * 1.7);
+    let fz = sin(pos.x * 2.5 + t * 0.7) + cos(pos.y * 3.7 - t * 1.2);
+    return vec3<f32>(fx, fy, fz) * 0.5;
+}
 
 fn hsv_ramp(t: f32) -> vec3<f32> {
     // Simple blue→red depth ramp (near = warm, far = cool inverted here).
@@ -77,6 +103,23 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     let pitch = params.view.y;
     let zoom = params.view.z;
     var p = vec3<f32>(x, y, z - 1.5);
+
+    // Per-point displacement: seed jitter + time drift + shared disruption field.
+    let t = params.anim.x;
+    let seed = params.anim.y;
+    let drift = params.anim.z;
+    let disruption = params.anim.w;
+    if (seed > 0.0 || drift > 0.0 || disruption > 0.0) {
+        let rnd = hash3(point_idx) * 2.0 - 1.0; // [-1,1)^3, stable per point
+        // Static jitter breaks the rigid grid.
+        var disp = rnd * seed;
+        // Drift animates each point's own offset over time.
+        let phase = t * (0.5 + drift) + f32(point_idx) * 0.0001;
+        disp += vec3<f32>(sin(phase + rnd.x * 6.28), sin(phase * 1.1 + rnd.y * 6.28), sin(phase * 0.9 + rnd.z * 6.28)) * (drift * 0.15);
+        // Disruption pushes points along a shared field so they react coherently.
+        disp += curl_field(p, t) * (disruption * 0.25);
+        p += disp;
+    }
 
     let cy_ = cos(yaw); let sy = sin(yaw);
     let cp = cos(pitch); let sp = sin(pitch);

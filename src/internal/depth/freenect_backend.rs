@@ -30,13 +30,13 @@ const KINECT_H: u32 = 480;
 /// `'static` (via `Box::leak`), mirroring the crate's own `kinect_live`
 /// example. The leak is bounded — one context + device per physical sensor ever
 /// opened — and reclaimed by the OS on exit. On `Drop` we explicitly stop the
-/// process thread and shut libfreenect down so the device is released cleanly.
+/// process thread so the capture thread's USB polling ends cleanly.
 ///
 /// The context spawns libfreenect's own USB process thread; we `try_recv` the
 /// latest depth (and optional RGB) frame each poll. Non-blocking by design so
 /// the manager's capture loop never stalls.
 pub struct FreenectBackend {
-    /// Leaked context — kept so `Drop` can stop the process thread + shutdown.
+    /// Leaked context — kept so `Drop` can stop the process thread.
     ctx: &'static FreenectContext,
     /// Leaked device — kept alive for the streams that borrow it.
     #[allow(dead_code)]
@@ -61,7 +61,8 @@ impl FreenectBackend {
     /// then feeds the stored streams' receivers for the session's lifetime.
     pub fn open(index: u32) -> Result<Self> {
         // Leak the context to `'static` so the device (and thus the streams)
-        // can be stored. Reclaimed on process exit; released via `Drop`.
+        // can be stored. Reclaimed on process exit; the process thread is
+        // stopped via `Drop`.
         let ctx: &'static FreenectContext = Box::leak(Box::new(
             freenect::FreenectContext::init_with_video()
                 .map_err(|e| anyhow::anyhow!("libfreenect init failed: {:?}", e))?,
@@ -118,8 +119,8 @@ impl FreenectBackend {
 impl Drop for FreenectBackend {
     fn drop(&mut self) {
         // Stop libfreenect's USB process thread. The context/device were leaked
-        // to `'static`, so their `Drop` (which would call this + shutdown) never
-        // runs — do it explicitly here to release the device cleanly.
+        // to `'static`, so their `Drop` never runs — stop the thread explicitly
+        // here so the capture thread's USB polling ends cleanly.
         if let Err(e) = self.ctx.stop_process_thread() {
             log::warn!("freenect: stop_process_thread failed on drop: {:?}", e);
         }

@@ -23,6 +23,14 @@ impl ColorMode {
             ColorMode::Solid => 2.0,
         }
     }
+
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => ColorMode::Rgb,
+            1 => ColorMode::DepthRamp,
+            _ => ColorMode::Solid,
+        }
+    }
 }
 
 /// User-facing point-cloud parameters (router-exposed).
@@ -36,6 +44,12 @@ pub struct PointCloudParams {
     pub depth_min_mm: f32,
     pub depth_max_mm: f32,
     pub solid_color: [f32; 3],
+    /// Per-point jitter amount (metres of max offset). `0` = rigid texel grid.
+    pub seed: f32,
+    /// Time-animated drift of the jitter offset (0 = static, higher = faster/larger flow).
+    pub drift: f32,
+    /// Strength of the shared procedural curl/noise displacement field (0 = off).
+    pub disruption: f32,
 }
 
 impl Default for PointCloudParams {
@@ -49,6 +63,9 @@ impl Default for PointCloudParams {
             depth_min_mm: 400.0,
             depth_max_mm: 4000.0,
             solid_color: [0.6, 0.9, 1.0],
+            seed: 0.0,
+            drift: 0.0,
+            disruption: 0.0,
         }
     }
 }
@@ -61,6 +78,8 @@ struct GpuParams {
     view: [f32; 4],
     misc: [f32; 4],
     solid: [f32; 4],
+    // time, seed, drift, disruption
+    anim: [f32; 4],
 }
 
 /// Point-cloud render pipeline. Target format is the deck texture format.
@@ -169,6 +188,7 @@ impl PointCloudPipeline {
         src_h: u32,
         target_w: u32,
         target_h: u32,
+        time: f32,
         params: &PointCloudParams,
     ) {
         let gpu = GpuParams {
@@ -197,6 +217,7 @@ impl PointCloudPipeline {
                 params.solid_color[2],
                 0.0,
             ],
+            anim: [time, params.seed, params.drift, params.disruption],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&[gpu]));
     }
@@ -268,6 +289,11 @@ mod tests {
         assert_eq!(ColorMode::Rgb.as_f32(), 0.0);
         assert_eq!(ColorMode::DepthRamp.as_f32(), 1.0);
         assert_eq!(ColorMode::Solid.as_f32(), 2.0);
+        // from_u8 is the persistence inverse of as_f32.
+        assert_eq!(ColorMode::from_u8(0), ColorMode::Rgb);
+        assert_eq!(ColorMode::from_u8(1), ColorMode::DepthRamp);
+        assert_eq!(ColorMode::from_u8(2), ColorMode::Solid);
+        assert_eq!(ColorMode::from_u8(99), ColorMode::Solid);
     }
 
     #[test]
@@ -276,6 +302,10 @@ mod tests {
         assert!(p.zoom > 0.0);
         assert!(p.point_size >= 1.0);
         assert!(p.depth_min_mm < p.depth_max_mm);
+        // New animation params default to off so legacy behaviour is unchanged.
+        assert_eq!(p.seed, 0.0);
+        assert_eq!(p.drift, 0.0);
+        assert_eq!(p.disruption, 0.0);
     }
 
     #[test]

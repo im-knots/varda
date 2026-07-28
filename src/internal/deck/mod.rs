@@ -694,6 +694,9 @@ impl Deck {
             }
             "depth_min" => p.depth_min_mm = v * 8000.0,
             "depth_max" => p.depth_max_mm = (v * 8000.0).max(p.depth_min_mm + 1.0),
+            "seed" => p.seed = v * 0.1,
+            "drift" => p.drift = v,
+            "disruption" => p.disruption = v,
             _ => return false,
         }
         true
