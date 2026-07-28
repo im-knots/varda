@@ -22,7 +22,9 @@ Write-Host "==> Project root: $ProjectRoot"
 # --- Build release binary ---
 if (-not $SkipBuild) {
     Write-Host "==> Building release binary..."
-    cargo build --release
+    # The `depth` feature (Kinect v1 via libfreenect) is excluded on Windows —
+    # libfreenect v1 has no vcpkg port. See spec/depth-sensors.md.
+    cargo build --release --no-default-features --features face-detection,html
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 }
 
