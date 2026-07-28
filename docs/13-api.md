@@ -15,10 +15,6 @@ design choice for the live-performance and installation use cases: a dedicated
 front-of-house or show/installation network where controllers, control panels,
 and automation scripts talk to the engine without credential friction.
 
-The practical consequence: **anyone who can reach the port has full control of the
-engine** — creating/removing decks, loading local media and LUT files by path,
-starting streams and recordings, and shutting the process down (`POST /api/shutdown`).
-
 Run Varda only on a network you control. If you need it reachable from a wider or
 untrusted network, put it behind your own boundary. Bind the machine to a private
 interface, use a firewall or VPN, or front it with an authenticating reverse proxy.
@@ -108,9 +104,55 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/shader \
 ### Add an HTML deck to a channel
 
 ```sh
-curl -X POST http://localhost:8080/api/channels/<ch_idx>/decks/html \
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/html \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/overlay.html"}'
+```
+
+### Add an effect, then tweak it
+
+`POST` returns the new effect's UUID in `{"status": "ok", "uuid": "..."}`. Every
+later call uses that UUID, so it keeps working after the chain is reordered.
+
+```sh
+# Append to a deck's chain (also /api/channels/<ch_uuid>/effects, /api/master/effects)
+curl -X POST http://localhost:8080/api/decks/<deck_uuid>/effects \
+  -H "Content-Type: application/json" \
+  -d '{"shader_name": "blur"}'
+
+# Bypass / re-enable it
+curl -X POST http://localhost:8080/api/effects/<effect_uuid>/toggle
+
+# Drive one of its parameters (see the parameter paths below)
+curl -X PUT http://localhost:8080/api/params \
+  -H "Content-Type: application/json" \
+  -d '{"path": "deck/<deck_uuid>/effect/<effect_uuid>/param/radius", "value": {"Float": 4.0}}'
+
+# Remove it — this also clears any modulation assigned to its parameters
+curl -X DELETE http://localhost:8080/api/effects/<effect_uuid>
+```
+
+### Build a transition sequence
+
+Sequences are addressed by UUID; steps are addressed by position *within* their
+sequence, which is how the sequencer itself refers to them.
+
+```sh
+# Create an empty sequence (returns its uuid)
+curl -X POST http://localhost:8080/api/sequences
+
+# Append a fade between two channels
+curl -X POST http://localhost:8080/api/sequences/<seq_uuid>/steps/fade \
+  -H "Content-Type: application/json" \
+  -d '{"from_channel_uuid": "<ch_uuid_a>", "to_channel_uuid": "<ch_uuid_b>"}'
+
+# Set that step's duration (steps are addressed by position within the sequence)
+curl -X PUT http://localhost:8080/api/sequences/<seq_uuid>/steps/0/duration \
+  -H "Content-Type: application/json" \
+  -d '{"value": 4.0, "unit": "Seconds"}'
+
+# Play it
+curl -X POST http://localhost:8080/api/sequences/<seq_uuid>/play
 ```
 
 ### Start an auto-crossfade
@@ -179,8 +221,11 @@ curl -X POST http://localhost:8080/api/command \
 ### Save the workspace
 
 ```sh
-curl -X POST http://localhost:8080/api/scene/save
+curl -X POST http://localhost:8080/api/workspace/save
 ```
+
+Saving from the API preserves the editor layout in `stage.json` — it writes back
+whatever the UI last had, rather than resetting panels and grid to defaults.
 
 ### Shut down (headless)
 
@@ -299,35 +344,405 @@ Switches an output between `Off`, `Projector` (full-frame test card), and
 `Surfaces` (per-surface test cards through each warp).
 
 ```sh
-curl -X PUT http://localhost:8080/api/outputs/0/calibration \
+curl -X PUT http://localhost:8080/api/outputs/<output_uuid>/calibration \
   -H "Content-Type: application/json" \
   -d '{"mode": "Projector"}'
 ```
 
-## Route Groups
+## Addressing
 
-The API is organized into 16 OpenAPI tags:
+Every write names its target entity by **UUID**, never by position. State snapshots
+carry a `uuid` on each channel, deck, effect, output, surface, and sequence, so a
+client reads the UUID once and uses it for every subsequent write.
 
-| Tag | Examples |
-|-----|----------|
-| **System** | `GET /api/health`, `POST /api/shutdown` |
-| **Mixer** | `PUT /api/mixer/crossfader`, `POST /api/mixer/auto-crossfade`, `PUT /api/mixer/tonemap`, `PUT /api/mixer/lut`, `DELETE /api/mixer/lut` |
-| **Channels** | `POST /api/channels`, `PUT /api/channels/:uuid/opacity` |
-| **Decks** | `POST /api/channels/:uuid/decks/shader`, `POST /api/channels/:idx/decks/html`, `PUT /api/decks/:uuid/opacity` |
-| **Video** | `POST /api/decks/:uuid/video/toggle-play`, `PUT /api/decks/:uuid/video/speed` |
-| **Effects** | `POST /api/effects`, `POST /api/effects/toggle` |
-| **Modulation** | `POST /api/modulation/lfo`, `POST /api/modulation/assign` |
-| **Macros** | `POST /api/macros`, `POST /api/macros/:uuid/targets`, `PUT /api/macros/:uuid/value`, `PUT /api/macros/:uuid/button/behavior` |
-| **Params** | `PUT /api/params` (set any parameter by path) |
-| **Surfaces** | `POST /api/surfaces/rect`, `PUT /api/surfaces/:uuid/source`, `PUT /api/surfaces/:uuid/path/handle`, `PUT /api/surfaces/:uuid/warp/corner`, `POST /api/surfaces/:uuid/warp/reset`, `PUT /api/surfaces/:uuid/warp/subdivisions`, `PUT /api/surfaces/:uuid/warp/mesh-point`, `POST /api/surfaces/:uuid/warp/bind`, `POST /api/surfaces/:uuid/warp/bezier`, `PUT /api/surfaces/:uuid/warp/anchor`, `PUT /api/surfaces/:uuid/warp/handle`, `PUT /api/surfaces/:uuid/warp/cage` |
-| **Outputs** | `POST /api/outputs/windowed`, `POST /api/outputs/headless`, `PUT /api/outputs/:idx/calibration` |
-| **Sequences** | `POST /api/sequences`, `POST /api/sequences/:idx/play` |
-| **Audio** | `POST /api/audio/scan`, `POST /api/audio/open` |
-| **Streams** | `POST /api/streams/library` |
-| **Devices** | `POST /api/devices/ndi/scan`, `POST /api/devices/midi/scan` |
-| **Auto Transitions** | `PUT /api/decks/:uuid/auto-transition/enabled` |
+This matters for correctness, not just style. A positional address is only valid
+until something ahead of it moves: if a client resolves "deck 3", another client
+removes deck 0, and the first client's write arrives afterwards, a positional write
+lands on a different deck with no error. A UUID either resolves to the entity the
+caller meant or fails with `404 Not Found`.
 
-For the complete list of all routes with request/response schemas, see the Swagger UI at `/api/docs`.
+Integers survive in two roles, both of which are payload rather than address:
+
+- **Reorder ordinals** — `PUT /api/channels/{channel_uuid}/decks/reorder` takes
+  `from_idx` and `to_idx`, the positions being swapped.
+- **Sequence step indices** — a step's position within its own sequence, which is
+  how the sequencer itself addresses steps.
+
+See [/spec/api-addressing.md] for the full rationale.
+
+## Route Reference
+
+For request and response schemas, see the Swagger UI at `/api/docs`.
+
+<!-- BEGIN GENERATED ROUTES -->
+
+<!-- Generated from ApiDoc::openapi() by tests/api_docs.rs.
+     Regenerate with: UPDATE_API_DOCS=1 cargo test --test api_docs -->
+
+Writes address entities by UUID. Positional integers appear only as reorder
+ordinals and sequence step indices — see [/spec/api-addressing.md].
+
+### Analyzers
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/decks/{deck_uuid}/analyzers` |  |
+| `DELETE` | `/api/decks/{deck_uuid}/analyzers/{analyzer_type}` |  |
+| `GET` | `/api/library/analyzers` | Analyzer types a deck can attach, with their names and parameter descriptors. |
+
+### Audio
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/audio/close` |  |
+| `POST` | `/api/audio/open` |  |
+| `POST` | `/api/audio/scan` |  |
+
+### Auto Transitions
+
+| Method | Path | Description |
+|---|---|---|
+| `PUT` | `/api/decks/{deck_uuid}/auto-transition/duration` |  |
+| `PUT` | `/api/decks/{deck_uuid}/auto-transition/enabled` |  |
+| `PUT` | `/api/decks/{deck_uuid}/auto-transition/play-duration` |  |
+| `PUT` | `/api/decks/{deck_uuid}/auto-transition/shader` |  |
+| `PUT` | `/api/decks/{deck_uuid}/auto-transition/trigger` |  |
+
+### Channels
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/channels` |  |
+| `DELETE` | `/api/channels/{channel_uuid}` |  |
+| `PUT` | `/api/channels/{channel_uuid}/blend-mode` |  |
+| `PUT` | `/api/channels/{channel_uuid}/opacity` |  |
+
+### Decks
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/channels/{channel_uuid}/decks/camera` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/dash` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/hls` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/html` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/image` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/ndi` |  |
+| `PUT` | `/api/channels/{channel_uuid}/decks/reorder` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/rtmp` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/shader` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/solid` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/srt` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/syphon` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/video` |  |
+| `DELETE` | `/api/decks/{deck_uuid}` |  |
+| `PUT` | `/api/decks/{deck_uuid}/blend-mode` |  |
+| `POST` | `/api/decks/{deck_uuid}/html/interactive` |  |
+| `POST` | `/api/decks/{deck_uuid}/html/reload` |  |
+| `POST` | `/api/decks/{deck_uuid}/move` |  |
+| `PUT` | `/api/decks/{deck_uuid}/mute` |  |
+| `PUT` | `/api/decks/{deck_uuid}/opacity` |  |
+| `PUT` | `/api/decks/{deck_uuid}/render-fps` |  |
+| `PUT` | `/api/decks/{deck_uuid}/scaling-mode` |  |
+| `PUT` | `/api/decks/{deck_uuid}/solo` |  |
+| `PUT` | `/api/decks/{deck_uuid}/transparent` |  |
+
+### Depth Sensors
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/channels/{channel_uuid}/decks/depth` |  |
+| `POST` | `/api/devices/depth/scan` |  |
+| `GET` | `/api/library/depth` | Depth sensors discovered by the last scan, as name and sensor id. |
+
+### Devices
+
+| Method | Path | Description |
+|---|---|---|
+| `PUT` | `/api/devices/audio/enabled` |  |
+| `POST` | `/api/devices/audio/scan` |  |
+| `POST` | `/api/devices/cameras/scan` |  |
+| `PUT` | `/api/devices/midi/enabled` |  |
+| `POST` | `/api/devices/midi/scan` |  |
+| `POST` | `/api/devices/ndi/scan` |  |
+| `POST` | `/api/devices/syphon/scan` |  |
+| `DELETE` | `/api/midi/mappings` |  |
+| `POST` | `/api/midi/mappings/remove` |  |
+
+### Effects
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/channels/{channel_uuid}/effects` |  |
+| `PUT` | `/api/channels/{channel_uuid}/effects/reorder` |  |
+| `POST` | `/api/decks/{deck_uuid}/effects` |  |
+| `PUT` | `/api/decks/{deck_uuid}/effects/reorder` |  |
+| `DELETE` | `/api/effects/{effect_uuid}` |  |
+| `POST` | `/api/effects/{effect_uuid}/toggle` |  |
+| `POST` | `/api/master/effects` |  |
+| `PUT` | `/api/master/effects/reorder` |  |
+
+### Library
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/library/cameras` | Camera devices discovered by the last scan, as name and device id. |
+| `GET` | `/api/library/effects` | Effect (filter) shaders available in the registry, with their registry indices. |
+| `GET` | `/api/library/generators` | Generator shaders available in the registry, with their registry indices. |
+| `GET` | `/api/library/monitors` | Connected monitors available as output displays, with name, index, and pixel size. |
+| `GET` | `/api/library/ndi` | Names of the NDI sources discovered by the last scan. |
+| `GET` | `/api/library/syphon` | Names of the Syphon servers discovered by the last scan. |
+| `GET` | `/api/library/transitions` | Names of the transition shaders the crossfader can use. |
+
+### Macros
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/macros` |  |
+| `DELETE` | `/api/macros/{uuid}` |  |
+| `PUT` | `/api/macros/{uuid}/button/behavior` |  |
+| `PUT` | `/api/macros/{uuid}/button/triggers` |  |
+| `PUT` | `/api/macros/{uuid}/kind` |  |
+| `PUT` | `/api/macros/{uuid}/modulation` | Drive a Knob/Fader macro's value from a modulation source. The source adds a |
+| `DELETE` | `/api/macros/{uuid}/modulation` | Remove all modulation driving this macro's value. |
+| `DELETE` | `/api/macros/{uuid}/modulation/{source_id}` | Remove only one modulation source from this macro's value, leaving any other |
+| `PUT` | `/api/macros/{uuid}/name` |  |
+| `POST` | `/api/macros/{uuid}/targets` |  |
+| `PUT` | `/api/macros/{uuid}/targets/{target_idx}` |  |
+| `DELETE` | `/api/macros/{uuid}/targets/{target_idx}` |  |
+| `PUT` | `/api/macros/{uuid}/value` |  |
+
+### Mixer
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/mixer/auto-crossfade` |  |
+| `POST` | `/api/mixer/beat-crossfade` |  |
+| `PUT` | `/api/mixer/crossfader` |  |
+| `PUT` | `/api/mixer/lut` |  |
+| `DELETE` | `/api/mixer/lut` |  |
+| `PUT` | `/api/mixer/tonemap` |  |
+| `PUT` | `/api/mixer/transition` |  |
+
+### Modulation
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/modulation/adsr` |  |
+| `POST` | `/api/modulation/analyzer` |  |
+| `POST` | `/api/modulation/assign` |  |
+| `POST` | `/api/modulation/audio-band` |  |
+| `POST` | `/api/modulation/clear` |  |
+| `POST` | `/api/modulation/lfo` |  |
+| `POST` | `/api/modulation/mod-on-mod` |  |
+| `POST` | `/api/modulation/mod-on-mod/remove` |  |
+| `POST` | `/api/modulation/step-sequencer` |  |
+| `DELETE` | `/api/modulation/{uuid}` |  |
+| `PUT` | `/api/modulation/{uuid}/adsr/attack` |  |
+| `PUT` | `/api/modulation/{uuid}/adsr/decay` |  |
+| `PUT` | `/api/modulation/{uuid}/adsr/release` |  |
+| `POST` | `/api/modulation/{uuid}/adsr/release-gate` |  |
+| `PUT` | `/api/modulation/{uuid}/adsr/sustain` |  |
+| `POST` | `/api/modulation/{uuid}/adsr/trigger` |  |
+| `PUT` | `/api/modulation/{uuid}/analyzer/smoothing` |  |
+| `PUT` | `/api/modulation/{uuid}/audio/freq-range` |  |
+| `PUT` | `/api/modulation/{uuid}/audio/gain` |  |
+| `PUT` | `/api/modulation/{uuid}/audio/mode` |  |
+| `PUT` | `/api/modulation/{uuid}/audio/noise-gate` |  |
+| `PUT` | `/api/modulation/{uuid}/audio/preset` |  |
+| `PUT` | `/api/modulation/{uuid}/audio/smoothing` |  |
+| `PUT` | `/api/modulation/{uuid}/audio/source` |  |
+| `PUT` | `/api/modulation/{uuid}/lfo/amplitude` |  |
+| `PUT` | `/api/modulation/{uuid}/lfo/bipolar` |  |
+| `PUT` | `/api/modulation/{uuid}/lfo/frequency` |  |
+| `PUT` | `/api/modulation/{uuid}/lfo/phase` |  |
+| `PUT` | `/api/modulation/{uuid}/lfo/waveform` |  |
+| `PUT` | `/api/modulation/{uuid}/step-seq/bipolar` |  |
+| `PUT` | `/api/modulation/{uuid}/step-seq/count` |  |
+| `PUT` | `/api/modulation/{uuid}/step-seq/interpolation` |  |
+| `PUT` | `/api/modulation/{uuid}/step-seq/rate` |  |
+| `PUT` | `/api/modulation/{uuid}/step-seq/steps` |  |
+| `PUT` | `/api/modulation/{uuid}/step-seq/value` |  |
+
+### Outputs
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/outputs` |  |
+| `POST` | `/api/outputs/headless` |  |
+| `DELETE` | `/api/outputs/{output_uuid}` |  |
+| `PUT` | `/api/outputs/{output_uuid}/calibration` |  |
+| `PUT` | `/api/outputs/{output_uuid}/display` |  |
+| `PUT` | `/api/outputs/{output_uuid}/edge-blend` |  |
+| `PUT` | `/api/outputs/{output_uuid}/edge-blend-mode` |  |
+| `POST` | `/api/outputs/{output_uuid}/start` |  |
+| `POST` | `/api/outputs/{output_uuid}/stop` |  |
+| `POST` | `/api/outputs/{output_uuid}/surfaces` |  |
+| `DELETE` | `/api/outputs/{output_uuid}/surfaces/{surface_uuid}` |  |
+| `PUT` | `/api/outputs/{output_uuid}/target` |  |
+
+### Params
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/decks/{deck_uuid}/params/reset` |  |
+| `PUT` | `/api/params` |  |
+
+### Scene
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/scene` | Full scene: channels, crossfader, master effects, modulation, macros, sequences, and streams. |
+| `GET` | `/api/scene/channels` | Every channel with its UUID, opacity, blend mode, decks, and effects. |
+| `GET` | `/api/scene/channels/{channel_uuid}` | A single channel, addressed by UUID. |
+| `GET` | `/api/scene/channels/{channel_uuid}/decks` | Every deck in one channel, addressed by channel UUID. |
+| `GET` | `/api/scene/channels/{channel_uuid}/decks/{deck_uuid}` | A single deck, addressed by its channel's UUID and its own UUID. |
+| `GET` | `/api/scene/macros` | Every macro control with its kind, current value, and parameter targets. |
+| `GET` | `/api/scene/modulation` | Modulation sources, their current output values, and parameter assignments. |
+| `GET` | `/api/scene/sequences` | Every transition sequence with its steps and playback state. |
+| `GET` | `/api/scene/streams` | Active stream receivers with their URL, mode, and connection status. |
+
+### Sequences
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/sequences` |  |
+| `DELETE` | `/api/sequences/{sequence_uuid}` |  |
+| `POST` | `/api/sequences/{sequence_uuid}/play` |  |
+| `POST` | `/api/sequences/{sequence_uuid}/steps/fade` |  |
+| `POST` | `/api/sequences/{sequence_uuid}/steps/goto` |  |
+| `POST` | `/api/sequences/{sequence_uuid}/steps/move` |  |
+| `POST` | `/api/sequences/{sequence_uuid}/steps/wait` |  |
+| `DELETE` | `/api/sequences/{sequence_uuid}/steps/{step_idx}` |  |
+| `PUT` | `/api/sequences/{sequence_uuid}/steps/{step_idx}/duration` |  |
+| `PUT` | `/api/sequences/{sequence_uuid}/steps/{step_idx}/easing` |  |
+| `PUT` | `/api/sequences/{sequence_uuid}/steps/{step_idx}/from-ch` |  |
+| `PUT` | `/api/sequences/{sequence_uuid}/steps/{step_idx}/goto-target` |  |
+| `PUT` | `/api/sequences/{sequence_uuid}/steps/{step_idx}/shader` |  |
+| `PUT` | `/api/sequences/{sequence_uuid}/steps/{step_idx}/to-ch` |  |
+| `POST` | `/api/sequences/{sequence_uuid}/stop` |  |
+| `POST` | `/api/sequences/{sequence_uuid}/toggle` |  |
+
+### Stage
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/stage` | Full stage: surfaces, output windows, and connected monitors. |
+| `POST` | `/api/stage/detect/camera` | POST /api/stage/detect/camera — detect contours from a camera snapshot. |
+| `POST` | `/api/stage/detect/confirm` | POST /api/stage/detect/confirm — create surfaces from detected contours. |
+| `POST` | `/api/stage/detect/dxf` | POST /api/stage/detect/dxf — detect contours from DXF data. |
+| `POST` | `/api/stage/detect/image` | POST /api/stage/detect/image — detect contours from a raster image. |
+| `POST` | `/api/stage/detect/svg` | POST /api/stage/detect/svg — detect contours from SVG data. |
+| `GET` | `/api/stage/outputs` | Every output window with its target, activity, and surface assignments. |
+| `GET` | `/api/stage/outputs/{uuid}` | A single output window, addressed by UUID. |
+| `GET` | `/api/stage/surfaces` | Every surface with its geometry, warp, and source assignment. |
+| `GET` | `/api/stage/surfaces/{uuid}` | A single surface, addressed by UUID. |
+
+### State
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/state/audio` | Audio analysis state: level, band energies, FFT bins, detected BPM, and input devices. |
+| `GET` | `/api/state/cameras` | Camera devices discovered by the last scan. |
+| `GET` | `/api/state/clock` | Clock state: resolved BPM, beat phase, active source, and detected clock sources. |
+| `GET` | `/api/state/depth` | Depth sensors discovered by the last scan. |
+| `GET` | `/api/state/macros` | Every macro control with its kind, current value, and parameter targets. |
+| `GET` | `/api/state/midi` | MIDI state: devices, mappings, and whether learn mode is active. |
+| `GET` | `/api/state/mixer` | Mixer state: channels, crossfader position, master effects, active transition, and sequences. |
+| `GET` | `/api/state/modulation` | Modulation state: sources, their current output values, and parameter assignments. |
+| `GET` | `/api/state/ndi` | NDI runtime availability and the source names found by the last scan. |
+| `GET` | `/api/state/outputs` | Output state: output windows, surfaces, and connected monitors. |
+| `GET` | `/api/state/performance` | Render loop counters: measured FPS, total frames rendered, and the configured target FPS. |
+| `GET` | `/api/state/registry` | Shader registry: generator and filter shader names with their indices. |
+| `GET` | `/api/state/streams` | Active stream receivers with their URL, mode, and connection status. |
+| `GET` | `/api/state/surfaces` | Every surface with its geometry, warp, and source assignment. |
+| `GET` | `/api/state/syphon` | Syphon framework availability and the server names found by the last scan. |
+
+### Streams
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/streams/dash/library` |  |
+| `DELETE` | `/api/streams/dash/library` |  |
+| `POST` | `/api/streams/hls/library` |  |
+| `DELETE` | `/api/streams/hls/library` |  |
+| `POST` | `/api/streams/library` |  |
+| `DELETE` | `/api/streams/library` |  |
+| `POST` | `/api/streams/rtmp/library` |  |
+| `DELETE` | `/api/streams/rtmp/library` |  |
+
+### Surfaces
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/surfaces/circle` |  |
+| `POST` | `/api/surfaces/combine` |  |
+| `POST` | `/api/surfaces/polygon` |  |
+| `POST` | `/api/surfaces/rect` |  |
+| `DELETE` | `/api/surfaces/{uuid}` |  |
+| `PUT` | `/api/surfaces/{uuid}/circle/radius` |  |
+| `PUT` | `/api/surfaces/{uuid}/circle/sides` |  |
+| `PUT` | `/api/surfaces/{uuid}/content-mapping` |  |
+| `PUT` | `/api/surfaces/{uuid}/contour-vertices` |  |
+| `POST` | `/api/surfaces/{uuid}/convert-to-polygon` |  |
+| `POST` | `/api/surfaces/{uuid}/duplicate` |  |
+| `PUT` | `/api/surfaces/{uuid}/edge/convert` |  |
+| `POST` | `/api/surfaces/{uuid}/flip-horizontal` |  |
+| `POST` | `/api/surfaces/{uuid}/flip-vertical` |  |
+| `POST` | `/api/surfaces/{uuid}/holes` |  |
+| `DELETE` | `/api/surfaces/{uuid}/holes/{index}` |  |
+| `PUT` | `/api/surfaces/{uuid}/move` |  |
+| `PUT` | `/api/surfaces/{uuid}/name` |  |
+| `PUT` | `/api/surfaces/{uuid}/output-type` |  |
+| `PUT` | `/api/surfaces/{uuid}/path/anchor` |  |
+| `PUT` | `/api/surfaces/{uuid}/path/handle` |  |
+| `POST` | `/api/surfaces/{uuid}/punch` | "Make Hole" (8i.7): convert the surface identified by `uuid` into a cut-out |
+| `POST` | `/api/surfaces/{uuid}/reorder` | Change a surface's global stacking order (8i.12): move it front/back/up/down |
+| `PUT` | `/api/surfaces/{uuid}/rotate` |  |
+| `PUT` | `/api/surfaces/{uuid}/scale` |  |
+| `PUT` | `/api/surfaces/{uuid}/source` |  |
+| `PUT` | `/api/surfaces/{uuid}/vertices` |  |
+| `POST` | `/api/surfaces/{uuid}/vertices/insert` |  |
+| `PUT` | `/api/surfaces/{uuid}/warp/anchor` |  |
+| `POST` | `/api/surfaces/{uuid}/warp/bezier` |  |
+| `POST` | `/api/surfaces/{uuid}/warp/bind` |  |
+| `PUT` | `/api/surfaces/{uuid}/warp/cage` |  |
+| `PUT` | `/api/surfaces/{uuid}/warp/corner` |  |
+| `PUT` | `/api/surfaces/{uuid}/warp/handle` |  |
+| `PUT` | `/api/surfaces/{uuid}/warp/mesh-point` |  |
+| `POST` | `/api/surfaces/{uuid}/warp/reset` |  |
+| `PUT` | `/api/surfaces/{uuid}/warp/subdivisions` |  |
+
+### System
+
+| Method | Path | Description |
+|---|---|---|
+| `PUT` | `/api/clock/manual-bpm` |  |
+| `PUT` | `/api/clock/preference` |  |
+| `POST` | `/api/command` | Applies any `EngineCommand` sent as JSON and returns its `CommandResult`. |
+| `GET` | `/api/health` |  |
+| `POST` | `/api/perf-profile` |  |
+| `POST` | `/api/redo` |  |
+| `PUT` | `/api/resolution` |  |
+| `POST` | `/api/shutdown` |  |
+| `GET` | `/api/state` |  |
+| `PUT` | `/api/target-fps` |  |
+| `POST` | `/api/undo` |  |
+| `POST` | `/api/workspace/load` |  |
+| `POST` | `/api/workspace/save` |  |
+
+### Video
+
+| Method | Path | Description |
+|---|---|---|
+| `DELETE` | `/api/decks/{deck_uuid}/video/in-out-points` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/in-point` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/loop-mode` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/out-point` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/seek` |  |
+| `PUT` | `/api/decks/{deck_uuid}/video/speed` |  |
+| `POST` | `/api/decks/{deck_uuid}/video/toggle-play` |  |
+
+<!-- END GENERATED ROUTES -->
 
 ## CORS
 

@@ -23,7 +23,10 @@ fn read_or_error(
     })
 }
 
-/// GET /api/library/generators
+/// Generator shaders available in the registry, with their registry indices.
+#[utoipa::path(get, path = "/api/library/generators",
+    responses((status = 200, body = Vec<ShaderEntry>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Library")]
 pub async fn generators(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(
@@ -41,7 +44,10 @@ pub async fn generators(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/library/effects
+/// Effect (filter) shaders available in the registry, with their registry indices.
+#[utoipa::path(get, path = "/api/library/effects",
+    responses((status = 200, body = Vec<ShaderEntry>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Library")]
 pub async fn effects(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(
@@ -59,7 +65,10 @@ pub async fn effects(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/library/transitions
+/// Names of the transition shaders the crossfader can use.
+#[utoipa::path(get, path = "/api/library/transitions",
+    responses((status = 200, body = Vec<TransitionEntry>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Library")]
 pub async fn transitions(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(
@@ -74,7 +83,10 @@ pub async fn transitions(State(state): State<SharedState>) -> impl IntoResponse 
     }
 }
 
-/// GET /api/library/cameras
+/// Camera devices discovered by the last scan, as name and device id.
+#[utoipa::path(get, path = "/api/library/cameras",
+    responses((status = 200, body = Vec<CameraEntry>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Library")]
 pub async fn cameras(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(
@@ -92,7 +104,10 @@ pub async fn cameras(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/library/depth
+/// Depth sensors discovered by the last scan, as name and sensor id.
+#[utoipa::path(get, path = "/api/library/depth",
+    responses((status = 200, body = Vec<DepthSensorEntry>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Depth Sensors")]
 pub async fn depth(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(
@@ -110,7 +125,10 @@ pub async fn depth(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/library/ndi
+/// Names of the NDI sources discovered by the last scan.
+#[utoipa::path(get, path = "/api/library/ndi",
+    responses((status = 200, body = Vec<NdiSourceEntry>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Library")]
 pub async fn ndi(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(
@@ -124,7 +142,10 @@ pub async fn ndi(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/library/syphon
+/// Names of the Syphon servers discovered by the last scan.
+#[utoipa::path(get, path = "/api/library/syphon",
+    responses((status = 200, body = Vec<SyphonSourceEntry>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Library")]
 pub async fn syphon(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(
@@ -138,7 +159,10 @@ pub async fn syphon(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/library/monitors
+/// Connected monitors available as output displays, with name, index, and pixel size.
+#[utoipa::path(get, path = "/api/library/monitors",
+    responses((status = 200, body = Vec<MonitorEntry>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Library")]
 pub async fn monitors(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(
@@ -158,7 +182,7 @@ pub async fn monitors(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/library/analyzers
+/// Analyzer types a deck can attach, with their names and parameter descriptors.
 #[utoipa::path(get, path = "/api/library/analyzers",
     responses((status = 200, body = Vec<crate::engine::types::AnalyzerTypeInfo>)),
     tag = "Analyzers")]

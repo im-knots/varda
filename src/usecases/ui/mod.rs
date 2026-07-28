@@ -525,8 +525,10 @@ pub struct UIData {
     /// User-defined macro controls (one control → many parameter targets).
     pub macros: Vec<crate::macros::Macro>,
     pub audio: AudioUIData,
-    /// Deck preview textures keyed by (ch_idx, deck_idx)
-    pub deck_preview_textures: std::collections::HashMap<(usize, usize), egui::TextureId>,
+    /// Deck preview textures keyed by deck UUID. UUID keys survive reordering
+    /// and removal, so the map needs no reindex pass — see
+    /// [`/spec/api-addressing.md`].
+    pub deck_preview_textures: std::collections::HashMap<String, egui::TextureId>,
     /// Channel preview textures keyed by ch_idx
     pub channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     /// Output preview textures keyed by output index
@@ -635,8 +637,6 @@ pub struct UIData {
     pub sequences: Vec<SequenceUIData>,
     /// Number of channels (for channel dropdowns in sequence builder)
     pub channel_count: usize,
-    /// Channel names (for labels in sequence builder)
-    pub channel_names: Vec<String>,
     /// Pipeline-derived FPS: average of per-channel FPSes (from deck render timing)
     pub fps: f32,
     /// Per-channel render stats: (channel_name, avg_deck_fps, active_deck_count, render_time_ms)
@@ -705,6 +705,8 @@ pub struct UIData {
 /// Read-only snapshot of a single transition sequence
 #[derive(Clone)]
 pub struct SequenceUIData {
+    /// Stable UUID — the address for every sequence command.
+    pub uuid: String,
     /// Display name
     pub name: String,
     /// Whether the sequence is enabled
@@ -730,8 +732,8 @@ pub struct SequenceStepUI {
 #[derive(Clone)]
 pub enum SequenceStepKindUI {
     Fade {
-        from_ch: usize,
-        to_ch: usize,
+        from_ch: String,
+        to_ch: String,
         duration_val: f64,
         duration_unit: crate::channel::DurationUnit,
         easing: String,
@@ -889,13 +891,18 @@ pub struct SurfaceUI {
 /// See /spec/ui-engine-boundary.md WS4 / Decision #11 — the deliberate split of
 /// "what I tell the engine" (`UIActions::commands`) from "my local view state".
 pub struct UISession {
-    /// (ch_idx, generator_registry_idx) — add a shader as a new deck to channel.
-    /// Async request resolved off-frame via `spawn_deck_loads` (not a command).
-    pub shader_to_add: Option<(usize, usize)>,
-    /// Channel index to open an image file dialog for (deferred to outside egui frame)
-    pub open_image_dialog_for_channel: Option<usize>,
-    /// Channel index to open a video file dialog for (deferred to outside egui frame)
-    pub open_video_dialog_for_channel: Option<usize>,
+    /// (channel_uuid, generator_registry_idx) — add a shader as a new deck to a
+    /// channel. Resolved off-frame via `spawn_deck_loads` (not a command), so the
+    /// channel is held by UUID: a channel index captured at click time can name a
+    /// different channel by the time the shader finishes compiling. See
+    /// [`/spec/api-addressing.md`].
+    pub shader_to_add: Option<(String, usize)>,
+    /// Channel UUID to open an image file dialog for (deferred to outside egui
+    /// frame). A UUID rather than an index because the dialog outlives the
+    /// frame that requested it — see [`/spec/api-addressing.md`].
+    pub open_image_dialog_for_channel: Option<String>,
+    /// Channel UUID to open a video file dialog for (deferred to outside egui frame)
+    pub open_video_dialog_for_channel: Option<String>,
     pub notifications_to_dismiss: Vec<usize>,
     /// Info notifications to push (e.g. "Copied URL to clipboard")
     pub info_notifications: Vec<String>,
@@ -1096,21 +1103,31 @@ pub enum LibraryDrag {
     ChannelPreset(usize),
 }
 
-/// Drag payload for effect reordering within a chain
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Drag payload for moving a deck to another channel or reordering it within
+/// its own. Named by UUID because the payload is set on drag start and read on
+/// release: the deck's index can shift in between.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeckDrag {
+    pub deck_uuid: String,
+}
+
+/// Drag payload for effect reordering within a chain. The chain is named by
+/// UUID because the payload outlives the frame it was created in — the drop is
+/// applied after release, by which point an index could name another entity.
+#[derive(Debug, Clone, PartialEq)]
 pub enum EffectDrag {
-    /// Deck effect: (ch_idx, deck_idx, effect_idx)
-    Deck(usize, usize, usize),
-    /// Channel effect: (ch_idx, effect_idx)
-    Channel(usize, usize),
+    /// Deck effect: (deck_uuid, effect_idx)
+    Deck(String, usize),
+    /// Channel effect: (channel_uuid, effect_idx)
+    Channel(String, usize),
     /// Master effect: (effect_idx)
     Master(usize),
 }
 
 /// Drag payload for reordering steps within a sequence (bottom bar only)
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SequenceStepDrag {
-    pub seq_idx: usize,
+    pub sequence_uuid: String,
     pub step_idx: usize,
 }
 
@@ -1417,7 +1434,6 @@ impl UIData {
 
             sequences: vec![],
             channel_count: 2,
-            channel_names: vec!["Ch A".to_string(), "Ch B".to_string()],
             fps: 60.0,
             channel_render_stats: vec![
                 ChannelRenderStats {

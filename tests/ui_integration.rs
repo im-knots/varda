@@ -60,8 +60,8 @@ struct AccActions {
     set_transition: Option<Option<String>>,
 
     // Collapsing header item actions
-    open_image_dialog_for_channel: Option<usize>,
-    open_video_dialog_for_channel: Option<usize>,
+    open_image_dialog_for_channel: Option<String>,
+    open_video_dialog_for_channel: Option<String>,
     midi_device_toggles_count: usize,
 }
 
@@ -127,10 +127,10 @@ impl AccActions {
 
         // Collapsing header items
         if a.session.open_image_dialog_for_channel.is_some() {
-            self.open_image_dialog_for_channel = a.session.open_image_dialog_for_channel;
+            self.open_image_dialog_for_channel = a.session.open_image_dialog_for_channel.clone();
         }
         if a.session.open_video_dialog_for_channel.is_some() {
-            self.open_video_dialog_for_channel = a.session.open_video_dialog_for_channel;
+            self.open_video_dialog_for_channel = a.session.open_video_dialog_for_channel.clone();
         }
     }
 }
@@ -626,7 +626,6 @@ fn click_remove_channel_with_three_channels() {
         effects: vec![],
     });
     data.channel_count = 3;
-    data.channel_names.push("Ch C".to_string());
     let mut harness = make_harness(data);
 
     // The "x" buttons appear next to each channel name.
@@ -832,9 +831,12 @@ fn collapsing_image_load_dialog() {
     harness.get_by_label("📁 Load to Ch A").click();
     harness.run();
 
-    assert!(
-        harness.state().open_image_dialog_for_channel.is_some(),
-        "Expected open_image_dialog_for_channel after clicking Load to Ch A"
+    // The request must name Ch A by UUID. Asserting only `is_some` would pass
+    // even if the button targeted a different channel.
+    assert_eq!(
+        harness.state().open_image_dialog_for_channel.as_deref(),
+        Some("ca000001"),
+        "Load to Ch A must request a dialog for Ch A's UUID"
     );
 }
 
@@ -857,12 +859,17 @@ fn collapsing_video_load_dialog() {
     loads[0].click();
     harness.run();
 
-    // Either image or video dialog should fire
+    // Either dialog may fire (the label is shared between the two headers), but
+    // whichever does must name Ch A by UUID.
     let state = harness.state();
-    assert!(
-        state.open_image_dialog_for_channel.is_some()
-            || state.open_video_dialog_for_channel.is_some(),
-        "Expected image or video dialog trigger"
+    let target = state
+        .open_image_dialog_for_channel
+        .as_deref()
+        .or(state.open_video_dialog_for_channel.as_deref());
+    assert_eq!(
+        target,
+        Some("ca000001"),
+        "Load to Ch A must request a dialog for Ch A's UUID"
     );
 }
 

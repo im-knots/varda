@@ -24,7 +24,10 @@ fn read_or_error(
     })
 }
 
-/// GET /api/stage — full stage state
+/// Full stage: surfaces, output windows, and connected monitors.
+#[utoipa::path(get, path = "/api/stage",
+    responses((status = 200, description = "Full stage state"), (status = 503, description = "Engine not yet initialized")),
+    tag = "Stage")]
 pub async fn stage(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(projection::project_stage(&s)).into_response(),
@@ -32,7 +35,10 @@ pub async fn stage(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/stage/surfaces
+/// Every surface with its geometry, warp, and source assignment.
+#[utoipa::path(get, path = "/api/stage/surfaces",
+    responses((status = 200, description = "Every surface with its geometry and warp"), (status = 503, description = "Engine not yet initialized")),
+    tag = "Stage")]
 pub async fn surfaces(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(&s.outputs.surfaces).into_response(),
@@ -40,7 +46,15 @@ pub async fn surfaces(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/stage/surfaces/:uuid
+/// A single surface, addressed by UUID.
+#[utoipa::path(get, path = "/api/stage/surfaces/{uuid}",
+    params(("uuid" = String, Path, description = "Surface UUID")),
+    responses(
+        (status = 200, description = "The surface with its geometry and warp"),
+        (status = 404, description = "Surface not found"),
+        (status = 503, description = "Engine not yet initialized")
+    ),
+    tag = "Stage")]
 pub async fn surface_by_uuid(
     State(state): State<SharedState>,
     Path(uuid): Path<String>,
@@ -54,7 +68,10 @@ pub async fn surface_by_uuid(
     }
 }
 
-/// GET /api/stage/outputs
+/// Every output window with its target, activity, and surface assignments.
+#[utoipa::path(get, path = "/api/stage/outputs",
+    responses((status = 200, description = "Every output window with its surface assignments"), (status = 503, description = "Engine not yet initialized")),
+    tag = "Stage")]
 pub async fn outputs(State(state): State<SharedState>) -> impl IntoResponse {
     match read_or_error(&state) {
         Ok(s) => Json(&s.outputs.windows).into_response(),
@@ -62,7 +79,15 @@ pub async fn outputs(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/stage/outputs/:uuid
+/// A single output window, addressed by UUID.
+#[utoipa::path(get, path = "/api/stage/outputs/{uuid}",
+    params(("uuid" = String, Path, description = "Output window UUID")),
+    responses(
+        (status = 200, description = "The output window with its surface assignments"),
+        (status = 404, description = "Output not found"),
+        (status = 503, description = "Engine not yet initialized")
+    ),
+    tag = "Stage")]
 pub async fn output_by_uuid(
     State(state): State<SharedState>,
     Path(uuid): Path<String>,

@@ -238,6 +238,10 @@ fn default_timer_trigger() -> TriggerConfig {
 /// Serializable transition sequence (channel-to-channel automation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitionSequenceConfig {
+    /// Stable UUID (8-char hex)
+    #[serde(default = "generate_default_uuid")]
+    pub uuid: String,
+
     #[serde(default = "default_sequence_name")]
     pub name: String,
 
@@ -252,13 +256,40 @@ fn default_sequence_name() -> String {
     "Sequence 1".to_string()
 }
 
+/// How a fade step names a channel. Scenes at v5 and later always write a UUID;
+/// `Index` exists only to read v4-and-earlier scenes, where fade steps stored a
+/// positional channel index. `resolve` turns either form into a UUID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChannelRef {
+    Uuid(String),
+    Index(usize),
+}
+
+impl ChannelRef {
+    /// Resolve to a channel UUID, using `channel_uuids` (scene channel order) to
+    /// interpret a legacy index. Returns `None` if the index is out of range.
+    pub fn resolve(&self, channel_uuids: &[String]) -> Option<String> {
+        match self {
+            ChannelRef::Uuid(uuid) => Some(uuid.clone()),
+            ChannelRef::Index(idx) => channel_uuids.get(*idx).cloned(),
+        }
+    }
+}
+
+impl From<String> for ChannelRef {
+    fn from(uuid: String) -> Self {
+        ChannelRef::Uuid(uuid)
+    }
+}
+
 /// A single step in a transition sequence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum TransitionStepConfig {
     Fade {
-        from_ch: usize,
-        to_ch: usize,
+        from_ch: ChannelRef,
+        to_ch: ChannelRef,
         duration: DurationSpecConfig,
         #[serde(default = "default_easing")]
         easing: EasingConfig,
@@ -1031,13 +1062,16 @@ mod tests {
 
     #[test]
     fn transition_sequence_config_roundtrip() {
+        let from_uuid = "chfrom01".to_string();
+        let to_uuid = "chto0001".to_string();
         let seq = TransitionSequenceConfig {
+            uuid: "seq00001".into(),
             name: "Show Loop".into(),
             enabled: true,
             steps: vec![
                 TransitionStepConfig::Fade {
-                    from_ch: 0,
-                    to_ch: 1,
+                    from_ch: from_uuid.clone().into(),
+                    to_ch: to_uuid.clone().into(),
                     duration: DurationSpecConfig::Beats(4.0),
                     easing: EasingConfig::EaseInOut,
                     transition_shader: Some("dissolve".into()),
@@ -1050,9 +1084,46 @@ mod tests {
             ],
         };
         let json = serde_json::to_string_pretty(&seq).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(raw["steps"][0]["from_ch"], serde_json::json!(from_uuid));
+        assert_eq!(raw["steps"][0]["to_ch"], serde_json::json!(to_uuid));
+
         let restored: TransitionSequenceConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.uuid, "seq00001");
         assert_eq!(restored.name, "Show Loop");
         assert_eq!(restored.steps.len(), 3);
+        match &restored.steps[0] {
+            TransitionStepConfig::Fade { from_ch, to_ch, .. } => {
+                assert_eq!(from_ch.resolve(&[]), Some(from_uuid));
+                assert_eq!(to_ch.resolve(&[]), Some(to_uuid));
+            }
+            other => panic!("expected a Fade step, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fade_step_reads_legacy_channel_index() {
+        let json = r#"{
+            "steps": [{
+                "kind": "Fade",
+                "from_ch": 0,
+                "to_ch": 1,
+                "duration": {"unit": "beats", "value": 4.0}
+            }]
+        }"#;
+        let seq: TransitionSequenceConfig = serde_json::from_str(json).unwrap();
+        let channels = vec!["chzero01".to_string(), "chone0001".to_string()];
+        match &seq.steps[0] {
+            TransitionStepConfig::Fade { from_ch, to_ch, .. } => {
+                assert_eq!(from_ch.resolve(&channels).as_deref(), Some("chzero01"));
+                assert_eq!(to_ch.resolve(&channels).as_deref(), Some("chone0001"));
+                assert!(
+                    from_ch.resolve(&[]).is_none(),
+                    "an index cannot resolve without the channel order"
+                );
+            }
+            other => panic!("expected a Fade step, got {other:?}"),
+        }
     }
 
     // ── Auto-transition config ───────────────────────────────────────

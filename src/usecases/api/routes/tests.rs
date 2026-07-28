@@ -469,7 +469,7 @@ mod tests {
         let app = router_with_mock_engine();
         let resp = app
             .oneshot(
-                Request::delete("/api/channels/0")
+                Request::delete("/api/channels/ch-001")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -482,7 +482,7 @@ mod tests {
     async fn test_set_channel_opacity() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/opacity",
+            "/api/channels/ch-001/opacity",
             serde_json::json!({"opacity": 0.5}),
         )
         .await;
@@ -494,7 +494,7 @@ mod tests {
     async fn test_set_channel_blend_mode() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/blend-mode",
+            "/api/channels/ch-001/blend-mode",
             serde_json::json!({"mode": "Add"}),
         )
         .await;
@@ -508,7 +508,7 @@ mod tests {
     async fn test_add_shader_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/shader",
+            "/api/channels/ch-001/decks/shader",
             serde_json::json!({"shader_name": "Sine"}),
         )
         .await;
@@ -521,7 +521,7 @@ mod tests {
         let app = router_with_mock_engine();
         let resp = app
             .oneshot(
-                Request::delete("/api/channels/0/decks/1")
+                Request::delete("/api/decks/dk-001")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -534,7 +534,7 @@ mod tests {
     async fn test_set_deck_opacity() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/opacity",
+            "/api/decks/dk-001/opacity",
             serde_json::json!({"opacity": 0.8}),
         )
         .await;
@@ -546,7 +546,7 @@ mod tests {
     async fn test_set_deck_solo() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/solo",
+            "/api/decks/dk-001/solo",
             serde_json::json!({"value": true}),
         )
         .await;
@@ -558,7 +558,7 @@ mod tests {
     async fn test_set_deck_mute() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/mute",
+            "/api/decks/dk-001/mute",
             serde_json::json!({"value": true}),
         )
         .await;
@@ -570,8 +570,32 @@ mod tests {
     async fn test_set_deck_scaling_mode() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/scaling-mode",
+            "/api/decks/dk-001/scaling-mode",
             serde_json::json!({"mode": "Fit"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_deck_render_fps() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/render-fps",
+            serde_json::json!({"render_fps": "auto"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_deck_transparent() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/transparent",
+            serde_json::json!({"value": true}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -582,7 +606,7 @@ mod tests {
     async fn test_add_image_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/image",
+            "/api/channels/ch-001/decks/image",
             serde_json::json!({"path": "/tmp/test.png"}),
         )
         .await;
@@ -594,7 +618,7 @@ mod tests {
     async fn test_add_solid_color_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/solid",
+            "/api/channels/ch-001/decks/solid",
             serde_json::json!({"color": [1.0, 0.0, 0.0, 1.0]}),
         )
         .await;
@@ -606,8 +630,33 @@ mod tests {
     async fn test_move_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/decks/move",
-            serde_json::json!({"src_ch": 0, "src_deck": 0, "dst_ch": 1}),
+            "/api/decks/dk-001/move",
+            serde_json::json!({"dst_channel_uuid": "ch-002"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    /// Reorder ordinals stay integers — they are the payload, not the address.
+    #[tokio::test]
+    async fn test_reorder_deck() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/channels/ch-001/decks/reorder",
+            serde_json::json!({"from_idx": 0, "to_idx": 1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_reset_generator_params() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/params/reset",
+            serde_json::json!({}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -617,11 +666,35 @@ mod tests {
     // ── Write: Effects routes ───────────────────────────────────
 
     #[tokio::test]
-    async fn test_add_effect() {
+    async fn test_add_master_effect() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/effects",
-            serde_json::json!({"target": "Master", "shader_name": "Blur"}),
+            "/api/master/effects",
+            serde_json::json!({"shader_name": "Blur"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_add_channel_effect() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/channels/ch-001/effects",
+            serde_json::json!({"shader_name": "Blur"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_add_deck_effect() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/effects",
+            serde_json::json!({"shader_name": "Blur"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -632,8 +705,8 @@ mod tests {
     async fn test_toggle_effect() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/effects/toggle",
-            serde_json::json!({"target": "Master", "effect_idx": 0}),
+            "/api/effects/fx-001/toggle",
+            serde_json::json!({}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1146,7 +1219,7 @@ mod tests {
         let app = router_with_mock_engine();
         let resp = app
             .oneshot(
-                Request::delete("/api/outputs/0")
+                Request::delete("/api/outputs/out-001")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1159,7 +1232,7 @@ mod tests {
     async fn test_set_output_display() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/outputs/0/display",
+            "/api/outputs/out-001/display",
             serde_json::json!({"monitor_name": "HDMI-1"}),
         )
         .await;
@@ -1184,7 +1257,7 @@ mod tests {
         let app = router_with_mock_engine();
         let resp = app
             .oneshot(
-                Request::delete("/api/outputs/out-001/surfaces/0")
+                Request::delete("/api/outputs/out-001/surfaces/srf-001")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1197,7 +1270,7 @@ mod tests {
     async fn test_start_output() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/outputs/0/start",
+            "/api/outputs/out-001/start",
             serde_json::json!({}),
         )
         .await;
@@ -1209,7 +1282,7 @@ mod tests {
     async fn test_stop_output() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/outputs/0/stop",
+            "/api/outputs/out-001/stop",
             serde_json::json!({}),
         )
         .await;
@@ -1221,7 +1294,7 @@ mod tests {
     async fn test_set_calibration_mode() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/outputs/0/calibration",
+            "/api/outputs/out-001/calibration",
             serde_json::json!({"mode": "Projector"}),
         )
         .await;
@@ -1383,7 +1456,7 @@ mod tests {
     async fn test_video_toggle_play() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/video/toggle-play",
+            "/api/decks/dk-001/video/toggle-play",
             serde_json::json!({}),
         )
         .await;
@@ -1395,7 +1468,7 @@ mod tests {
     async fn test_video_seek() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/video/seek",
+            "/api/decks/dk-001/video/seek",
             serde_json::json!({"position_secs": 10.5}),
         )
         .await;
@@ -1407,7 +1480,7 @@ mod tests {
     async fn test_video_set_speed() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/video/speed",
+            "/api/decks/dk-001/video/speed",
             serde_json::json!({"speed": 2.0}),
         )
         .await;
@@ -1419,7 +1492,7 @@ mod tests {
     async fn test_video_set_loop_mode() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/video/loop-mode",
+            "/api/decks/dk-001/video/loop-mode",
             serde_json::json!({"mode": "Loop"}),
         )
         .await;
@@ -1431,7 +1504,7 @@ mod tests {
     async fn test_video_set_in_point() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/video/in-point",
+            "/api/decks/dk-001/video/in-point",
             serde_json::json!({"secs": 1.0}),
         )
         .await;
@@ -1443,7 +1516,7 @@ mod tests {
     async fn test_video_set_out_point() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/video/out-point",
+            "/api/decks/dk-001/video/out-point",
             serde_json::json!({"secs": 30.0}),
         )
         .await;
@@ -1456,7 +1529,7 @@ mod tests {
         let app = router_with_mock_engine();
         let resp = app
             .oneshot(
-                Request::delete("/api/channels/0/decks/0/video/in-out-points")
+                Request::delete("/api/decks/dk-001/video/in-out-points")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1471,7 +1544,7 @@ mod tests {
     async fn test_set_auto_transition_enabled() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/auto-transition/enabled",
+            "/api/decks/dk-001/auto-transition/enabled",
             serde_json::json!({"value": true}),
         )
         .await;
@@ -1483,7 +1556,7 @@ mod tests {
     async fn test_set_auto_transition_trigger() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/auto-transition/trigger",
+            "/api/decks/dk-001/auto-transition/trigger",
             serde_json::json!({"value": true}),
         )
         .await;
@@ -1495,7 +1568,7 @@ mod tests {
     async fn test_set_auto_transition_play_duration() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/auto-transition/play-duration",
+            "/api/decks/dk-001/auto-transition/play-duration",
             serde_json::json!({"value": 5.0, "unit": "Seconds"}),
         )
         .await;
@@ -1507,7 +1580,7 @@ mod tests {
     async fn test_set_auto_transition_duration() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/auto-transition/duration",
+            "/api/decks/dk-001/auto-transition/duration",
             serde_json::json!({"value": 2.0, "unit": "Seconds"}),
         )
         .await;
@@ -1519,7 +1592,7 @@ mod tests {
     async fn test_set_auto_transition_shader() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/auto-transition/shader",
+            "/api/decks/dk-001/auto-transition/shader",
             serde_json::json!({"shader_name": "Dissolve"}),
         )
         .await;
@@ -1533,7 +1606,7 @@ mod tests {
     async fn test_add_video_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/video",
+            "/api/channels/ch-001/decks/video",
             serde_json::json!({"path": "/tmp/test.mp4"}),
         )
         .await;
@@ -1545,7 +1618,7 @@ mod tests {
     async fn test_add_camera_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/camera",
+            "/api/channels/ch-001/decks/camera",
             serde_json::json!({"camera_id": 0}),
         )
         .await;
@@ -1557,7 +1630,7 @@ mod tests {
     async fn test_add_ndi_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/ndi",
+            "/api/channels/ch-001/decks/ndi",
             serde_json::json!({"source_name": "OBS"}),
         )
         .await;
@@ -1569,7 +1642,7 @@ mod tests {
     async fn test_add_syphon_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/syphon",
+            "/api/channels/ch-001/decks/syphon",
             serde_json::json!({"server_name": "TestServer"}),
         )
         .await;
@@ -1581,7 +1654,7 @@ mod tests {
     async fn test_add_srt_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/srt",
+            "/api/channels/ch-001/decks/srt",
             serde_json::json!({"url": "srt://localhost:9000", "mode": "Caller"}),
         )
         .await;
@@ -1593,7 +1666,7 @@ mod tests {
     async fn test_add_html_deck() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/html",
+            "/api/channels/ch-001/decks/html",
             serde_json::json!({"url": "https://example.com/visuals.html"}),
         )
         .await;
@@ -1608,14 +1681,8 @@ mod tests {
         let app = router_with_mock_engine();
         let resp = app
             .oneshot(
-                Request::delete("/api/effects")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_vec(
-                            &serde_json::json!({"target": "Master", "effect_idx": 0}),
-                        )
-                        .unwrap(),
-                    ))
+                Request::delete("/api/effects/fx-001")
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await
@@ -1624,11 +1691,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_move_effect() {
-        let (status, json) = post_json(
+    async fn test_reorder_master_effect() {
+        let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/effects/move",
-            serde_json::json!({"target": "Master", "from_idx": 0, "to_idx": 1}),
+            "/api/master/effects/reorder",
+            serde_json::json!({"from_idx": 0, "to_idx": 1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_reorder_channel_effect() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/channels/ch-001/effects/reorder",
+            serde_json::json!({"from_idx": 0, "to_idx": 1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_reorder_deck_effect() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/effects/reorder",
+            serde_json::json!({"from_idx": 0, "to_idx": 1}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1654,7 +1745,7 @@ mod tests {
         let app = router_with_mock_engine();
         let resp = app
             .oneshot(
-                Request::delete("/api/sequences/0")
+                Request::delete("/api/sequences/seq-001")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1667,7 +1758,7 @@ mod tests {
     async fn test_play_sequence() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/sequences/0/play",
+            "/api/sequences/seq-001/play",
             serde_json::json!({}),
         )
         .await;
@@ -1679,7 +1770,7 @@ mod tests {
     async fn test_stop_sequence() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/sequences/0/stop",
+            "/api/sequences/seq-001/stop",
             serde_json::json!({}),
         )
         .await;
@@ -1691,7 +1782,7 @@ mod tests {
     async fn test_toggle_sequence() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/sequences/0/toggle",
+            "/api/sequences/seq-001/toggle",
             serde_json::json!({}),
         )
         .await;
@@ -1703,8 +1794,8 @@ mod tests {
     async fn test_add_fade_step() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/sequences/0/steps/fade",
-            serde_json::json!({"from_ch": 0, "to_ch": 1}),
+            "/api/sequences/seq-001/steps/fade",
+            serde_json::json!({"from_channel_uuid": "ch-001", "to_channel_uuid": "ch-002"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1715,7 +1806,7 @@ mod tests {
     async fn test_add_wait_step() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/sequences/0/steps/wait",
+            "/api/sequences/seq-001/steps/wait",
             serde_json::json!({}),
         )
         .await;
@@ -1727,7 +1818,7 @@ mod tests {
     async fn test_add_goto_step() {
         let (status, json) = post_json(
             router_with_mock_engine(),
-            "/api/sequences/0/steps/goto",
+            "/api/sequences/seq-001/steps/goto",
             serde_json::json!({"step_index": 0}),
         )
         .await;
@@ -1740,7 +1831,7 @@ mod tests {
         let app = router_with_mock_engine();
         let resp = app
             .oneshot(
-                Request::delete("/api/sequences/0/steps/1")
+                Request::delete("/api/sequences/seq-001/steps/1")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1753,7 +1844,7 @@ mod tests {
     async fn test_set_step_duration() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/sequences/0/steps/0/duration",
+            "/api/sequences/seq-001/steps/0/duration",
             serde_json::json!({"value": 3.0, "unit": "Seconds"}),
         )
         .await;
@@ -1765,7 +1856,7 @@ mod tests {
     async fn test_set_step_easing() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/sequences/0/steps/0/easing",
+            "/api/sequences/seq-001/steps/0/easing",
             serde_json::json!({"easing": "Linear"}),
         )
         .await;
@@ -1777,8 +1868,44 @@ mod tests {
     async fn test_set_step_shader() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/sequences/0/steps/0/shader",
+            "/api/sequences/seq-001/steps/0/shader",
             serde_json::json!({"shader_name": "Dissolve"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_step_from_ch() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/sequences/seq-001/steps/0/from-ch",
+            serde_json::json!({"channel_uuid": "ch-001"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_set_step_to_ch() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/sequences/seq-001/steps/0/to-ch",
+            serde_json::json!({"channel_uuid": "ch-002"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_move_step() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/sequences/seq-001/steps/move",
+            serde_json::json!({"from": 0, "to": 1}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -2542,7 +2669,7 @@ mod tests {
     async fn test_set_deck_blend_mode_add() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/blend-mode",
+            "/api/decks/dk-001/blend-mode",
             serde_json::json!({"mode": "Add"}),
         )
         .await;
@@ -2570,7 +2697,7 @@ mod tests {
     async fn test_auto_transition_shader_null() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/channels/0/decks/0/auto-transition/shader",
+            "/api/decks/dk-001/auto-transition/shader",
             serde_json::json!({"shader_name": null}),
         )
         .await;
@@ -2584,7 +2711,7 @@ mod tests {
     async fn test_step_shader_null() {
         let (status, json) = put_json(
             router_with_mock_engine(),
-            "/api/sequences/0/steps/0/shader",
+            "/api/sequences/seq-001/steps/0/shader",
             serde_json::json!({"shader_name": null}),
         )
         .await;
@@ -2608,6 +2735,382 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    // ── UUID addressing ─────────────────────────────────────────
+
+    /// A client that creates an entity and then addresses it takes the UUID from
+    /// the creation response, never a position in the entity list.
+    #[tokio::test]
+    async fn test_created_uuid_addresses_the_new_entity() {
+        let app = router_with_ok_with_id_engine();
+        let (status, json) = post_json(app.clone(), "/api/channels", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        let channel_uuid = json["uuid"].as_str().expect("creation returns a uuid");
+
+        let (status, _) = post_json(
+            app,
+            &format!("/api/channels/{channel_uuid}/decks/shader"),
+            serde_json::json!({"shader_name": "Sine"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    /// An unresolvable UUID is a loud 404 rather than a silent write to whatever
+    /// entity currently occupies a position. See `/spec/api-addressing.md`.
+    #[tokio::test]
+    async fn test_unresolvable_deck_uuid_returns_404() {
+        let (status, json) = put_json(
+            router_with_not_found_engine(),
+            "/api/decks/no-such-deck/opacity",
+            serde_json::json!({"opacity": 0.0}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["error"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn test_unresolvable_effect_uuid_returns_404() {
+        let (status, json) = post_json(
+            router_with_not_found_engine(),
+            "/api/effects/no-such-effect/toggle",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["error"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn test_unresolvable_output_uuid_returns_404() {
+        let (status, json) = put_json(
+            router_with_not_found_engine(),
+            "/api/outputs/no-such-output/calibration",
+            serde_json::json!({"mode": "Projector"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["error"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn test_unresolvable_sequence_uuid_returns_404() {
+        let (status, json) = post_json(
+            router_with_not_found_engine(),
+            "/api/sequences/no-such-sequence/play",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["error"], "not_found");
+    }
+
+    // ── Write: Analyzer routes ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_request_analyzer() {
+        let (status, json) = post_json(
+            router_with_mock_engine(),
+            "/api/decks/dk-001/analyzers",
+            serde_json::json!({"analyzer_type": "brightness"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_release_analyzer() {
+        let app = router_with_mock_engine();
+        let resp = app
+            .oneshot(
+                Request::delete("/api/decks/dk-001/analyzers/brightness")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── Address plumbing: path segments → command fields ────────
+    //
+    // The mock engine replies `Ok` to anything, so a status assertion alone
+    // cannot catch a handler that puts a path segment in the wrong command
+    // field. These tests inspect the dispatched command instead.
+
+    fn router_capturing_commands() -> (
+        axum::Router,
+        std::sync::Arc<std::sync::Mutex<Vec<crate::engine::EngineCommand>>>,
+    ) {
+        let state = make_test_state();
+        let (cmd_tx, mut cmd_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::engine::CommandEnvelope>();
+        let engine_state = std::sync::Arc::new(std::sync::RwLock::new(Some(state)));
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        tokio::spawn(async move {
+            while let Some((cmd, reply_tx)) = cmd_rx.recv().await {
+                sink.lock().unwrap().push(cmd);
+                if let Some(tx) = reply_tx {
+                    let _ = tx.send(CommandResult::Ok);
+                }
+            }
+        });
+        let shared = SharedState {
+            command_tx: cmd_tx,
+            engine_state,
+        };
+        (crate::usecases::api::runner::build_router(shared), seen)
+    }
+
+    fn take_command(
+        seen: &std::sync::Arc<std::sync::Mutex<Vec<crate::engine::EngineCommand>>>,
+    ) -> crate::engine::EngineCommand {
+        seen.lock()
+            .unwrap()
+            .pop()
+            .expect("handler dispatched no command")
+    }
+
+    #[tokio::test]
+    async fn test_deck_mutation_carries_deck_uuid() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/decks/dk-007/opacity",
+            serde_json::json!({"opacity": 0.25}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetDeckOpacity { deck_uuid, opacity } => {
+                assert_eq!(deck_uuid, "dk-007");
+                assert!((opacity - 0.25).abs() < 1e-6);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deck_creation_carries_parent_channel_uuid() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/channels/ch-042/decks/shader",
+            serde_json::json!({"shader_name": "Sine"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::AddDeck {
+                channel_uuid,
+                shader_name,
+            } => {
+                assert_eq!(channel_uuid, "ch-042");
+                assert_eq!(shader_name, "Sine");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_move_deck_distinguishes_source_and_destination() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/decks/dk-001/move",
+            serde_json::json!({"dst_channel_uuid": "ch-002"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::MoveDeck {
+                deck_uuid,
+                dst_channel_uuid,
+            } => {
+                assert_eq!(deck_uuid, "dk-001");
+                assert_eq!(dst_channel_uuid, "ch-002");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reorder_deck_keeps_channel_scoped_ordinals() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/channels/ch-003/decks/reorder",
+            serde_json::json!({"from_idx": 2, "to_idx": 0}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::ReorderDeck {
+                channel_uuid,
+                from_idx,
+                to_idx,
+            } => {
+                assert_eq!(channel_uuid, "ch-003");
+                assert_eq!(from_idx, 2);
+                assert_eq!(to_idx, 0);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_effect_routes_address_effect_by_uuid_alone() {
+        let (app, seen) = router_capturing_commands();
+        let resp = app
+            .oneshot(
+                Request::delete("/api/effects/fx-009")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::RemoveEffect { effect_uuid } => {
+                assert_eq!(effect_uuid, "fx-009");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_effect_creation_targets_match_route_prefix() {
+        use crate::engine::types::EffectTarget;
+        for (path, expected) in [
+            (
+                "/api/channels/ch-005/effects",
+                EffectTarget::Channel("ch-005".into()),
+            ),
+            (
+                "/api/decks/dk-005/effects",
+                EffectTarget::Deck("dk-005".into()),
+            ),
+            ("/api/master/effects", EffectTarget::Master),
+        ] {
+            let (app, seen) = router_capturing_commands();
+            let (status, _) =
+                post_json(app, path, serde_json::json!({"shader_name": "Blur"})).await;
+            assert_eq!(status, StatusCode::OK, "route {path}");
+            match take_command(&seen) {
+                crate::engine::EngineCommand::AddEffect { target, .. } => {
+                    assert_eq!(target, expected, "route {path}");
+                }
+                other => panic!("unexpected command for {path}: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unassign_surface_does_not_swap_its_two_uuids() {
+        let (app, seen) = router_capturing_commands();
+        let resp = app
+            .oneshot(
+                Request::delete("/api/outputs/out-001/surfaces/sf-002")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::UnassignSurfaceFromOutput {
+                output_uuid,
+                surface_uuid,
+            } => {
+                assert_eq!(output_uuid, "out-001");
+                assert_eq!(surface_uuid, "sf-002");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_step_route_mixes_sequence_uuid_with_ordinal_index() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = put_json(
+            app,
+            "/api/sequences/seq-001/steps/3/from-ch",
+            serde_json::json!({"channel_uuid": "ch-002"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetStepFromCh {
+                sequence_uuid,
+                step_idx,
+                channel_uuid,
+            } => {
+                assert_eq!(sequence_uuid, "seq-001");
+                assert_eq!(step_idx, 3);
+                assert_eq!(channel_uuid, "ch-002");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_fade_step_keeps_from_and_to_channels_distinct() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(
+            app,
+            "/api/sequences/seq-001/steps/fade",
+            serde_json::json!({"from_channel_uuid": "ch-001", "to_channel_uuid": "ch-002"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::AddFadeStep {
+                sequence_uuid,
+                from_channel_uuid,
+                to_channel_uuid,
+            } => {
+                assert_eq!(sequence_uuid, "seq-001");
+                assert_eq!(from_channel_uuid, "ch-001");
+                assert_eq!(to_channel_uuid, "ch-002");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_output_route_carries_output_uuid() {
+        let (app, seen) = router_capturing_commands();
+        let (status, _) = post_json(app, "/api/outputs/out-003/start", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::StartOutput { output_uuid } => {
+                assert_eq!(output_uuid, "out-003");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_uuid_with_hyphens_and_dots_survives_path_extraction() {
+        let (app, seen) = router_capturing_commands();
+        let uuid = "3f2b1c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+        let (status, _) = put_json(
+            app,
+            &format!("/api/decks/{uuid}/opacity"),
+            serde_json::json!({"opacity": 1.0}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        match take_command(&seen) {
+            crate::engine::EngineCommand::SetDeckOpacity { deck_uuid, .. } => {
+                assert_eq!(deck_uuid, uuid);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     // ── Empty body on POST endpoint that requires body ──────────

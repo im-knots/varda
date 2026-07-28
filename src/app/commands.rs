@@ -4,8 +4,50 @@
 //! variant that cross-thread consumers (HTTP API, WebSocket, CLI) drive through
 //! the command channel.
 
+use super::resolve::UnknownEntity;
 use super::VardaApp;
 use crate::engine::{CommandOutcome, CommandResult, DomeLayoutFields, EngineCommand, ErrorCode};
+
+/// Classify an engine error for the wire. An unresolvable UUID is `NotFound` —
+/// the caller's view of the world is stale, which is distinct from a malformed
+/// request. See [`/spec/api-addressing.md`].
+fn classify(err: &anyhow::Error) -> ErrorCode {
+    if err.downcast_ref::<UnknownEntity>().is_some() {
+        ErrorCode::NotFound
+    } else {
+        ErrorCode::InvalidInput
+    }
+}
+
+/// Map a unit-returning engine call onto the wire result.
+fn wire(result: anyhow::Result<()>) -> CommandResult {
+    match result {
+        Ok(()) => CommandResult::Ok,
+        Err(e) => CommandResult::Err {
+            code: classify(&e),
+            message: e.to_string(),
+        },
+    }
+}
+
+/// Map an id-returning engine call (creation) onto the wire result.
+fn wire_id(result: anyhow::Result<String>) -> CommandResult {
+    match result {
+        Ok(uuid) => CommandResult::OkWithId { uuid },
+        Err(e) => CommandResult::Err {
+            code: classify(&e),
+            message: e.to_string(),
+        },
+    }
+}
+
+/// Wire result for a resolution failure handled inline.
+fn not_found(err: UnknownEntity) -> CommandResult {
+    CommandResult::Err {
+        code: ErrorCode::NotFound,
+        message: err.to_string(),
+    }
+}
 
 impl VardaApp {
     /// Execute a command on behalf of the windowed GUI, returning a typed,
@@ -15,95 +57,51 @@ impl VardaApp {
     /// delegated verbatim to [`Self::execute_command`]. See
     /// [`/spec/ui-engine-boundary.md`] WS1/Decision #9.
     pub(crate) fn execute_command_gui(&mut self, cmd: EngineCommand) -> CommandOutcome {
-        // Deck-creating commands append to a channel; on success the runner
-        // registers the new deck's preview texture. Includes the external-I/O
-        // sources, which now report `OkWithId` (see `app/state/io.rs`).
-        let channel_idx = match &cmd {
-            EngineCommand::AddDeck { channel_idx, .. }
-            | EngineCommand::AddImageDeck { channel_idx, .. }
-            | EngineCommand::AddVideoDeck { channel_idx, .. }
-            | EngineCommand::AddSolidColorDeck { channel_idx, .. }
-            | EngineCommand::AddCameraDeck { channel_idx, .. }
-            | EngineCommand::AddDepthSensorDeck { channel_idx, .. }
-            | EngineCommand::AddNdiDeck { channel_idx, .. }
-            | EngineCommand::AddSyphonDeck { channel_idx, .. }
-            | EngineCommand::AddSrtDeck { channel_idx, .. }
-            | EngineCommand::AddHlsDeck { channel_idx, .. }
-            | EngineCommand::AddDashDeck { channel_idx, .. }
-            | EngineCommand::AddRtmpDeck { channel_idx, .. }
-            | EngineCommand::AddHtmlDeck { channel_idx, .. } => Some(*channel_idx),
-            _ => None,
+        // A preset load can create several decks at once (a channel preset fills
+        // a whole channel), and the count isn't known up front, so diff the deck
+        // set across execution rather than reading a single reported id.
+        let is_preset_load = matches!(
+            &cmd,
+            EngineCommand::LoadDeckPreset { .. } | EngineCommand::LoadChannelPreset { .. }
+        );
+        let is_deck_add = super::actions::command_is_deck_add(&cmd);
+        let decks_before = if is_preset_load {
+            self.deck_uuid_set()
+        } else {
+            std::collections::HashSet::new()
         };
-        // Structural deck changes shift indices; the runner must refresh the
-        // index-keyed preview-texture map for the affected channels.
-        let reindex: Option<Vec<usize>> = match &cmd {
-            EngineCommand::RemoveDeck { channel_idx, .. }
-            | EngineCommand::ReorderDeck {
-                ch: channel_idx, ..
-            } => Some(vec![*channel_idx]),
-            EngineCommand::MoveDeck { src_ch, dst_ch, .. } => Some(vec![*src_ch, *dst_ch]),
-            _ => None,
-        };
-        // Preset loads append decks (to a fixed channel) or fill/create a channel;
-        // the affected channel's previews are re-registered from the outcome. The
-        // channel target for `LoadChannelPreset` isn't known until after execution
-        // (it may create a new channel), so capture the pre-execution channel count.
-        let preset_deck_channel = match &cmd {
-            EngineCommand::LoadDeckPreset { channel_idx, .. } => Some(*channel_idx),
-            _ => None,
-        };
-        let preset_channel_target = match &cmd {
-            EngineCommand::LoadChannelPreset { target_channel, .. } => Some(*target_channel),
-            _ => None,
-        };
-        let channels_before = self.mixer.channels().len();
+
         let result = self.execute_command(cmd);
-        if let Some(channel_idx) = preset_deck_channel {
-            if !matches!(result, CommandResult::Err { .. }) {
-                return CommandOutcome::DecksReindexed {
-                    channels: vec![channel_idx],
-                };
-            }
+        if matches!(result, CommandResult::Err { .. }) {
             return CommandOutcome::Plain(result);
         }
-        if let Some(target) = preset_channel_target {
-            if !matches!(result, CommandResult::Err { .. }) {
-                let channels_after = self.mixer.channels().len();
-                // A new channel was appended if the count grew; otherwise the
-                // preset filled the (empty) target channel in place.
-                let channels: Vec<usize> = if channels_after > channels_before {
-                    (channels_before..channels_after).collect()
-                } else {
-                    target.into_iter().collect()
-                };
-                return CommandOutcome::DecksReindexed { channels };
-            }
-            return CommandOutcome::Plain(result);
+
+        if is_preset_load {
+            let uuids = self
+                .deck_uuid_set()
+                .difference(&decks_before)
+                .cloned()
+                .collect();
+            return CommandOutcome::DecksCreated { uuids };
         }
-        if let Some(channel_idx) = channel_idx {
+        if is_deck_add {
             if let CommandResult::OkWithId { uuid } = result {
-                // Deck-creating commands append to the channel, so the new deck
-                // is the last slot.
-                let deck_idx = self
-                    .mixer
-                    .channels()
-                    .get(channel_idx)
-                    .map(|ch| ch.decks.len().saturating_sub(1))
-                    .unwrap_or(0);
-                return CommandOutcome::DeckCreated {
-                    channel_idx,
-                    deck_idx,
-                    uuid,
-                };
+                return CommandOutcome::DecksCreated { uuids: vec![uuid] };
             }
             return CommandOutcome::Plain(result);
-        }
-        if let Some(channels) = reindex {
-            if matches!(result, CommandResult::Ok) {
-                return CommandOutcome::DecksReindexed { channels };
-            }
         }
         CommandOutcome::Plain(result)
+    }
+
+    /// Every live deck UUID. Used to diff deck creation across a command whose
+    /// effect on the deck set isn't known in advance.
+    fn deck_uuid_set(&self) -> std::collections::HashSet<String> {
+        self.mixer
+            .channels()
+            .iter()
+            .flat_map(|ch| ch.decks.iter())
+            .map(|slot| slot.deck.uuid().to_string())
+            .collect()
     }
 
     /// Undo/redo on behalf of the windowed GUI. Uses the UI `layout` to source
@@ -188,214 +186,88 @@ impl VardaApp {
                 CommandResult::Ok
             }
             EngineCommand::AddDeck {
-                channel_idx,
+                channel_uuid,
                 shader_name,
-            } => match self.add_deck(channel_idx, &shader_name) {
-                Ok(uuid) => CommandResult::OkWithId { uuid },
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::InvalidInput,
-                    message: e.to_string(),
-                },
-            },
-            EngineCommand::AddImageDeck { channel_idx, path } => {
-                match self.add_image_deck(channel_idx, &path) {
-                    Ok(uuid) => CommandResult::OkWithId { uuid },
-                    Err(e) => CommandResult::Err {
-                        code: ErrorCode::InvalidInput,
-                        message: e.to_string(),
-                    },
-                }
+            } => wire_id(self.add_deck(&channel_uuid, &shader_name)),
+            EngineCommand::AddImageDeck { channel_uuid, path } => {
+                wire_id(self.add_image_deck(&channel_uuid, &path))
             }
-            EngineCommand::AddVideoDeck { channel_idx, path } => {
-                match self.add_video_deck(channel_idx, &path) {
-                    Ok(uuid) => CommandResult::OkWithId { uuid },
-                    Err(e) => CommandResult::Err {
-                        code: ErrorCode::InvalidInput,
-                        message: e.to_string(),
-                    },
-                }
+            EngineCommand::AddVideoDeck { channel_uuid, path } => {
+                wire_id(self.add_video_deck(&channel_uuid, &path))
             }
-            EngineCommand::AddSolidColorDeck { channel_idx, color } => {
-                match self.add_solid_color_deck(channel_idx, color) {
-                    Ok(uuid) => CommandResult::OkWithId { uuid },
-                    Err(e) => CommandResult::Err {
-                        code: ErrorCode::InvalidInput,
-                        message: e.to_string(),
-                    },
-                }
-            }
+            EngineCommand::AddSolidColorDeck {
+                channel_uuid,
+                color,
+            } => wire_id(self.add_solid_color_deck(&channel_uuid, color)),
             EngineCommand::AddCameraDeck {
-                channel_idx,
+                channel_uuid,
                 camera_id,
-            } => match self.add_camera_deck(channel_idx, camera_id) {
-                Ok(uuid) => CommandResult::OkWithId { uuid },
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::InvalidInput,
-                    message: e.to_string(),
-                },
-            },
+            } => wire_id(self.add_camera_deck(&channel_uuid, camera_id)),
             EngineCommand::AddDepthSensorDeck {
-                channel_idx,
+                channel_uuid,
                 depth_sensor_id,
-            } => match self.add_depth_sensor_deck(channel_idx, depth_sensor_id) {
-                Ok(uuid) => CommandResult::OkWithId { uuid },
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::InvalidInput,
-                    message: e.to_string(),
-                },
-            },
-            EngineCommand::RemoveDeck {
-                channel_idx,
-                deck_idx,
-            } => match self.remove_deck(channel_idx, deck_idx) {
-                Ok(_) => CommandResult::Ok,
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: e.to_string(),
-                },
-            },
+            } => wire_id(self.add_depth_sensor_deck(&channel_uuid, depth_sensor_id)),
+            EngineCommand::RemoveDeck { deck_uuid } => wire(self.remove_deck(&deck_uuid)),
             EngineCommand::MoveDeck {
-                src_ch,
-                src_deck,
-                dst_ch,
-            } => match self.move_deck(src_ch, src_deck, dst_ch) {
-                Ok(_) => CommandResult::Ok,
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::InvalidInput,
-                    message: e.to_string(),
-                },
-            },
+                deck_uuid,
+                dst_channel_uuid,
+            } => wire(self.move_deck(&deck_uuid, &dst_channel_uuid)),
             EngineCommand::ReorderDeck {
-                ch,
+                channel_uuid,
                 from_idx,
                 to_idx,
-            } => {
-                self.reorder_deck(ch, from_idx, to_idx);
-                CommandResult::Ok
+            } => wire(self.reorder_deck(&channel_uuid, from_idx, to_idx)),
+            EngineCommand::SetDeckOpacity { deck_uuid, opacity } => {
+                wire(self.set_deck_opacity(&deck_uuid, opacity))
             }
-            EngineCommand::SetDeckOpacity {
-                channel_idx,
-                deck_idx,
-                opacity,
-            } => {
-                self.set_deck_opacity(channel_idx, deck_idx, opacity);
-                CommandResult::Ok
+            EngineCommand::SetDeckBlendMode { deck_uuid, mode } => {
+                wire(self.set_deck_blend_mode(&deck_uuid, mode))
             }
-            EngineCommand::SetDeckBlendMode {
-                channel_idx,
-                deck_idx,
-                mode,
-            } => {
-                self.set_deck_blend_mode(channel_idx, deck_idx, mode);
-                CommandResult::Ok
+            EngineCommand::SetDeckSolo { deck_uuid, solo } => {
+                wire(self.set_deck_solo(&deck_uuid, solo))
             }
-            EngineCommand::SetDeckSolo {
-                channel_idx,
-                deck_idx,
-                solo,
-            } => {
-                self.set_deck_solo(channel_idx, deck_idx, solo);
-                CommandResult::Ok
-            }
-            EngineCommand::SetDeckMute {
-                channel_idx,
-                deck_idx,
-                mute,
-            } => {
-                self.set_deck_mute(channel_idx, deck_idx, mute);
-                CommandResult::Ok
+            EngineCommand::SetDeckMute { deck_uuid, mute } => {
+                wire(self.set_deck_mute(&deck_uuid, mute))
             }
             EngineCommand::SetDeckRenderFps {
-                channel_idx,
-                deck_idx,
+                deck_uuid,
                 render_fps,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if let Some(slot) = ch.decks.get_mut(deck_idx) {
-                        slot.render_fps = render_fps;
-                        CommandResult::Ok
-                    } else {
-                        CommandResult::Err {
-                            code: ErrorCode::NotFound,
-                            message: format!("Deck {} not found", deck_idx),
-                        }
-                    }
-                } else {
-                    CommandResult::Err {
-                        code: ErrorCode::NotFound,
-                        message: format!("Channel {} not found", channel_idx),
-                    }
+            } => match self.resolve_deck(&deck_uuid) {
+                Ok((ch, dk)) => {
+                    self.mixer.channels_mut()[ch].decks[dk].render_fps = render_fps;
+                    CommandResult::Ok
                 }
-            }
-            EngineCommand::SetDeckScalingMode {
-                channel_idx,
-                deck_idx,
-                mode,
-            } => {
-                self.set_deck_scaling_mode(channel_idx, deck_idx, mode);
-                CommandResult::Ok
+                Err(e) => not_found(e),
+            },
+            EngineCommand::SetDeckScalingMode { deck_uuid, mode } => {
+                wire(self.set_deck_scaling_mode(&deck_uuid, mode))
             }
             EngineCommand::SetDeckTransparent {
-                channel_idx,
-                deck_idx,
+                deck_uuid,
                 transparent,
-            } => {
-                self.set_deck_transparent(channel_idx, deck_idx, transparent);
-                CommandResult::Ok
-            }
+            } => wire(self.set_deck_transparent(&deck_uuid, transparent)),
             EngineCommand::SetChannelOpacity {
-                channel_idx,
+                channel_uuid,
                 opacity,
-            } => {
-                self.set_channel_opacity(channel_idx, opacity);
-                CommandResult::Ok
+            } => wire(self.set_channel_opacity(&channel_uuid, opacity)),
+            EngineCommand::SetChannelBlendMode { channel_uuid, mode } => {
+                wire(self.set_channel_blend_mode(&channel_uuid, mode))
             }
-            EngineCommand::SetChannelBlendMode { channel_idx, mode } => {
-                self.set_channel_blend_mode(channel_idx, mode);
-                CommandResult::Ok
-            }
-            EngineCommand::AddChannel => match self.add_channel() {
-                Ok(_idx) => CommandResult::Ok,
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::InternalError,
-                    message: e.to_string(),
-                },
-            },
-            EngineCommand::RemoveChannel { channel_idx } => {
-                match self.remove_channel(channel_idx) {
-                    Ok(_) => CommandResult::Ok,
-                    Err(e) => CommandResult::Err {
-                        code: ErrorCode::NotFound,
-                        message: e.to_string(),
-                    },
-                }
+            EngineCommand::AddChannel => wire_id(self.add_channel()),
+            EngineCommand::RemoveChannel { channel_uuid } => {
+                wire(self.remove_channel(&channel_uuid))
             }
             EngineCommand::AddEffect {
                 target,
                 shader_name,
-            } => match self.add_effect(target, &shader_name) {
-                Ok(_) => CommandResult::Ok,
-                Err(e) => CommandResult::Err {
-                    code: ErrorCode::InvalidInput,
-                    message: e.to_string(),
-                },
-            },
-            EngineCommand::RemoveEffect { target, effect_idx } => {
-                self.remove_effect(target, effect_idx);
-                CommandResult::Ok
-            }
-            EngineCommand::ToggleEffect { target, effect_idx } => {
-                self.toggle_effect(target, effect_idx);
-                CommandResult::Ok
-            }
+            } => wire_id(self.add_effect(target, &shader_name)),
+            EngineCommand::RemoveEffect { effect_uuid } => wire(self.remove_effect(&effect_uuid)),
+            EngineCommand::ToggleEffect { effect_uuid } => wire(self.toggle_effect(&effect_uuid)),
             EngineCommand::MoveEffect {
                 target,
                 from_idx,
                 to_idx,
-            } => {
-                self.move_effect(target, from_idx, to_idx);
-                CommandResult::Ok
-            }
+            } => wire(self.move_effect(target, from_idx, to_idx)),
             EngineCommand::SetTransition { shader_name } => {
                 match self.set_transition(shader_name.as_deref()) {
                     Ok(_) => CommandResult::Ok,
@@ -486,17 +358,18 @@ impl VardaApp {
                 self.request_create_output();
                 CommandResult::Ok
             }
-            EngineCommand::CloseOutput { idx } => {
-                self.close_output(idx);
-                CommandResult::Ok
-            }
-            EngineCommand::SetOutputDisplay { idx, monitor_name } => {
-                self.set_output_display(idx, &monitor_name);
-                CommandResult::Ok
-            }
-            EngineCommand::SetOutputTarget { idx, target } => {
-                self.cmd_set_output_target(idx, target)
-            }
+            EngineCommand::CloseOutput { output_uuid } => wire(self.close_output(&output_uuid)),
+            EngineCommand::SetOutputDisplay {
+                output_uuid,
+                monitor_name,
+            } => wire(self.set_output_display(&output_uuid, &monitor_name)),
+            EngineCommand::SetOutputTarget {
+                output_uuid,
+                target,
+            } => match self.resolve_output(&output_uuid) {
+                Ok(idx) => self.cmd_set_output_target(idx, target),
+                Err(e) => not_found(e),
+            },
 
             // ── Surfaces ────────────────────────────────────
             EngineCommand::AddSurface { name, source } => {
@@ -613,20 +486,12 @@ impl VardaApp {
             }
             EngineCommand::UnassignSurfaceFromOutput {
                 output_uuid,
-                assignment_idx,
+                surface_uuid,
             } => {
-                self.unassign_surface_from_output(&output_uuid, assignment_idx);
+                self.unassign_surface_from_output(&output_uuid, &surface_uuid);
                 self.recompute_auto_edge_blend();
                 CommandResult::Ok
             }
-            EngineCommand::AssignSurfaceToOutputByIdx {
-                output_idx,
-                surface_uuid,
-            } => self.cmd_assign_surface_to_output_by_idx(output_idx, &surface_uuid),
-            EngineCommand::UnassignSurfaceFromOutputByIdx {
-                output_idx,
-                assignment_idx,
-            } => self.cmd_unassign_surface_from_output_by_idx(output_idx, assignment_idx),
 
             // ── Surface Auto-Detection ────────────────────────
             EngineCommand::DetectFromImage { image_data, params } => {
@@ -703,135 +568,41 @@ impl VardaApp {
             }
 
             // ── Video Playback ────────────────────────────────
-            EngineCommand::VideoTogglePlay {
-                channel_idx,
-                deck_idx,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() && ch.decks[deck_idx].deck.video_toggle_play() {
-                        return CommandResult::Ok;
-                    }
-                }
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Deck not found or not a video".into(),
-                }
+            EngineCommand::VideoTogglePlay { deck_uuid } => {
+                self.exec_on_deck(&deck_uuid, |d| d.video_toggle_play())
             }
             EngineCommand::VideoSeek {
-                channel_idx,
-                deck_idx,
+                deck_uuid,
                 position_secs,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len()
-                        && ch.decks[deck_idx].deck.video_seek(position_secs)
-                    {
-                        return CommandResult::Ok;
-                    }
-                }
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Deck not found".into(),
-                }
+            } => self.exec_on_deck(&deck_uuid, |d| d.video_seek(position_secs)),
+            EngineCommand::VideoSetSpeed { deck_uuid, speed } => {
+                self.exec_on_deck(&deck_uuid, |d| d.video_set_speed(speed))
             }
-            EngineCommand::VideoSetSpeed {
-                channel_idx,
-                deck_idx,
-                speed,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() && ch.decks[deck_idx].deck.video_set_speed(speed) {
-                        return CommandResult::Ok;
-                    }
-                }
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Deck not found or not a video".into(),
-                }
+            EngineCommand::VideoSetLoopMode { deck_uuid, mode } => {
+                self.exec_on_deck(&deck_uuid, |d| d.video_set_loop_mode(mode))
             }
-            EngineCommand::VideoSetLoopMode {
-                channel_idx,
-                deck_idx,
-                mode,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len()
-                        && ch.decks[deck_idx].deck.video_set_loop_mode(mode)
-                    {
-                        return CommandResult::Ok;
-                    }
-                }
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Deck not found or not a video".into(),
-                }
+            EngineCommand::VideoSetInPoint { deck_uuid, secs } => {
+                self.exec_on_deck(&deck_uuid, |d| d.video_set_in_point(secs))
             }
-            EngineCommand::VideoSetInPoint {
-                channel_idx,
-                deck_idx,
-                secs,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() && ch.decks[deck_idx].deck.video_set_in_point(secs)
-                    {
-                        return CommandResult::Ok;
-                    }
-                }
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Deck not found or not a video".into(),
-                }
+            EngineCommand::VideoSetOutPoint { deck_uuid, secs } => {
+                self.exec_on_deck(&deck_uuid, |d| d.video_set_out_point(secs))
             }
-            EngineCommand::VideoSetOutPoint {
-                channel_idx,
-                deck_idx,
-                secs,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len()
-                        && ch.decks[deck_idx].deck.video_set_out_point(secs)
-                    {
-                        return CommandResult::Ok;
-                    }
-                }
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Deck not found or not a video".into(),
-                }
-            }
-            EngineCommand::VideoClearInOutPoints {
-                channel_idx,
-                deck_idx,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len()
-                        && ch.decks[deck_idx].deck.video_clear_in_out_points()
-                    {
-                        return CommandResult::Ok;
-                    }
-                }
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Deck not found or not a video".into(),
-                }
+            EngineCommand::VideoClearInOutPoints { deck_uuid } => {
+                self.exec_on_deck(&deck_uuid, |d| d.video_clear_in_out_points())
             }
 
             // ── Deck Auto-Transitions ─────────────────────────
-            EngineCommand::SetAutoTransitionEnabled {
-                channel_idx,
-                deck_idx,
-                enabled,
-            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                at.enabled = enabled;
-                if !enabled {
-                    at.phase = crate::channel::DeckTransitionPhase::Inactive;
-                }
-            }),
+            EngineCommand::SetAutoTransitionEnabled { deck_uuid, enabled } => self
+                .exec_auto_transition(&deck_uuid, |at| {
+                    at.enabled = enabled;
+                    if !enabled {
+                        at.phase = crate::channel::DeckTransitionPhase::Inactive;
+                    }
+                }),
             EngineCommand::SetAutoTransitionTrigger {
-                channel_idx,
-                deck_idx,
+                deck_uuid,
                 clip_end,
-            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+            } => self.exec_auto_transition(&deck_uuid, |at| {
                 at.trigger = if clip_end {
                     crate::channel::TransitionTrigger::ClipEnd
                 } else {
@@ -839,134 +610,108 @@ impl VardaApp {
                 };
             }),
             EngineCommand::SetAutoTransitionPlayDuration {
-                channel_idx,
-                deck_idx,
+                deck_uuid,
                 value,
                 unit,
-            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+            } => self.exec_auto_transition(&deck_uuid, |at| {
                 at.play_duration = crate::channel::DurationSpec::from_value_unit(value, unit);
             }),
             EngineCommand::SetAutoTransitionDuration {
-                channel_idx,
-                deck_idx,
+                deck_uuid,
                 value,
                 unit,
-            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
+            } => self.exec_auto_transition(&deck_uuid, |at| {
                 at.transition_duration = crate::channel::DurationSpec::from_value_unit(value, unit);
             }),
             EngineCommand::SetAutoTransitionShader {
-                channel_idx,
-                deck_idx,
+                deck_uuid,
                 shader_name,
             } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        let slot = &mut ch.decks[deck_idx];
-                        if slot.auto_transition.is_none() {
-                            slot.auto_transition = Some(crate::channel::DeckAutoTransition::new());
-                        }
-                        if let Some(at) = slot.auto_transition.as_mut() {
-                            at.transition_shader_name = shader_name.clone();
-                        }
-                        if let Some(shader_name) = &shader_name {
-                            if let Some(shader) = self
-                                .registry
-                                .transitions()
-                                .iter()
-                                .find(|s| s.name() == *shader_name)
-                            {
-                                let _ =
-                                    slot.set_transition_shader(&self.context, (*shader).clone());
-                            }
-                        } else {
-                            slot.transition_effect = None;
-                        }
-                        return CommandResult::Ok;
+                let (ch_idx, deck_idx) = match self.resolve_deck(&deck_uuid) {
+                    Ok(loc) => loc,
+                    Err(e) => return not_found(e),
+                };
+                let shader = shader_name.as_ref().and_then(|name| {
+                    self.registry
+                        .transitions()
+                        .iter()
+                        .find(|s| s.name() == *name)
+                        .map(|s| (*s).clone())
+                });
+                let slot = &mut self.mixer.channels_mut()[ch_idx].decks[deck_idx];
+                slot.auto_transition
+                    .get_or_insert_with(crate::channel::DeckAutoTransition::new)
+                    .transition_shader_name = shader_name.clone();
+                match shader {
+                    Some(shader) => {
+                        let _ = slot.set_transition_shader(&self.context, shader);
                     }
+                    None => slot.transition_effect = None,
                 }
-                CommandResult::Err {
-                    code: ErrorCode::NotFound,
-                    message: "Deck not found".into(),
-                }
+                CommandResult::Ok
             }
-            EngineCommand::ToggleAutoTransitionPlayDurationUnit {
-                channel_idx,
-                deck_idx,
-            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                let next_unit = at.play_duration.unit().next();
-                at.play_duration = crate::channel::DurationSpec::from_value_unit(
-                    at.play_duration.value(),
-                    next_unit,
-                );
-            }),
-            EngineCommand::ToggleAutoTransitionDurationUnit {
-                channel_idx,
-                deck_idx,
-            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                let next_unit = at.transition_duration.unit().next();
-                at.transition_duration = crate::channel::DurationSpec::from_value_unit(
-                    at.transition_duration.value(),
-                    next_unit,
-                );
-            }),
-            EngineCommand::SetAutoTransitionPlayDurationValue {
-                channel_idx,
-                deck_idx,
-                value,
-            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                at.play_duration.set_value(value);
-            }),
-            EngineCommand::SetAutoTransitionDurationValue {
-                channel_idx,
-                deck_idx,
-                value,
-            } => self.exec_auto_transition(channel_idx, deck_idx, |at| {
-                at.transition_duration.set_value(value);
-            }),
+            EngineCommand::ToggleAutoTransitionPlayDurationUnit { deck_uuid } => self
+                .exec_auto_transition(&deck_uuid, |at| {
+                    let next_unit = at.play_duration.unit().next();
+                    at.play_duration = crate::channel::DurationSpec::from_value_unit(
+                        at.play_duration.value(),
+                        next_unit,
+                    );
+                }),
+            EngineCommand::ToggleAutoTransitionDurationUnit { deck_uuid } => self
+                .exec_auto_transition(&deck_uuid, |at| {
+                    let next_unit = at.transition_duration.unit().next();
+                    at.transition_duration = crate::channel::DurationSpec::from_value_unit(
+                        at.transition_duration.value(),
+                        next_unit,
+                    );
+                }),
+            EngineCommand::SetAutoTransitionPlayDurationValue { deck_uuid, value } => self
+                .exec_auto_transition(&deck_uuid, |at| {
+                    at.play_duration.set_value(value);
+                }),
+            EngineCommand::SetAutoTransitionDurationValue { deck_uuid, value } => self
+                .exec_auto_transition(&deck_uuid, |at| {
+                    at.transition_duration.set_value(value);
+                }),
 
             // ── External I/O Deck Sources ─────────────────────
             EngineCommand::AddNdiDeck {
-                channel_idx,
+                channel_uuid,
                 source_name,
-            } => self.cmd_add_ndi_deck(channel_idx, source_name),
+            } => self.cmd_add_ndi_deck(&channel_uuid, source_name),
             EngineCommand::AddSyphonDeck {
-                channel_idx,
+                channel_uuid,
                 server_name,
-            } => self.cmd_add_syphon_deck(channel_idx, server_name),
+            } => self.cmd_add_syphon_deck(&channel_uuid, server_name),
             EngineCommand::AddSrtDeck {
-                channel_idx,
+                channel_uuid,
                 url,
                 mode,
-            } => self.cmd_add_srt_deck(channel_idx, url, mode),
-            EngineCommand::AddHlsDeck { channel_idx, url } => {
-                self.cmd_add_hls_deck(channel_idx, url)
+            } => self.cmd_add_srt_deck(&channel_uuid, url, mode),
+            EngineCommand::AddHlsDeck { channel_uuid, url } => {
+                self.cmd_add_hls_deck(&channel_uuid, url)
             }
-            EngineCommand::AddDashDeck { channel_idx, url } => {
-                self.cmd_add_dash_deck(channel_idx, url)
+            EngineCommand::AddDashDeck { channel_uuid, url } => {
+                self.cmd_add_dash_deck(&channel_uuid, url)
             }
             EngineCommand::AddRtmpDeck {
-                channel_idx,
+                channel_uuid,
                 url,
                 mode,
-            } => self.cmd_add_rtmp_deck(channel_idx, url, mode),
-            EngineCommand::ReloadHtmlDeck {
-                channel_idx,
-                deck_idx,
-            } => self.cmd_reload_html_deck(channel_idx, deck_idx),
-            EngineCommand::AddHtmlDeck { channel_idx, url } => {
-                self.cmd_add_html_deck(channel_idx, url)
+            } => self.cmd_add_rtmp_deck(&channel_uuid, url, mode),
+            EngineCommand::ReloadHtmlDeck { deck_uuid } => self.cmd_reload_html_deck(&deck_uuid),
+            EngineCommand::AddHtmlDeck { channel_uuid, url } => {
+                self.cmd_add_html_deck(&channel_uuid, url)
             }
-            EngineCommand::OpenHtmlInteractive {
-                channel_idx,
-                deck_idx,
-            } => {
+            EngineCommand::OpenHtmlInteractive { deck_uuid } => {
                 #[cfg(feature = "html")]
                 {
-                    self.cmd_open_html_interactive(channel_idx, deck_idx)
+                    self.cmd_open_html_interactive(&deck_uuid)
                 }
                 #[cfg(not(feature = "html"))]
                 {
-                    let _ = (channel_idx, deck_idx);
+                    let _ = deck_uuid;
                     crate::engine::CommandResult::Err {
                         code: crate::engine::ErrorCode::InvalidInput,
                         message: "HTML feature not built".into(),
@@ -986,73 +731,83 @@ impl VardaApp {
 
             // ── Transition Sequences ──────────────────────────
             EngineCommand::CreateSequence => self.cmd_create_sequence(),
-            EngineCommand::DeleteSequence { idx } => self.cmd_delete_sequence(idx),
-            EngineCommand::PlaySequence { idx } => self.cmd_play_sequence(idx),
-            EngineCommand::StopSequence { idx } => self.cmd_stop_sequence(idx),
-            EngineCommand::ToggleSequence { idx } => self.cmd_toggle_sequence(idx),
-            EngineCommand::AddFadeStep {
-                seq_idx,
-                from_ch,
-                to_ch,
-            } => self.cmd_add_fade_step(seq_idx, from_ch, to_ch),
-            EngineCommand::AddWaitStep { seq_idx } => self.cmd_add_wait_step(seq_idx),
-            EngineCommand::AddGoToStep {
-                seq_idx,
-                step_index,
-            } => self.cmd_add_goto_step(seq_idx, step_index),
-            EngineCommand::RemoveStep { seq_idx, step_idx } => {
-                self.cmd_remove_step(seq_idx, step_idx)
+            EngineCommand::DeleteSequence { sequence_uuid } => {
+                self.cmd_delete_sequence(&sequence_uuid)
             }
+            EngineCommand::PlaySequence { sequence_uuid } => self.cmd_play_sequence(&sequence_uuid),
+            EngineCommand::StopSequence { sequence_uuid } => self.cmd_stop_sequence(&sequence_uuid),
+            EngineCommand::ToggleSequence { sequence_uuid } => {
+                self.cmd_toggle_sequence(&sequence_uuid)
+            }
+            EngineCommand::AddFadeStep {
+                sequence_uuid,
+                from_channel_uuid,
+                to_channel_uuid,
+            } => self.cmd_add_fade_step(&sequence_uuid, &from_channel_uuid, &to_channel_uuid),
+            EngineCommand::AddWaitStep { sequence_uuid } => self.cmd_add_wait_step(&sequence_uuid),
+            EngineCommand::AddGoToStep {
+                sequence_uuid,
+                step_index,
+            } => self.cmd_add_goto_step(&sequence_uuid, step_index),
+            EngineCommand::RemoveStep {
+                sequence_uuid,
+                step_idx,
+            } => self.cmd_remove_step(&sequence_uuid, step_idx),
             EngineCommand::SetStepDuration {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
                 value,
                 unit,
-            } => self.cmd_set_step_duration(seq_idx, step_idx, value, unit),
+            } => self.cmd_set_step_duration(&sequence_uuid, step_idx, value, unit),
             EngineCommand::SetStepEasing {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
                 easing,
-            } => self.cmd_set_step_easing(seq_idx, step_idx, easing),
+            } => self.cmd_set_step_easing(&sequence_uuid, step_idx, easing),
             EngineCommand::SetStepTransitionShader {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
                 shader_name,
-            } => self.cmd_set_step_transition_shader(seq_idx, step_idx, shader_name),
-            EngineCommand::MoveStep { seq_idx, from, to } => self.cmd_move_step(seq_idx, from, to),
+            } => self.cmd_set_step_transition_shader(&sequence_uuid, step_idx, shader_name),
+            EngineCommand::MoveStep {
+                sequence_uuid,
+                from,
+                to,
+            } => self.cmd_move_step(&sequence_uuid, from, to),
             EngineCommand::SetStepDurationUnit {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
                 unit,
-            } => self.cmd_set_step_duration_unit(seq_idx, step_idx, unit),
-            EngineCommand::ToggleStepDurationUnit { seq_idx, step_idx } => {
-                self.cmd_toggle_step_duration_unit(seq_idx, step_idx)
-            }
+            } => self.cmd_set_step_duration_unit(&sequence_uuid, step_idx, unit),
+            EngineCommand::ToggleStepDurationUnit {
+                sequence_uuid,
+                step_idx,
+            } => self.cmd_toggle_step_duration_unit(&sequence_uuid, step_idx),
             EngineCommand::SetStepDurationValue {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
                 value,
-            } => self.cmd_set_step_duration_value(seq_idx, step_idx, value),
+            } => self.cmd_set_step_duration_value(&sequence_uuid, step_idx, value),
             EngineCommand::SetStepFromCh {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
-                ch,
-            } => self.cmd_set_step_from_ch(seq_idx, step_idx, ch),
+                channel_uuid,
+            } => self.cmd_set_step_from_ch(&sequence_uuid, step_idx, channel_uuid),
             EngineCommand::SetStepToCh {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
-                ch,
-            } => self.cmd_set_step_to_ch(seq_idx, step_idx, ch),
+                channel_uuid,
+            } => self.cmd_set_step_to_ch(&sequence_uuid, step_idx, channel_uuid),
             EngineCommand::SetGoToTarget {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
                 target,
-            } => self.cmd_set_goto_target(seq_idx, step_idx, target),
+            } => self.cmd_set_goto_target(&sequence_uuid, step_idx, target),
             EngineCommand::SetStepTargetAmount {
-                seq_idx,
+                sequence_uuid,
                 step_idx,
                 amount,
-            } => self.cmd_set_step_target_amount(seq_idx, step_idx, amount),
+            } => self.cmd_set_step_target_amount(&sequence_uuid, step_idx, amount),
 
             // ── Stream Library ─────────────────────────────────
             EngineCommand::AddStreamLibraryEntry { url, mode } => {
@@ -1082,10 +837,10 @@ impl VardaApp {
             EngineCommand::CreateHeadlessOutput { target } => {
                 self.cmd_create_headless_output(target)
             }
-            EngineCommand::StartOutput { idx } => self.cmd_start_output(idx),
-            EngineCommand::StopOutput { idx } => self.cmd_stop_output(idx),
-            EngineCommand::SetCalibrationMode { idx, mode } => {
-                self.cmd_set_calibration_mode(idx, mode)
+            EngineCommand::StartOutput { output_uuid } => self.cmd_start_output(&output_uuid),
+            EngineCommand::StopOutput { output_uuid } => self.cmd_stop_output(&output_uuid),
+            EngineCommand::SetCalibrationMode { output_uuid, mode } => {
+                self.cmd_set_calibration_mode(&output_uuid, mode)
             }
             EngineCommand::SetWarpCorner {
                 surface_uuid,
@@ -1130,15 +885,17 @@ impl VardaApp {
                 cols,
                 rows,
             } => self.cmd_set_bezier_cage_subdivisions(&surface_uuid, cols, rows),
-            EngineCommand::SetEdgeBlend { output_idx, config } => {
-                self.cmd_set_edge_blend(output_idx, config)
+            EngineCommand::SetEdgeBlend {
+                output_uuid,
+                config,
+            } => self.cmd_set_edge_blend(&output_uuid, config),
+            EngineCommand::SetEdgeBlendMode { output_uuid, mode } => {
+                self.cmd_set_edge_blend_mode(&output_uuid, mode)
             }
-            EngineCommand::SetEdgeBlendMode { output_idx, mode } => {
-                self.cmd_set_edge_blend_mode(output_idx, mode)
-            }
-            EngineCommand::SetOutputRotation { idx, rotation } => {
-                self.cmd_set_output_rotation(idx, rotation)
-            }
+            EngineCommand::SetOutputRotation {
+                output_uuid,
+                rotation,
+            } => self.cmd_set_output_rotation(&output_uuid, rotation),
 
             // ── Modulation Updates ────────────────────────────────
             EngineCommand::UpdateLfoFrequency { uuid, frequency } => {
@@ -1631,72 +1388,43 @@ impl VardaApp {
                 CommandResult::Ok
             }
 
-            // ── Parameters (index-based) ────────────────────────────
+            // ── Parameters ─────────────────────────────────────────
             EngineCommand::SetGeneratorParam {
-                channel_idx,
-                deck_idx,
+                deck_uuid,
                 name,
                 value,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        ch.decks[deck_idx].deck.generator_params.set(&name, value);
+            } => match self.resolve_deck(&deck_uuid) {
+                Ok((ch_idx, dk_idx)) => {
+                    if let Some(ch) = self.mixer.channel_mut(ch_idx) {
+                        ch.decks[dk_idx].deck.generator_params.set(&name, value);
                     }
+                    CommandResult::Ok
                 }
-                CommandResult::Ok
-            }
+                Err(e) => e.into(),
+            },
             EngineCommand::SetEffectParam {
-                channel_idx,
-                deck_idx,
-                effect_idx,
+                effect_uuid,
                 name,
                 value,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        let deck = &mut ch.decks[deck_idx].deck;
-                        if effect_idx < deck.effects.len() {
-                            deck.effects[effect_idx].params.set(&name, value);
+            } => match self.resolve_effect(&effect_uuid) {
+                Ok(loc) => {
+                    if let Some(effect) = self.mixer.effect_at_mut(loc) {
+                        effect.params.set(&name, value);
+                    }
+                    CommandResult::Ok
+                }
+                Err(e) => e.into(),
+            },
+            EngineCommand::ResetGeneratorParamsToDefaults { deck_uuid } => {
+                match self.resolve_deck(&deck_uuid) {
+                    Ok((ch_idx, dk_idx)) => {
+                        if let Some(ch) = self.mixer.channel_mut(ch_idx) {
+                            ch.decks[dk_idx].deck.generator_params.reset_to_defaults();
                         }
+                        CommandResult::Ok
                     }
+                    Err(e) => e.into(),
                 }
-                CommandResult::Ok
-            }
-            EngineCommand::SetChannelEffectParam {
-                channel_idx,
-                effect_idx,
-                name,
-                value,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if effect_idx < ch.effects.len() {
-                        ch.effects[effect_idx].params.set(&name, value);
-                    }
-                }
-                CommandResult::Ok
-            }
-            EngineCommand::SetMasterEffectParam {
-                effect_idx,
-                name,
-                value,
-            } => {
-                if effect_idx < self.mixer.master_effects().len() {
-                    self.mixer.master_effects_mut()[effect_idx]
-                        .params
-                        .set(&name, value);
-                }
-                CommandResult::Ok
-            }
-            EngineCommand::ResetGeneratorParamsToDefaults {
-                channel_idx,
-                deck_idx,
-            } => {
-                if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-                    if deck_idx < ch.decks.len() {
-                        ch.decks[deck_idx].deck.generator_params.reset_to_defaults();
-                    }
-                }
-                CommandResult::Ok
             }
 
             // ── Resolution ────────────────────────────────────────
@@ -1717,25 +1445,25 @@ impl VardaApp {
 
             // ── Presets ───────────────────────────────────────────
             EngineCommand::LoadDeckPreset {
-                channel_idx,
-                preset_idx,
-            } => self.cmd_load_deck_preset(channel_idx, preset_idx),
+                channel_uuid,
+                preset_name,
+            } => self.cmd_load_deck_preset(&channel_uuid, &preset_name),
             EngineCommand::LoadChannelPreset {
-                target_channel,
-                preset_idx,
-            } => self.cmd_load_channel_preset(target_channel, preset_idx),
-            EngineCommand::SaveDeckPreset {
-                channel_idx,
-                deck_idx,
-                name,
-            } => self.cmd_save_deck_preset(channel_idx, deck_idx, &name),
-            EngineCommand::SaveChannelPreset { channel_idx, name } => {
-                self.cmd_save_channel_preset(channel_idx, &name)
+                target_channel_uuid,
+                preset_name,
+            } => self.cmd_load_channel_preset(target_channel_uuid.as_deref(), &preset_name),
+            EngineCommand::SaveDeckPreset { deck_uuid, name } => {
+                self.cmd_save_deck_preset(&deck_uuid, &name)
+            }
+            EngineCommand::SaveChannelPreset { channel_uuid, name } => {
+                self.cmd_save_channel_preset(&channel_uuid, &name)
             }
 
             // ── Persistence ───────────────────────────────────────
             EngineCommand::SaveWorkspace => {
-                let layout = crate::usecases::ui::UILayoutState::default();
+                // No layout travels with the command, so reuse the last one the
+                // engine saw rather than writing defaults over the user's panels.
+                let layout = self.session.last_layout.clone();
                 self.save_workspace(&layout);
                 CommandResult::Ok
             }
@@ -1900,9 +1628,11 @@ mod tests {
     #[test]
     fn authoring_commands_are_undoable() {
         assert!(command_is_undoable(&C::AddChannel));
-        assert!(command_is_undoable(&C::RemoveChannel { channel_idx: 0 }));
+        assert!(command_is_undoable(&C::RemoveChannel {
+            channel_uuid: "ch".into(),
+        }));
         assert!(command_is_undoable(&C::SetChannelOpacity {
-            channel_idx: 0,
+            channel_uuid: "ch".into(),
             opacity: 0.5,
         }));
         assert!(command_is_undoable(&C::SetParam {
@@ -1911,8 +1641,8 @@ mod tests {
         }));
         assert!(command_is_undoable(&C::RemoveSurface { uuid: "s".into() }));
         // Surface→output assignment is authoring and must be undoable.
-        assert!(command_is_undoable(&C::AssignSurfaceToOutputByIdx {
-            output_idx: 0,
+        assert!(command_is_undoable(&C::AssignSurfaceToOutput {
+            output_uuid: "o".into(),
             surface_uuid: "s".into(),
         }));
     }
@@ -1921,11 +1651,14 @@ mod tests {
     fn live_and_transient_commands_are_not_undoable() {
         assert!(!command_is_undoable(&C::SetCrossfader(0.5)));
         assert!(!command_is_undoable(&C::VideoTogglePlay {
-            channel_idx: 0,
-            deck_idx: 0,
+            deck_uuid: "dk".into(),
         }));
-        assert!(!command_is_undoable(&C::PlaySequence { idx: 0 }));
-        assert!(!command_is_undoable(&C::StartOutput { idx: 0 }));
+        assert!(!command_is_undoable(&C::PlaySequence {
+            sequence_uuid: "sq".into(),
+        }));
+        assert!(!command_is_undoable(&C::StartOutput {
+            output_uuid: "o".into(),
+        }));
         assert!(!command_is_undoable(&C::CreateOutput));
         assert!(!command_is_undoable(&C::Undo));
         assert!(!command_is_undoable(&C::Redo));
@@ -1958,8 +1691,9 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
         let result = app.execute_command(C::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid,
             color: [1.0, 0.0, 0.0, 1.0],
         });
         let CommandResult::OkWithId { uuid } = result else {
@@ -1972,31 +1706,30 @@ mod tests {
     }
 
     #[test]
-    fn gui_deck_add_reports_location_and_matching_uuid() {
+    fn gui_deck_add_reports_resolvable_uuid() {
         let Some(mut app) = headless_app() else {
             return;
         };
+        let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
         let outcome = app.execute_command_gui(C::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid,
             color: [0.0, 1.0, 0.0, 1.0],
         });
-        let CommandOutcome::DeckCreated {
-            channel_idx,
-            deck_idx,
-            uuid,
-        } = outcome
-        else {
-            panic!("expected DeckCreated, got {outcome:?}");
+        let CommandOutcome::DecksCreated { uuids } = outcome else {
+            panic!("expected DecksCreated, got {outcome:?}");
         };
-        assert_eq!(channel_idx, 0);
-        assert_eq!(deck_idx, 0);
+        assert_eq!(uuids.len(), 1);
+        let (channel_idx, deck_idx) = app
+            .mixer_ref()
+            .find_deck_by_uuid(&uuids[0])
+            .expect("reported uuid must resolve to a deck");
         let slot_uuid = app.mixer_ref().channels()[channel_idx].decks[deck_idx]
             .deck
             .uuid()
             .to_string();
         assert_eq!(
-            slot_uuid, uuid,
-            "reported uuid must match the deck at the reported location"
+            slot_uuid, uuids[0],
+            "reported uuid must match the deck it resolves to"
         );
     }
 
@@ -2009,8 +1742,9 @@ mod tests {
         // Runner records the pre-mutation snapshot, then mutates.
         let before = app.history_snapshot(&layout);
         app.push_history(before);
+        let channel_uuid = app.mixer_ref().channels()[0].uuid().to_string();
         app.execute_command(C::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid,
             color: [0.0, 0.0, 1.0, 1.0],
         });
         assert_eq!(app.mixer_ref().channels()[0].decks.len(), 1);

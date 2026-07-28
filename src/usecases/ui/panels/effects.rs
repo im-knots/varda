@@ -4,7 +4,7 @@ use super::super::{widgets, EffectDrag, LibraryDrag, UIActions, UIData};
 use super::utils::{
     channel_color, render_effect_drag_ghost, render_effect_drag_handle, render_effect_drop_zone,
 };
-use crate::engine::{EffectTarget, EngineCommand};
+use crate::engine::EngineCommand;
 use crate::params::ParamValue;
 
 pub(super) fn render_master_effect_detail(
@@ -54,8 +54,7 @@ pub(super) fn render_master_effect_detail(
                                                 if ui.checkbox(&mut enabled, "").changed() {
                                                     actions.commands.push(
                                                         EngineCommand::ToggleEffect {
-                                                            target: EffectTarget::Master,
-                                                            effect_idx: eff_idx,
+                                                            effect_uuid: eff_uuid.clone(),
                                                         },
                                                     );
                                                 }
@@ -64,6 +63,7 @@ pub(super) fn render_master_effect_detail(
 
                                             if !eff_params.params.is_empty() {
                                                 let eff_idx_copy = eff_idx;
+                                                let eff_uuid_param = eff_uuid.clone();
                                                 let midi_prefix =
                                                     format!("master/effect/{}", eff_uuid);
                                                 widgets::render_effect_params(
@@ -71,8 +71,8 @@ pub(super) fn render_master_effect_detail(
                                                     &eff_params.params,
                                                     &data.modulation_sources,
                                                     &|name: &str, val: ParamValue| {
-                                                        EngineCommand::SetMasterEffectParam {
-                                                            effect_idx: eff_idx_copy,
+                                                        EngineCommand::SetEffectParam {
+                                                            effect_uuid: eff_uuid_param.clone(),
                                                             name: name.to_string(),
                                                             value: val,
                                                         }
@@ -136,8 +136,7 @@ pub(super) fn render_master_effect_detail(
                             );
                             if btn_resp.clicked() {
                                 actions.commands.push(EngineCommand::RemoveEffect {
-                                    target: EffectTarget::Master,
-                                    effect_idx: eff_idx,
+                                    effect_uuid: eff_uuid.clone(),
                                 });
                             }
                         }
@@ -233,7 +232,7 @@ pub(super) fn render_channel_effect_detail(
             }
             if ui.small_button("✓ Save").clicked() && !name.is_empty() {
                 actions.commands.push(EngineCommand::SaveChannelPreset {
-                    channel_idx: ch_idx,
+                    channel_uuid: ch.uuid.clone(),
                     name: name.clone(),
                 });
                 ui.data_mut(|d| d.insert_temp(prompt_id, false));
@@ -277,13 +276,14 @@ pub(super) fn render_channel_effect_detail(
                         });
                     ui.separator();
                 }
+                let ch_chain_key = format!("ch_{}", ch.uuid);
                 {
                     for (eff_idx, (eff_uuid, eff_name, eff_enabled, eff_params)) in
                         ch.effects.iter().enumerate()
                     {
                         let eff_uuid_ch_assign = eff_uuid.clone();
                         let eff_uuid_ch_remove = eff_uuid.clone();
-                        render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), eff_idx);
+                        render_effect_drop_zone(ui, &ch_chain_key, eff_idx);
 
                         let card_resp = egui::Frame::default()
                             .inner_margin(6.0)
@@ -306,14 +306,13 @@ pub(super) fn render_channel_effect_detail(
                                             ui.horizontal(|ui| {
                                                 render_effect_drag_handle(
                                                     ui,
-                                                    EffectDrag::Channel(ch_idx, eff_idx),
+                                                    EffectDrag::Channel(ch.uuid.clone(), eff_idx),
                                                 );
                                                 let mut enabled = *eff_enabled;
                                                 if ui.checkbox(&mut enabled, "").changed() {
                                                     actions.commands.push(
                                                         EngineCommand::ToggleEffect {
-                                                            target: EffectTarget::Channel(ch_idx),
-                                                            effect_idx: eff_idx,
+                                                            effect_uuid: eff_uuid.clone(),
                                                         },
                                                     );
                                                 }
@@ -328,7 +327,7 @@ pub(super) fn render_channel_effect_detail(
                                                 let ch_copy = ch_idx;
                                                 let eff_idx_copy = eff_idx;
                                                 let ch_uuid = ch.uuid.clone();
-                                                let _ch_uuid = ch_uuid.clone();
+                                                let eff_uuid_param = eff_uuid.clone();
                                                 let midi_prefix =
                                                     format!("ch/{}/effect/{}", ch_uuid, eff_uuid);
                                                 widgets::render_effect_params(
@@ -336,9 +335,8 @@ pub(super) fn render_channel_effect_detail(
                                                     &eff_params.params,
                                                     &data.modulation_sources,
                                                     &|name: &str, val: ParamValue| {
-                                                        EngineCommand::SetChannelEffectParam {
-                                                            channel_idx: ch_copy,
-                                                            effect_idx: eff_idx_copy,
+                                                        EngineCommand::SetEffectParam {
+                                                            effect_uuid: eff_uuid_param.clone(),
                                                             name: name.to_string(),
                                                             value: val,
                                                         }
@@ -402,15 +400,14 @@ pub(super) fn render_channel_effect_detail(
                             );
                             if btn_resp.clicked() {
                                 actions.commands.push(EngineCommand::RemoveEffect {
-                                    target: EffectTarget::Channel(ch_idx),
-                                    effect_idx: eff_idx,
+                                    effect_uuid: eff_uuid.clone(),
                                 });
                             }
                         }
                         render_effect_drag_ghost(
                             ui,
                             egui::Id::new(("eff_ghost_ch", ch_idx, eff_idx)),
-                            EffectDrag::Channel(ch_idx, eff_idx),
+                            EffectDrag::Channel(ch.uuid.clone(), eff_idx),
                             eff_name,
                         );
                         ui.separator();
@@ -419,7 +416,7 @@ pub(super) fn render_channel_effect_detail(
                     // Drop zone after last effect (for reordering)
                     if !ch.effects.is_empty() {
                         let num_effects = ch.effects.len();
-                        render_effect_drop_zone(ui, &format!("ch_{}", ch_idx), num_effects);
+                        render_effect_drop_zone(ui, &ch_chain_key, num_effects);
                     }
 
                     // Remaining space: always present drop target
@@ -453,7 +450,6 @@ pub(super) fn render_channel_effect_detail(
 
                 // Store channel effect chain rect for deferred library drops
                 let chain_rect = ui.min_rect();
-                let ch_chain_key = format!("ch_{}", ch_idx);
                 ui.ctx().memory_mut(|mem| {
                     mem.data
                         .insert_temp(egui::Id::new("ch_fx_drop_rect").with(ch_idx), chain_rect);

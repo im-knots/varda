@@ -97,7 +97,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         is_html_interactive: {
                             #[cfg(feature = "html")]
                             {
-                                app.interactive_active_deck() == Some((ch_idx, deck_idx))
+                                app.interactive_active_deck() == Some(slot.deck.uuid())
                             }
                             #[cfg(not(feature = "html"))]
                             {
@@ -228,7 +228,11 @@ fn build_shader_params(
 }
 
 fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot> {
-    let channel_names: Vec<String> = mixer.channels().iter().map(|c| c.name.clone()).collect();
+    let channel_names: std::collections::HashMap<&str, &str> = mixer
+        .channels()
+        .iter()
+        .map(|c| (c.uuid(), c.name.as_str()))
+        .collect();
     mixer
         .transition_sequences()
         .iter()
@@ -250,19 +254,16 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
                             let easing_name = format!("{:?}", easing);
                             let label = format!(
                                 "Fade {} -> {} ({:.1}{})",
-                                channel_names
-                                    .get(*from_ch)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("?"),
-                                channel_names.get(*to_ch).map(|s| s.as_str()).unwrap_or("?"),
+                                channel_names.get(from_ch.as_str()).copied().unwrap_or("?"),
+                                channel_names.get(to_ch.as_str()).copied().unwrap_or("?"),
                                 duration.value(),
                                 unit_label
                             );
                             (
                                 label,
                                 SequenceStepKindSnapshot::Fade {
-                                    from_ch: *from_ch,
-                                    to_ch: *to_ch,
+                                    from_ch: from_ch.clone(),
+                                    to_ch: to_ch.clone(),
                                     duration_val: duration.value(),
                                     duration_unit: duration.unit(),
                                     easing: easing_name,
@@ -296,6 +297,7 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
                 })
                 .collect();
             SequenceSnapshot {
+                uuid: seq.uuid.clone(),
                 name: seq.name.clone(),
                 enabled: seq.enabled,
                 playing: seq.state.playing,
@@ -569,8 +571,9 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
-        app.set_deck_opacity(0, 0, 0.5);
+        let ch = build_mixer_snapshot(&app).channels[0].uuid.clone();
+        let deck_uuid = app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        app.set_deck_opacity(&deck_uuid, 0.5).unwrap();
         let snap = build_mixer_snapshot(&app);
         let deck = &snap.channels[0].decks[0];
         assert!((deck.opacity - 0.5).abs() < 1e-5);
@@ -583,13 +586,15 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
-        let target = crate::engine::types::EffectTarget::Deck(0, 0);
-        // Try adding an effect — may fail if "Invert" not in registry
-        if app.add_effect(target, "Invert").is_ok() {
-            let snap = build_mixer_snapshot(&app);
-            assert!(!snap.channels[0].decks[0].effects.is_empty());
-        }
+        let ch = build_mixer_snapshot(&app).channels[0].uuid.clone();
+        let deck_uuid = app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let target = crate::engine::types::EffectTarget::Deck(deck_uuid);
+        let effect_uuid = app.add_effect(target, "invert").unwrap();
+
+        let snap = build_mixer_snapshot(&app);
+        let effects = &snap.channels[0].decks[0].effects;
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].uuid, effect_uuid);
     }
 
     #[test]

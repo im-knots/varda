@@ -26,6 +26,19 @@ fn send_cmd(app: &mut VardaApp, cmd: EngineCommand) -> CommandResult {
     reply_rx.blocking_recv().unwrap()
 }
 
+/// The UUID a creating command reports (see ui-engine-boundary.md WS1).
+fn new_uuid(result: CommandResult) -> String {
+    match result {
+        CommandResult::OkWithId { uuid } => uuid,
+        other => panic!("expected OkWithId, got {other:?}"),
+    }
+}
+
+/// UUID of the channel currently at `idx`.
+fn channel_uuid(app: &mut VardaApp, idx: usize) -> String {
+    app.build_engine_state().mixer.channels[idx].uuid.clone()
+}
+
 // ── Surface Commands ────────────────────────────────────────────────
 
 #[test]
@@ -222,24 +235,30 @@ fn sequence_full_lifecycle() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    let r = send_cmd(&mut app, EngineCommand::CreateSequence);
-    assert!(matches!(r, CommandResult::Ok));
+    let ch_a = channel_uuid(&mut app, 0);
+    let ch_b = channel_uuid(&mut app, 1);
+    let seq = new_uuid(send_cmd(&mut app, EngineCommand::CreateSequence));
     assert_eq!(app.build_engine_state().mixer.sequences.len(), 1);
 
     // Add steps
     send_cmd(
         &mut app,
         EngineCommand::AddFadeStep {
-            seq_idx: 0,
-            from_ch: 0,
-            to_ch: 1,
+            sequence_uuid: seq.clone(),
+            from_channel_uuid: ch_a,
+            to_channel_uuid: ch_b,
         },
     );
-    send_cmd(&mut app, EngineCommand::AddWaitStep { seq_idx: 0 });
+    send_cmd(
+        &mut app,
+        EngineCommand::AddWaitStep {
+            sequence_uuid: seq.clone(),
+        },
+    );
     send_cmd(
         &mut app,
         EngineCommand::AddGoToStep {
-            seq_idx: 0,
+            sequence_uuid: seq.clone(),
             step_index: 0,
         },
     );
@@ -249,7 +268,7 @@ fn sequence_full_lifecycle() {
     send_cmd(
         &mut app,
         EngineCommand::RemoveStep {
-            seq_idx: 0,
+            sequence_uuid: seq.clone(),
             step_idx: 1,
         },
     );
@@ -259,24 +278,38 @@ fn sequence_full_lifecycle() {
     send_cmd(
         &mut app,
         EngineCommand::MoveStep {
-            seq_idx: 0,
+            sequence_uuid: seq.clone(),
             from: 0,
             to: 1,
         },
     );
 
     // Delete sequence
-    let r = send_cmd(&mut app, EngineCommand::DeleteSequence { idx: 0 });
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::DeleteSequence {
+            sequence_uuid: seq.clone(),
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
-    assert_eq!(app.build_engine_state().mixer.sequences.len(), 0);
+    let state = app.build_engine_state();
+    assert_eq!(state.mixer.sequences.len(), 0);
+    assert!(state.mixer.sequences.iter().all(|s| s.uuid != seq));
 }
 
 #[test]
-fn sequence_oob_returns_not_found() {
+fn sequence_unknown_uuid_returns_not_found() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    let r = send_cmd(&mut app, EngineCommand::DeleteSequence { idx: 99 });
+    let ch_a = channel_uuid(&mut app, 0);
+    let ch_b = channel_uuid(&mut app, 1);
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::DeleteSequence {
+            sequence_uuid: "no-such-sequence".into(),
+        },
+    );
     assert!(matches!(
         r,
         CommandResult::Err {
@@ -287,9 +320,9 @@ fn sequence_oob_returns_not_found() {
     let r = send_cmd(
         &mut app,
         EngineCommand::AddFadeStep {
-            seq_idx: 99,
-            from_ch: 0,
-            to_ch: 1,
+            sequence_uuid: "no-such-sequence".into(),
+            from_channel_uuid: ch_a,
+            to_channel_uuid: ch_b,
         },
     );
     assert!(matches!(
@@ -341,11 +374,18 @@ fn headless_output_syphon_create_and_start() {
     );
     assert!(matches!(r, CommandResult::Ok));
 
-    // A fresh headless app starts with no outputs, so the created Syphon output
-    // is at index 0. Starting it activates the publisher on macOS; on other
-    // platforms it must be rejected with Unavailable, mirroring the Syphon
-    // receive deck path (cmd_add_syphon_deck).
-    let r = send_cmd(&mut app, EngineCommand::StartOutput { idx: 0 });
+    // Starting the output activates the publisher on macOS; on other platforms
+    // it must be rejected with Unavailable, mirroring the Syphon receive deck
+    // path (cmd_add_syphon_deck).
+    let output_uuid = app
+        .build_engine_state()
+        .outputs
+        .windows
+        .last()
+        .expect("headless output created")
+        .uuid
+        .clone();
+    let r = send_cmd(&mut app, EngineCommand::StartOutput { output_uuid });
     #[cfg(target_os = "macos")]
     assert!(matches!(r, CommandResult::Ok));
     #[cfg(not(target_os = "macos"))]
@@ -398,17 +438,17 @@ fn solid_color_deck_source_kind() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    let r = send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
-    // Deck-creating commands report the new deck's UUID (see ui-engine-boundary.md WS1).
-    assert!(matches!(r, CommandResult::OkWithId { .. }));
+    ));
     let state = app.build_engine_state();
     assert_eq!(state.mixer.channels[0].decks.len(), 1);
+    assert_eq!(state.mixer.channels[0].decks[0].uuid, deck);
     // Solid color deck name is the hex color, not "Solid Color"
     assert!(!state.mixer.channels[0].decks[0].name.is_empty());
 }
@@ -454,15 +494,16 @@ fn toggle_param_flips_crossfader() {
 }
 
 #[test]
-fn load_deck_preset_out_of_range_errors() {
+fn load_deck_preset_unknown_name_errors() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
     let r = send_cmd(
         &mut app,
         EngineCommand::LoadDeckPreset {
-            channel_idx: 0,
-            preset_idx: 99,
+            channel_uuid: ch,
+            preset_name: "no-such-preset".into(),
         },
     );
     assert!(matches!(
@@ -475,15 +516,36 @@ fn load_deck_preset_out_of_range_errors() {
 }
 
 #[test]
-fn load_channel_preset_out_of_range_errors() {
+fn load_deck_preset_unknown_channel_errors() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::LoadDeckPreset {
+            channel_uuid: "no-such-channel".into(),
+            preset_name: "red".into(),
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn load_channel_preset_unknown_name_errors() {
     let Some(mut app) = headless_app() else {
         return;
     };
     let r = send_cmd(
         &mut app,
         EngineCommand::LoadChannelPreset {
-            target_channel: None,
-            preset_idx: 99,
+            target_channel_uuid: None,
+            preset_name: "no-such-preset".into(),
         },
     );
     assert!(matches!(
@@ -502,20 +564,20 @@ fn deck_preset_save_then_load_roundtrip() {
         return;
     };
     // Create a source deck to save.
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
+    ));
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 1);
     // Save it as a preset (writes to the temp workspace + refreshes the library).
     let r = send_cmd(
         &mut app,
         EngineCommand::SaveDeckPreset {
-            channel_idx: 0,
-            deck_idx: 0,
+            deck_uuid: deck,
             name: "red".into(),
         },
     );
@@ -524,8 +586,8 @@ fn deck_preset_save_then_load_roundtrip() {
     let r = send_cmd(
         &mut app,
         EngineCommand::LoadDeckPreset {
-            channel_idx: 0,
-            preset_idx: 0,
+            channel_uuid: ch,
+            preset_name: "red".into(),
         },
     );
     assert!(matches!(r, CommandResult::Ok));
@@ -539,17 +601,18 @@ fn channel_preset_save_then_load_appends_channel() {
         return;
     };
     // Populate channel 0 with a deck, then save the channel as a preset.
+    let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             color: [0.0, 1.0, 0.0, 1.0],
         },
     );
     let r = send_cmd(
         &mut app,
         EngineCommand::SaveChannelPreset {
-            channel_idx: 0,
+            channel_uuid: ch,
             name: "green".into(),
         },
     );
@@ -559,8 +622,8 @@ fn channel_preset_save_then_load_appends_channel() {
     let r = send_cmd(
         &mut app,
         EngineCommand::LoadChannelPreset {
-            target_channel: None,
-            preset_idx: 0,
+            target_channel_uuid: None,
+            preset_name: "green".into(),
         },
     );
     assert!(matches!(r, CommandResult::Ok));
@@ -576,10 +639,11 @@ fn headless_render_smoke() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [0.0, 1.0, 0.0, 1.0],
         },
     );

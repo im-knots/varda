@@ -16,35 +16,38 @@ pub trait MixerCommands {
     fn set_crossfader(&mut self, position: f32);
     fn start_auto_crossfade(&mut self, target: f32, duration_secs: f32, easing: CrossfadeEasing);
     fn start_beat_crossfade(&mut self, target: f32, beats: f32);
-    /// Deck-creating commands return the new deck's stable UUID so callers can
-    /// report it (`CommandResult::OkWithId`) and register a preview texture.
-    fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<String>;
-    fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String>;
-    fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String>;
-    fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<String>;
-    fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<String>;
+    /// Deck-creating commands take the parent channel's UUID (there is no deck
+    /// UUID yet) and return the new deck's stable UUID so callers can report it
+    /// (`CommandResult::OkWithId`) and register a preview texture.
+    fn add_deck(&mut self, channel_uuid: &str, shader_name: &str) -> Result<String>;
+    fn add_image_deck(&mut self, channel_uuid: &str, path: &std::path::Path) -> Result<String>;
+    fn add_video_deck(&mut self, channel_uuid: &str, path: &std::path::Path) -> Result<String>;
+    fn add_solid_color_deck(&mut self, channel_uuid: &str, color: [f32; 4]) -> Result<String>;
+    fn add_camera_deck(&mut self, channel_uuid: &str, camera_id: CameraId) -> Result<String>;
     fn add_depth_sensor_deck(
         &mut self,
-        channel_idx: usize,
+        channel_uuid: &str,
         depth_sensor_id: DepthSensorId,
     ) -> Result<String>;
-    fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()>;
-    fn move_deck(&mut self, src_ch: usize, src_deck: usize, dst_ch: usize) -> Result<()>;
-    fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize);
-    fn set_deck_opacity(&mut self, channel_idx: usize, deck_idx: usize, opacity: f32);
-    fn set_deck_blend_mode(&mut self, channel_idx: usize, deck_idx: usize, mode: BlendMode);
-    fn set_deck_solo(&mut self, channel_idx: usize, deck_idx: usize, solo: bool);
-    fn set_deck_mute(&mut self, channel_idx: usize, deck_idx: usize, mute: bool);
-    fn set_deck_scaling_mode(&mut self, channel_idx: usize, deck_idx: usize, mode: ScalingMode);
-    fn set_deck_transparent(&mut self, channel_idx: usize, deck_idx: usize, transparent: bool);
-    fn set_channel_opacity(&mut self, channel_idx: usize, opacity: f32);
-    fn set_channel_blend_mode(&mut self, channel_idx: usize, mode: BlendMode);
-    fn add_channel(&mut self) -> Result<usize>;
-    fn remove_channel(&mut self, channel_idx: usize) -> Result<()>;
-    fn add_effect(&mut self, target: EffectTarget, shader_name: &str) -> Result<()>;
-    fn remove_effect(&mut self, target: EffectTarget, effect_idx: usize);
-    fn toggle_effect(&mut self, target: EffectTarget, effect_idx: usize);
-    fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize);
+    fn remove_deck(&mut self, deck_uuid: &str) -> Result<()>;
+    fn move_deck(&mut self, deck_uuid: &str, dst_channel_uuid: &str) -> Result<()>;
+    /// Reposition a deck within `channel_uuid`. The indices are ordinals.
+    fn reorder_deck(&mut self, channel_uuid: &str, from_idx: usize, to_idx: usize) -> Result<()>;
+    fn set_deck_opacity(&mut self, deck_uuid: &str, opacity: f32) -> Result<()>;
+    fn set_deck_blend_mode(&mut self, deck_uuid: &str, mode: BlendMode) -> Result<()>;
+    fn set_deck_solo(&mut self, deck_uuid: &str, solo: bool) -> Result<()>;
+    fn set_deck_mute(&mut self, deck_uuid: &str, mute: bool) -> Result<()>;
+    fn set_deck_scaling_mode(&mut self, deck_uuid: &str, mode: ScalingMode) -> Result<()>;
+    fn set_deck_transparent(&mut self, deck_uuid: &str, transparent: bool) -> Result<()>;
+    fn set_channel_opacity(&mut self, channel_uuid: &str, opacity: f32) -> Result<()>;
+    fn set_channel_blend_mode(&mut self, channel_uuid: &str, mode: BlendMode) -> Result<()>;
+    /// Returns the new channel's UUID.
+    fn add_channel(&mut self) -> Result<String>;
+    fn remove_channel(&mut self, channel_uuid: &str) -> Result<()>;
+    fn add_effect(&mut self, target: EffectTarget, shader_name: &str) -> Result<String>;
+    fn remove_effect(&mut self, effect_uuid: &str) -> Result<()>;
+    fn toggle_effect(&mut self, effect_uuid: &str) -> Result<()>;
+    fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize) -> Result<()>;
     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()>;
     fn set_tonemap_mode(&mut self, mode: crate::engine::value::render::TonemapMode);
     fn load_lut(&mut self, filename: &str) -> Result<()>;
@@ -136,8 +139,8 @@ pub trait MacroQueries {
 /// Commands for controlling outputs and surfaces.
 pub trait OutputCommands {
     fn request_create_output(&mut self);
-    fn close_output(&mut self, idx: usize);
-    fn set_output_display(&mut self, idx: usize, monitor_name: &str);
+    fn close_output(&mut self, output_uuid: &str) -> Result<()>;
+    fn set_output_display(&mut self, output_uuid: &str, monitor_name: &str) -> Result<()>;
 }
 
 /// Read-only queries for output state.
@@ -171,7 +174,7 @@ pub trait SurfaceCommands {
     fn set_surface_content_mapping(&mut self, uuid: &str, mapping: ContentMapping);
     fn rename_surface(&mut self, uuid: &str, name: &str);
     fn assign_surface_to_output(&mut self, output_uuid: &str, surface_uuid: &str);
-    fn unassign_surface_from_output(&mut self, output_uuid: &str, assignment_idx: usize);
+    fn unassign_surface_from_output(&mut self, output_uuid: &str, surface_uuid: &str);
 }
 
 /// Commands for surface auto-detection and import.

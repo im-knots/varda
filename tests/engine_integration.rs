@@ -1,7 +1,9 @@
 //! Engine integration tests — multi-step command workflows through real headless VardaApp.
 
 use varda::app::{AppConfig, VardaApp};
-use varda::engine::{BlendMode, CommandResult, EngineCommand, ErrorCode, SurfaceQueries};
+use varda::engine::{
+    BlendMode, CommandResult, DeckSnapshot, EffectTarget, EngineCommand, ErrorCode, SurfaceQueries,
+};
 use varda::modulation::LFOWaveform;
 use varda::renderer::context::OutputSource;
 use varda::surface::SurfacePath;
@@ -34,6 +36,31 @@ fn fire(app: &mut VardaApp, cmd: EngineCommand) {
     app.process_commands();
 }
 
+/// The UUID a creating command reports (see ui-engine-boundary.md WS1).
+fn new_uuid(result: CommandResult) -> String {
+    match result {
+        CommandResult::OkWithId { uuid } => uuid,
+        other => panic!("expected OkWithId, got {other:?}"),
+    }
+}
+
+/// UUID of the channel currently at `idx`.
+fn channel_uuid(app: &mut VardaApp, idx: usize) -> String {
+    app.build_engine_state().mixer.channels[idx].uuid.clone()
+}
+
+/// The deck with `uuid`, wherever it currently lives.
+fn deck_snapshot(app: &mut VardaApp, uuid: &str) -> DeckSnapshot {
+    app.build_engine_state()
+        .mixer
+        .channels
+        .iter()
+        .flat_map(|ch| ch.decks.iter())
+        .find(|d| d.uuid == uuid)
+        .cloned()
+        .unwrap_or_else(|| panic!("no deck with UUID '{uuid}'"))
+}
+
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[test]
@@ -41,26 +68,22 @@ fn multi_step_add_deck_set_opacity_verify() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    let r = send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
-    // Deck-creating commands report the new deck's UUID (see ui-engine-boundary.md WS1).
-    assert!(matches!(r, CommandResult::OkWithId { .. }), "{r:?}");
-    // Channels start empty, so the first added deck is at index 0
+    ));
     fire(
         &mut app,
         EngineCommand::SetDeckOpacity {
-            channel_idx: 0,
-            deck_idx: 0,
+            deck_uuid: deck.clone(),
             opacity: 0.42,
         },
     );
-    let state = app.build_engine_state();
-    assert!((state.mixer.channels[0].decks[0].opacity - 0.42).abs() < 1e-4);
+    assert!((deck_snapshot(&mut app, &deck).opacity - 0.42).abs() < 1e-4);
 }
 
 #[test]
@@ -68,22 +91,27 @@ fn add_deck_add_effect_verify_chain() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [0.0, 1.0, 0.0, 1.0],
         },
-    );
+    ));
     let r = send_cmd(
         &mut app,
         EngineCommand::AddEffect {
-            target: varda::engine::EffectTarget::Deck(0, 0),
-            shader_name: "Invert".to_string(),
+            target: EffectTarget::Deck(deck),
+            shader_name: "invert".to_string(),
         },
     );
-    assert!(matches!(r, CommandResult::Ok | CommandResult::Err { .. }));
-    // If the shader exists the effect is added; otherwise the command may fail gracefully.
+    // If the shader exists the effect is added; otherwise the command must fail
+    // gracefully rather than panic.
+    assert!(matches!(
+        r,
+        CommandResult::OkWithId { .. } | CommandResult::Err { .. }
+    ));
 }
 
 #[test]
@@ -161,16 +189,14 @@ fn macro_value_modulation_drives_targets_live() {
         return;
     };
     // Deck on channel 0 to receive the modulated macro value via its opacity.
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck_uuid = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
-    let deck_uuid = app.build_engine_state().mixer.channels[0].decks[0]
-        .uuid
-        .clone();
+    ));
 
     // Knob macro at base 0.5 driving that deck's opacity.
     send_cmd(
@@ -220,7 +246,7 @@ fn macro_value_modulation_drives_targets_live() {
     for _ in 0..60 {
         app.update_frame_timing();
         app.render_mixer_frame();
-        let op = app.build_engine_state().mixer.channels[0].decks[0].opacity;
+        let op = deck_snapshot(&mut app, &deck_uuid).opacity;
         min = min.min(op);
         max = max.max(op);
     }
@@ -251,10 +277,17 @@ fn remove_middle_channel_state_consistent() {
         return;
     };
     fire(&mut app, EngineCommand::AddChannel); // now 3
-    let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 1 });
+    let middle = channel_uuid(&mut app, 1);
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveChannel {
+            channel_uuid: middle.clone(),
+        },
+    );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
     assert_eq!(state.mixer.channels.len(), 2);
+    assert!(state.mixer.channels.iter().all(|c| c.uuid != middle));
 }
 
 #[test]
@@ -262,45 +295,40 @@ fn deck_solo_mute_interactions() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // Add two decks to ch0 (channels start empty, so indices will be 0 and 1)
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let first = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
-    send_cmd(
+    ));
+    let second = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [0.0, 0.0, 1.0, 1.0],
         },
-    );
-    // Mute deck 0
+    ));
     fire(
         &mut app,
         EngineCommand::SetDeckMute {
-            channel_idx: 0,
-            deck_idx: 0,
+            deck_uuid: first.clone(),
             mute: true,
         },
     );
-    let state = app.build_engine_state();
-    assert!(state.mixer.channels[0].decks[0].mute);
+    assert!(deck_snapshot(&mut app, &first).mute);
     // Note: effective_opacity reflects transition phase, not mute state.
     // Mute is applied at render time by skipping the deck entirely.
-    // Solo deck 1
     fire(
         &mut app,
         EngineCommand::SetDeckSolo {
-            channel_idx: 0,
-            deck_idx: 1,
+            deck_uuid: second.clone(),
             solo: true,
         },
     );
-    let state = app.build_engine_state();
-    assert!(state.mixer.channels[0].decks[1].solo);
+    assert!(deck_snapshot(&mut app, &second).solo);
+    assert!(!deck_snapshot(&mut app, &first).solo);
 }
 
 #[test]
@@ -321,34 +349,31 @@ fn blend_mode_roundtrip() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 1.0, 1.0, 1.0],
         },
-    );
+    ));
     fire(
         &mut app,
         EngineCommand::SetDeckBlendMode {
-            channel_idx: 0,
-            deck_idx: 0,
+            deck_uuid: deck.clone(),
             mode: BlendMode::Add,
         },
     );
-    let state = app.build_engine_state();
-    assert_eq!(state.mixer.channels[0].decks[0].blend_mode, BlendMode::Add);
+    assert_eq!(deck_snapshot(&mut app, &deck).blend_mode, BlendMode::Add);
     fire(
         &mut app,
         EngineCommand::SetDeckBlendMode {
-            channel_idx: 0,
-            deck_idx: 0,
+            deck_uuid: deck.clone(),
             mode: BlendMode::Multiply,
         },
     );
-    let state = app.build_engine_state();
     assert_eq!(
-        state.mixer.channels[0].decks[0].blend_mode,
+        deck_snapshot(&mut app, &deck).blend_mode,
         BlendMode::Multiply
     );
 }
@@ -358,10 +383,11 @@ fn render_frames_after_mutations() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
@@ -395,12 +421,23 @@ fn command_reply_correctness() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // Valid command
+    // Valid command — creation reports the new channel's UUID.
     let r = send_cmd(&mut app, EngineCommand::AddChannel);
-    assert!(matches!(r, CommandResult::Ok));
-    // Invalid: remove channel out of range
-    let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 999 });
-    assert!(matches!(r, CommandResult::Err { .. }));
+    assert!(matches!(r, CommandResult::OkWithId { .. }), "{r:?}");
+    // Invalid: a channel UUID that names nothing.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveChannel {
+            channel_uuid: "does-not-exist".into(),
+        },
+    );
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -473,10 +510,11 @@ fn publish_state_reflects_mutations() {
         return;
     };
     let reader = app.state_reader();
+    let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
@@ -491,46 +529,45 @@ fn effect_toggle_and_remove() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
-    let target = varda::engine::EffectTarget::Deck(0, 0);
-    // Add an effect — it may or may not succeed depending on shader registry
-    let r = send_cmd(
+    ));
+    let effect = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddEffect {
-            target: target.clone(),
-            shader_name: "Invert".into(),
+            target: EffectTarget::Deck(deck.clone()),
+            shader_name: "invert".into(),
+        },
+    ));
+
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::ToggleEffect {
+            effect_uuid: effect.clone(),
         },
     );
-    if matches!(r, CommandResult::Ok) {
-        // Toggle
-        let r = send_cmd(
-            &mut app,
-            EngineCommand::ToggleEffect {
-                target: target.clone(),
-                effect_idx: 0,
-            },
-        );
-        assert!(matches!(r, CommandResult::Ok));
-        let state = app.build_engine_state();
-        assert!(!state.mixer.channels[0].decks[0].effects[0].enabled);
-        // Remove
-        let r = send_cmd(
-            &mut app,
-            EngineCommand::RemoveEffect {
-                target,
-                effect_idx: 0,
-            },
-        );
-        assert!(matches!(r, CommandResult::Ok));
-        let state = app.build_engine_state();
-        assert!(state.mixer.channels[0].decks[0].effects.is_empty());
-    }
+    assert!(matches!(r, CommandResult::Ok));
+    let toggled = deck_snapshot(&mut app, &deck)
+        .effects
+        .iter()
+        .find(|e| e.uuid == effect)
+        .expect("effect in deck chain")
+        .enabled;
+    assert!(!toggled);
+
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveEffect {
+            effect_uuid: effect,
+        },
+    );
+    assert!(matches!(r, CommandResult::Ok));
+    assert!(deck_snapshot(&mut app, &deck).effects.is_empty());
 }
 
 #[test]
@@ -538,28 +575,29 @@ fn move_deck_between_channels() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch0 = channel_uuid(&mut app, 0);
+    let ch1 = channel_uuid(&mut app, 1);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch0,
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
+    ));
     let before_ch0 = app.build_engine_state().mixer.channels[0].decks.len();
     let before_ch1 = app.build_engine_state().mixer.channels[1].decks.len();
-    // Deck is at index 0 (channels start empty)
     let r = send_cmd(
         &mut app,
         EngineCommand::MoveDeck {
-            src_ch: 0,
-            src_deck: 0,
-            dst_ch: 1,
+            deck_uuid: deck.clone(),
+            dst_channel_uuid: ch1,
         },
     );
     assert!(matches!(r, CommandResult::Ok));
     let state = app.build_engine_state();
     assert_eq!(state.mixer.channels[0].decks.len(), before_ch0 - 1);
     assert_eq!(state.mixer.channels[1].decks.len(), before_ch1 + 1);
+    assert!(state.mixer.channels[1].decks.iter().any(|d| d.uuid == deck));
 }
 
 #[test]
@@ -567,30 +605,34 @@ fn reorder_deck_via_command() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let first = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
-    send_cmd(
+    ));
+    let second = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             color: [0.0, 1.0, 0.0, 1.0],
         },
-    );
+    ));
     let r = send_cmd(
         &mut app,
         EngineCommand::ReorderDeck {
-            ch: 0,
+            channel_uuid: ch,
             from_idx: 0,
             to_idx: 1,
         },
     );
     assert!(matches!(r, CommandResult::Ok));
-    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 2);
+    let decks = app.build_engine_state().mixer.channels[0].decks.clone();
+    assert_eq!(decks.len(), 2);
+    assert_eq!(decks[0].uuid, second);
+    assert_eq!(decks[1].uuid, first);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -600,45 +642,54 @@ fn reorder_deck_via_command() {
 // ── G: Adversarial scene values ──────────────────────────────────────
 
 #[test]
-fn chaos_oob_channel_index_does_not_panic() {
+fn chaos_unknown_channel_uuid_does_not_panic() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    // Add deck to non-existent channel
+    // Add deck to a channel that does not exist
     let r = send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 999,
+            channel_uuid: "no-such-channel".into(),
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
     assert!(
-        matches!(r, CommandResult::Err { .. }),
-        "OOB channel should error gracefully"
+        matches!(
+            r,
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                ..
+            }
+        ),
+        "unknown channel should error gracefully: {r:?}"
     );
-    // Remove deck from non-existent channel
+    // Remove a deck that does not exist
     let r = send_cmd(
         &mut app,
         EngineCommand::RemoveDeck {
-            channel_idx: 999,
-            deck_idx: 0,
+            deck_uuid: "no-such-deck".into(),
         },
     );
-    assert!(matches!(r, CommandResult::Err { .. }));
-    // Set opacity on non-existent channel
+    assert!(matches!(
+        r,
+        CommandResult::Err {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+    // Set opacity on entities that do not exist
     fire(
         &mut app,
         EngineCommand::SetChannelOpacity {
-            channel_idx: 999,
+            channel_uuid: "no-such-channel".into(),
             opacity: 0.5,
         },
     );
-    // Set deck opacity on non-existent deck
     fire(
         &mut app,
         EngineCommand::SetDeckOpacity {
-            channel_idx: 0,
-            deck_idx: 999,
+            deck_uuid: "no-such-deck".into(),
             opacity: 0.5,
         },
     );
@@ -648,48 +699,58 @@ fn chaos_oob_channel_index_does_not_panic() {
 }
 
 #[test]
-fn chaos_oob_deck_index_does_not_panic() {
+fn chaos_unknown_deck_uuid_errors_not_found() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch0 = channel_uuid(&mut app, 0);
+    let ch1 = channel_uuid(&mut app, 1);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch0,
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
-    // Remove deck at index far beyond count — silent no-op (returns Ok)
+    ));
+    let is_not_found = |r: &CommandResult| {
+        matches!(
+            r,
+            CommandResult::Err {
+                code: ErrorCode::NotFound,
+                ..
+            }
+        )
+    };
+    // Remove a deck nobody owns
     let r = send_cmd(
         &mut app,
         EngineCommand::RemoveDeck {
-            channel_idx: 0,
-            deck_idx: 100,
+            deck_uuid: "no-such-deck".into(),
         },
     );
-    assert!(matches!(r, CommandResult::Ok));
-    // Move deck from invalid source — silent no-op
+    assert!(is_not_found(&r), "{r:?}");
+    // Move a deck nobody owns
     let r = send_cmd(
         &mut app,
         EngineCommand::MoveDeck {
-            src_ch: 0,
-            src_deck: 100,
-            dst_ch: 1,
+            deck_uuid: "no-such-deck".into(),
+            dst_channel_uuid: ch1,
         },
     );
-    assert!(matches!(r, CommandResult::Ok));
-    // Move deck to invalid destination channel — silent no-op
+    assert!(is_not_found(&r), "{r:?}");
+    // Move a live deck to a channel nobody owns
     let r = send_cmd(
         &mut app,
         EngineCommand::MoveDeck {
-            src_ch: 0,
-            src_deck: 0,
-            dst_ch: 999,
+            deck_uuid: deck.clone(),
+            dst_channel_uuid: "no-such-channel".into(),
         },
     );
-    assert!(matches!(r, CommandResult::Ok));
+    assert!(is_not_found(&r), "{r:?}");
     // Deck should still be present (none of the above should have touched it)
-    assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 1);
+    let state = app.build_engine_state();
+    assert_eq!(state.mixer.channels[0].decks.len(), 1);
+    assert_eq!(state.mixer.channels[0].decks[0].uuid, deck);
     app.update_frame_timing();
     app.render_mixer_frame();
 }
@@ -717,18 +778,18 @@ fn chaos_nan_opacity_via_command() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
+    ));
     fire(
         &mut app,
         EngineCommand::SetDeckOpacity {
-            channel_idx: 0,
-            deck_idx: 0,
+            deck_uuid: deck,
             opacity: f32::NAN,
         },
     );
@@ -737,7 +798,7 @@ fn chaos_nan_opacity_via_command() {
     fire(
         &mut app,
         EngineCommand::SetChannelOpacity {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             opacity: f32::INFINITY,
         },
     );
@@ -745,7 +806,7 @@ fn chaos_nan_opacity_via_command() {
     fire(
         &mut app,
         EngineCommand::SetChannelOpacity {
-            channel_idx: 0,
+            channel_uuid: ch,
             opacity: f32::NEG_INFINITY,
         },
     );
@@ -827,29 +888,30 @@ fn chaos_rapid_deck_add_remove_cycle() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
+    let mut decks = Vec::new();
     for i in 0..20 {
         let color = [(i as f32) / 20.0, 0.0, 0.0, 1.0];
-        send_cmd(
+        decks.push(new_uuid(send_cmd(
             &mut app,
             EngineCommand::AddSolidColorDeck {
-                channel_idx: 0,
+                channel_uuid: ch.clone(),
                 color,
             },
-        );
+        )));
     }
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 20);
     // Remove all in reverse order
-    for i in (0..20).rev() {
+    for uuid in decks.iter().rev() {
         let r = send_cmd(
             &mut app,
             EngineCommand::RemoveDeck {
-                channel_idx: 0,
-                deck_idx: i,
+                deck_uuid: uuid.clone(),
             },
         );
         assert!(
             matches!(r, CommandResult::Ok),
-            "Remove deck {i} failed: {r:?}"
+            "Remove deck {uuid} failed: {r:?}"
         );
     }
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 0);
@@ -865,20 +927,25 @@ fn chaos_rapid_channel_add_remove_cycle() {
     };
     let initial = app.build_engine_state().mixer.channels.len();
     // Add 10 channels
+    let mut added = Vec::new();
     for _ in 0..10 {
-        let r = send_cmd(&mut app, EngineCommand::AddChannel);
-        assert!(matches!(r, CommandResult::Ok));
+        added.push(new_uuid(send_cmd(&mut app, EngineCommand::AddChannel)));
     }
     assert_eq!(app.build_engine_state().mixer.channels.len(), initial + 10);
     // Render with many channels
     app.update_frame_timing();
     app.render_mixer_frame();
-    // Remove channels (from end to avoid index shifting)
-    for i in (initial..initial + 10).rev() {
-        let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: i });
+    // Remove the channels we added
+    for uuid in added.iter().rev() {
+        let r = send_cmd(
+            &mut app,
+            EngineCommand::RemoveChannel {
+                channel_uuid: uuid.clone(),
+            },
+        );
         assert!(
             matches!(r, CommandResult::Ok),
-            "Remove channel {i} failed: {r:?}"
+            "Remove channel {uuid} failed: {r:?}"
         );
     }
     assert_eq!(app.build_engine_state().mixer.channels.len(), initial);
@@ -890,24 +957,19 @@ fn chaos_interleaved_add_remove_render() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
     // Add deck, render, remove, render — 10 cycles
     for _ in 0..10 {
-        send_cmd(
+        let deck = new_uuid(send_cmd(
             &mut app,
             EngineCommand::AddSolidColorDeck {
-                channel_idx: 0,
+                channel_uuid: ch.clone(),
                 color: [1.0, 1.0, 1.0, 1.0],
             },
-        );
+        ));
         app.update_frame_timing();
         app.render_mixer_frame();
-        send_cmd(
-            &mut app,
-            EngineCommand::RemoveDeck {
-                channel_idx: 0,
-                deck_idx: 0,
-            },
-        );
+        send_cmd(&mut app, EngineCommand::RemoveDeck { deck_uuid: deck });
         app.render_mixer_frame();
     }
     assert_eq!(app.build_engine_state().mixer.channels[0].decks.len(), 0);
@@ -922,24 +984,41 @@ fn chaos_remove_last_channels_rejected() {
     send_cmd(&mut app, EngineCommand::AddChannel);
     send_cmd(&mut app, EngineCommand::AddChannel);
     assert_eq!(app.build_engine_state().mixer.channels.len(), 4);
-    // Remove extras (from end to avoid index shift)
+    // Remove extras
     while app.build_engine_state().mixer.channels.len() > 2 {
-        let idx = app.build_engine_state().mixer.channels.len() - 1;
-        let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: idx });
+        let last = app
+            .build_engine_state()
+            .mixer
+            .channels
+            .last()
+            .unwrap()
+            .uuid
+            .clone();
+        let r = send_cmd(
+            &mut app,
+            EngineCommand::RemoveChannel { channel_uuid: last },
+        );
         assert!(matches!(r, CommandResult::Ok));
     }
-    assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
+    let remaining: Vec<String> = app
+        .build_engine_state()
+        .mixer
+        .channels
+        .iter()
+        .map(|c| c.uuid.clone())
+        .collect();
+    assert_eq!(remaining.len(), 2);
     // Removing either of the last 2 should fail (minimum 2 enforced)
-    let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 0 });
-    assert!(
-        matches!(r, CommandResult::Err { .. }),
-        "Should not remove below minimum"
-    );
-    let r = send_cmd(&mut app, EngineCommand::RemoveChannel { channel_idx: 1 });
-    assert!(
-        matches!(r, CommandResult::Err { .. }),
-        "Should not remove below minimum"
-    );
+    for uuid in remaining {
+        let r = send_cmd(
+            &mut app,
+            EngineCommand::RemoveChannel { channel_uuid: uuid },
+        );
+        assert!(
+            matches!(r, CommandResult::Err { .. }),
+            "Should not remove below minimum"
+        );
+    }
     assert_eq!(app.build_engine_state().mixer.channels.len(), 2);
     app.update_frame_timing();
     app.render_mixer_frame();
@@ -952,17 +1031,19 @@ fn chaos_command_storm_crossfader_sweep() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch0 = channel_uuid(&mut app, 0);
+    let ch1 = channel_uuid(&mut app, 1);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch0,
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 1,
+            channel_uuid: ch1,
             color: [0.0, 0.0, 1.0, 1.0],
         },
     );
@@ -985,21 +1066,21 @@ fn chaos_command_storm_opacity_sweep() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
+    ));
     // Sweep deck opacity 0→1→0 rapidly
     for i in 0..=100 {
         let val = i as f32 / 100.0;
         fire(
             &mut app,
             EngineCommand::SetDeckOpacity {
-                channel_idx: 0,
-                deck_idx: 0,
+                deck_uuid: deck.clone(),
                 opacity: val,
             },
         );
@@ -1009,16 +1090,14 @@ fn chaos_command_storm_opacity_sweep() {
         fire(
             &mut app,
             EngineCommand::SetDeckOpacity {
-                channel_idx: 0,
-                deck_idx: 0,
+                deck_uuid: deck.clone(),
                 opacity: val,
             },
         );
     }
     app.update_frame_timing();
     app.render_mixer_frame();
-    let state = app.build_engine_state();
-    assert!((state.mixer.channels[0].decks[0].opacity - 0.0).abs() < 1e-4);
+    assert!(deck_snapshot(&mut app, &deck).opacity.abs() < 1e-4);
 }
 
 #[test]
@@ -1026,22 +1105,30 @@ fn chaos_command_storm_mixed_mutations() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch0 = channel_uuid(&mut app, 0);
+    let ch1 = channel_uuid(&mut app, 1);
+    let deck = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch0.clone(),
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+    ));
     // Fire 50 rapid mixed commands without rendering between them
     let tx = app.command_sender();
     for i in 0..50 {
         let cmd = match i % 5 {
             0 => EngineCommand::SetCrossfader(i as f32 / 50.0),
             1 => EngineCommand::SetChannelOpacity {
-                channel_idx: 0,
+                channel_uuid: ch0.clone(),
                 opacity: (50 - i) as f32 / 50.0,
             },
             2 => EngineCommand::AddSolidColorDeck {
-                channel_idx: i % 2,
+                channel_uuid: if i % 2 == 0 { ch0.clone() } else { ch1.clone() },
                 color: [1.0, 1.0, 1.0, 1.0],
             },
             3 => EngineCommand::SetDeckOpacity {
-                channel_idx: 0,
-                deck_idx: 0,
+                deck_uuid: deck.clone(),
                 opacity: i as f32 / 50.0,
             },
             _ => EngineCommand::SetCrossfader(0.5),
@@ -1063,17 +1150,19 @@ fn chaos_render_many_frames_with_content() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch0 = channel_uuid(&mut app, 0);
+    let ch1 = channel_uuid(&mut app, 1);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch0,
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 1,
+            channel_uuid: ch1,
             color: [0.0, 1.0, 0.0, 1.0],
         },
     );
@@ -1091,17 +1180,19 @@ fn chaos_crossfader_extremes_render() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch0 = channel_uuid(&mut app, 0);
+    let ch1 = channel_uuid(&mut app, 1);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch0,
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 1,
+            channel_uuid: ch1,
             color: [0.0, 0.0, 1.0, 1.0],
         },
     );
@@ -1117,13 +1208,14 @@ fn chaos_opacity_extremes_render() {
     let Some(mut app) = headless_app() else {
         return;
     };
-    send_cmd(
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             color: [1.0, 0.0, 0.0, 1.0],
         },
-    );
+    ));
     for &val in &[
         0.0,
         1.0,
@@ -1139,8 +1231,7 @@ fn chaos_opacity_extremes_render() {
         fire(
             &mut app,
             EngineCommand::SetDeckOpacity {
-                channel_idx: 0,
-                deck_idx: 0,
+                deck_uuid: deck.clone(),
                 opacity: val,
             },
         );
@@ -1151,7 +1242,7 @@ fn chaos_opacity_extremes_render() {
         fire(
             &mut app,
             EngineCommand::SetChannelOpacity {
-                channel_idx: 0,
+                channel_uuid: ch.clone(),
                 opacity: val,
             },
         );
@@ -1164,10 +1255,11 @@ fn chaos_resolution_change_during_render() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
@@ -1208,20 +1300,21 @@ fn chaos_blend_mode_rapid_cycling() {
     let Some(mut app) = headless_app() else {
         return;
     };
+    let ch = channel_uuid(&mut app, 0);
     send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch.clone(),
             color: [1.0, 0.0, 0.0, 1.0],
         },
     );
-    send_cmd(
+    let top = new_uuid(send_cmd(
         &mut app,
         EngineCommand::AddSolidColorDeck {
-            channel_idx: 0,
+            channel_uuid: ch,
             color: [0.0, 1.0, 0.0, 1.0],
         },
-    );
+    ));
     let modes = [
         BlendMode::Normal,
         BlendMode::Add,
@@ -1233,8 +1326,7 @@ fn chaos_blend_mode_rapid_cycling() {
         fire(
             &mut app,
             EngineCommand::SetDeckBlendMode {
-                channel_idx: 0,
-                deck_idx: 1,
+                deck_uuid: top.clone(),
                 mode,
             },
         );
@@ -1249,23 +1341,24 @@ fn chaos_solo_mute_all_decks() {
         return;
     };
     // Add 5 decks to channel 0
+    let ch = channel_uuid(&mut app, 0);
+    let mut decks = Vec::new();
     for i in 0..5 {
         let c = i as f32 / 5.0;
-        send_cmd(
+        decks.push(new_uuid(send_cmd(
             &mut app,
             EngineCommand::AddSolidColorDeck {
-                channel_idx: 0,
+                channel_uuid: ch.clone(),
                 color: [c, c, c, 1.0],
             },
-        );
+        )));
     }
     // Mute all
-    for i in 0..5 {
+    for uuid in &decks {
         fire(
             &mut app,
             EngineCommand::SetDeckMute {
-                channel_idx: 0,
-                deck_idx: i,
+                deck_uuid: uuid.clone(),
                 mute: true,
             },
         );
@@ -1276,19 +1369,17 @@ fn chaos_solo_mute_all_decks() {
     fire(
         &mut app,
         EngineCommand::SetDeckSolo {
-            channel_idx: 0,
-            deck_idx: 2,
+            deck_uuid: decks[2].clone(),
             solo: true,
         },
     );
     app.render_mixer_frame();
     // Unmute all, unsolo
-    for i in 0..5 {
+    for uuid in &decks {
         fire(
             &mut app,
             EngineCommand::SetDeckMute {
-                channel_idx: 0,
-                deck_idx: i,
+                deck_uuid: uuid.clone(),
                 mute: false,
             },
         );
@@ -1296,8 +1387,7 @@ fn chaos_solo_mute_all_decks() {
     fire(
         &mut app,
         EngineCommand::SetDeckSolo {
-            channel_idx: 0,
-            deck_idx: 2,
+            deck_uuid: decks[2].clone(),
             solo: false,
         },
     );
@@ -1311,21 +1401,30 @@ fn chaos_state_consistency_after_storm() {
     };
     // Setup: 3 channels with 2 decks each
     send_cmd(&mut app, EngineCommand::AddChannel);
-    for ch in 0..3 {
-        send_cmd(
+    let channels: Vec<String> = app
+        .build_engine_state()
+        .mixer
+        .channels
+        .iter()
+        .map(|c| c.uuid.clone())
+        .collect();
+    let mut decks: Vec<Vec<String>> = Vec::new();
+    for ch in &channels {
+        let first = new_uuid(send_cmd(
             &mut app,
             EngineCommand::AddSolidColorDeck {
-                channel_idx: ch,
+                channel_uuid: ch.clone(),
                 color: [1.0, 0.0, 0.0, 1.0],
             },
-        );
-        send_cmd(
+        ));
+        let second = new_uuid(send_cmd(
             &mut app,
             EngineCommand::AddSolidColorDeck {
-                channel_idx: ch,
+                channel_uuid: ch.clone(),
                 color: [0.0, 1.0, 0.0, 1.0],
             },
-        );
+        ));
+        decks.push(vec![first, second]);
     }
     // Storm: 200 parameter mutations
     for i in 0..200 {
@@ -1334,15 +1433,14 @@ fn chaos_state_consistency_after_storm() {
         fire(
             &mut app,
             EngineCommand::SetDeckOpacity {
-                channel_idx: ch,
-                deck_idx: deck,
+                deck_uuid: decks[ch][deck].clone(),
                 opacity: (i as f32 / 200.0),
             },
         );
         fire(
             &mut app,
             EngineCommand::SetChannelOpacity {
-                channel_idx: ch,
+                channel_uuid: channels[ch].clone(),
                 opacity: 1.0 - (i as f32 / 200.0),
             },
         );
@@ -1400,10 +1498,18 @@ fn mesh_warp_subdivide_and_drag_point() {
             },
         },
     );
+    let output_uuid = app
+        .build_engine_state()
+        .outputs
+        .windows
+        .last()
+        .expect("headless output created")
+        .uuid
+        .clone();
     let r = send_cmd(
         &mut app,
-        EngineCommand::AssignSurfaceToOutputByIdx {
-            output_idx: 0,
+        EngineCommand::AssignSurfaceToOutput {
+            output_uuid,
             surface_uuid: surface_uuid.clone(),
         },
     );

@@ -29,13 +29,13 @@ pub async fn add_channel(State(state): State<SharedState>) -> impl IntoResponse 
     }
 }
 
-#[utoipa::path(delete, path = "/api/channels/{idx}", params(("idx" = usize, Path, description = "Channel index")), responses((status = 200, body = CommandResult)), tag = "Channels")]
+#[utoipa::path(delete, path = "/api/channels/{channel_uuid}", params(("channel_uuid" = String, Path, description = "Channel UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Channels")]
 pub async fn remove_channel(
     State(state): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(channel_uuid): Path<String>,
 ) -> impl IntoResponse {
     match state
-        .send_command(EngineCommand::RemoveChannel { channel_idx: idx })
+        .send_command(EngineCommand::RemoveChannel { channel_uuid })
         .await
     {
         Ok(result) => command_response(result),
@@ -43,15 +43,15 @@ pub async fn remove_channel(
     }
 }
 
-#[utoipa::path(put, path = "/api/channels/{idx}/opacity", params(("idx" = usize, Path, description = "Channel index")), request_body = ChannelOpacityBody, responses((status = 200, body = CommandResult)), tag = "Channels")]
+#[utoipa::path(put, path = "/api/channels/{channel_uuid}/opacity", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = ChannelOpacityBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Channels")]
 pub async fn set_opacity(
     State(state): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(body): Json<ChannelOpacityBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetChannelOpacity {
-            channel_idx: idx,
+            channel_uuid,
             opacity: body.opacity,
         })
         .await
@@ -61,15 +61,15 @@ pub async fn set_opacity(
     }
 }
 
-#[utoipa::path(put, path = "/api/channels/{idx}/blend-mode", params(("idx" = usize, Path, description = "Channel index")), request_body = ChannelBlendModeBody, responses((status = 200, body = CommandResult)), tag = "Channels")]
+#[utoipa::path(put, path = "/api/channels/{channel_uuid}/blend-mode", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = ChannelBlendModeBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Channels")]
 pub async fn set_blend_mode(
     State(state): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(channel_uuid): Path<String>,
     Json(body): Json<ChannelBlendModeBody>,
 ) -> impl IntoResponse {
     match state
         .send_command(EngineCommand::SetChannelBlendMode {
-            channel_idx: idx,
+            channel_uuid,
             mode: body.mode,
         })
         .await

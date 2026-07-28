@@ -29,23 +29,29 @@ pub async fn create(State(s): State<SharedState>) -> impl IntoResponse {
     }
 }
 
-#[utoipa::path(delete, path = "/api/outputs/{idx}", params(("idx" = usize, Path, description = "Output index")), responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn close(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::CloseOutput { idx }).await {
+#[utoipa::path(delete, path = "/api/outputs/{output_uuid}", params(("output_uuid" = String, Path, description = "Output UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
+pub async fn close(
+    State(s): State<SharedState>,
+    Path(output_uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::CloseOutput { output_uuid })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
 }
 
-#[utoipa::path(put, path = "/api/outputs/{idx}/display", params(("idx" = usize, Path, description = "Output index")), request_body = SetDisplayBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
+#[utoipa::path(put, path = "/api/outputs/{output_uuid}/display", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = SetDisplayBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn set_display(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(output_uuid): Path<String>,
     Json(b): Json<SetDisplayBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetOutputDisplay {
-            idx,
+            output_uuid,
             monitor_name: b.monitor_name,
         })
         .await
@@ -55,7 +61,7 @@ pub async fn set_display(
     }
 }
 
-#[utoipa::path(post, path = "/api/outputs/{output_uuid}/surfaces", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = AssignSurfaceBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
+#[utoipa::path(post, path = "/api/outputs/{output_uuid}/surfaces", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = AssignSurfaceBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output or surface not found")), tag = "Outputs")]
 pub async fn assign_surface(
     State(s): State<SharedState>,
     Path(output_uuid): Path<String>,
@@ -73,15 +79,15 @@ pub async fn assign_surface(
     }
 }
 
-#[utoipa::path(delete, path = "/api/outputs/{output_uuid}/surfaces/{assignment_idx}", params(("output_uuid" = String, Path, description = "Output UUID"), ("assignment_idx" = usize, Path, description = "Surface assignment index")), responses((status = 200, body = CommandResult)), tag = "Outputs")]
+#[utoipa::path(delete, path = "/api/outputs/{output_uuid}/surfaces/{surface_uuid}", params(("output_uuid" = String, Path, description = "Output UUID"), ("surface_uuid" = String, Path, description = "Surface UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Output or surface assignment not found")), tag = "Outputs")]
 pub async fn unassign_surface(
     State(s): State<SharedState>,
-    Path((output_uuid, assignment_idx)): Path<(String, usize)>,
+    Path((output_uuid, surface_uuid)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::UnassignSurfaceFromOutput {
             output_uuid,
-            assignment_idx,
+            surface_uuid,
         })
         .await
     {
@@ -111,16 +117,28 @@ pub async fn create_headless(
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(post, path = "/api/outputs/{idx}/start", params(("idx" = usize, Path, description = "Output index")), responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn start(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::StartOutput { idx }).await {
+#[utoipa::path(post, path = "/api/outputs/{output_uuid}/start", params(("output_uuid" = String, Path, description = "Output UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
+pub async fn start(
+    State(s): State<SharedState>,
+    Path(output_uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::StartOutput { output_uuid })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
-#[utoipa::path(post, path = "/api/outputs/{idx}/stop", params(("idx" = usize, Path, description = "Output index")), responses((status = 200, body = CommandResult)), tag = "Outputs")]
-pub async fn stop(State(s): State<SharedState>, Path(idx): Path<usize>) -> impl IntoResponse {
-    match s.send_command(EngineCommand::StopOutput { idx }).await {
+#[utoipa::path(post, path = "/api/outputs/{output_uuid}/stop", params(("output_uuid" = String, Path, description = "Output UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
+pub async fn stop(
+    State(s): State<SharedState>,
+    Path(output_uuid): Path<String>,
+) -> impl IntoResponse {
+    match s
+        .send_command(EngineCommand::StopOutput { output_uuid })
+        .await
+    {
         Ok(r) => command_response(r),
         Err(m) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
@@ -131,14 +149,17 @@ pub struct SetCalibrationModeBody {
     pub mode: crate::renderer::context::CalibrationMode,
 }
 
-#[utoipa::path(put, path = "/api/outputs/{idx}/calibration", params(("idx" = usize, Path, description = "Output index")), request_body = SetCalibrationModeBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
+#[utoipa::path(put, path = "/api/outputs/{output_uuid}/calibration", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = SetCalibrationModeBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn set_calibration_mode(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(output_uuid): Path<String>,
     Json(b): Json<SetCalibrationModeBody>,
 ) -> impl IntoResponse {
     match s
-        .send_command(EngineCommand::SetCalibrationMode { idx, mode: b.mode })
+        .send_command(EngineCommand::SetCalibrationMode {
+            output_uuid,
+            mode: b.mode,
+        })
         .await
     {
         Ok(r) => command_response(r),
@@ -154,15 +175,15 @@ pub struct SetOutputTargetBody {
     pub target: crate::renderer::context::OutputTarget,
 }
 
-#[utoipa::path(put, path = "/api/outputs/{idx}/target", params(("idx" = usize, Path, description = "Output index")), request_body = SetOutputTargetBody, responses((status = 200, body = CommandResult)), tag = "Outputs")]
+#[utoipa::path(put, path = "/api/outputs/{output_uuid}/target", params(("output_uuid" = String, Path, description = "Output UUID")), request_body = SetOutputTargetBody, responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")), tag = "Outputs")]
 pub async fn set_target(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(output_uuid): Path<String>,
     Json(b): Json<SetOutputTargetBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetOutputTarget {
-            idx,
+            output_uuid,
             target: b.target,
         })
         .await
@@ -182,20 +203,20 @@ pub struct SetEdgeBlendBody {
 
 #[utoipa::path(
     put,
-    path = "/api/outputs/{idx}/edge-blend",
-    params(("idx" = usize, Path, description = "Output index")),
+    path = "/api/outputs/{output_uuid}/edge-blend",
+    params(("output_uuid" = String, Path, description = "Output UUID")),
     request_body = SetEdgeBlendBody,
-    responses((status = 200, body = CommandResult)),
+    responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")),
     tag = "Outputs"
 )]
 pub async fn set_edge_blend(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(output_uuid): Path<String>,
     Json(b): Json<SetEdgeBlendBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetEdgeBlend {
-            output_idx: idx,
+            output_uuid,
             config: b.config,
         })
         .await
@@ -213,20 +234,20 @@ pub struct SetEdgeBlendModeBody {
 
 #[utoipa::path(
     put,
-    path = "/api/outputs/{idx}/edge-blend-mode",
-    params(("idx" = usize, Path, description = "Output index")),
+    path = "/api/outputs/{output_uuid}/edge-blend-mode",
+    params(("output_uuid" = String, Path, description = "Output UUID")),
     request_body = SetEdgeBlendModeBody,
-    responses((status = 200, body = CommandResult)),
+    responses((status = 200, body = CommandResult), (status = 404, description = "Output not found")),
     tag = "Outputs"
 )]
 pub async fn set_edge_blend_mode(
     State(s): State<SharedState>,
-    Path(idx): Path<usize>,
+    Path(output_uuid): Path<String>,
     Json(b): Json<SetEdgeBlendModeBody>,
 ) -> impl IntoResponse {
     match s
         .send_command(EngineCommand::SetEdgeBlendMode {
-            output_idx: idx,
+            output_uuid,
             mode: b.mode,
         })
         .await

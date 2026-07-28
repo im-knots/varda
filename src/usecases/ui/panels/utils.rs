@@ -1,6 +1,6 @@
 //! Shared UI utilities.
 
-use super::super::EffectDrag;
+use super::super::{ChannelUIInfo, EffectDrag};
 
 /// Format seconds as MM:SS
 pub(super) fn format_time(secs: f64) -> String {
@@ -45,7 +45,17 @@ pub(super) fn render_collapsed_column(ui: &mut egui::Ui, label: &str, open_id: e
     }
 }
 
-/// `chain_key` identifies the chain (e.g. "deck_0_1", "ch_0", "master").
+/// Resolve a channel UUID to its ordinal and display name. The ordinal is only
+/// used for palette lookup; callers must treat `None` as "no longer exists"
+/// rather than falling back to a position.
+pub(super) fn resolve_channel(channels: &[ChannelUIInfo], uuid: &str) -> Option<(usize, String)> {
+    channels
+        .iter()
+        .position(|c| c.uuid == uuid)
+        .map(|i| (i, channels[i].name.clone()))
+}
+
+/// `chain_key` identifies the chain (e.g. "deck_<uuid>", "ch_<uuid>", "master").
 /// `position` is the insert index in the chain.
 pub(super) fn render_effect_drop_zone(ui: &mut egui::Ui, chain_key: &str, position: usize) {
     let dz = ui.allocate_response(

@@ -12,19 +12,34 @@ pub enum FileDialogKind {
     Video,
 }
 
+/// Correlates a spawned deck load with the target its requester recorded.
+///
+/// Deliberately opaque: a load outlives the frame that requested it, so any
+/// position captured at spawn time may name a different entity by the time the
+/// deck is ready. The requester keeps `token → channel UUID` and resolves the
+/// UUID on completion. See [`/spec/api-addressing.md`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeckLoadToken(pub usize);
+
 /// Result from a completed file dialog (sent from background thread).
 /// Supports multi-select: `paths` may contain one or more files.
+///
+/// The target channel is held by UUID, not index: the dialog runs on a
+/// background thread while the UI stays live, so the channel list can change
+/// between opening the dialog and picking a file.
 #[derive(Debug)]
 pub struct FileDialogResult {
     pub kind: FileDialogKind,
-    pub ch_idx: usize,
+    pub channel_uuid: String,
     pub paths: Vec<std::path::PathBuf>,
 }
 
 /// Result from a background deck load (sent from a spawned thread).
 /// Contains a ready-to-use Deck that just needs mixer insertion + egui texture registration.
 pub struct DeckLoadResult {
-    pub ch_idx: usize,
+    /// Echoed back verbatim from the spawn request; only the requester can
+    /// interpret it.
+    pub token: DeckLoadToken,
     pub deck: anyhow::Result<crate::deck::Deck>,
     pub name: String,
 }
@@ -54,14 +69,14 @@ impl VardaApp {
         pending: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
         render_width: u32,
         render_height: u32,
-        images: Vec<(usize, std::path::PathBuf)>,
-        videos: Vec<(usize, std::path::PathBuf)>,
-        shaders: Vec<(usize, crate::isf::ISFShader)>,
+        images: Vec<(DeckLoadToken, std::path::PathBuf)>,
+        videos: Vec<(DeckLoadToken, std::path::PathBuf)>,
+        shaders: Vec<(DeckLoadToken, crate::isf::ISFShader)>,
     ) {
         use crate::deck::Deck;
         use std::sync::atomic::Ordering;
 
-        for (ch_idx, path) in images {
+        for (token, path) in images {
             let tx = sender.clone();
             let ctx = context.clone();
             let counter = pending.clone();
@@ -85,12 +100,12 @@ impl VardaApp {
                         Err(anyhow::anyhow!("panic loading image deck")),
                     ),
                 };
-                let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
+                let _ = tx.send(DeckLoadResult { token, deck, name });
                 counter.fetch_sub(1, Ordering::Relaxed);
             });
         }
 
-        for (ch_idx, path) in videos {
+        for (token, path) in videos {
             let tx = sender.clone();
             let ctx = context.clone();
             let counter = pending.clone();
@@ -114,12 +129,12 @@ impl VardaApp {
                         Err(anyhow::anyhow!("panic loading video deck")),
                     ),
                 };
-                let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
+                let _ = tx.send(DeckLoadResult { token, deck, name });
                 counter.fetch_sub(1, Ordering::Relaxed);
             });
         }
 
-        for (ch_idx, shader) in shaders {
+        for (token, shader) in shaders {
             let tx = sender.clone();
             let ctx = context.clone();
             let counter = pending.clone();
@@ -143,7 +158,7 @@ impl VardaApp {
                         Err(anyhow::anyhow!("panic loading shader deck")),
                     ),
                 };
-                let _ = tx.send(DeckLoadResult { ch_idx, deck, name });
+                let _ = tx.send(DeckLoadResult { token, deck, name });
                 counter.fetch_sub(1, Ordering::Relaxed);
             });
         }
@@ -910,7 +925,7 @@ impl VardaApp {
     pub fn open_file_dialog(
         sender: &std::sync::mpsc::Sender<FileDialogResult>,
         kind: FileDialogKind,
-        ch_idx: usize,
+        channel_uuid: String,
     ) {
         let tx = sender.clone();
         std::thread::spawn(move || {
@@ -926,7 +941,7 @@ impl VardaApp {
                 if !paths.is_empty() {
                     let _ = tx.send(FileDialogResult {
                         kind,
-                        ch_idx,
+                        channel_uuid,
                         paths,
                     });
                 }
@@ -1065,7 +1080,7 @@ mod tests {
                 ),
             };
             let _ = tx.send(DeckLoadResult {
-                ch_idx: 0,
+                token: DeckLoadToken(0),
                 deck,
                 name,
             });

@@ -56,7 +56,9 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         ui.label(egui::RichText::new(&output.name).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("x").on_hover_text("Close output").clicked() {
-                                actions.commands.push(EngineCommand::CloseOutput { idx });
+                                actions.commands.push(EngineCommand::CloseOutput {
+                                    output_uuid: output.uuid.clone(),
+                                });
                             }
                         });
                     });
@@ -115,10 +117,10 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
 
                     if output.is_windowed {
                         // Windowed output controls
-                        render_windowed_controls(ui, idx, output, data, actions);
+                        render_windowed_controls(ui, &output.uuid, output, data, actions);
                     } else {
                         // Headless output controls (recording/SRT/NDI/Syphon)
-                        render_headless_controls(ui, idx, output, data, actions);
+                        render_headless_controls(ui, &output.uuid, output, data, actions);
                     }
                 });
             ui.add_space(4.0);
@@ -129,7 +131,7 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
 /// Controls specific to windowed outputs (display selector, calibration, surfaces).
 fn render_windowed_controls(
     ui: &mut egui::Ui,
-    idx: usize,
+    output_uuid: &str,
     output: &super::super::OutputUI,
     data: &UIData,
     actions: &mut UIActions,
@@ -137,14 +139,14 @@ fn render_windowed_controls(
     // Display target selector
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Display:").small());
-        egui::ComboBox::from_id_salt(format!("output_target_{}", idx))
+        egui::ComboBox::from_id_salt(format!("output_target_{}", output_uuid))
             .selected_text(egui::RichText::new(&output.target_label).small())
             .width(160.0)
             .show_ui(ui, |ui| {
                 let is_windowed = matches!(output.target, OutputTarget::Windowed);
                 if ui.selectable_label(is_windowed, "Windowed").clicked() {
                     actions.commands.push(EngineCommand::SetOutputTarget {
-                        idx,
+                        output_uuid: output_uuid.to_string(),
                         target: OutputTarget::Windowed,
                     });
                 }
@@ -152,7 +154,7 @@ fn render_windowed_controls(
                     let label = format!("{} ({}x{})", monitor.name, monitor.width, monitor.height);
                     if ui.selectable_label(false, &label).clicked() {
                         actions.commands.push(EngineCommand::SetOutputTarget {
-                            idx,
+                            output_uuid: output_uuid.to_string(),
                             target: OutputTarget::Display {
                                 name: monitor.name.clone(),
                                 monitor_index: monitor.index,
@@ -166,7 +168,7 @@ fn render_windowed_controls(
     // Rotation selector
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rotation:").small());
-        egui::ComboBox::from_id_salt(format!("output_rotation_{}", idx))
+        egui::ComboBox::from_id_salt(format!("output_rotation_{}", output_uuid))
             .selected_text(egui::RichText::new(output.rotation.label()).small())
             .width(80.0)
             .show_ui(ui, |ui| {
@@ -175,9 +177,10 @@ fn render_windowed_controls(
                         .selectable_label(output.rotation == rot, rot.label())
                         .clicked()
                     {
-                        actions
-                            .commands
-                            .push(EngineCommand::SetOutputRotation { idx, rotation: rot });
+                        actions.commands.push(EngineCommand::SetOutputRotation {
+                            output_uuid: output_uuid.to_string(),
+                            rotation: rot,
+                        });
                     }
                 }
             });
@@ -197,9 +200,10 @@ fn render_windowed_controls(
                 .selectable_label(output.calibration_mode == mode, label)
                 .clicked()
             {
-                actions
-                    .commands
-                    .push(EngineCommand::SetCalibrationMode { idx, mode });
+                actions.commands.push(EngineCommand::SetCalibrationMode {
+                    output_uuid: output_uuid.to_string(),
+                    mode,
+                });
             }
         }
     });
@@ -208,7 +212,7 @@ fn render_windowed_controls(
     ui.add_space(2.0);
     ui.label(egui::RichText::new("Surfaces:").small().strong());
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt(format!("assign_surf_{}", idx))
+        egui::ComboBox::from_id_salt(format!("assign_surf_{}", output_uuid))
             .selected_text("+ Assign Surface")
             .width(140.0)
             .show_ui(ui, |ui| {
@@ -218,39 +222,37 @@ fn render_windowed_controls(
                         .iter()
                         .any(|a| a.surface_uuid == surface.uuid);
                     if !already_assigned && ui.selectable_label(false, &surface.name).clicked() {
-                        actions
-                            .commands
-                            .push(EngineCommand::AssignSurfaceToOutputByIdx {
-                                output_idx: idx,
-                                surface_uuid: surface.uuid.clone(),
-                            });
+                        actions.commands.push(EngineCommand::AssignSurfaceToOutput {
+                            output_uuid: output_uuid.to_string(),
+                            surface_uuid: surface.uuid.clone(),
+                        });
                     }
                 }
             });
     });
 
-    for (ai, assignment) in output.surface_assignments.iter().enumerate() {
+    for assignment in output.surface_assignments.iter() {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
             if ui.small_button("x").on_hover_text("Unassign").clicked() {
                 actions
                     .commands
-                    .push(EngineCommand::UnassignSurfaceFromOutputByIdx {
-                        output_idx: idx,
-                        assignment_idx: ai,
+                    .push(EngineCommand::UnassignSurfaceFromOutput {
+                        output_uuid: output_uuid.to_string(),
+                        surface_uuid: assignment.surface_uuid.clone(),
                     });
             }
         });
     }
 
     // Edge blending
-    render_edge_blend_controls(ui, idx, output, actions);
+    render_edge_blend_controls(ui, output_uuid, output, actions);
 }
 
 /// Controls specific to headless outputs (start/stop, duration, inline config).
 fn render_headless_controls(
     ui: &mut egui::Ui,
-    idx: usize,
+    output_uuid: &str,
     output: &super::super::OutputUI,
     data: &UIData,
     actions: &mut UIActions,
@@ -268,7 +270,7 @@ fn render_headless_controls(
             // Codec selector
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Codec:").small());
-                let codec_id = egui::Id::new(format!("rec_codec_{}", idx));
+                let codec_id = egui::Id::new(format!("rec_codec_{}", output_uuid));
                 egui::ComboBox::from_id_salt(codec_id)
                     .selected_text(egui::RichText::new(codec.to_string()).small())
                     .width(120.0)
@@ -285,7 +287,7 @@ fn render_headless_controls(
                         ] {
                             if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
                                 actions.commands.push(EngineCommand::SetOutputTarget {
-                                    idx,
+                                    output_uuid: output_uuid.to_string(),
                                     target: OutputTarget::Recording {
                                         path: path.clone(),
                                         codec: c.clone(),
@@ -299,7 +301,7 @@ fn render_headless_controls(
             // File path input
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("File:").small());
-                let path_id = egui::Id::new(format!("rec_path_{}", idx));
+                let path_id = egui::Id::new(format!("rec_path_{}", output_uuid));
                 let mut current_path: String = ui
                     .data(|d| d.get_temp(path_id))
                     .unwrap_or_else(|| path.clone());
@@ -312,7 +314,7 @@ fn render_headless_controls(
                     ui.data_mut(|d| d.insert_temp(path_id, current_path.clone()));
                     if response.lost_focus() {
                         actions.commands.push(EngineCommand::SetOutputTarget {
-                            idx,
+                            output_uuid: output_uuid.to_string(),
                             target: OutputTarget::Recording {
                                 path: current_path,
                                 codec: codec.clone(),
@@ -336,7 +338,7 @@ fn render_headless_controls(
             | OutputTarget::SyphonServer { .. }
     );
     if is_stream {
-        render_stream_config(ui, idx, output, actions);
+        render_stream_config(ui, output_uuid, output, actions);
     }
 
     // Audio passthrough device selector (ffmpeg targets only; locked while active)
@@ -353,7 +355,7 @@ fn render_headless_controls(
             ui.label(egui::RichText::new("Audio:").small());
             let current = output.target.audio_device();
             let selected_text = current.unwrap_or("None (silent)");
-            egui::ComboBox::from_id_salt(format!("out_audio_{}", idx))
+            egui::ComboBox::from_id_salt(format!("out_audio_{}", output_uuid))
                 .selected_text(egui::RichText::new(selected_text).small())
                 .width(160.0)
                 .show_ui(ui, |ui| {
@@ -362,7 +364,7 @@ fn render_headless_controls(
                         .clicked()
                     {
                         actions.commands.push(EngineCommand::SetOutputTarget {
-                            idx,
+                            output_uuid: output_uuid.to_string(),
                             target: output.target.with_audio_device(None),
                         });
                     }
@@ -370,7 +372,7 @@ fn render_headless_controls(
                         let selected = current == Some(dev.name.as_str());
                         if ui.selectable_label(selected, &dev.name).clicked() {
                             actions.commands.push(EngineCommand::SetOutputTarget {
-                                idx,
+                                output_uuid: output_uuid.to_string(),
                                 target: output.target.with_audio_device(Some(dev.name.clone())),
                             });
                         }
@@ -382,7 +384,7 @@ fn render_headless_controls(
     // Rotation selector
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rotation:").small());
-        egui::ComboBox::from_id_salt(format!("headless_rotation_{}", idx))
+        egui::ComboBox::from_id_salt(format!("headless_rotation_{}", output_uuid))
             .selected_text(egui::RichText::new(output.rotation.label()).small())
             .width(80.0)
             .show_ui(ui, |ui| {
@@ -391,9 +393,10 @@ fn render_headless_controls(
                         .selectable_label(output.rotation == rot, rot.label())
                         .clicked()
                     {
-                        actions
-                            .commands
-                            .push(EngineCommand::SetOutputRotation { idx, rotation: rot });
+                        actions.commands.push(EngineCommand::SetOutputRotation {
+                            output_uuid: output_uuid.to_string(),
+                            rotation: rot,
+                        });
                     }
                 }
             });
@@ -403,7 +406,7 @@ fn render_headless_controls(
     ui.add_space(2.0);
     ui.label(egui::RichText::new("Surfaces:").small().strong());
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt(format!("assign_surf_{}", idx))
+        egui::ComboBox::from_id_salt(format!("assign_surf_{}", output_uuid))
             .selected_text("+ Assign Surface")
             .width(140.0)
             .show_ui(ui, |ui| {
@@ -413,26 +416,24 @@ fn render_headless_controls(
                         .iter()
                         .any(|a| a.surface_uuid == surface.uuid);
                     if !already_assigned && ui.selectable_label(false, &surface.name).clicked() {
-                        actions
-                            .commands
-                            .push(EngineCommand::AssignSurfaceToOutputByIdx {
-                                output_idx: idx,
-                                surface_uuid: surface.uuid.clone(),
-                            });
+                        actions.commands.push(EngineCommand::AssignSurfaceToOutput {
+                            output_uuid: output_uuid.to_string(),
+                            surface_uuid: surface.uuid.clone(),
+                        });
                     }
                 }
             });
     });
 
-    for (ai, assignment) in output.surface_assignments.iter().enumerate() {
+    for assignment in output.surface_assignments.iter() {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
             if ui.small_button("x").on_hover_text("Unassign").clicked() {
                 actions
                     .commands
-                    .push(EngineCommand::UnassignSurfaceFromOutputByIdx {
-                        output_idx: idx,
-                        assignment_idx: ai,
+                    .push(EngineCommand::UnassignSurfaceFromOutput {
+                        output_uuid: output_uuid.to_string(),
+                        surface_uuid: assignment.surface_uuid.clone(),
                     });
             }
         });
@@ -448,21 +449,25 @@ fn render_headless_controls(
                     .color(egui::Color32::from_rgb(255, 80, 80)),
             );
             if ui.button("⏹ Stop").clicked() {
-                actions.commands.push(EngineCommand::StopOutput { idx });
+                actions.commands.push(EngineCommand::StopOutput {
+                    output_uuid: output_uuid.to_string(),
+                });
             }
         } else if ui.button("▶ Start").clicked() {
-            actions.commands.push(EngineCommand::StartOutput { idx });
+            actions.commands.push(EngineCommand::StartOutput {
+                output_uuid: output_uuid.to_string(),
+            });
         }
     });
 
     // Edge blending
-    render_edge_blend_controls(ui, idx, output, actions);
+    render_edge_blend_controls(ui, output_uuid, output, actions);
 }
 
 /// Unified stream output config with protocol dropdown (SRT, HLS, DASH, RTMP, NDI, Syphon).
 fn render_stream_config(
     ui: &mut egui::Ui,
-    idx: usize,
+    output_uuid: &str,
     output: &super::super::OutputUI,
     actions: &mut UIActions,
 ) {
@@ -483,7 +488,7 @@ fn render_stream_config(
     if !output.is_active {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Protocol:").small());
-            egui::ComboBox::from_id_salt(format!("stream_proto_{}", idx))
+            egui::ComboBox::from_id_salt(format!("stream_proto_{}", output_uuid))
                 .selected_text(egui::RichText::new(current_proto).small())
                 .width(80.0)
                 .show_ui(ui, |ui| {
@@ -545,7 +550,7 @@ fn render_stream_config(
                             && current_proto != *label
                         {
                             actions.commands.push(EngineCommand::SetOutputTarget {
-                                idx,
+                                output_uuid: output_uuid.to_string(),
                                 target: default_target.clone(),
                             });
                         }
@@ -570,14 +575,14 @@ fn render_stream_config(
             if !output.is_active {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Codec:").small());
-                    egui::ComboBox::from_id_salt(format!("srt_codec_{}", idx))
+                    egui::ComboBox::from_id_salt(format!("srt_codec_{}", output_uuid))
                         .selected_text(egui::RichText::new(codec.to_string()).small())
                         .width(120.0)
                         .show_ui(ui, |ui| {
                             for c in &[SrtCodec::H264, SrtCodec::H265] {
                                 if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
                                     actions.commands.push(EngineCommand::SetOutputTarget {
-                                        idx,
+                                        output_uuid: output_uuid.to_string(),
                                         target: OutputTarget::SrtStream {
                                             url: url.clone(),
                                             codec: c.clone(),
@@ -590,7 +595,7 @@ fn render_stream_config(
                 });
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("URL:").small());
-                    let url_id = egui::Id::new(format!("srt_url_{}", idx));
+                    let url_id = egui::Id::new(format!("srt_url_{}", output_uuid));
                     let mut current_url: String = ui
                         .data(|d| d.get_temp(url_id))
                         .unwrap_or_else(|| url.clone());
@@ -603,7 +608,7 @@ fn render_stream_config(
                         ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
                         if response.lost_focus() {
                             actions.commands.push(EngineCommand::SetOutputTarget {
-                                idx,
+                                output_uuid: output_uuid.to_string(),
                                 target: OutputTarget::SrtStream {
                                     url: current_url,
                                     codec: codec.clone(),
@@ -623,7 +628,7 @@ fn render_stream_config(
         } => {
             render_hls_dash_name_codec(
                 ui,
-                idx,
+                output_uuid,
                 "hls",
                 name,
                 codec,
@@ -644,7 +649,7 @@ fn render_stream_config(
                         .changed()
                     {
                         actions.commands.push(EngineCommand::SetOutputTarget {
-                            idx,
+                            output_uuid: output_uuid.to_string(),
                             target: OutputTarget::HlsStream {
                                 name: name.clone(),
                                 codec: codec.clone(),
@@ -667,7 +672,7 @@ fn render_stream_config(
         } => {
             render_hls_dash_name_codec(
                 ui,
-                idx,
+                output_uuid,
                 "dash",
                 name,
                 codec,
@@ -692,7 +697,7 @@ fn render_stream_config(
             if !output.is_active {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Codec:").small());
-                    egui::ComboBox::from_id_salt(format!("rtmp_codec_{}", idx))
+                    egui::ComboBox::from_id_salt(format!("rtmp_codec_{}", output_uuid))
                         .selected_text(egui::RichText::new(codec.to_string()).small())
                         .width(120.0)
                         .show_ui(ui, |ui| {
@@ -703,7 +708,7 @@ fn render_stream_config(
                             ] {
                                 if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
                                     actions.commands.push(EngineCommand::SetOutputTarget {
-                                        idx,
+                                        output_uuid: output_uuid.to_string(),
                                         target: OutputTarget::RtmpStream {
                                             url: url.clone(),
                                             codec: c.clone(),
@@ -716,7 +721,7 @@ fn render_stream_config(
                 });
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("URL:").small());
-                    let url_id = egui::Id::new(format!("rtmp_url_{}", idx));
+                    let url_id = egui::Id::new(format!("rtmp_url_{}", output_uuid));
                     let mut current_url: String = ui
                         .data(|d| d.get_temp(url_id))
                         .unwrap_or_else(|| url.clone());
@@ -729,7 +734,7 @@ fn render_stream_config(
                         ui.data_mut(|d| d.insert_temp(url_id, current_url.clone()));
                         if response.lost_focus() {
                             actions.commands.push(EngineCommand::SetOutputTarget {
-                                idx,
+                                output_uuid: output_uuid.to_string(),
                                 target: OutputTarget::RtmpStream {
                                     url: current_url,
                                     codec: codec.clone(),
@@ -744,7 +749,7 @@ fn render_stream_config(
         OutputTarget::NdiSend { ref sender_name } if !output.is_active => {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Name:").small());
-                let name_id = egui::Id::new(format!("ndi_name_{}", idx));
+                let name_id = egui::Id::new(format!("ndi_name_{}", output_uuid));
                 let mut current_name: String = ui
                     .data(|d| d.get_temp(name_id))
                     .unwrap_or_else(|| sender_name.clone());
@@ -757,7 +762,7 @@ fn render_stream_config(
                     ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
                     if response.lost_focus() {
                         actions.commands.push(EngineCommand::SetOutputTarget {
-                            idx,
+                            output_uuid: output_uuid.to_string(),
                             target: OutputTarget::NdiSend {
                                 sender_name: current_name,
                             },
@@ -769,7 +774,7 @@ fn render_stream_config(
         OutputTarget::SyphonServer { ref server_name } if !output.is_active => {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Name:").small());
-                let name_id = egui::Id::new(format!("syphon_name_{}", idx));
+                let name_id = egui::Id::new(format!("syphon_name_{}", output_uuid));
                 let mut current_name: String = ui
                     .data(|d| d.get_temp(name_id))
                     .unwrap_or_else(|| server_name.clone());
@@ -782,7 +787,7 @@ fn render_stream_config(
                     ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
                     if response.lost_focus() {
                         actions.commands.push(EngineCommand::SetOutputTarget {
-                            idx,
+                            output_uuid: output_uuid.to_string(),
                             target: OutputTarget::SyphonServer {
                                 server_name: current_name,
                             },
@@ -827,7 +832,7 @@ fn render_copyable_url(
 #[allow(clippy::too_many_arguments)]
 fn render_hls_dash_name_codec(
     ui: &mut egui::Ui,
-    idx: usize,
+    output_uuid: &str,
     prefix: &str,
     name: &str,
     codec: &crate::renderer::context::StreamingCodec,
@@ -839,7 +844,7 @@ fn render_hls_dash_name_codec(
     if !is_active {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Codec:").small());
-            egui::ComboBox::from_id_salt(format!("{}_codec_{}", prefix, idx))
+            egui::ComboBox::from_id_salt(format!("{}_codec_{}", prefix, output_uuid))
                 .selected_text(egui::RichText::new(codec.to_string()).small())
                 .width(120.0)
                 .show_ui(ui, |ui| {
@@ -850,7 +855,7 @@ fn render_hls_dash_name_codec(
                     ] {
                         if ui.selectable_label(*codec == *c, c.to_string()).clicked() {
                             actions.commands.push(EngineCommand::SetOutputTarget {
-                                idx,
+                                output_uuid: output_uuid.to_string(),
                                 target: make_target(name.to_string(), c.clone()),
                             });
                         }
@@ -859,7 +864,7 @@ fn render_hls_dash_name_codec(
         });
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Name:").small());
-            let name_id = egui::Id::new(format!("{}_name_{}", prefix, idx));
+            let name_id = egui::Id::new(format!("{}_name_{}", prefix, output_uuid));
             let mut current_name: String = ui
                 .data(|d| d.get_temp(name_id))
                 .unwrap_or_else(|| name.to_string());
@@ -872,7 +877,7 @@ fn render_hls_dash_name_codec(
                 ui.data_mut(|d| d.insert_temp(name_id, current_name.clone()));
                 if response.lost_focus() {
                     actions.commands.push(EngineCommand::SetOutputTarget {
-                        idx,
+                        output_uuid: output_uuid.to_string(),
                         target: make_target(current_name, codec.clone()),
                     });
                 }
@@ -884,13 +889,13 @@ fn render_hls_dash_name_codec(
 /// Render edge blending controls for an output (shared by windowed and headless).
 fn render_edge_blend_controls(
     ui: &mut egui::Ui,
-    idx: usize,
+    output_uuid: &str,
     output: &super::super::OutputUI,
     actions: &mut UIActions,
 ) {
     use crate::renderer::edge_blend::EdgeBlendMode;
 
-    let collapse_id = egui::Id::new("edge_blend_section").with(idx);
+    let collapse_id = egui::Id::new("edge_blend_section").with(output_uuid);
     egui::CollapsingHeader::new(egui::RichText::new("Edge Blending").small().strong())
         .id_salt(collapse_id)
         .default_open(false)
@@ -905,7 +910,7 @@ fn render_edge_blend_controls(
                     && is_auto
                 {
                     actions.commands.push(EngineCommand::SetEdgeBlendMode {
-                        output_idx: idx,
+                        output_uuid: output_uuid.to_string(),
                         mode: EdgeBlendMode::Manual,
                     });
                 }
@@ -915,7 +920,7 @@ fn render_edge_blend_controls(
                     && !is_auto
                 {
                     actions.commands.push(EngineCommand::SetEdgeBlendMode {
-                        output_idx: idx,
+                        output_uuid: output_uuid.to_string(),
                         mode: EdgeBlendMode::Auto,
                     });
                 }
@@ -1028,7 +1033,7 @@ fn render_edge_blend_controls(
 
             if changed {
                 actions.commands.push(EngineCommand::SetEdgeBlend {
-                    output_idx: idx,
+                    output_uuid: output_uuid.to_string(),
                     config: cfg,
                 });
             }

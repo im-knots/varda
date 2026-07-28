@@ -35,14 +35,18 @@ pub use crate::engine::value::surface::{
 };
 pub use crate::engine::value::video::LoopMode;
 
-/// Identifies where to apply an effect in the signal chain.
+/// Identifies which effect chain to operate on.
+///
+/// Used for chain-scoped operations (append an effect, reorder within a chain).
+/// Operations on an *existing* effect address it by its own UUID instead — see
+/// [`/spec/api-addressing.md`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum EffectTarget {
-    /// Effect on a specific deck: (channel_idx, deck_idx)
-    Deck(usize, usize),
-    /// Effect on a channel's post-composite chain: (channel_idx)
-    Channel(usize),
-    /// Effect on the master output chain
+    /// A deck's pre-composite chain, by deck UUID.
+    Deck(String),
+    /// A channel's post-composite chain, by channel UUID.
+    Channel(String),
+    /// The master output chain.
     Master,
 }
 
@@ -344,6 +348,7 @@ pub struct ModulationAssignmentSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct SequenceSnapshot {
+    pub uuid: String,
     pub name: String,
     pub enabled: bool,
     pub playing: bool,
@@ -358,11 +363,13 @@ pub struct SequenceStepSnapshot {
     pub kind: SequenceStepKindSnapshot,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub enum SequenceStepKindSnapshot {
     Fade {
-        from_ch: usize,
-        to_ch: usize,
+        /// Source channel UUID. Resolve against the channel list for a name; a
+        /// UUID that no longer resolves means the channel was deleted.
+        from_ch: String,
+        to_ch: String,
         duration_val: f64,
         duration_unit: crate::channel::DurationUnit,
         easing: String,
@@ -526,28 +533,34 @@ mod tests {
 
     #[test]
     fn effect_target_deck_equality() {
-        let a = EffectTarget::Deck(0, 1);
-        let b = EffectTarget::Deck(0, 1);
+        let a = EffectTarget::Deck("deck-a".into());
+        let b = EffectTarget::Deck("deck-a".into());
         assert_eq!(a, b);
     }
 
     #[test]
     fn effect_target_deck_inequality() {
-        assert_ne!(EffectTarget::Deck(0, 0), EffectTarget::Deck(0, 1));
-        assert_ne!(EffectTarget::Deck(0, 0), EffectTarget::Channel(0));
-        assert_ne!(EffectTarget::Channel(0), EffectTarget::Master);
+        assert_ne!(
+            EffectTarget::Deck("deck-a".into()),
+            EffectTarget::Deck("deck-b".into())
+        );
+        assert_ne!(
+            EffectTarget::Deck("uuid-1".into()),
+            EffectTarget::Channel("uuid-1".into())
+        );
+        assert_ne!(EffectTarget::Channel("ch-a".into()), EffectTarget::Master);
     }
 
     #[test]
     fn effect_target_debug() {
         assert!(format!("{:?}", EffectTarget::Master).contains("Master"));
-        assert!(format!("{:?}", EffectTarget::Channel(2)).contains("2"));
-        assert!(format!("{:?}", EffectTarget::Deck(1, 3)).contains("1"));
+        assert!(format!("{:?}", EffectTarget::Channel("ch-2".into())).contains("ch-2"));
+        assert!(format!("{:?}", EffectTarget::Deck("deck-1".into())).contains("deck-1"));
     }
 
     #[test]
     fn effect_target_clone() {
-        let original = EffectTarget::Deck(5, 10);
+        let original = EffectTarget::Deck("deck-5".into());
         let cloned = original.clone();
         assert_eq!(original, cloned);
     }
@@ -557,8 +570,8 @@ mod tests {
         use std::collections::HashSet;
         let mut set = HashSet::new();
         set.insert(EffectTarget::Master);
-        set.insert(EffectTarget::Channel(0));
-        set.insert(EffectTarget::Channel(0)); // duplicate
+        set.insert(EffectTarget::Channel("ch-a".into()));
+        set.insert(EffectTarget::Channel("ch-a".into())); // duplicate
         assert_eq!(set.len(), 2);
     }
 
@@ -740,15 +753,15 @@ mod tests {
     #[test]
     fn engine_command_add_deck() {
         let cmd = crate::engine::EngineCommand::AddDeck {
-            channel_idx: 0,
+            channel_uuid: "ch-0".into(),
             shader_name: "Color Bars".into(),
         };
         match cmd {
             crate::engine::EngineCommand::AddDeck {
-                channel_idx,
+                channel_uuid,
                 shader_name,
             } => {
-                assert_eq!(channel_idx, 0);
+                assert_eq!(channel_uuid, "ch-0");
                 assert_eq!(shader_name, "Color Bars");
             }
             _ => panic!("Wrong variant"),

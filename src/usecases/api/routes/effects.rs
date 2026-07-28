@@ -1,6 +1,11 @@
 //! Effects write routes.
+//!
+//! Effect UUIDs are globally unique, so routes that name an existing effect are
+//! flat (`/api/effects/{effect_uuid}`). Creation and reorder keep the owning
+//! chain in the path: creation has no effect UUID yet, and reorder ordinals are
+//! scoped to a single chain.
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
@@ -12,47 +17,27 @@ use crate::usecases::api::{command_response, SharedState};
 
 #[derive(Deserialize, ToSchema)]
 pub struct AddEffectBody {
-    /// Where to apply the effect (channel, deck, or master).
-    pub target: EffectTarget,
     /// Name of the shader to use as an effect.
     pub shader_name: String,
 }
 
 #[derive(Deserialize, ToSchema)]
-pub struct RemoveEffectBody {
-    /// Where to remove the effect from.
-    pub target: EffectTarget,
-    /// Index of the effect in the target's effect chain.
-    pub effect_idx: usize,
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct ToggleEffectBody {
-    /// Where the effect resides.
-    pub target: EffectTarget,
-    /// Index of the effect to toggle.
-    pub effect_idx: usize,
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct MoveEffectBody {
-    /// Where the effect resides.
-    pub target: EffectTarget,
-    /// Current index of the effect to move.
+pub struct ReorderEffectBody {
+    /// Current index of the effect within the chain.
     pub from_idx: usize,
-    /// Destination index for the effect.
+    /// Destination index within the chain.
     pub to_idx: usize,
 }
 
-#[utoipa::path(post, path = "/api/effects", request_body = AddEffectBody, responses((status = 200, body = CommandResult)), tag = "Effects")]
-pub async fn add_effect(
-    State(state): State<SharedState>,
-    Json(body): Json<AddEffectBody>,
-) -> impl IntoResponse {
+async fn add_effect(
+    state: SharedState,
+    target: EffectTarget,
+    shader_name: String,
+) -> axum::response::Response {
     match state
         .send_command(EngineCommand::AddEffect {
-            target: body.target,
-            shader_name: body.shader_name,
+            target,
+            shader_name,
         })
         .await
     {
@@ -61,48 +46,14 @@ pub async fn add_effect(
     }
 }
 
-#[utoipa::path(delete, path = "/api/effects", request_body = RemoveEffectBody, responses((status = 200, body = CommandResult)), tag = "Effects")]
-pub async fn remove_effect(
-    State(state): State<SharedState>,
-    Json(body): Json<RemoveEffectBody>,
-) -> impl IntoResponse {
-    match state
-        .send_command(EngineCommand::RemoveEffect {
-            target: body.target,
-            effect_idx: body.effect_idx,
-        })
-        .await
-    {
-        Ok(result) => command_response(result),
-        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-    }
-}
-
-#[utoipa::path(post, path = "/api/effects/toggle", request_body = ToggleEffectBody, responses((status = 200, body = CommandResult)), tag = "Effects")]
-pub async fn toggle_effect(
-    State(state): State<SharedState>,
-    Json(body): Json<ToggleEffectBody>,
-) -> impl IntoResponse {
-    match state
-        .send_command(EngineCommand::ToggleEffect {
-            target: body.target,
-            effect_idx: body.effect_idx,
-        })
-        .await
-    {
-        Ok(result) => command_response(result),
-        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-    }
-}
-
-#[utoipa::path(post, path = "/api/effects/move", request_body = MoveEffectBody, responses((status = 200, body = CommandResult)), tag = "Effects")]
-pub async fn move_effect(
-    State(state): State<SharedState>,
-    Json(body): Json<MoveEffectBody>,
-) -> impl IntoResponse {
+async fn move_effect(
+    state: SharedState,
+    target: EffectTarget,
+    body: ReorderEffectBody,
+) -> axum::response::Response {
     match state
         .send_command(EngineCommand::MoveEffect {
-            target: body.target,
+            target,
             from_idx: body.from_idx,
             to_idx: body.to_idx,
         })
@@ -111,4 +62,84 @@ pub async fn move_effect(
         Ok(result) => command_response(result),
         Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
     }
+}
+
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/effects", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = AddEffectBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Effects")]
+pub async fn add_channel_effect(
+    State(state): State<SharedState>,
+    Path(channel_uuid): Path<String>,
+    Json(body): Json<AddEffectBody>,
+) -> impl IntoResponse {
+    add_effect(state, EffectTarget::Channel(channel_uuid), body.shader_name).await
+}
+
+#[utoipa::path(post, path = "/api/decks/{deck_uuid}/effects", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = AddEffectBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Effects")]
+pub async fn add_deck_effect(
+    State(state): State<SharedState>,
+    Path(deck_uuid): Path<String>,
+    Json(body): Json<AddEffectBody>,
+) -> impl IntoResponse {
+    add_effect(state, EffectTarget::Deck(deck_uuid), body.shader_name).await
+}
+
+#[utoipa::path(post, path = "/api/master/effects", request_body = AddEffectBody, responses((status = 200, body = CommandResult)), tag = "Effects")]
+pub async fn add_master_effect(
+    State(state): State<SharedState>,
+    Json(body): Json<AddEffectBody>,
+) -> impl IntoResponse {
+    add_effect(state, EffectTarget::Master, body.shader_name).await
+}
+
+#[utoipa::path(delete, path = "/api/effects/{effect_uuid}", params(("effect_uuid" = String, Path, description = "Effect UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Effect not found")), tag = "Effects")]
+pub async fn remove_effect(
+    State(state): State<SharedState>,
+    Path(effect_uuid): Path<String>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RemoveEffect { effect_uuid })
+        .await
+    {
+        Ok(result) => command_response(result),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(post, path = "/api/effects/{effect_uuid}/toggle", params(("effect_uuid" = String, Path, description = "Effect UUID")), responses((status = 200, body = CommandResult), (status = 404, description = "Effect not found")), tag = "Effects")]
+pub async fn toggle_effect(
+    State(state): State<SharedState>,
+    Path(effect_uuid): Path<String>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::ToggleEffect { effect_uuid })
+        .await
+    {
+        Ok(result) => command_response(result),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(put, path = "/api/channels/{channel_uuid}/effects/reorder", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = ReorderEffectBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Effects")]
+pub async fn reorder_channel_effect(
+    State(state): State<SharedState>,
+    Path(channel_uuid): Path<String>,
+    Json(body): Json<ReorderEffectBody>,
+) -> impl IntoResponse {
+    move_effect(state, EffectTarget::Channel(channel_uuid), body).await
+}
+
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/effects/reorder", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = ReorderEffectBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found")), tag = "Effects")]
+pub async fn reorder_deck_effect(
+    State(state): State<SharedState>,
+    Path(deck_uuid): Path<String>,
+    Json(body): Json<ReorderEffectBody>,
+) -> impl IntoResponse {
+    move_effect(state, EffectTarget::Deck(deck_uuid), body).await
+}
+
+#[utoipa::path(put, path = "/api/master/effects/reorder", request_body = ReorderEffectBody, responses((status = 200, body = CommandResult)), tag = "Effects")]
+pub async fn reorder_master_effect(
+    State(state): State<SharedState>,
+    Json(body): Json<ReorderEffectBody>,
+) -> impl IntoResponse {
+    move_effect(state, EffectTarget::Master, body).await
 }

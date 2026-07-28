@@ -38,13 +38,9 @@ pub enum CommandResult {
 pub enum CommandOutcome {
     /// No GUI side-channel data; carries the wire result verbatim.
     Plain(CommandResult),
-    /// A deck was created. The GUI registers its preview texture from the
-    /// deck at `(channel_idx, deck_idx)`; `uuid` mirrors `OkWithId`.
-    DeckCreated {
-        channel_idx: usize,
-        deck_idx: usize,
-        uuid: String,
-    },
+    /// One or more decks were created. The GUI registers a preview texture for
+    /// each UUID. Mirrors `OkWithId` for the single-deck case.
+    DecksCreated { uuids: Vec<String> },
     /// Undo/redo restored engine state. `structural_changed` tells the GUI to
     /// re-register all preview textures; `dome_layout` carries the UI-local
     /// dome flags to sync back into layout state.
@@ -52,10 +48,6 @@ pub enum CommandOutcome {
         structural_changed: bool,
         dome_layout: DomeLayoutFields,
     },
-    /// A structural deck change (remove/move/reorder) shifted deck indices in
-    /// these channels. The GUI frees and re-registers preview textures for each
-    /// listed channel so the index-keyed texture map stays in sync.
-    DecksReindexed { channels: Vec<usize> },
 }
 
 /// Dome layout flags that live in UI layout state (not engine state) and must
@@ -68,7 +60,9 @@ pub struct DomeLayoutFields {
 }
 
 /// Error codes for command failures.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 pub enum ErrorCode {
     NotFound,
     InvalidInput,
@@ -107,102 +101,95 @@ pub enum EngineCommand {
         beats: f32,
     },
     AddDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         shader_name: String,
     },
     AddImageDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         path: std::path::PathBuf,
     },
     AddVideoDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         path: std::path::PathBuf,
     },
     AddSolidColorDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         color: [f32; 4],
     },
     AddCameraDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         camera_id: CameraId,
     },
     AddDepthSensorDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         depth_sensor_id: DepthSensorId,
     },
     RemoveDeck {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
     },
     MoveDeck {
-        src_ch: usize,
-        src_deck: usize,
-        dst_ch: usize,
+        deck_uuid: String,
+        dst_channel_uuid: String,
     },
+    /// Reposition a deck within its channel. `from_idx`/`to_idx` are ordinals,
+    /// not addresses — the position is the payload. See `/spec/api-addressing.md`.
     ReorderDeck {
-        ch: usize,
+        channel_uuid: String,
         from_idx: usize,
         to_idx: usize,
     },
     SetDeckOpacity {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         opacity: f32,
     },
     SetDeckBlendMode {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         mode: BlendMode,
     },
     SetDeckSolo {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         solo: bool,
     },
     SetDeckMute {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         mute: bool,
     },
     SetDeckRenderFps {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         render_fps: DeckRenderFps,
     },
     SetDeckScalingMode {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         mode: ScalingMode,
     },
     SetDeckTransparent {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         transparent: bool,
     },
     SetChannelOpacity {
-        channel_idx: usize,
+        channel_uuid: String,
         opacity: f32,
     },
     SetChannelBlendMode {
-        channel_idx: usize,
+        channel_uuid: String,
         mode: BlendMode,
     },
     AddChannel,
     RemoveChannel {
-        channel_idx: usize,
+        channel_uuid: String,
     },
     AddEffect {
         target: EffectTarget,
         shader_name: String,
     },
     RemoveEffect {
-        target: EffectTarget,
-        effect_idx: usize,
+        effect_uuid: String,
     },
     ToggleEffect {
-        target: EffectTarget,
-        effect_idx: usize,
+        effect_uuid: String,
     },
+    /// Reposition an effect within its chain. `target` scopes the ordinals; the
+    /// indices are positions, not addresses.
     MoveEffect {
         target: EffectTarget,
         from_idx: usize,
@@ -268,125 +255,107 @@ pub enum EngineCommand {
 
     // ── Video Playback ────────────────────────────────────────────
     VideoTogglePlay {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
     },
     VideoSeek {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         position_secs: f64,
     },
     VideoSetSpeed {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         speed: f64,
     },
     VideoSetLoopMode {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         mode: crate::engine::value::video::LoopMode,
     },
     VideoSetInPoint {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         secs: f64,
     },
     VideoSetOutPoint {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         secs: f64,
     },
     VideoClearInOutPoints {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
     },
 
     // ── Deck Auto-Transitions ──────────────────────────────────
     SetAutoTransitionEnabled {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         enabled: bool,
     },
     SetAutoTransitionTrigger {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         clip_end: bool,
     },
     SetAutoTransitionPlayDuration {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         value: f64,
         unit: crate::channel::DurationUnit,
     },
     SetAutoTransitionDuration {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         value: f64,
         unit: crate::channel::DurationUnit,
     },
     SetAutoTransitionShader {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         shader_name: Option<String>,
     },
     ToggleAutoTransitionPlayDurationUnit {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
     },
     ToggleAutoTransitionDurationUnit {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
     },
     SetAutoTransitionPlayDurationValue {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         value: f64,
     },
     SetAutoTransitionDurationValue {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         value: f64,
     },
 
     // ── External I/O Deck Sources ──────────────────────────────
     AddNdiDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         source_name: String,
     },
     AddSyphonDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         server_name: String,
     },
     AddSrtDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         url: String,
         mode: crate::stream::SrtMode,
     },
     AddHlsDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         url: String,
     },
     AddDashDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         url: String,
     },
     AddRtmpDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         url: String,
         mode: crate::stream::RtmpMode,
     },
     AddHtmlDeck {
-        channel_idx: usize,
+        channel_uuid: String,
         url: String,
     },
     ReloadHtmlDeck {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
     },
-    /// Open the interactive window for the HTML deck at `(channel_idx, deck_idx)`.
+    /// Open the interactive window for an HTML deck.
     OpenHtmlInteractive {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
     },
     /// Close the interactive HTML window (if any).
     CloseHtmlInteractive,
@@ -394,85 +363,87 @@ pub enum EngineCommand {
     // ── Transition Sequences ───────────────────────────────────
     CreateSequence,
     DeleteSequence {
-        idx: usize,
+        sequence_uuid: String,
     },
     PlaySequence {
-        idx: usize,
+        sequence_uuid: String,
     },
     StopSequence {
-        idx: usize,
+        sequence_uuid: String,
     },
     ToggleSequence {
-        idx: usize,
+        sequence_uuid: String,
     },
+    // Steps are positional within their sequence: `step_idx` is an ordinal, not
+    // an address. See `/spec/api-addressing.md`.
     AddFadeStep {
-        seq_idx: usize,
-        from_ch: usize,
-        to_ch: usize,
+        sequence_uuid: String,
+        from_channel_uuid: String,
+        to_channel_uuid: String,
     },
     AddWaitStep {
-        seq_idx: usize,
+        sequence_uuid: String,
     },
     AddGoToStep {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_index: usize,
     },
     RemoveStep {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
     },
     SetStepDuration {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
         value: f64,
         unit: crate::channel::DurationUnit,
     },
     SetStepEasing {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
         easing: String,
     },
     SetStepTransitionShader {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
         shader_name: Option<String>,
     },
     MoveStep {
-        seq_idx: usize,
+        sequence_uuid: String,
         from: usize,
         to: usize,
     },
     SetStepDurationUnit {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
         unit: crate::channel::DurationUnit,
     },
     SetStepFromCh {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
-        ch: usize,
+        channel_uuid: String,
     },
     SetStepToCh {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
-        ch: usize,
+        channel_uuid: String,
     },
     SetGoToTarget {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
         target: usize,
     },
     ToggleStepDurationUnit {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
     },
     SetStepDurationValue {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
         value: f64,
     },
     SetStepTargetAmount {
-        seq_idx: usize,
+        sequence_uuid: String,
         step_idx: usize,
         amount: f32,
     },
@@ -517,25 +488,25 @@ pub enum EngineCommand {
         target: crate::engine::value::render::OutputTarget,
     },
     CloseOutput {
-        idx: usize,
+        output_uuid: String,
     },
     SetOutputDisplay {
-        idx: usize,
+        output_uuid: String,
         monitor_name: String,
     },
     SetOutputTarget {
-        idx: usize,
+        output_uuid: String,
         target: crate::engine::value::render::OutputTarget,
     },
     StartOutput {
-        idx: usize,
+        output_uuid: String,
     },
     StopOutput {
-        idx: usize,
+        output_uuid: String,
     },
     /// Set the calibration display mode for an output (Off / Projector / Surfaces).
     SetCalibrationMode {
-        idx: usize,
+        output_uuid: String,
         mode: crate::engine::value::render::CalibrationMode,
     },
     /// Move one corner-pin corner of a surface's warp (per-surface).
@@ -599,15 +570,15 @@ pub enum EngineCommand {
         rows: u32,
     },
     SetEdgeBlend {
-        output_idx: usize,
+        output_uuid: String,
         config: crate::engine::value::render::EdgeBlendConfig,
     },
     SetEdgeBlendMode {
-        output_idx: usize,
+        output_uuid: String,
         mode: crate::engine::value::render::EdgeBlendMode,
     },
     SetOutputRotation {
-        idx: usize,
+        output_uuid: String,
         rotation: crate::engine::value::render::OutputRotation,
     },
 
@@ -751,15 +722,7 @@ pub enum EngineCommand {
     },
     UnassignSurfaceFromOutput {
         output_uuid: String,
-        assignment_idx: usize,
-    },
-    AssignSurfaceToOutputByIdx {
-        output_idx: usize,
         surface_uuid: String,
-    },
-    UnassignSurfaceFromOutputByIdx {
-        output_idx: usize,
-        assignment_idx: usize,
     },
 
     // ── Surface Auto-Detection ──────────────────────────────────
@@ -1007,34 +970,21 @@ pub enum EngineCommand {
         bpm: f32,
     },
 
-    // ── Parameters (index-based) ─────────────────────────────────
+    // ── Parameters ───────────────────────────────────────────────
     SetGeneratorParam {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         name: String,
         value: ParamValue,
     },
+    /// Set a parameter on any effect — deck, channel, or master chain. Effect
+    /// UUIDs are globally unique, so one variant covers all three scopes.
     SetEffectParam {
-        channel_idx: usize,
-        deck_idx: usize,
-        effect_idx: usize,
-        name: String,
-        value: ParamValue,
-    },
-    SetChannelEffectParam {
-        channel_idx: usize,
-        effect_idx: usize,
-        name: String,
-        value: ParamValue,
-    },
-    SetMasterEffectParam {
-        effect_idx: usize,
+        effect_uuid: String,
         name: String,
         value: ParamValue,
     },
     ResetGeneratorParamsToDefaults {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
     },
 
     // ── Resolution ─────────────────────────────────────────────
@@ -1057,26 +1007,27 @@ pub enum EngineCommand {
     },
 
     // ── Presets ────────────────────────────────────────────────
-    /// Load a deck preset (by library index) as a new deck appended to a channel.
+    /// Load a named deck preset as a new deck appended to a channel. Presets are
+    /// addressed by name: the library is rescanned from disk, so its ordering is
+    /// not stable across scans.
     LoadDeckPreset {
-        channel_idx: usize,
-        preset_idx: usize,
+        channel_uuid: String,
+        preset_name: String,
     },
-    /// Load a channel preset (by library index). Fills `target_channel` if it is
-    /// given and empty; otherwise appends a new channel.
+    /// Load a named channel preset. Fills `target_channel_uuid` if it is given
+    /// and empty; otherwise appends a new channel.
     LoadChannelPreset {
-        target_channel: Option<usize>,
-        preset_idx: usize,
+        target_channel_uuid: Option<String>,
+        preset_name: String,
     },
     /// Save a deck's current config as a named deck preset (writes to disk).
     SaveDeckPreset {
-        channel_idx: usize,
-        deck_idx: usize,
+        deck_uuid: String,
         name: String,
     },
     /// Save a channel's current config as a named channel preset (writes to disk).
     SaveChannelPreset {
-        channel_idx: usize,
+        channel_uuid: String,
         name: String,
     },
 

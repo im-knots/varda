@@ -1,5 +1,6 @@
 //! Engine trait implementations for VardaApp.
 
+use super::resolve::EffectChain;
 use super::VardaApp;
 use crate::deck::{Deck, Effect};
 use crate::engine::traits::*;
@@ -38,7 +39,8 @@ impl MixerCommands for VardaApp {
         self.mixer.start_beat_crossfade(target, beats);
     }
 
-    fn add_deck(&mut self, channel_idx: usize, shader_name: &str) -> Result<String> {
+    fn add_deck(&mut self, channel_uuid: &str, shader_name: &str) -> Result<String> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
         let generators = self.registry.generators();
         let shader = generators
             .iter()
@@ -77,7 +79,8 @@ impl MixerCommands for VardaApp {
         Ok(uuid)
     }
 
-    fn add_image_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String> {
+    fn add_image_deck(&mut self, channel_uuid: &str, path: &std::path::Path) -> Result<String> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
         let deck =
             Deck::new_from_image(&self.context, path, self.render_width, self.render_height)?;
         let uuid = deck.uuid().to_string();
@@ -96,7 +99,8 @@ impl MixerCommands for VardaApp {
         Ok(uuid)
     }
 
-    fn add_video_deck(&mut self, channel_idx: usize, path: &std::path::Path) -> Result<String> {
+    fn add_video_deck(&mut self, channel_uuid: &str, path: &std::path::Path) -> Result<String> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
         let deck =
             Deck::new_from_video(&self.context, path, self.render_width, self.render_height)?;
         let uuid = deck.uuid().to_string();
@@ -115,7 +119,8 @@ impl MixerCommands for VardaApp {
         Ok(uuid)
     }
 
-    fn add_solid_color_deck(&mut self, channel_idx: usize, color: [f32; 4]) -> Result<String> {
+    fn add_solid_color_deck(&mut self, channel_uuid: &str, color: [f32; 4]) -> Result<String> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
         let deck =
             Deck::new_solid_color(&self.context, color, self.render_width, self.render_height)?;
         let uuid = deck.uuid().to_string();
@@ -134,7 +139,8 @@ impl MixerCommands for VardaApp {
         Ok(uuid)
     }
 
-    fn add_camera_deck(&mut self, channel_idx: usize, camera_id: CameraId) -> Result<String> {
+    fn add_camera_deck(&mut self, channel_uuid: &str, camera_id: CameraId) -> Result<String> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
         let cam_name = self
             .camera_manager
             .devices()
@@ -171,9 +177,10 @@ impl MixerCommands for VardaApp {
 
     fn add_depth_sensor_deck(
         &mut self,
-        channel_idx: usize,
+        channel_uuid: &str,
         depth_sensor_id: crate::depth::DepthSensorId,
     ) -> Result<String> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
         let name = self
             .depth_manager
             .devices()
@@ -210,14 +217,8 @@ impl MixerCommands for VardaApp {
         Ok(uuid)
     }
 
-    fn remove_deck(&mut self, channel_idx: usize, deck_idx: usize) -> Result<()> {
-        // Capture deck UUID before removal for modulation cleanup
-        let deck_uuid = self
-            .mixer
-            .channels()
-            .get(channel_idx)
-            .and_then(|ch| ch.decks.get(deck_idx))
-            .map(|slot| slot.deck.uuid().to_string());
+    fn remove_deck(&mut self, deck_uuid: &str) -> Result<()> {
+        let (channel_idx, deck_idx) = self.resolve_deck(deck_uuid)?;
         // Release external resources before removal
         if let Some(ch) = self.mixer.channels().get(channel_idx) {
             if let Some(slot) = ch.decks.get(deck_idx) {
@@ -240,141 +241,131 @@ impl MixerCommands for VardaApp {
             .mixer
             .channel_mut(channel_idx)
             .context("Invalid channel")?;
-        if deck_idx < ch.decks.len() {
-            // Also capture effect UUIDs for modulation cleanup
-            let effect_uuids: Vec<String> = ch.decks[deck_idx]
-                .deck
-                .effects
-                .iter()
-                .map(|e| e.uuid.clone())
-                .collect();
-            ch.remove_deck(deck_idx);
-            log::info!("Removed deck {} from channel {}", deck_idx, channel_idx);
-            // Clean up orphaned modulation assignments
-            if let Some(uuid) = deck_uuid {
-                self.mixer
-                    .modulation_mut()
-                    .remove_assignments_with_prefix(&format!("deck_{}:", uuid));
-            }
-            for fx_uuid in &effect_uuids {
-                self.mixer
-                    .modulation_mut()
-                    .remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
-            }
+        // Capture effect UUIDs before removal so their modulation goes with them.
+        let effect_uuids: Vec<String> = ch.decks[deck_idx]
+            .deck
+            .effects
+            .iter()
+            .map(|e| e.uuid.clone())
+            .collect();
+        ch.remove_deck(deck_idx);
+        log::info!("Removed deck {} from channel {}", deck_uuid, channel_idx);
+        self.mixer
+            .modulation_mut()
+            .remove_assignments_with_prefix(&format!("deck_{}:", deck_uuid));
+        for fx_uuid in &effect_uuids {
+            self.mixer
+                .modulation_mut()
+                .remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
         }
         Ok(())
     }
 
-    fn move_deck(&mut self, src_ch: usize, src_deck: usize, dst_ch: usize) -> Result<()> {
+    fn move_deck(&mut self, deck_uuid: &str, dst_channel_uuid: &str) -> Result<()> {
+        let (src_ch, src_deck) = self.resolve_deck(deck_uuid)?;
+        let dst_ch = self.resolve_channel(dst_channel_uuid)?;
         if src_ch == dst_ch {
             return Ok(());
         }
         let channels = self.mixer.channels_mut();
-        if src_ch >= channels.len() || dst_ch >= channels.len() {
-            return Ok(());
-        }
-        if src_deck >= channels[src_ch].decks.len() {
-            return Ok(());
-        }
         // Two mutable borrows into different vec elements require raw indexing
         // (split_at_mut or index — Rust's borrow checker doesn't allow two
         //  channel_mut() calls in the same scope)
         let Some(slot) = channels[src_ch].remove_deck_slot(src_deck) else {
-            log::warn!(
-                "move_deck: deck {} not found in channel {}",
-                src_deck,
-                src_ch
-            );
-            return Ok(());
+            anyhow::bail!("deck '{}' vanished during move", deck_uuid);
         };
-        let new_idx = channels[dst_ch].add_deck_slot(slot);
+        channels[dst_ch].add_deck_slot(slot);
+        log::info!("Moved deck {} from ch{} to ch{}", deck_uuid, src_ch, dst_ch);
+        Ok(())
+    }
+
+    fn reorder_deck(&mut self, channel_uuid: &str, from_idx: usize, to_idx: usize) -> Result<()> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
+        if from_idx == to_idx {
+            return Ok(());
+        }
+        let channel = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
+        if from_idx >= channel.decks.len() || to_idx >= channel.decks.len() {
+            anyhow::bail!(
+                "reorder_deck: ordinals {from_idx}->{to_idx} out of range for {} decks",
+                channel.decks.len()
+            );
+        }
+        let slot = channel.decks.remove(from_idx);
+        channel.decks.insert(to_idx, slot);
         log::info!(
-            "Moved deck {} from ch{} to ch{} (new idx {})",
-            src_deck,
-            src_ch,
-            dst_ch,
-            new_idx
+            "Reordered deck in ch {}: {} -> {}",
+            channel_uuid,
+            from_idx,
+            to_idx
         );
         Ok(())
     }
 
-    fn reorder_deck(&mut self, ch: usize, from_idx: usize, to_idx: usize) {
-        if from_idx == to_idx {
-            return;
-        }
-        if let Some(channel) = self.mixer.channel_mut(ch) {
-            if from_idx < channel.decks.len() && to_idx < channel.decks.len() {
-                let slot = channel.decks.remove(from_idx);
-                channel.decks.insert(to_idx, slot);
-                log::info!("Reordered deck in ch{}: {} -> {}", ch, from_idx, to_idx);
-            }
-        }
+    fn set_deck_opacity(&mut self, deck_uuid: &str, opacity: f32) -> Result<()> {
+        let (ch, dk) = self.resolve_deck(deck_uuid)?;
+        self.mixer.channels_mut()[ch].decks[dk].opacity = sanitize_unit(opacity, 1.0);
+        Ok(())
     }
 
-    fn set_deck_opacity(&mut self, channel_idx: usize, deck_idx: usize, opacity: f32) {
-        let opacity = sanitize_unit(opacity, 1.0);
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            if deck_idx < ch.decks.len() {
-                ch.decks[deck_idx].opacity = opacity;
-            }
-        }
+    fn set_deck_blend_mode(&mut self, deck_uuid: &str, mode: BlendMode) -> Result<()> {
+        let (ch, dk) = self.resolve_deck(deck_uuid)?;
+        self.mixer.channels_mut()[ch].decks[dk].blend_mode = mode;
+        Ok(())
     }
 
-    fn set_deck_blend_mode(&mut self, channel_idx: usize, deck_idx: usize, mode: BlendMode) {
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            if deck_idx < ch.decks.len() {
-                ch.decks[deck_idx].blend_mode = mode;
-            }
-        }
+    fn set_deck_solo(&mut self, deck_uuid: &str, solo: bool) -> Result<()> {
+        let (ch, dk) = self.resolve_deck(deck_uuid)?;
+        self.mixer.channels_mut()[ch].set_deck_solo(dk, solo);
+        Ok(())
     }
 
-    fn set_deck_solo(&mut self, channel_idx: usize, deck_idx: usize, solo: bool) {
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            ch.set_deck_solo(deck_idx, solo);
-        }
+    fn set_deck_mute(&mut self, deck_uuid: &str, mute: bool) -> Result<()> {
+        let (ch, dk) = self.resolve_deck(deck_uuid)?;
+        self.mixer.channels_mut()[ch].set_deck_mute(dk, mute);
+        Ok(())
     }
 
-    fn set_deck_mute(&mut self, channel_idx: usize, deck_idx: usize, mute: bool) {
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            ch.set_deck_mute(deck_idx, mute);
-        }
+    fn set_deck_scaling_mode(&mut self, deck_uuid: &str, mode: ScalingMode) -> Result<()> {
+        let (ch, dk) = self.resolve_deck(deck_uuid)?;
+        self.mixer.channels_mut()[ch].decks[dk]
+            .deck
+            .set_scaling_mode(mode);
+        Ok(())
     }
 
-    fn set_deck_scaling_mode(&mut self, channel_idx: usize, deck_idx: usize, mode: ScalingMode) {
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            if deck_idx < ch.decks.len() {
-                ch.decks[deck_idx].deck.set_scaling_mode(mode);
-            }
-        }
+    fn set_deck_transparent(&mut self, deck_uuid: &str, transparent: bool) -> Result<()> {
+        let (ch, dk) = self.resolve_deck(deck_uuid)?;
+        self.mixer.channels_mut()[ch].decks[dk]
+            .deck
+            .set_transparent(transparent);
+        Ok(())
     }
 
-    fn set_deck_transparent(&mut self, channel_idx: usize, deck_idx: usize, transparent: bool) {
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            if deck_idx < ch.decks.len() {
-                ch.decks[deck_idx].deck.set_transparent(transparent);
-            }
-        }
+    fn set_channel_opacity(&mut self, channel_uuid: &str, opacity: f32) -> Result<()> {
+        let ch = self.resolve_channel(channel_uuid)?;
+        self.mixer.channels_mut()[ch].opacity = sanitize_unit(opacity, 1.0);
+        Ok(())
     }
 
-    fn set_channel_opacity(&mut self, channel_idx: usize, opacity: f32) {
-        let opacity = sanitize_unit(opacity, 1.0);
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            ch.opacity = opacity;
-        }
+    fn set_channel_blend_mode(&mut self, channel_uuid: &str, mode: BlendMode) -> Result<()> {
+        let ch = self.resolve_channel(channel_uuid)?;
+        self.mixer.channels_mut()[ch].blend_mode = mode;
+        Ok(())
     }
 
-    fn set_channel_blend_mode(&mut self, channel_idx: usize, mode: BlendMode) {
-        if let Some(ch) = self.mixer.channel_mut(channel_idx) {
-            ch.blend_mode = mode;
-        }
+    fn add_channel(&mut self) -> Result<String> {
+        let idx = self
+            .mixer
+            .add_channel(&self.context, self.render_width, self.render_height)?;
+        Ok(self.mixer.channels()[idx].uuid().to_string())
     }
 
-    fn add_channel(&mut self) -> Result<usize> {
-        self.mixer
-            .add_channel(&self.context, self.render_width, self.render_height)
-    }
-
-    fn remove_channel(&mut self, channel_idx: usize) -> Result<()> {
+    fn remove_channel(&mut self, channel_uuid: &str) -> Result<()> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
         if self.mixer.remove_channel(channel_idx) {
             // Selection fixup is handled by the UI consumer (UIRunner)
             Ok(())
@@ -383,133 +374,107 @@ impl MixerCommands for VardaApp {
         }
     }
 
-    fn add_effect(&mut self, target: EffectTarget, shader_name: &str) -> Result<()> {
+    fn add_effect(&mut self, target: EffectTarget, shader_name: &str) -> Result<String> {
+        let chain = self.resolve_effect_target(&target)?;
         let filters = self.registry.filters();
         let shader = filters
             .iter()
             .find(|s| s.name() == shader_name)
             .context("Filter shader not found")?;
-        match target {
-            EffectTarget::Deck(ch_idx, deck_idx) => {
+        match chain {
+            EffectChain::Deck {
+                channel_idx,
+                deck_idx,
+            } => {
                 let effect = Effect::new(&self.context, (*shader).clone())?;
-                let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
-                if deck_idx < ch.decks.len() {
-                    ch.decks[deck_idx].deck.add_effect(effect);
-                    ch.decks[deck_idx]
-                        .deck
-                        .ensure_preprocessor_analyzers(&self.analyzer_registry);
-                    log::info!(
-                        "Added effect {} to ch{} deck {}",
-                        shader_name,
-                        ch_idx,
-                        deck_idx
-                    );
-                }
+                let uuid = effect.uuid.clone();
+                let ch = self
+                    .mixer
+                    .channel_mut(channel_idx)
+                    .context("Invalid channel")?;
+                ch.decks[deck_idx].deck.add_effect(effect);
+                ch.decks[deck_idx]
+                    .deck
+                    .ensure_preprocessor_analyzers(&self.analyzer_registry);
+                log::info!("Added effect {} to deck chain ({})", shader_name, uuid);
+                Ok(uuid)
             }
-            EffectTarget::Channel(ch_idx) => {
+            EffectChain::Channel { channel_idx } => {
                 let effect = Effect::new_with_format(
                     &self.context,
                     (*shader).clone(),
                     self.context.compositing_format,
                 )?;
-                let ch = self.mixer.channel_mut(ch_idx).context("Invalid channel")?;
+                let uuid = effect.uuid.clone();
+                let ch = self
+                    .mixer
+                    .channel_mut(channel_idx)
+                    .context("Invalid channel")?;
                 ch.add_effect(effect);
-                log::info!("Added channel effect {} to ch{}", shader_name, ch_idx);
+                log::info!("Added channel effect {} ({})", shader_name, uuid);
+                Ok(uuid)
             }
-            EffectTarget::Master => {
+            EffectChain::Master => {
                 let effect = Effect::new_with_format(
                     &self.context,
                     (*shader).clone(),
                     self.context.compositing_format,
                 )?;
+                let uuid = effect.uuid.clone();
                 self.mixer.add_master_effect(effect);
-                log::info!("Added master effect: {}", shader_name);
+                log::info!("Added master effect {} ({})", shader_name, uuid);
+                Ok(uuid)
             }
         }
+    }
+
+    fn remove_effect(&mut self, effect_uuid: &str) -> Result<()> {
+        let location = self.resolve_effect(effect_uuid)?;
+        let (chain, idx) = self.mixer.effect_chain_at_mut(location);
+        chain.remove(idx);
+        // The effect's modulation assignments die with it — otherwise they point
+        // at a UUID that no longer resolves.
+        self.mixer
+            .modulation_mut()
+            .remove_assignments_with_prefix(&format!("fx_{}:", effect_uuid));
         Ok(())
     }
 
-    fn remove_effect(&mut self, target: EffectTarget, effect_idx: usize) {
-        match target {
-            EffectTarget::Deck(ch_idx, deck_idx) => {
-                if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                    if deck_idx < ch.decks.len() {
-                        ch.decks[deck_idx].deck.remove_effect(effect_idx);
-                    }
-                }
-            }
-            EffectTarget::Channel(ch_idx) => {
-                if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                    ch.remove_effect(effect_idx);
-                }
-            }
-            EffectTarget::Master => {
-                self.mixer.remove_master_effect(effect_idx);
-            }
-        }
+    fn toggle_effect(&mut self, effect_uuid: &str) -> Result<()> {
+        let location = self.resolve_effect(effect_uuid)?;
+        let (chain, idx) = self.mixer.effect_chain_at_mut(location);
+        chain[idx].enabled = !chain[idx].enabled;
+        Ok(())
     }
 
-    fn toggle_effect(&mut self, target: EffectTarget, effect_idx: usize) {
-        match target {
-            EffectTarget::Deck(ch_idx, deck_idx) => {
-                if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                    if deck_idx < ch.decks.len() {
-                        let deck = &mut ch.decks[deck_idx].deck;
-                        if effect_idx < deck.effects.len() {
-                            deck.effects[effect_idx].enabled = !deck.effects[effect_idx].enabled;
-                        }
-                    }
-                }
-            }
-            EffectTarget::Channel(ch_idx) => {
-                if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                    if effect_idx < ch.effects.len() {
-                        ch.effects[effect_idx].enabled = !ch.effects[effect_idx].enabled;
-                    }
-                }
-            }
-            EffectTarget::Master => {
-                if effect_idx < self.mixer.master_effects().len() {
-                    self.mixer.master_effects_mut()[effect_idx].enabled =
-                        !self.mixer.master_effects_mut()[effect_idx].enabled;
-                }
-            }
-        }
-    }
-
-    fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize) {
+    fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize) -> Result<()> {
+        let chain = self.resolve_effect_target(&target)?;
         if from_idx == to_idx {
-            return;
+            return Ok(());
         }
-        match target {
-            EffectTarget::Deck(ch_idx, deck_idx) => {
-                if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                    if deck_idx < ch.decks.len() {
-                        let effects = &mut ch.decks[deck_idx].deck.effects;
-                        if from_idx < effects.len() && to_idx < effects.len() {
-                            let effect = effects.remove(from_idx);
-                            effects.insert(to_idx, effect);
-                        }
-                    }
-                }
+        let effects = match chain {
+            EffectChain::Deck {
+                channel_idx,
+                deck_idx,
+            } => {
+                &mut self.mixer.channels_mut()[channel_idx].decks[deck_idx]
+                    .deck
+                    .effects
             }
-            EffectTarget::Channel(ch_idx) => {
-                if let Some(ch) = self.mixer.channel_mut(ch_idx) {
-                    if from_idx < ch.effects.len() && to_idx < ch.effects.len() {
-                        let effect = ch.effects.remove(from_idx);
-                        ch.effects.insert(to_idx, effect);
-                    }
-                }
+            EffectChain::Channel { channel_idx } => {
+                &mut self.mixer.channels_mut()[channel_idx].effects
             }
-            EffectTarget::Master => {
-                if from_idx < self.mixer.master_effects().len()
-                    && to_idx < self.mixer.master_effects().len()
-                {
-                    let effect = self.mixer.master_effects_mut().remove(from_idx);
-                    self.mixer.master_effects_mut().insert(to_idx, effect);
-                }
-            }
+            EffectChain::Master => self.mixer.master_effects_mut(),
+        };
+        if from_idx >= effects.len() || to_idx >= effects.len() {
+            anyhow::bail!(
+                "move_effect: ordinals {from_idx}->{to_idx} out of range for {} effects",
+                effects.len()
+            );
         }
+        let effect = effects.remove(from_idx);
+        effects.insert(to_idx, effect);
+        Ok(())
     }
 
     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()> {
@@ -910,43 +875,46 @@ impl OutputCommands for VardaApp {
             .push(crate::scene::OutputConfig::default_windowed());
     }
 
-    fn close_output(&mut self, idx: usize) {
-        if idx < self.output.outputs.len() {
-            let name = self.output.outputs[idx].name().to_string();
-            // Stop active subprocess before removing to release ports/resources
-            if let crate::renderer::context::UnifiedOutput::Headless(h) =
-                &mut self.output.outputs[idx]
-            {
-                if let Some(mut sub) = h.subprocess.take() {
-                    sub.stop();
-                }
+    fn close_output(&mut self, output_uuid: &str) -> Result<()> {
+        let idx = self.resolve_output(output_uuid)?;
+        let name = self.output.outputs[idx].name().to_string();
+        // Stop active subprocess before removing to release ports/resources
+        if let crate::renderer::context::UnifiedOutput::Headless(h) = &mut self.output.outputs[idx]
+        {
+            if let Some(mut sub) = h.subprocess.take() {
+                sub.stop();
             }
-            let removed = self.output.outputs.remove(idx);
-            if let crate::renderer::context::UnifiedOutput::Window(w) = removed {
-                w.destroy();
-            }
-            log::info!("Closed output '{}'", name);
         }
+        let removed = self.output.outputs.remove(idx);
+        if let crate::renderer::context::UnifiedOutput::Window(w) = removed {
+            w.destroy();
+        }
+        log::info!("Closed output '{}'", name);
+        Ok(())
     }
 
-    fn set_output_display(&mut self, idx: usize, monitor_name: &str) {
-        if let Some(crate::renderer::context::UnifiedOutput::Window(output)) =
-            self.output.outputs.get_mut(idx)
+    fn set_output_display(&mut self, output_uuid: &str, monitor_name: &str) -> Result<()> {
+        let idx = self.resolve_output(output_uuid)?;
+        let Some((mi, (_, handle))) = self
+            .output
+            .cached_monitors
+            .iter()
+            .enumerate()
+            .find(|(_, (name, _))| name == monitor_name)
+            .map(|(mi, (n, h))| (mi, (n.clone(), h.clone())))
+        else {
+            anyhow::bail!("No monitor named '{}'", monitor_name);
+        };
+        if let crate::renderer::context::UnifiedOutput::Window(output) =
+            &mut self.output.outputs[idx]
         {
-            if let Some((mi, (_, handle))) = self
-                .output
-                .cached_monitors
-                .iter()
-                .enumerate()
-                .find(|(_, (name, _))| name == monitor_name)
-            {
-                let target = crate::renderer::context::OutputTarget::Display {
-                    name: monitor_name.to_string(),
-                    monitor_index: mi,
-                };
-                output.set_target(target, Some(handle.clone()));
-            }
+            let target = crate::renderer::context::OutputTarget::Display {
+                name: monitor_name.to_string(),
+                monitor_index: mi,
+            };
+            output.set_target(target, Some(handle));
         }
+        Ok(())
     }
 }
 
@@ -1183,17 +1151,16 @@ impl SurfaceCommands for VardaApp {
         }
     }
 
-    fn unassign_surface_from_output(&mut self, output_uuid: &str, assignment_idx: usize) {
+    fn unassign_surface_from_output(&mut self, output_uuid: &str, surface_uuid: &str) {
         if let Some(output) = self
             .output
             .outputs
             .iter_mut()
             .find(|o| o.uuid() == output_uuid)
         {
-            let assignments = output.surface_assignments_mut();
-            if assignment_idx < assignments.len() {
-                assignments.remove(assignment_idx);
-            }
+            output
+                .surface_assignments_mut()
+                .retain(|a| a.surface_uuid != surface_uuid);
         }
     }
 }
@@ -1427,13 +1394,20 @@ mod tests {
         super::super::VardaApp::new(gpu, &config).ok()
     }
 
+    fn channel_uuid(app: &super::super::VardaApp, idx: usize) -> String {
+        app.mixer_snapshot().channels[idx].uuid.clone()
+    }
+
     #[test]
     fn move_deck_same_channel_noop() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
-        let result = app.move_deck(0, 0, 0);
+        let ch0 = channel_uuid(&app, 0);
+        let deck = app
+            .add_solid_color_deck(&ch0, [1.0, 0.0, 0.0, 1.0])
+            .unwrap();
+        let result = app.move_deck(&deck, &ch0);
         assert!(result.is_ok());
         // Deck should still be in channel 0
         let snap = app.mixer_snapshot();
@@ -1441,21 +1415,25 @@ mod tests {
     }
 
     #[test]
-    fn move_deck_invalid_src_channel() {
+    fn move_deck_unknown_deck_errors() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let result = app.move_deck(99, 0, 0);
-        assert!(result.is_ok()); // silent no-op
+        let ch0 = channel_uuid(&app, 0);
+        assert!(app.move_deck("nosuchdk", &ch0).is_err());
     }
 
     #[test]
-    fn move_deck_invalid_src_deck() {
+    fn move_deck_unknown_dst_channel_errors() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let result = app.move_deck(0, 99, 1);
-        assert!(result.is_ok()); // silent no-op
+        let ch0 = channel_uuid(&app, 0);
+        let deck = app
+            .add_solid_color_deck(&ch0, [1.0, 0.0, 0.0, 1.0])
+            .unwrap();
+        assert!(app.move_deck(&deck, "nosuchch").is_err());
+        assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 1);
     }
 
     #[test]
@@ -1463,12 +1441,16 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let ch0 = channel_uuid(&app, 0);
+        let ch1 = channel_uuid(&app, 1);
+        let deck = app
+            .add_solid_color_deck(&ch0, [1.0, 0.0, 0.0, 1.0])
+            .unwrap();
         let snap = app.mixer_snapshot();
         assert_eq!(snap.channels[0].decks.len(), 1);
         assert_eq!(snap.channels[1].decks.len(), 0);
 
-        let result = app.move_deck(0, 0, 1);
+        let result = app.move_deck(&deck, &ch1);
         assert!(result.is_ok());
         let snap = app.mixer_snapshot();
         assert_eq!(snap.channels[0].decks.len(), 0);
@@ -1480,11 +1462,15 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
-        app.add_solid_color_deck(0, [0.0, 1.0, 0.0, 1.0]).unwrap();
-        app.add_solid_color_deck(0, [0.0, 0.0, 1.0, 1.0]).unwrap();
+        let ch0 = channel_uuid(&app, 0);
+        app.add_solid_color_deck(&ch0, [1.0, 0.0, 0.0, 1.0])
+            .unwrap();
+        app.add_solid_color_deck(&ch0, [0.0, 1.0, 0.0, 1.0])
+            .unwrap();
+        app.add_solid_color_deck(&ch0, [0.0, 0.0, 1.0, 1.0])
+            .unwrap();
         assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 3);
-        app.reorder_deck(0, 0, 2);
+        app.reorder_deck(&ch0, 0, 2).unwrap();
         assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 3);
     }
 
@@ -1493,57 +1479,63 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
-        app.reorder_deck(0, 0, 0);
+        let ch0 = channel_uuid(&app, 0);
+        app.add_solid_color_deck(&ch0, [1.0, 0.0, 0.0, 1.0])
+            .unwrap();
+        app.reorder_deck(&ch0, 0, 0).unwrap();
         assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 1);
     }
 
     #[test]
-    fn reorder_deck_invalid_channel() {
+    fn reorder_deck_unknown_channel_errors() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.reorder_deck(99, 0, 1); // no crash
+        assert!(app.reorder_deck("nosuchch", 0, 1).is_err());
     }
 
     #[test]
-    fn set_deck_opacity_invalid_channel() {
+    fn set_deck_opacity_unknown_deck_errors() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.set_deck_opacity(99, 0, 0.5); // no crash
+        assert!(app.set_deck_opacity("nosuchdk", 0.5).is_err());
     }
 
     #[test]
-    fn set_deck_opacity_invalid_deck() {
+    fn set_deck_opacity_rejects_channel_uuid() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.set_deck_opacity(0, 99, 0.5); // no crash
+        let ch0 = channel_uuid(&app, 0);
+        assert!(
+            app.set_deck_opacity(&ch0, 0.5).is_err(),
+            "a channel UUID does not name a deck"
+        );
     }
 
     #[test]
-    fn set_deck_blend_mode_invalid() {
+    fn set_deck_blend_mode_unknown_deck_errors() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.set_deck_blend_mode(99, 99, BlendMode::Add); // no crash
+        assert!(app.set_deck_blend_mode("nosuchdk", BlendMode::Add).is_err());
     }
 
     #[test]
-    fn set_deck_solo_invalid() {
+    fn set_deck_solo_unknown_deck_errors() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.set_deck_solo(99, 99, true); // no crash
+        assert!(app.set_deck_solo("nosuchdk", true).is_err());
     }
 
     #[test]
-    fn set_deck_mute_invalid() {
+    fn set_deck_mute_unknown_deck_errors() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.set_deck_mute(99, 99, true); // no crash
+        assert!(app.set_deck_mute("nosuchdk", true).is_err());
     }
 
     #[test]
@@ -1551,14 +1543,15 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        app.set_channel_opacity(0, 2.0);
+        let ch0 = channel_uuid(&app, 0);
+        app.set_channel_opacity(&ch0, 2.0).unwrap();
         let snap = app.mixer_snapshot();
         assert!(
             (snap.channels[0].opacity - 1.0).abs() < 1e-5,
             "should clamp to 1.0"
         );
 
-        app.set_channel_opacity(0, -1.0);
+        app.set_channel_opacity(&ch0, -1.0).unwrap();
         let snap = app.mixer_snapshot();
         assert!(
             (snap.channels[0].opacity).abs() < 1e-5,
@@ -1585,20 +1578,18 @@ mod tests {
         };
         assert_eq!(app.mixer_snapshot().channels.len(), 2);
         // Trying to remove should fail (minimum 2)
-        let result = app.remove_channel(0);
+        let ch0 = channel_uuid(&app, 0);
+        let result = app.remove_channel(&ch0);
         assert!(result.is_err());
         assert_eq!(app.mixer_snapshot().channels.len(), 2);
     }
 
     #[test]
-    fn toggle_effect_invalid_index() {
+    fn toggle_effect_unknown_uuid_errors() {
         let Some(mut app) = headless_app() else {
             return;
         };
-        // Toggle on non-existent effect → no crash
-        app.toggle_effect(EffectTarget::Deck(0, 0), 99);
-        app.toggle_effect(EffectTarget::Channel(0), 99);
-        app.toggle_effect(EffectTarget::Master, 99);
+        assert!(app.toggle_effect("nosuchfx").is_err());
     }
 
     #[test]

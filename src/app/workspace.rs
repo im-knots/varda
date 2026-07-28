@@ -19,7 +19,8 @@ fn duration_config_to_spec(
 impl VardaApp {
     /// Save the entire workspace to `.varda/`.
     /// `layout` is UI-consumer-owned state persisted in stage.json.
-    pub fn save_workspace(&self, layout: &UILayoutState) {
+    pub fn save_workspace(&mut self, layout: &UILayoutState) {
+        self.session.last_layout = layout.clone();
         if let Err(e) = self.session.workspace.ensure_dir() {
             log::error!("Failed to create .varda directory: {}", e);
             return;
@@ -280,6 +281,9 @@ impl VardaApp {
                 }
                 Err(e) => log::warn!("Failed to load OSC config: {}", e),
             }
+        }
+        if let Some(layout) = &loaded_layout {
+            self.session.last_layout = layout.clone();
         }
         loaded_layout
     }
@@ -548,48 +552,27 @@ impl VardaApp {
         );
 
         // (f) Transition sequences — cheap clone
+        let channel_uuids: Vec<String> = self
+            .mixer
+            .channels()
+            .iter()
+            .map(|ch| ch.uuid().to_string())
+            .collect();
         self.mixer.transition_sequences_mut().clear();
         for seq_config in &target.transition_sequences {
-            use crate::mixer::{SequencerState, StepKind, TransitionSequence, TransitionStep};
-            use crate::scene::TransitionStepConfig;
-            let steps = seq_config
-                .steps
-                .iter()
-                .map(|step| {
-                    let kind = match step {
-                        TransitionStepConfig::Fade {
-                            from_ch,
-                            to_ch,
-                            duration,
-                            easing,
-                            transition_shader,
-                            target_amount,
-                        } => StepKind::Fade {
-                            from_ch: *from_ch,
-                            to_ch: *to_ch,
-                            duration: duration_config_to_spec(duration),
-                            easing: (*easing).into(),
-                            transition_shader: transition_shader.clone(),
-                            target_amount: *target_amount,
-                        },
-                        TransitionStepConfig::Wait { duration } => StepKind::Wait {
-                            duration: duration_config_to_spec(duration),
-                        },
-                        TransitionStepConfig::GoTo { step_index } => StepKind::GoTo {
-                            step_index: *step_index,
-                        },
-                    };
-                    TransitionStep { kind }
-                })
-                .collect();
-            self.mixer
-                .transition_sequences_mut()
-                .push(TransitionSequence {
-                    name: seq_config.name.clone(),
+            let steps = crate::persistence::restore_sequence_steps(
+                &seq_config.steps,
+                &channel_uuids,
+                &mut warnings,
+            );
+            self.mixer.transition_sequences_mut().push(
+                crate::mixer::TransitionSequence::with_uuid(
+                    seq_config.uuid.clone(),
+                    seq_config.name.clone(),
                     steps,
-                    enabled: seq_config.enabled,
-                    state: SequencerState::new(),
-                });
+                    seq_config.enabled,
+                ),
+            );
         }
 
         (warnings, structural)
@@ -921,7 +904,8 @@ mod tests {
         let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
-        app.add_solid_color_deck(0, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        let ch = app.mixer_snapshot().channels[0].uuid.clone();
+        app.add_solid_color_deck(&ch, [1.0, 0.0, 0.0, 1.0]).unwrap();
         app.set_crossfader(0.6);
         app.save_workspace(&UILayoutState::default());
 
@@ -999,7 +983,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let varda_dir = tmp.path().join(".varda");
         assert!(!varda_dir.exists());
-        let Some(app) = headless_app_in(tmp.path()) else {
+        let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
         app.save_workspace(&UILayoutState::default());
@@ -1009,7 +993,7 @@ mod tests {
     #[test]
     fn load_workspace_returns_layout() {
         let tmp = TempDir::new().unwrap();
-        let Some(app) = headless_app_in(tmp.path()) else {
+        let Some(mut app) = headless_app_in(tmp.path()) else {
             return;
         };
         let layout = UILayoutState {
@@ -1027,6 +1011,34 @@ mod tests {
         let loaded = loaded.unwrap();
         assert!(loaded.stage_editor_open);
         assert!(loaded.library_panel_open);
+    }
+
+    /// `EngineCommand::SaveWorkspace` carries no layout, so it must reuse the one
+    /// loaded from disk instead of writing defaults over the user's panels.
+    #[test]
+    fn command_save_preserves_loaded_layout() {
+        let tmp = TempDir::new().unwrap();
+        let Some(mut app) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        app.save_workspace(&UILayoutState {
+            stage_editor_open: true,
+            library_panel_open: true,
+            ..Default::default()
+        });
+
+        let Some(mut app2) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        app2.load_workspace();
+        app2.execute_command(crate::engine::EngineCommand::SaveWorkspace);
+
+        let Some(mut app3) = headless_app_in(tmp.path()) else {
+            return;
+        };
+        let reloaded = app3.load_workspace().expect("layout should survive");
+        assert!(reloaded.stage_editor_open);
+        assert!(reloaded.library_panel_open);
     }
 
     #[test]
