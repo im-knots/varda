@@ -8,7 +8,7 @@ A visual performance tool with broadcast style routing for VJs, installation art
 Varda applies broadcast video workflows to live visuals. Sources (video, cameras, generative shaders, streams, images) flow through a routing graph of decks, channels, and surfaces to reach outputs (projectors, streams, recordings). Instead of a clip-launch grid, you control what's live by adjusting opacity, blend modes, crossfaders, mute/solo, and effect chains. 
 
 - **Routing matrix**: Sources > Decks > Channels > Mixer > Surfaces > Outputs. Any source to any output, split, branch, or sub-mix at every junction
-- **Sources**: video (HAP GPU-native + ffmpeg), cameras, ISF shaders (generators/filters), NDI, SRT, HLS, DASH, RTMP/RTMPS, Syphon (macOS receive), images, and html/css/js sources (Servo)
+- **Sources**: video (HAP GPU-native + ffmpeg), cameras, GLSL shaders (generators/filters, ISF-style metadata), NDI, SRT, HLS, DASH, RTMP/RTMPS, Syphon (macOS receive), images, and html/css/js sources (Servo)
 - **Mixing**: N-channel compositing, A/B crossfader, per-deck opacity, 15 blend modes, linear-light HDR pipeline
 - **Color**: 9 tonemap presets (ACES, AgX, Reinhard, Hable, etc.), 3D LUT support (.cube/.3dl) for color grading
 - **Transitions**: ISF shader transitions between channels, deck auto-transitions (timer/clip-end triggers), multi-channel transition sequencer with beat-synced or timed triggers (seconds, minutes, hours). Allowing for quick automated live transitions or long running automated installations.
@@ -142,7 +142,9 @@ varda [OPTIONS]
     --shader-dir <DIR>        Extra shader library directory (repeatable)
 ```
 
-`--shader-dir` is repeatable and layers on top of the built-in shader directories in a fixed precedence order. see [ISF Shader Authoring → File Location](docs/12-isf-authoring.md#file-location) for the full hierarchy and override/hot-reload behavior.
+`--shader-dir` is repeatable and layers on top of the built-in shader directories in a fixed precedence order. see [Shader Authoring → File Location](docs/12-isf-authoring.md#file-location) for the full hierarchy and override/hot-reload behavior.
+
+> **Shader format:** Varda uses ISF's JSON metadata header with GLSL 450 (Vulkan) shader bodies, not ISF's GLSL ES dialect. Shaders from isf.video need a short mechanical port — see [Porting an ISF Shader](docs/12-isf-authoring.md#porting-an-isf-shader).
 
 Headless mode runs the full engine without a UI window — controlled via the HTTP API. Outputs defined in `stage.json` auto-start on launch. Graceful shutdown on Ctrl-C or `POST /api/shutdown`.
 

@@ -92,11 +92,12 @@ Here you will find everything you need to start throwing those pixels.
 ### Part IV — Reference
 
 - **11. [Shader Library](11-shader-library.md)** — catalog of bundled generators, filters, transitions, and compute shaders
-- **12. [ISF Shader Authoring](12-isf-authoring.md)**
+- **12. [Shader Authoring](12-isf-authoring.md)**
   - [Shader Types](12-isf-authoring.md#shader-types) — generator, filter, transition
   - [Metadata Format](12-isf-authoring.md#metadata-format) — JSON header, input types
   - [Built-in Uniforms](12-isf-authoring.md#built-in-uniforms) — TIME, RENDERSIZE, audio, phase accumulators
-  - [Multi-Pass Rendering](12-isf-authoring.md#multi-pass-rendering) — persistent buffers, feedback loops
+  - [Porting an ISF Shader](12-isf-authoring.md#porting-an-isf-shader) — dialect differences, the vertical flip, what isn't supported
+  - [Multi-Pass Rendering](12-isf-authoring.md#multi-pass-rendering) — persistent buffers, feedback loops, substepping
   - [Compute Shaders](12-isf-authoring.md#compute-shaders) — `.comp` shaders, storage buffers, dispatch
   - [Hot-Reload](12-isf-authoring.md#hot-reload) — live editing workflow
   - [File Location](12-isf-authoring.md#file-location) — shader directory precedence hierarchy, `--shader-dir`

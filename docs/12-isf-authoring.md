@@ -1,6 +1,10 @@
-# ISF Shader Authoring
+# Shader Authoring
 
-Varda uses [ISF (Interactive Shader Format)](https://isf.video) for all generators, filters, and transitions. Shaders are GLSL 450 (Vulkan) with a JSON metadata header that declares parameters, inputs, and passes.
+Varda shaders are **GLSL 450 (Vulkan)** with an [ISF](https://isf.video)-style JSON metadata header that declares parameters, inputs, and passes.
+
+> **Read this first if you have existing ISF shaders.** Varda uses ISF's *metadata format*, not its *shader language*. A shader downloaded from isf.video, VDMX, or the ISF Editor will **not** load as-is — real ISF is GLSL ES with implicitly injected uniforms, and Varda needs explicit Vulkan declarations. Porting is mechanical and usually takes a few minutes. See [Porting an ISF Shader](#porting-an-isf-shader).
+
+In exchange for not being drop-in ISF, the dialect gets you things ISF can't express: [compute shaders](#compute-shaders) with persistent storage buffers, [analyzer preprocessors](#analyzer-preprocessors-advanced) that inject ML/sensor data as textures, and [phase accumulators](#phase-accumulators) for jump-free speed changes.
 
 ## Shader Types
 
@@ -163,6 +167,112 @@ void main() {
 }
 ```
 
+## Porting an ISF Shader
+
+Varda's JSON header is ISF-compatible, so the metadata usually needs no changes at all. The work is in the GLSL body.
+
+### What differs
+
+| | Real ISF | Varda |
+|---|---|---|
+| Language | GLSL ES (no `#version`) | GLSL 450 Vulkan, `#version 450` required |
+| Uniforms | Injected implicitly by name from `INPUTS` | Declared explicitly in a `UserParams` block |
+| Automatic vars | Injected implicitly (`TIME`, `RENDERSIZE`, …) | Declared explicitly in the `ISFUniforms` block |
+| Textures | Combined `sampler2D` | Separate `texture2D` + `sampler` (WebGPU has no combined samplers) |
+| Sampling | `IMG_THIS_PIXEL()`, `IMG_NORM_PIXEL()`, `texture2D()` | `texture(sampler2D(tex, texSampler), uv)` |
+| Fragment coords | `isf_FragNormCoord`, **bottom-left** origin | `uv` varying, **top-left** origin |
+| Output | `gl_FragColor` | `layout(location = 0) out vec4 fragColor` |
+| Bindings | Host-managed, invisible | Explicit `layout(set = 0, binding = N)` |
+
+### Steps
+
+1. **Keep the JSON header.** `DESCRIPTION`, `CREDIT`, `CATEGORIES`, `INPUTS`, `PASSES`, `IMPORTED` all parse as-is.
+2. **Add `#version 450`** as the first line after the header, and delete any existing `#version`.
+3. **Add the standard prologue** — `in vec2 uv`, `out vec4 fragColor`, the `ISFUniforms` block, the sampler, your textures, and a `UserParams` block listing every non-image `INPUTS` entry **in declaration order**. Copy the layout from the [Filter example](#filter) above.
+4. **Delete any `varying` declarations.** Not valid in GLSL 450 core.
+5. **Replace `gl_FragColor`** with `fragColor`.
+6. **Rewrite sampling calls:**
+   ```glsl
+   texture2D(inputImage, c)      →  texture(sampler2D(inputImage, texSampler), c)
+   IMG_NORM_PIXEL(inputImage, c) →  texture(sampler2D(inputImage, texSampler), c)
+   IMG_THIS_PIXEL(inputImage)    →  texture(sampler2D(inputImage, texSampler), uv)
+   IMG_PIXEL(inputImage, px)     →  texture(sampler2D(inputImage, texSampler), px / RENDERSIZE)
+   IMG_SIZE(inputImage)          →  vec2(textureSize(sampler2D(inputImage, texSampler), 0))
+   ```
+7. **Fix the vertical orientation** — see below. This is the step people miss.
+
+### The vertical flip
+
+**ISF's `isf_FragNormCoord` has `(0,0)` at the bottom-left. Varda's `uv` has `(0,0)` at the top-left.** Substituting one for the other renders the shader upside down.
+
+If the shader is vertically symmetric you won't notice — until you use it on something that isn't, like text or a logo. Check with an asymmetric source before you trust it.
+
+To port ISF coordinate math unchanged, establish a flipped coordinate once at the top of `main` and use it everywhere ISF used `isf_FragNormCoord`:
+
+```glsl
+void main() {
+    vec2 p = vec2(uv.x, 1.0 - uv.y);   // ISF/GL orientation
+    // ... original ISF body, using p wherever it used isf_FragNormCoord
+}
+```
+
+**Do not use the flipped coordinate for texture sampling.** Varda's textures are stored top-left, so `inputImage` and pass buffers are sampled with raw `uv`. Mixing the two is what produces a shader that generates correctly but samples mirrored, or vice versa.
+
+`gl_FragCoord` needs the same treatment — it is upper-left origin in Vulkan and lower-left in OpenGL:
+
+```glsl
+vec2 fc = vec2(gl_FragCoord.x, RENDERSIZE.y - gl_FragCoord.y);
+```
+
+Around a dozen shaders in `shaders/` are ports that do exactly this — `star_nest.fs`, `apollonian_glow.fs`, `truchet_tube.fs`, and `mandelbrot_deco.fs` are good references.
+
+### Worked example
+
+Original ISF:
+
+```glsl
+/*{ "CATEGORIES": ["Filter"], "INPUTS": [
+    { "NAME": "inputImage", "TYPE": "image" },
+    { "NAME": "amount", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0 }
+] }*/
+void main() {
+    vec4 src = IMG_THIS_PIXEL(inputImage);
+    float v = isf_FragNormCoord.y;
+    gl_FragColor = mix(src, vec4(v), amount);
+}
+```
+
+Ported:
+
+```glsl
+/*{ "CATEGORIES": ["Filter"], "INPUTS": [
+    { "NAME": "inputImage", "TYPE": "image" },
+    { "NAME": "amount", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0 }
+] }*/
+#version 450
+layout(location = 0) out vec4 fragColor;
+layout(location = 0) in  vec2 uv;
+layout(set = 0, binding = 0) uniform ISFUniforms { /* full block — see below */ };
+layout(set = 0, binding = 1) uniform sampler   texSampler;
+layout(set = 0, binding = 2) uniform texture2D inputImage;
+layout(set = 0, binding = 3) uniform UserParams { float amount; };
+
+void main() {
+    vec4 src = texture(sampler2D(inputImage, texSampler), uv);  // raw uv — sampling
+    float v = 1.0 - uv.y;                                       // flipped — ISF coord
+    fragColor = mix(src, vec4(v), amount);
+}
+```
+
+### Not supported
+
+| ISF feature | Status |
+|---|---|
+| Vertex shaders (`.vs`, `isf_vertShaderInit()`) | Not supported |
+| Filters with two or more `image` inputs | Not supported — one input image per effect. To blend two sources, use two decks in a channel with a [blend mode](04-performance.md) instead. |
+| `audio` / `audioFFT` image inputs | Not bound. Use the `audio_*` scalars in `ISFUniforms` instead. |
+| `.frag` / `.glsl` extensions | Only `.fs` and `.comp` are discovered |
+
 ## Multi-Pass Rendering
 
 For feedback effects, simulations, and post-processing chains, declare multiple render passes:
@@ -178,8 +288,21 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 - **Persistent** buffers survive across frames — essential for feedback loops and simulations (Game of Life, reaction-diffusion)
 - The final pass (empty `{}`) renders to the output
 - Access pass buffers as `texture2D` samplers with the target name
-- Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers
+- Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers. Only `$WIDTH`, `$HEIGHT`, `$WIDTH/N` and `$WIDTH*N` with integer `N` are parsed — `$WIDTH/2.0` and arithmetic like `max($WIDTH,$HEIGHT)` are not, and fall back to full resolution.
 - Optional `FLOAT: true` for 32-bit float buffers (HDR, simulation data)
+
+### Two behaviours that will surprise you
+
+**`PERSISTENT` passes run four times per frame.** Varda substeps persistent passes for numerical stability — 4 iterations at `TIMEDELTA / 4`, with `FRAMEINDEX` advancing once per substep. Time-based simulations integrate correctly (4 × dt/4 == dt), but anything that steps once per invocation regardless of time — cellular automata, fixed-step reaction-diffusion, `FRAMEINDEX`-gated logic — advances **four generations per frame**.
+
+Design for it: drive state changes from `TIMEDELTA`, or rate-limit against `FRAMEINDEX` explicitly. `game_of_life.fs` does the latter. It also means a persistent multi-pass shader costs roughly 4× its apparent GPU budget, which matters when you are stacking decks.
+
+**Any pass buffer forces nearest-neighbour filtering on every texture in the shader.** Float pass buffers aren't filterable in WebGPU, and the sampler is shared, so declaring even one `PASSES` target downgrades `inputImage` sampling from linear to nearest. If a filter looks unexpectedly blocky after you add a pass, this is why. Sample at texel centres to keep it predictable:
+
+```glsl
+vec2 texel = 1.0 / RENDERSIZE;
+vec2 snapped = (floor(uv * RENDERSIZE) + 0.5) * texel;
+```
 
 ## Compute Shaders
 
