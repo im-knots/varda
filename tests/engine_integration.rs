@@ -1844,3 +1844,191 @@ fn punch_surface_hole_workflow() {
         }
     ));
 }
+
+// ── Engine trait contracts (traits.rs / api-addressing.md) ─────────
+//
+// These assert promises the engine traits make at their boundary, distinct
+// from the UUID-race regressions in tests/uuid_addressing.rs. They exercise
+// contract *shape* — which failures are NotFound, which creations hand back a
+// resolvable id, and which removals are permissive no-ops — rather than the
+// reindex-safety those tests cover.
+
+/// `MixerCommands::add_effect` resolves its *target* before doing anything.
+/// An unresolvable Deck/Channel target is a precondition failure: the wire
+/// result is `NotFound` and no effect is created anywhere. The existing
+/// NotFound sweep only covers `Toggle`/`RemoveEffect` (which resolve the effect
+/// uuid); `AddEffect` resolves the target chain, a separate code path.
+#[test]
+fn add_effect_on_unknown_target_is_not_found_and_creates_nothing() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch,
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ));
+
+    for target in [
+        EffectTarget::Deck("no-such-deck".into()),
+        EffectTarget::Channel("no-such-channel".into()),
+    ] {
+        let label = format!("{target:?}");
+        let r = send_cmd(
+            &mut app,
+            EngineCommand::AddEffect {
+                target,
+                shader_name: "invert".to_string(),
+            },
+        );
+        assert!(
+            matches!(
+                r,
+                CommandResult::Err {
+                    code: ErrorCode::NotFound,
+                    ..
+                }
+            ),
+            "AddEffect on {label} must be NotFound, got {r:?}"
+        );
+    }
+
+    // No effect leaked onto the real deck or the master chain.
+    let state = app.build_engine_state();
+    let deck_effects = &state
+        .mixer
+        .channels
+        .iter()
+        .flat_map(|c| c.decks.iter())
+        .find(|d| d.uuid == deck)
+        .expect("deck must still exist")
+        .effects;
+    assert!(
+        deck_effects.is_empty(),
+        "no effect should have been created"
+    );
+    assert!(
+        state.mixer.master_effects.is_empty(),
+        "no effect should have leaked onto the master chain"
+    );
+}
+
+/// The creation contract: `add_effect` returns `OkWithId`, and the reported
+/// uuid resolves to a real effect in the very next state snapshot — for every
+/// chain (deck, channel, master). This is the id-is-real half of the WS1 /
+/// api-addressing promise (`uuid_addressing.rs` asserts the *toggle* works but
+/// never that the reported id is findable in the snapshot).
+#[test]
+fn add_effect_reports_a_uuid_that_resolves_in_the_next_snapshot() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let deck = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddSolidColorDeck {
+            channel_uuid: ch.clone(),
+            color: [1.0, 1.0, 1.0, 1.0],
+        },
+    ));
+
+    // A build lacking the `invert` filter can't create effects; skip if so.
+    let deck_fx = match send_cmd(
+        &mut app,
+        EngineCommand::AddEffect {
+            target: EffectTarget::Deck(deck.clone()),
+            shader_name: "invert".to_string(),
+        },
+    ) {
+        CommandResult::OkWithId { uuid } => uuid,
+        CommandResult::Err { .. } => return,
+        other => panic!("expected OkWithId, got {other:?}"),
+    };
+    let channel_fx = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddEffect {
+            target: EffectTarget::Channel(ch),
+            shader_name: "invert".to_string(),
+        },
+    ));
+    let master_fx = new_uuid(send_cmd(
+        &mut app,
+        EngineCommand::AddEffect {
+            target: EffectTarget::Master,
+            shader_name: "invert".to_string(),
+        },
+    ));
+
+    let state = app.build_engine_state();
+    let ch0 = &state.mixer.channels[0];
+    assert_eq!(
+        ch0.decks[0]
+            .effects
+            .iter()
+            .filter(|e| e.uuid == deck_fx)
+            .count(),
+        1,
+        "deck effect uuid must resolve in the snapshot"
+    );
+    assert_eq!(
+        ch0.effects.iter().filter(|e| e.uuid == channel_fx).count(),
+        1,
+        "channel effect uuid must resolve in the snapshot"
+    );
+    assert_eq!(
+        state
+            .mixer
+            .master_effects
+            .iter()
+            .filter(|e| e.uuid == master_fx)
+            .count(),
+        1,
+        "master effect uuid must resolve in the snapshot"
+    );
+}
+
+/// `ModulationCommands::remove_modulation_source` has no `Result` in its
+/// signature — its contract is permissive: removing an unknown uuid is a silent
+/// `Ok` no-op, not an error, and it must not disturb existing sources. This is
+/// the inverse of the fallible-command contract (`Result`-returning commands
+/// report `NotFound` and mutate nothing).
+#[test]
+fn remove_unknown_modulation_source_is_a_silent_noop() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    // Create a real source so we can prove the no-op leaves it intact.
+    let before = send_cmd(
+        &mut app,
+        EngineCommand::AddLfo {
+            waveform: LFOWaveform::Sine,
+            frequency: 1.0,
+        },
+    );
+    assert!(
+        matches!(before, CommandResult::Ok),
+        "AddLfo should report Ok, got {before:?}"
+    );
+    let sources_before = app.build_engine_state().modulation.sources.len();
+    assert_eq!(sources_before, 1, "one modulation source expected");
+
+    // Removing a uuid that names nothing is Ok and changes nothing.
+    let r = send_cmd(
+        &mut app,
+        EngineCommand::RemoveModulationSource {
+            uuid: "deadbeef".into(),
+        },
+    );
+    assert!(
+        matches!(r, CommandResult::Ok),
+        "removing an unknown modulation source must be a silent Ok, got {r:?}"
+    );
+    assert_eq!(
+        app.build_engine_state().modulation.sources.len(),
+        sources_before,
+        "the existing source must be untouched by a no-op removal"
+    );
+}

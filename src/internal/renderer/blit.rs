@@ -1549,6 +1549,96 @@ mod tests {
 
     const QUAD: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
 
+    /// Every emitted index must reference a real vertex, in whole triangles.
+    fn assert_valid_indices(indices: &[u32], n: usize) {
+        assert_eq!(indices.len() % 3, 0, "indices must form whole triangles");
+        for &i in indices {
+            assert!((i as usize) < n, "index {i} out of range for {n} verts");
+        }
+    }
+
+    #[test]
+    fn ear_clip_triangulate_degenerate_is_empty() {
+        assert!(ear_clip_triangulate(&[]).is_empty());
+        assert!(ear_clip_triangulate(&[[0.0, 0.0]]).is_empty());
+        assert!(ear_clip_triangulate(&[[0.0, 0.0], [1.0, 0.0]]).is_empty());
+    }
+
+    #[test]
+    fn ear_clip_triangulate_convex_quad_is_two_triangles() {
+        let indices = ear_clip_triangulate(&QUAD);
+        assert_eq!(indices.len(), 6, "a quad is two triangles");
+        assert_valid_indices(&indices, QUAD.len());
+    }
+
+    #[test]
+    fn ear_clip_triangulate_concave_polygon_is_fully_triangulated() {
+        // Concave L-shape (one reflex vertex): ear-clipping must still emit
+        // n-2 triangles with valid indices, not degenerate on the concavity.
+        let l_shape = [
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 2.0],
+            [0.0, 2.0],
+        ];
+        let indices = ear_clip_triangulate(&l_shape);
+        assert_eq!(indices.len(), (l_shape.len() - 2) * 3);
+        assert_valid_indices(&indices, l_shape.len());
+    }
+
+    #[test]
+    fn ear_clip_cross_sign_tracks_turn_direction() {
+        let o = [0.0, 0.0];
+        let a = [1.0, 0.0];
+        assert!(ear_clip_cross(o, a, [1.0, 1.0]) > 0.0);
+        assert!(ear_clip_cross(o, a, [1.0, -1.0]) < 0.0);
+        assert_eq!(ear_clip_cross(o, a, [2.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn ear_clip_point_in_tri_detects_inside_outside_edge() {
+        let a = [0.0, 0.0];
+        let b = [4.0, 0.0];
+        let c = [0.0, 4.0];
+        assert!(ear_clip_point_in_tri([1.0, 1.0], a, b, c), "interior");
+        assert!(!ear_clip_point_in_tri([3.0, 3.0], a, b, c), "exterior");
+        assert!(ear_clip_point_in_tri([2.0, 0.0], a, b, c), "on edge");
+    }
+
+    #[test]
+    fn ear_clip_is_ear_accepts_convex_and_rejects_enclosing_corner() {
+        // QUAD winds CCW under the signed-area convention (y-down) -> ccw = true.
+        let idx = [0usize, 1, 2, 3];
+        assert!(ear_clip_is_ear(&QUAD, &idx, 0, 1, 2, true));
+
+        // Concave quad: the corner's triangle swallows the reflex vertex 2, so
+        // it is not a valid ear.
+        let concave = [[0.0, 0.0], [2.0, 1.0], [1.0, 1.0], [0.0, 2.0]];
+        let cidx = [0usize, 1, 2, 3];
+        assert!(!ear_clip_is_ear(&concave, &cidx, 3, 0, 1, true));
+    }
+
+    /// UVs must be the vertex position normalized within the bounding box, so a
+    /// quad offset into the lower-right BB quadrant maps into [0..1] UV space.
+    #[test]
+    fn triangulate_verts_maps_uv_within_bounding_box() {
+        let verts = PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 2.0, 2.0);
+        assert_eq!(verts.len(), 6);
+        for v in &verts {
+            assert!(
+                (0.0..=1.0).contains(&v.uv[0]) && (0.0..=1.0).contains(&v.uv[1]),
+                "uv must fall within the bounding box, got {:?}",
+                v.uv
+            );
+        }
+        // The far corner [1,1] under a 2x2 BB rooted at origin maps to [0.5,0.5].
+        assert!(verts.iter().any(|v| v.position == [1.0, 1.0]
+            && (v.uv[0] - 0.5).abs() < 1e-6
+            && (v.uv[1] - 0.5).abs() < 1e-6));
+    }
+
     #[test]
     fn triangulate_verts_quad_yields_two_triangles() {
         let verts = PolygonBlitPipeline::triangulate_verts(&QUAD, 0.0, 0.0, 1.0, 1.0);

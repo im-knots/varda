@@ -1664,6 +1664,112 @@ mod tests {
         assert!(!command_is_undoable(&C::Redo));
         assert!(!command_is_undoable(&C::SaveWorkspace));
         assert!(!command_is_undoable(&C::Shutdown));
+        // Audio device lifecycle, detection previews, and global settings are
+        // all live/transient — excluded from the undo timeline.
+        assert!(!command_is_undoable(&C::ScanAudioDevices));
+        assert!(!command_is_undoable(&C::RescanAudio));
+        assert!(!command_is_undoable(&C::DetectFromImage {
+            image_data: Vec::new(),
+            params: crate::engine::value::detect::DetectionParams::default(),
+        }));
+        assert!(!command_is_undoable(&C::SetRenderResolution {
+            width: 1280,
+            height: 720,
+        }));
+        assert!(!command_is_undoable(&C::SetTargetFps { fps: 30 }));
+        // Saving a preset writes to disk; it is not undoable (loading is).
+        assert!(!command_is_undoable(&C::SaveChannelPreset {
+            channel_uuid: "ch".into(),
+            name: "p".into(),
+        }));
+    }
+
+    // ── Error → wire mapping (classify / wire / wire_id / not_found) ───
+    //
+    // These are pure functions with no GPU dependency: they translate engine
+    // `anyhow::Result`s into the serializable `CommandResult`. The key contract
+    // (api-addressing.md) is that an unresolvable UUID becomes `NotFound`, while
+    // any other error is `InvalidInput`.
+
+    use super::{classify, not_found, wire, wire_id, UnknownEntity};
+    use crate::engine::ErrorCode;
+
+    fn unknown() -> UnknownEntity {
+        UnknownEntity {
+            kind: "deck",
+            uuid: "abc123".to_string(),
+        }
+    }
+
+    #[test]
+    fn classify_unknown_entity_is_not_found() {
+        let err: anyhow::Error = unknown().into();
+        assert_eq!(classify(&err), ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn classify_unknown_entity_survives_context_wrapping() {
+        // Downcast must still find the UnknownEntity through an anyhow context.
+        let err = anyhow::Error::from(unknown()).context("while applying command");
+        assert_eq!(classify(&err), ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn classify_generic_error_is_invalid_input() {
+        let err = anyhow::anyhow!("bad value");
+        assert_eq!(classify(&err), ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn wire_ok_maps_to_ok() {
+        assert!(matches!(wire(Ok(())), CommandResult::Ok));
+    }
+
+    #[test]
+    fn wire_err_classifies_and_carries_message() {
+        // Unresolvable UUID → NotFound, message preserved.
+        match wire(Err(unknown().into())) {
+            CommandResult::Err { code, message } => {
+                assert_eq!(code, ErrorCode::NotFound);
+                assert_eq!(message, "No deck with UUID 'abc123'");
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+        // Generic error → InvalidInput.
+        match wire(Err(anyhow::anyhow!("nope"))) {
+            CommandResult::Err { code, message } => {
+                assert_eq!(code, ErrorCode::InvalidInput);
+                assert_eq!(message, "nope");
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wire_id_ok_carries_uuid() {
+        match wire_id(Ok("deck-42".to_string())) {
+            CommandResult::OkWithId { uuid } => assert_eq!(uuid, "deck-42"),
+            other => panic!("expected OkWithId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wire_id_err_classifies() {
+        match wire_id(Err(unknown().into())) {
+            CommandResult::Err { code, .. } => assert_eq!(code, ErrorCode::NotFound),
+            other => panic!("expected Err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_found_always_maps_to_not_found_with_display_message() {
+        match not_found(unknown()) {
+            CommandResult::Err { code, message } => {
+                assert_eq!(code, ErrorCode::NotFound);
+                assert_eq!(message, "No deck with UUID 'abc123'");
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
     }
 
     // ── WS1: typed return channel (ui-engine-boundary.md) ──────────────

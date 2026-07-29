@@ -191,3 +191,98 @@ pub(crate) fn command_is_deck_add(cmd: &EngineCommand) -> bool {
             | EngineCommand::AddHtmlDeck { .. }
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ch() -> String {
+        "ch-uuid".to_string()
+    }
+
+    #[test]
+    fn every_deck_add_variant_is_recognized() {
+        // Mirrors the deck-add arm list in execute_command_gui: if a new
+        // Add*Deck variant is introduced but omitted from command_is_deck_add,
+        // the GUI silently skips its toast + preview-texture registration.
+        let deck_adds = [
+            EngineCommand::AddDeck {
+                channel_uuid: ch(),
+                shader_name: "solid".into(),
+            },
+            EngineCommand::AddImageDeck {
+                channel_uuid: ch(),
+                path: "/tmp/x.png".into(),
+            },
+            EngineCommand::AddVideoDeck {
+                channel_uuid: ch(),
+                path: "/tmp/x.mp4".into(),
+            },
+            EngineCommand::AddSolidColorDeck {
+                channel_uuid: ch(),
+                color: [0.0, 0.0, 0.0, 1.0],
+            },
+            EngineCommand::AddCameraDeck {
+                channel_uuid: ch(),
+                camera_id: 0,
+            },
+            EngineCommand::AddDepthSensorDeck {
+                channel_uuid: ch(),
+                depth_sensor_id: 0,
+            },
+            EngineCommand::AddNdiDeck {
+                channel_uuid: ch(),
+                source_name: "src".into(),
+            },
+            EngineCommand::AddSyphonDeck {
+                channel_uuid: ch(),
+                server_name: "srv".into(),
+            },
+            EngineCommand::AddSrtDeck {
+                channel_uuid: ch(),
+                url: "srt://h:9000".into(),
+                mode: crate::stream::SrtMode::Caller,
+            },
+            EngineCommand::AddHlsDeck {
+                channel_uuid: ch(),
+                url: "http://h/live.m3u8".into(),
+            },
+            EngineCommand::AddDashDeck {
+                channel_uuid: ch(),
+                url: "http://h/live.mpd".into(),
+            },
+            EngineCommand::AddRtmpDeck {
+                channel_uuid: ch(),
+                url: "rtmp://h/live".into(),
+                mode: crate::stream::RtmpMode::Pull,
+            },
+            EngineCommand::AddHtmlDeck {
+                channel_uuid: ch(),
+                url: "http://h".into(),
+            },
+        ];
+        assert_eq!(deck_adds.len(), 13, "expected 13 deck-add variants");
+        for cmd in &deck_adds {
+            assert!(command_is_deck_add(cmd), "not recognized: {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn non_deck_commands_are_rejected() {
+        let others = [
+            EngineCommand::AddChannel,
+            EngineCommand::RemoveChannel { channel_uuid: ch() },
+            EngineCommand::RemoveDeck {
+                deck_uuid: "d".into(),
+            },
+            EngineCommand::SetCrossfader(0.5),
+            EngineCommand::SetDeckOpacity {
+                deck_uuid: "d".into(),
+                opacity: 0.5,
+            },
+        ];
+        for cmd in &others {
+            assert!(!command_is_deck_add(cmd), "wrongly recognized: {cmd:?}");
+        }
+    }
+}

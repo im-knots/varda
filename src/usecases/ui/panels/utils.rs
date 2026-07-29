@@ -234,3 +234,105 @@ fn hue_to_channel(p: f32, q: f32, mut t: f32) -> f32 {
     }
     p
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_time_covers_boundaries_and_truncates() {
+        assert_eq!(format_time(0.0), "00:00");
+        assert_eq!(format_time(30.0), "00:30");
+        assert_eq!(format_time(60.0), "01:00");
+        assert_eq!(format_time(125.0), "02:05");
+        // Minutes are not wrapped at 60 — an hour reads as 60:00.
+        assert_eq!(format_time(3600.0), "60:00");
+        // Fractional seconds floor, not round.
+        assert_eq!(format_time(30.7), "00:30");
+        assert_eq!(format_time(59.9), "00:59");
+        assert_eq!(format_time(60.1), "01:00");
+    }
+
+    #[test]
+    fn hue_subdivision_places_indices_on_expected_ring_fractions() {
+        assert_eq!(hue_subdivision(0), (0, 0.0));
+        assert_eq!(hue_subdivision(1), (1, 0.5));
+        assert_eq!(hue_subdivision(2), (2, 0.25));
+        assert_eq!(hue_subdivision(3), (2, 0.75));
+        // Ring 3 holds four slots at the odd eighths.
+        assert_eq!(hue_subdivision(4), (3, 0.125));
+        assert_eq!(hue_subdivision(5), (3, 0.375));
+        assert_eq!(hue_subdivision(6), (3, 0.625));
+        assert_eq!(hue_subdivision(7), (3, 0.875));
+    }
+
+    #[test]
+    fn hue_subdivision_fractions_are_unique_across_channels() {
+        // Every channel index must map to a distinct hue fraction so palette
+        // colours never collide.
+        let mut seen = std::collections::HashSet::new();
+        for idx in 0..16 {
+            let (_ring, frac) = hue_subdivision(idx);
+            assert!(
+                seen.insert(frac.to_bits()),
+                "duplicate hue fraction {frac} at idx {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn hue_subdivision_is_monotonic_within_each_ring() {
+        // idx ranges per ring: ring2=[2,3], ring3=[4,7].
+        for (start, end) in [(2usize, 4usize), (4, 8)] {
+            let mut prev = -1.0;
+            for idx in start..end {
+                let (_ring, frac) = hue_subdivision(idx);
+                assert!(frac > prev, "ring not monotonic at idx {idx}: {frac}");
+                prev = frac;
+            }
+        }
+    }
+
+    fn approx(a: (f32, f32, f32), b: (f32, f32, f32)) {
+        assert!(
+            (a.0 - b.0).abs() < 1e-5 && (a.1 - b.1).abs() < 1e-5 && (a.2 - b.2).abs() < 1e-5,
+            "expected {b:?}, got {a:?}"
+        );
+    }
+
+    #[test]
+    fn hsl_to_rgb_zero_saturation_is_grayscale() {
+        approx(hsl_to_rgb(0.5, 0.0, 0.5), (0.5, 0.5, 0.5));
+        approx(hsl_to_rgb(0.2, 0.0, 0.25), (0.25, 0.25, 0.25));
+    }
+
+    #[test]
+    fn hsl_to_rgb_primaries() {
+        approx(hsl_to_rgb(0.0, 1.0, 0.5), (1.0, 0.0, 0.0));
+        approx(hsl_to_rgb(1.0 / 3.0, 1.0, 0.5), (0.0, 1.0, 0.0));
+        approx(hsl_to_rgb(2.0 / 3.0, 1.0, 0.5), (0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn hsl_to_rgb_lightness_extremes_are_black_and_white() {
+        approx(hsl_to_rgb(0.5, 0.8, 0.0), (0.0, 0.0, 0.0));
+        approx(hsl_to_rgb(0.5, 0.8, 1.0), (1.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn hsl_to_rgb_hue_wraps_at_one() {
+        // h=1.0 must resolve to the same colour as h=0.0 (red).
+        approx(hsl_to_rgb(1.0, 1.0, 0.5), hsl_to_rgb(0.0, 1.0, 0.5));
+    }
+
+    #[test]
+    fn channel_color_is_deterministic_and_distinct_across_channels() {
+        assert_eq!(channel_color(0), channel_color(0));
+        let colors: Vec<_> = (0..4).map(channel_color).collect();
+        for i in 0..colors.len() {
+            for j in (i + 1)..colors.len() {
+                assert_ne!(colors[i], colors[j], "channels {i} and {j} share a colour");
+            }
+        }
+    }
+}

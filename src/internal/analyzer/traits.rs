@@ -107,6 +107,77 @@ impl AnalyzerSnapshot {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scalar_def(name: &str, default: f32) -> ScalarOutputDef {
+        ScalarOutputDef {
+            name: name.to_string(),
+            description: String::new(),
+            range: (0.0, 1.0),
+            default,
+            default_smoothing: 0.0,
+        }
+    }
+
+    #[test]
+    fn empty_snapshot_has_no_outputs() {
+        let snap = AnalyzerSnapshot::empty();
+        assert!(snap.scalars.is_empty());
+        assert!(snap.textures.is_empty());
+    }
+
+    #[test]
+    fn from_defaults_with_empty_schema_is_empty() {
+        let schema = AnalyzerSchema {
+            scalars: vec![],
+            textures: vec![],
+        };
+        let snap = AnalyzerSnapshot::from_defaults(&schema);
+        assert!(snap.scalars.is_empty());
+    }
+
+    #[test]
+    fn from_defaults_populates_each_scalar_default() {
+        let schema = AnalyzerSchema {
+            scalars: vec![scalar_def("brightness", 0.5), scalar_def("hue", 0.0)],
+            textures: vec![],
+        };
+        let snap = AnalyzerSnapshot::from_defaults(&schema);
+        assert_eq!(snap.scalars.len(), 2);
+        assert_eq!(snap.scalars.get("brightness"), Some(&0.5));
+        assert_eq!(snap.scalars.get("hue"), Some(&0.0));
+    }
+
+    #[test]
+    fn scalar_returns_value_when_present() {
+        let schema = AnalyzerSchema {
+            scalars: vec![scalar_def("face_x", 0.73)],
+            textures: vec![],
+        };
+        let snap = AnalyzerSnapshot::from_defaults(&schema);
+        assert!((snap.scalar("face_x") - 0.73).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scalar_falls_back_to_zero_when_missing() {
+        let snap = AnalyzerSnapshot::empty();
+        assert_eq!(snap.scalar("nonexistent"), 0.0);
+    }
+
+    #[test]
+    fn scalar_lookup_is_case_sensitive() {
+        let schema = AnalyzerSchema {
+            scalars: vec![scalar_def("Face_X", 0.5)],
+            textures: vec![],
+        };
+        let snap = AnalyzerSnapshot::from_defaults(&schema);
+        assert_eq!(snap.scalar("Face_X"), 0.5);
+        assert_eq!(snap.scalar("face_x"), 0.0);
+    }
+}
+
 // ── Input ────────────────────────────────────────────────────────────────────
 
 /// Input frame delivered to an analyzer for processing.

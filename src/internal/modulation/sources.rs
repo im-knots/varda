@@ -463,3 +463,132 @@ impl ModulationSource {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::internal::modulation::AudioSourceValues;
+
+    /// Build an `AudioValues` whose single primary source reads full-scale
+    /// energy (`energy_in_range ≈ 1.0`) across the whole spectrum. A flat
+    /// FFT of 1.0 gives RMS = 1.0 → `(20*log10(1) + 60)/60 = 1.0`.
+    fn loud_audio() -> AudioValues {
+        let mut av = AudioValues::default();
+        av.sources.insert(
+            0,
+            AudioSourceValues {
+                fft: vec![1.0; 256],
+                level: 1.0,
+                sample_rate: 48000.0,
+            },
+        );
+        av
+    }
+
+    /// Silent audio: no sources, so `raw` collapses to 0.0.
+    fn silent_audio() -> AudioValues {
+        AudioValues::default()
+    }
+
+    fn full_band(mode: AudioReactMode, smoothing: f32, noise_gate: f32) -> ModulationSource {
+        ModulationSource::AudioBand {
+            source_id: None,
+            freq_low: 20.0,
+            freq_high: 20000.0,
+            gain: 1.0,
+            smoothing,
+            mode,
+            noise_gate,
+        }
+    }
+
+    #[test]
+    fn audio_band_direct_tracks_rising_signal_immediately() {
+        let mut src = full_band(AudioReactMode::Direct, 0.5, 0.0);
+        let out = src.calculate(0.0, 0.01, &loud_audio(), &AnalyzerValues::default(), 0.0);
+        // raw (~1.0) >= prev (0.0) → attack is instantaneous, clamped to 1.0.
+        assert!((out - 1.0).abs() < 0.01, "expected ~1.0, got {out}");
+    }
+
+    #[test]
+    fn audio_band_direct_releases_toward_zero_by_release_alpha() {
+        // raw = 0 (silent) < prev → decay branch: prev + (1 - smoothing) * (0 - prev).
+        let mut src = full_band(AudioReactMode::Direct, 0.5, 0.0);
+        let out = src.calculate(0.0, 0.01, &silent_audio(), &AnalyzerValues::default(), 0.8);
+        // 0.8 + 0.5 * (0.0 - 0.8) = 0.4
+        assert!((out - 0.4).abs() < 1e-5, "expected 0.4, got {out}");
+    }
+
+    #[test]
+    fn audio_band_direct_full_release_when_smoothing_zero() {
+        // release_alpha = 1.0 → collapses straight to raw (0.0).
+        let mut src = full_band(AudioReactMode::Direct, 0.0, 0.0);
+        let out = src.calculate(0.0, 0.01, &silent_audio(), &AnalyzerValues::default(), 0.8);
+        assert!(out.abs() < 1e-6, "expected 0.0, got {out}");
+    }
+
+    #[test]
+    fn audio_band_increase_accumulates_upward() {
+        // speed = (1 - 0) * 4 = 4.0; step = raw(~1.0) * dt(0.01) * 4 = ~0.04.
+        let mut src = full_band(AudioReactMode::Increase, 0.0, 0.0);
+        let out = src.calculate(0.0, 0.01, &loud_audio(), &AnalyzerValues::default(), 0.0);
+        assert!((out - 0.04).abs() < 0.001, "expected ~0.04, got {out}");
+    }
+
+    #[test]
+    fn audio_band_increase_wraps_past_one() {
+        // prev 0.98 + ~0.04 = ~1.02 >= 1.0 → wraps to ~0.02.
+        let mut src = full_band(AudioReactMode::Increase, 0.0, 0.0);
+        let out = src.calculate(0.0, 0.01, &loud_audio(), &AnalyzerValues::default(), 0.98);
+        assert!(
+            (out - 0.02).abs() < 0.001,
+            "expected ~0.02 after wrap, got {out}"
+        );
+    }
+
+    #[test]
+    fn audio_band_increase_holds_when_signal_idle() {
+        // raw <= 0 → value is held, not advanced.
+        let mut src = full_band(AudioReactMode::Increase, 0.0, 0.0);
+        let out = src.calculate(0.0, 0.01, &silent_audio(), &AnalyzerValues::default(), 0.42);
+        assert!((out - 0.42).abs() < 1e-6, "expected held 0.42, got {out}");
+    }
+
+    #[test]
+    fn audio_band_decrease_accumulates_downward() {
+        // step ~0.04; prev 1.0 - 0.04 = ~0.96.
+        let mut src = full_band(AudioReactMode::Decrease, 0.0, 0.0);
+        let out = src.calculate(0.0, 0.01, &loud_audio(), &AnalyzerValues::default(), 1.0);
+        assert!((out - 0.96).abs() < 0.001, "expected ~0.96, got {out}");
+    }
+
+    #[test]
+    fn audio_band_decrease_wraps_below_zero() {
+        // prev 0.02 - ~0.04 = ~-0.02 <= 0.0 → wraps to ~0.98.
+        let mut src = full_band(AudioReactMode::Decrease, 0.0, 0.0);
+        let out = src.calculate(0.0, 0.01, &loud_audio(), &AnalyzerValues::default(), 0.02);
+        assert!(
+            (out - 0.98).abs() < 0.001,
+            "expected ~0.98 after wrap, got {out}"
+        );
+    }
+
+    #[test]
+    fn audio_band_decrease_holds_when_signal_idle() {
+        let mut src = full_band(AudioReactMode::Decrease, 0.0, 0.0);
+        let out = src.calculate(0.0, 0.01, &silent_audio(), &AnalyzerValues::default(), 0.42);
+        assert!((out - 0.42).abs() < 1e-6, "expected held 0.42, got {out}");
+    }
+
+    #[test]
+    fn audio_band_noise_gate_zeroes_signal_below_threshold() {
+        // raw ~1.0 but noise_gate 1.5 > raw → gated to 0.0. Under Direct with a
+        // nonzero prev this drives the decay branch toward 0.
+        let mut src = full_band(AudioReactMode::Direct, 0.0, 1.5);
+        let out = src.calculate(0.0, 0.01, &loud_audio(), &AnalyzerValues::default(), 0.8);
+        assert!(
+            out.abs() < 1e-6,
+            "gated signal should release to 0, got {out}"
+        );
+    }
+}

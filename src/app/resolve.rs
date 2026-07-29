@@ -118,3 +118,38 @@ pub enum EffectChain {
     Channel { channel_idx: usize },
     Master,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::{CommandResult, ErrorCode};
+
+    #[test]
+    fn new_populates_kind_and_uuid() {
+        let e = UnknownEntity::new("deck", "abc123");
+        assert_eq!(e.kind, "deck");
+        assert_eq!(e.uuid, "abc123");
+    }
+
+    #[test]
+    fn display_names_the_kind_and_uuid() {
+        let e = UnknownEntity::new("channel", "ch-7");
+        assert_eq!(e.to_string(), "No channel with UUID 'ch-7'");
+    }
+
+    #[test]
+    fn into_command_result_is_not_found_with_display_message() {
+        // Every resolve_* error path relies on this `.into()` to build a 404:
+        // the code must be NotFound and the message must match the Display form.
+        let e = UnknownEntity::new("effect", "fx-99");
+        let expected = e.to_string();
+        let result: CommandResult = e.into();
+        match result {
+            CommandResult::Err { code, message } => {
+                assert_eq!(code, ErrorCode::NotFound);
+                assert_eq!(message, expected);
+            }
+            other => panic!("expected Err(NotFound), got {other:?}"),
+        }
+    }
+}
