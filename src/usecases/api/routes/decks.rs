@@ -28,6 +28,62 @@ fn sanitize_path(p: std::path::PathBuf) -> std::path::PathBuf {
         .collect()
 }
 
+#[cfg(test)]
+mod sanitize_path_tests {
+    use super::sanitize_path;
+    use std::path::{Component, Path, PathBuf};
+
+    /// A path guaranteed not to exist on disk, so `canonicalize` fails and the
+    /// deterministic `..`-stripping branch runs (no filesystem dependency).
+    fn nonexistent(p: &str) -> PathBuf {
+        let path = PathBuf::from(p);
+        assert!(
+            path.canonicalize().is_err(),
+            "test path unexpectedly exists"
+        );
+        path
+    }
+
+    fn has_parent_dir(p: &Path) -> bool {
+        p.components().any(|c| matches!(c, Component::ParentDir))
+    }
+
+    #[test]
+    fn strips_all_parent_dir_components() {
+        let cleaned = sanitize_path(nonexistent(
+            "/varda_test_nope/foo/../bar/../../baz_zzz_missing",
+        ));
+        assert!(!has_parent_dir(&cleaned), "'..' survived: {cleaned:?}");
+    }
+
+    #[test]
+    fn retains_non_traversal_components() {
+        let cleaned = sanitize_path(nonexistent("../../secret_zzz_missing_dir/asset.png"));
+        assert!(!has_parent_dir(&cleaned));
+        // The real, non-traversal segments must be preserved.
+        let s = cleaned.to_string_lossy();
+        assert!(s.contains("secret_zzz_missing_dir"), "lost segment: {s}");
+        assert!(s.contains("asset.png"), "lost filename: {s}");
+    }
+
+    #[test]
+    fn normal_relative_path_passes_through_unchanged() {
+        let cleaned = sanitize_path(nonexistent("assets_zzz_missing/textures/tile.png"));
+        assert_eq!(
+            cleaned,
+            PathBuf::from("assets_zzz_missing/textures/tile.png")
+        );
+    }
+
+    #[test]
+    fn bare_parent_dir_reduces_to_empty() {
+        let cleaned = sanitize_path(nonexistent("nope_zzz/.."));
+        // ".." is stripped; only the leading normal component remains.
+        assert!(!has_parent_dir(&cleaned));
+        assert_eq!(cleaned, PathBuf::from("nope_zzz"));
+    }
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct AddShaderDeckBody {
     /// Name of the shader to load into the new deck.

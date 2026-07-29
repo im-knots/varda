@@ -147,3 +147,107 @@ pub(super) fn point_in_triangle(
     let has_pos = (d0 > 0.0) || (d1 > 0.0) || (d2 > 0.0);
     !(has_neg && has_pos)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(x: f32, y: f32) -> egui::Pos2 {
+        egui::pos2(x, y)
+    }
+
+    /// Every index a triangulation emits must reference a real vertex, and the
+    /// output must be whole triangles.
+    fn assert_valid_indices(indices: &[u32], n: usize) {
+        assert_eq!(indices.len() % 3, 0, "indices must form whole triangles");
+        for &i in indices {
+            assert!((i as usize) < n, "index {i} out of range for {n} verts");
+        }
+    }
+
+    #[test]
+    fn triangulate_degenerate_is_empty() {
+        assert!(triangulate_polygon(&[]).is_empty());
+        assert!(triangulate_polygon(&[p(0.0, 0.0)]).is_empty());
+        assert!(triangulate_polygon(&[p(0.0, 0.0), p(1.0, 0.0)]).is_empty());
+    }
+
+    #[test]
+    fn triangulate_convex_quad_yields_two_triangles() {
+        // CW in screen (y-down) coords.
+        let quad = [p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)];
+        let indices = triangulate_polygon(&quad);
+        assert_eq!(indices.len(), 6, "a quad is two triangles");
+        assert_valid_indices(&indices, quad.len());
+    }
+
+    #[test]
+    fn triangulate_simple_polygon_emits_n_minus_two_triangles() {
+        // Convex pentagon: a simple polygon of n verts triangulates to n-2 tris.
+        let penta = [
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(3.0, 1.5),
+            p(1.0, 3.0),
+            p(-1.0, 1.5),
+        ];
+        let indices = triangulate_polygon(&penta);
+        assert_eq!(indices.len(), (penta.len() - 2) * 3);
+        assert_valid_indices(&indices, penta.len());
+    }
+
+    #[test]
+    fn triangulate_concave_polygon_is_fully_triangulated() {
+        // Concave L-shape (one reflex vertex). Ear-clipping must still fully
+        // triangulate it into n-2 triangles with valid indices.
+        let l_shape = [
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(2.0, 1.0),
+            p(1.0, 1.0),
+            p(1.0, 2.0),
+            p(0.0, 2.0),
+        ];
+        let indices = triangulate_polygon(&l_shape);
+        assert_eq!(indices.len(), (l_shape.len() - 2) * 3);
+        assert_valid_indices(&indices, l_shape.len());
+    }
+
+    #[test]
+    fn cross_2d_sign_tracks_turn_direction() {
+        let o = p(0.0, 0.0);
+        let a = p(1.0, 0.0);
+        // Right turn vs left turn have opposite signs; collinear is zero.
+        assert!(cross_2d(o, a, p(1.0, 1.0)) > 0.0);
+        assert!(cross_2d(o, a, p(1.0, -1.0)) < 0.0);
+        assert_eq!(cross_2d(o, a, p(2.0, 0.0)), 0.0);
+    }
+
+    #[test]
+    fn point_in_triangle_detects_inside_outside_and_boundary() {
+        let a = p(0.0, 0.0);
+        let b = p(4.0, 0.0);
+        let c = p(0.0, 4.0);
+        assert!(point_in_triangle(p(1.0, 1.0), a, b, c), "interior point");
+        assert!(!point_in_triangle(p(3.0, 3.0), a, b, c), "exterior point");
+        // A point on an edge is treated as inside (no strictly-mixed signs).
+        assert!(point_in_triangle(p(2.0, 0.0), a, b, c), "edge point");
+    }
+
+    #[test]
+    fn is_ear_accepts_convex_corner_and_rejects_interior_containing_corner() {
+        // This square winds CCW under triangulate_polygon's shoelace sign
+        // convention (screen coords, y-down), so pass ccw = true.
+        let verts = [p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)];
+        let idx = [0usize, 1, 2, 3];
+        // Corner 0->1->2 is a convex ear and vertex 3 lies outside triangle(0,1,2).
+        assert!(is_ear(&verts, &idx, 0, 1, 2, true));
+
+        // A concave quad where the tested corner's triangle swallows the reflex
+        // vertex must be rejected as an ear. Diamond with vertex 2 pulled inward.
+        let concave = [p(0.0, 0.0), p(2.0, 1.0), p(1.0, 1.0), p(0.0, 2.0)];
+        let cidx = [0usize, 1, 2, 3];
+        // Triangle(3,0,1) contains the reflex vertex 2, so corner 0 is not an ear.
+        assert!(!is_ear(&concave, &cidx, 3, 0, 1, true));
+    }
+}

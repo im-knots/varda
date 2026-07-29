@@ -70,6 +70,31 @@ impl Default for PointCloudParams {
     }
 }
 
+impl PointCloudParams {
+    /// Denormalize a fader value (`0..1`) into the physical range of `name` and
+    /// apply it. Returns `false` for an unknown param (nothing mutated).
+    ///
+    /// This is the pure param-scaling half of `Deck::set_depth_param`, split out
+    /// so the mapping can be unit-tested without a live depth deck.
+    pub(crate) fn set_normalized_param(&mut self, name: &str, value: f32) -> bool {
+        let v = value.clamp(0.0, 1.0);
+        match name {
+            "orbit_yaw" => self.orbit_yaw = (v - 0.5) * std::f32::consts::TAU,
+            "orbit_pitch" => self.orbit_pitch = (v - 0.5) * std::f32::consts::PI,
+            "zoom" => self.zoom = 0.1 + v * 4.9,
+            "point_size" => self.point_size = 0.25 + v * 9.75,
+            "color_mode" => self.color_mode = ColorMode::from_u8((v * 3.0) as u8),
+            "depth_min" => self.depth_min_mm = v * 8000.0,
+            "depth_max" => self.depth_max_mm = (v * 8000.0).max(self.depth_min_mm + 1.0),
+            "seed" => self.seed = v * 0.1,
+            "drift" => self.drift = v,
+            "disruption" => self.disruption = v,
+            _ => return false,
+        }
+        true
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuParams {
@@ -306,6 +331,91 @@ mod tests {
         assert_eq!(p.seed, 0.0);
         assert_eq!(p.drift, 0.0);
         assert_eq!(p.disruption, 0.0);
+    }
+
+    #[test]
+    fn normalized_orbit_maps_full_sweep() {
+        use std::f32::consts::{PI, TAU};
+        let mut p = PointCloudParams::default();
+        // Yaw sweeps a full turn centred on 0.
+        assert!(p.set_normalized_param("orbit_yaw", 0.0));
+        assert!((p.orbit_yaw - (-0.5 * TAU)).abs() < 1e-5);
+        p.set_normalized_param("orbit_yaw", 0.5);
+        assert!(p.orbit_yaw.abs() < 1e-5);
+        p.set_normalized_param("orbit_yaw", 1.0);
+        assert!((p.orbit_yaw - (0.5 * TAU)).abs() < 1e-5);
+        // Pitch sweeps half a turn (straight down to straight up).
+        p.set_normalized_param("orbit_pitch", 0.0);
+        assert!((p.orbit_pitch - (-0.5 * PI)).abs() < 1e-5);
+        p.set_normalized_param("orbit_pitch", 1.0);
+        assert!((p.orbit_pitch - (0.5 * PI)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn normalized_zoom_and_point_size_hit_their_endpoints() {
+        let mut p = PointCloudParams::default();
+        p.set_normalized_param("zoom", 0.0);
+        assert!((p.zoom - 0.1).abs() < 1e-5);
+        p.set_normalized_param("zoom", 1.0);
+        assert!((p.zoom - 5.0).abs() < 1e-5);
+        p.set_normalized_param("point_size", 0.0);
+        assert!((p.point_size - 0.25).abs() < 1e-5);
+        p.set_normalized_param("point_size", 1.0);
+        assert!((p.point_size - 10.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn normalized_depth_max_enforces_min_gap() {
+        let mut p = PointCloudParams::default();
+        // Push min high, then request a max that maps below it: clamps to min+1.
+        p.set_normalized_param("depth_min", 0.5); // 4000 mm
+        p.set_normalized_param("depth_max", 0.25); // raw 2000 mm < min
+        assert!((p.depth_max_mm - (p.depth_min_mm + 1.0)).abs() < 1e-3);
+        // A max comfortably above min is untouched.
+        p.set_normalized_param("depth_min", 0.1); // 800 mm
+        p.set_normalized_param("depth_max", 0.5); // 4000 mm
+        assert!((p.depth_max_mm - 4000.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn normalized_seed_scales_and_drift_disruption_passthrough() {
+        let mut p = PointCloudParams::default();
+        p.set_normalized_param("seed", 1.0);
+        assert!((p.seed - 0.1).abs() < 1e-6);
+        p.set_normalized_param("drift", 0.42);
+        assert!((p.drift - 0.42).abs() < 1e-6);
+        p.set_normalized_param("disruption", 0.73);
+        assert!((p.disruption - 0.73).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalized_color_mode_buckets_across_range() {
+        let mut p = PointCloudParams::default();
+        p.set_normalized_param("color_mode", 0.0);
+        assert_eq!(p.color_mode, ColorMode::Rgb);
+        p.set_normalized_param("color_mode", 0.5);
+        assert_eq!(p.color_mode, ColorMode::DepthRamp);
+        p.set_normalized_param("color_mode", 1.0);
+        assert_eq!(p.color_mode, ColorMode::Solid);
+    }
+
+    #[test]
+    fn normalized_param_clamps_out_of_range_input() {
+        let mut p = PointCloudParams::default();
+        // Values outside 0..1 clamp before scaling, so they never exceed endpoints.
+        p.set_normalized_param("zoom", -5.0);
+        assert!((p.zoom - 0.1).abs() < 1e-5);
+        p.set_normalized_param("zoom", 9.0);
+        assert!((p.zoom - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn normalized_unknown_param_is_rejected_without_mutation() {
+        let mut p = PointCloudParams::default();
+        let before = p;
+        assert!(!p.set_normalized_param("nope", 0.5));
+        assert_eq!(p.zoom, before.zoom);
+        assert_eq!(p.orbit_yaw, before.orbit_yaw);
     }
 
     #[test]

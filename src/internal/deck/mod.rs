@@ -671,35 +671,13 @@ impl Deck {
     /// params map linearly to their range; `color_mode` buckets into 3 modes.
     /// See spec/depth-sensors.md.
     pub fn set_depth_param(&mut self, name: &str, value: f32) -> bool {
-        use crate::depth::point_cloud::ColorMode;
         if !matches!(
             self.external_source_kind(),
             Some(ExternalSourceKind::DepthSensor(_))
         ) {
             return false;
         }
-        let p = &mut self.point_cloud_params;
-        let v = value.clamp(0.0, 1.0);
-        match name {
-            "orbit_yaw" => p.orbit_yaw = (v - 0.5) * std::f32::consts::TAU,
-            "orbit_pitch" => p.orbit_pitch = (v - 0.5) * std::f32::consts::PI,
-            "zoom" => p.zoom = 0.1 + v * 4.9,
-            "point_size" => p.point_size = 0.25 + v * 9.75,
-            "color_mode" => {
-                p.color_mode = match (v * 3.0) as u32 {
-                    0 => ColorMode::Rgb,
-                    1 => ColorMode::DepthRamp,
-                    _ => ColorMode::Solid,
-                }
-            }
-            "depth_min" => p.depth_min_mm = v * 8000.0,
-            "depth_max" => p.depth_max_mm = (v * 8000.0).max(p.depth_min_mm + 1.0),
-            "seed" => p.seed = v * 0.1,
-            "drift" => p.drift = v,
-            "disruption" => p.disruption = v,
-            _ => return false,
-        }
-        true
+        self.point_cloud_params.set_normalized_param(name, value)
     }
 
     /// Whether this deck preserves source alpha (transparent compositing).

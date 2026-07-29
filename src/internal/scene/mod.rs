@@ -1407,6 +1407,104 @@ mod tests {
     }
 
     #[test]
+    fn scene_config_roundtrip_ndi_source() {
+        let source = SourceConfig::Ndi {
+            name: "STUDIO (Camera 1)".to_string(),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Ndi { name } => assert_eq!(name, "STUDIO (Camera 1)"),
+            _ => panic!("Expected Ndi source"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_syphon_source() {
+        let source = SourceConfig::Syphon {
+            name: "Simple Server".to_string(),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Syphon { name } => assert_eq!(name, "Simple Server"),
+            _ => panic!("Expected Syphon source"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_srt_source() {
+        let source = SourceConfig::Srt {
+            url: "srt://192.168.1.10:9000".to_string(),
+            mode: "caller".to_string(),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Srt { url, mode } => {
+                assert_eq!(url, "srt://192.168.1.10:9000");
+                assert_eq!(mode, "caller");
+            }
+            _ => panic!("Expected Srt source"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_hls_source() {
+        let source = SourceConfig::Hls {
+            url: "https://cdn.example.com/live/index.m3u8".to_string(),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Hls { url } => {
+                assert_eq!(url, "https://cdn.example.com/live/index.m3u8");
+            }
+            _ => panic!("Expected Hls source"),
+        }
+    }
+
+    #[test]
+    fn scene_config_roundtrip_dash_source() {
+        let source = SourceConfig::Dash {
+            url: "https://cdn.example.com/live/manifest.mpd".to_string(),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: SourceConfig = serde_json::from_str(&json).unwrap();
+        match restored {
+            SourceConfig::Dash { url } => {
+                assert_eq!(url, "https://cdn.example.com/live/manifest.mpd");
+            }
+            _ => panic!("Expected Dash source"),
+        }
+    }
+
+    /// The `#[serde(tag = "type")]` discriminant must keep the URL-only network
+    /// variants (Hls/Dash) distinct — they share the same field shape, so a
+    /// mistagged variant would silently deserialize as the wrong source type.
+    #[test]
+    fn scene_config_url_variants_are_tag_discriminated() {
+        let hls_json = serde_json::to_string(&SourceConfig::Hls {
+            url: "u".to_string(),
+        })
+        .unwrap();
+        let dash_json = serde_json::to_string(&SourceConfig::Dash {
+            url: "u".to_string(),
+        })
+        .unwrap();
+        assert!(hls_json.contains("\"type\":\"Hls\""));
+        assert!(dash_json.contains("\"type\":\"Dash\""));
+        assert!(matches!(
+            serde_json::from_str::<SourceConfig>(&hls_json).unwrap(),
+            SourceConfig::Hls { .. }
+        ));
+        assert!(matches!(
+            serde_json::from_str::<SourceConfig>(&dash_json).unwrap(),
+            SourceConfig::Dash { .. }
+        ));
+    }
+
+    #[test]
     fn scene_config_roundtrip_html_source() {
         let source = SourceConfig::Html {
             url: "https://example.com/visuals.html".to_string(),

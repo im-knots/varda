@@ -439,3 +439,242 @@ impl EdgeBlendConfig {
         self.left.enabled || self.right.enabled || self.top.enabled || self.bottom.enabled
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── OutputRotation ───────────────────────────────────────────────
+
+    #[test]
+    fn rotation_default_is_deg0() {
+        assert_eq!(OutputRotation::default(), OutputRotation::Deg0);
+    }
+
+    #[test]
+    fn rotation_index_maps_each_variant() {
+        assert_eq!(OutputRotation::Deg0.index(), 0);
+        assert_eq!(OutputRotation::Deg90.index(), 1);
+        assert_eq!(OutputRotation::Deg180.index(), 2);
+        assert_eq!(OutputRotation::Deg270.index(), 3);
+    }
+
+    #[test]
+    fn rotation_swaps_dimensions_only_for_quarter_turns() {
+        assert!(!OutputRotation::Deg0.swaps_dimensions());
+        assert!(OutputRotation::Deg90.swaps_dimensions());
+        assert!(!OutputRotation::Deg180.swaps_dimensions());
+        assert!(OutputRotation::Deg270.swaps_dimensions());
+    }
+
+    #[test]
+    fn rotation_effective_dimensions_swaps_for_quarter_turns() {
+        assert_eq!(
+            OutputRotation::Deg0.effective_dimensions(1920, 1080),
+            (1920, 1080)
+        );
+        assert_eq!(
+            OutputRotation::Deg180.effective_dimensions(1920, 1080),
+            (1920, 1080)
+        );
+        assert_eq!(
+            OutputRotation::Deg90.effective_dimensions(1920, 1080),
+            (1080, 1920)
+        );
+        assert_eq!(
+            OutputRotation::Deg270.effective_dimensions(1920, 1080),
+            (1080, 1920)
+        );
+    }
+
+    #[test]
+    fn rotation_label_per_variant() {
+        assert_eq!(OutputRotation::Deg0.label(), "0°");
+        assert_eq!(OutputRotation::Deg90.label(), "90°");
+        assert_eq!(OutputRotation::Deg180.label(), "180°");
+        assert_eq!(OutputRotation::Deg270.label(), "270°");
+    }
+
+    #[test]
+    fn rotation_all_lists_every_variant_in_order() {
+        assert_eq!(
+            OutputRotation::ALL,
+            [
+                OutputRotation::Deg0,
+                OutputRotation::Deg90,
+                OutputRotation::Deg180,
+                OutputRotation::Deg270,
+            ]
+        );
+    }
+
+    // ── OutputSource ─────────────────────────────────────────────────
+
+    #[test]
+    fn source_channel_indices_extracts_only_channel_variants() {
+        assert_eq!(OutputSource::Master.channel_indices(), None);
+        assert_eq!(OutputSource::Domemaster.channel_indices(), None);
+        assert_eq!(OutputSource::Deck(0, 1).channel_indices(), None);
+        assert_eq!(OutputSource::Channel(2).channel_indices(), Some(vec![2]));
+        assert_eq!(
+            OutputSource::Channels(vec![0, 3, 5]).channel_indices(),
+            Some(vec![0, 3, 5])
+        );
+    }
+
+    #[test]
+    fn source_display_formats() {
+        assert_eq!(OutputSource::Master.to_string(), "Master");
+        assert_eq!(OutputSource::Channel(0).to_string(), "Ch 0");
+        assert_eq!(OutputSource::Channels(vec![0, 1]).to_string(), "Ch 0+Ch 1");
+        // Deck display is 1-indexed for humans.
+        assert_eq!(OutputSource::Deck(0, 0).to_string(), "Ch 1 Deck 1");
+        assert_eq!(OutputSource::Domemaster.to_string(), "Domemaster");
+    }
+
+    // ── OutputTarget ─────────────────────────────────────────────────
+
+    #[test]
+    fn target_windowed_predicates() {
+        assert!(OutputTarget::Windowed.is_windowed());
+        assert!(!OutputTarget::Windowed.is_headless());
+        let display = OutputTarget::Display {
+            name: "HDMI-1".into(),
+            monitor_index: 0,
+        };
+        assert!(display.is_windowed());
+        assert!(!display.is_headless());
+    }
+
+    #[test]
+    fn target_headless_predicates() {
+        let ndi = OutputTarget::NdiSend {
+            sender_name: "Out".into(),
+        };
+        assert!(ndi.is_headless());
+        assert!(!ndi.is_windowed());
+        let rec = OutputTarget::Recording {
+            path: "/tmp/out.mov".into(),
+            codec: RecordingCodec::H264,
+            audio_device: None,
+        };
+        assert!(rec.is_headless());
+    }
+
+    #[test]
+    fn target_audio_device_only_for_configured_ffmpeg_targets() {
+        // No audio configured → None even on an ffmpeg target.
+        assert_eq!(
+            OutputTarget::Recording {
+                path: "/tmp/a.mov".into(),
+                codec: RecordingCodec::H264,
+                audio_device: None,
+            }
+            .audio_device(),
+            None
+        );
+        // Configured audio → Some.
+        assert_eq!(
+            OutputTarget::SrtStream {
+                url: "srt://host:9000".into(),
+                codec: SrtCodec::H264,
+                audio_device: Some("BlackHole 2ch".into()),
+            }
+            .audio_device(),
+            Some("BlackHole 2ch")
+        );
+        // Non-ffmpeg targets never carry audio.
+        assert_eq!(OutputTarget::Windowed.audio_device(), None);
+        assert_eq!(
+            OutputTarget::NdiSend {
+                sender_name: "Out".into(),
+            }
+            .audio_device(),
+            None
+        );
+    }
+
+    #[test]
+    fn target_with_audio_device_updates_ffmpeg_targets() {
+        let rec = OutputTarget::Recording {
+            path: "/tmp/a.mov".into(),
+            codec: RecordingCodec::H264,
+            audio_device: None,
+        };
+        let updated = rec.with_audio_device(Some("Mic".into()));
+        assert_eq!(updated.audio_device(), Some("Mic"));
+        // Clearing it back to None works too.
+        assert_eq!(updated.with_audio_device(None).audio_device(), None);
+    }
+
+    #[test]
+    fn target_with_audio_device_is_noop_for_non_ffmpeg() {
+        let windowed = OutputTarget::Windowed;
+        let updated = windowed.with_audio_device(Some("Mic".into()));
+        // Still Windowed, still no audio device.
+        assert_eq!(updated, OutputTarget::Windowed);
+        assert_eq!(updated.audio_device(), None);
+    }
+
+    #[test]
+    fn target_display_formats() {
+        assert_eq!(OutputTarget::Windowed.to_string(), "Windowed");
+        assert_eq!(
+            OutputTarget::Display {
+                name: "Built-in".into(),
+                monitor_index: 1,
+            }
+            .to_string(),
+            "Built-in"
+        );
+        assert_eq!(
+            OutputTarget::HlsStream {
+                name: "live".into(),
+                codec: StreamingCodec::H264,
+                low_latency: true,
+                audio_device: None,
+            }
+            .to_string(),
+            "LL-HLS [H.264]: live"
+        );
+        assert_eq!(
+            OutputTarget::HlsStream {
+                name: "live".into(),
+                codec: StreamingCodec::H264,
+                low_latency: false,
+                audio_device: None,
+            }
+            .to_string(),
+            "HLS [H.264]: live"
+        );
+    }
+
+    // ── EdgeBlend ────────────────────────────────────────────────────
+
+    #[test]
+    fn edge_blend_edge_default_is_disabled_with_ramp_params() {
+        let e = EdgeBlendEdge::default();
+        assert!(!e.enabled);
+        assert!((e.width - 0.1).abs() < 1e-6);
+        assert!((e.gamma - 2.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn edge_blend_config_default_has_nothing_enabled() {
+        assert!(!EdgeBlendConfig::default().any_enabled());
+    }
+
+    #[test]
+    fn edge_blend_config_any_enabled_detects_each_edge() {
+        for pick in 0..4 {
+            let mut cfg = EdgeBlendConfig::default();
+            match pick {
+                0 => cfg.left.enabled = true,
+                1 => cfg.right.enabled = true,
+                2 => cfg.top.enabled = true,
+                _ => cfg.bottom.enabled = true,
+            }
+            assert!(cfg.any_enabled(), "edge {pick} should register as enabled");
+        }
+    }
+}
