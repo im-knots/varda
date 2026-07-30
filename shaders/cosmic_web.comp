@@ -53,7 +53,7 @@ layout(set = 0, binding = 1) uniform UserParams {
     vec4 void_color; vec4 filament_color; vec4 node_color; vec4 bg_color;
 };
 
-layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
 
 // Pass 0 synthesises NUM_MODES plane waves: xy = wavevector, z = amplitude, w = phase.
 layout(std430, set = 0, binding = 3) buffer ModeBuffer {

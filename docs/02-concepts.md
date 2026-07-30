@@ -101,7 +101,13 @@ Effects can be reordered via drag-and-drop and toggled on/off individually.
 
 ## Tonemapping & Color Grading
 
-The compositing pipeline operates in **linear-light HDR** (`Rgba16Float`). Before frames reach outputs, two optional color transforms are applied in order:
+Varda works in **linear-light HDR** (`Rgba16Float`) from the moment a source enters a
+deck all the way to the output boundary — deck targets, all three effect tiers, ISF pass
+buffers, and compute shader output are float. 8-bit only appears at the two ends where it
+belongs: source frames arrive sRGB-encoded and are decoded to linear on sample, and the
+final image is encoded back to sRGB when it reaches a window, recording, or stream.
+
+Before frames reach outputs, two optional color transforms are applied in order:
 
 ### Tonemap
 

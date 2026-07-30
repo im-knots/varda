@@ -60,7 +60,6 @@ void main() {
     vec3 embossed = (s1.rgb - s2.rgb) * emboss_strength + 0.5;
 
     vec3 result = mix(embossed, src.rgb, blend_original);
-    result = clamp(result, 0.0, 1.0);
-
+    result = max(result, 0.0);
     fragColor = vec4(result, src.a);
 }

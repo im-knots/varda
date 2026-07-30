@@ -91,7 +91,6 @@ void main() {
 
     vec3 col = mix(color2.rgb, color1.rgb, pattern * depthFade);
     col += color1.rgb * centerGlow;
-    col = clamp(col, 0.0, 1.0);
-
+    col = max(col, 0.0);
     fragColor = vec4(col, 1.0);
 }

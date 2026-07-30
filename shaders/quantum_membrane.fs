@@ -211,6 +211,6 @@ void main() {
         alpha = clamp((line + glow * 0.4 + 0.05) * fog * 2.0, 0.0, 1.0);
     }
 
-    col = clamp(col, 0.0, 1.0);
+    col = max(col, 0.0);
     fragColor = vec4(col, alpha);
 }

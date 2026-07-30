@@ -80,7 +80,6 @@ void main() {
     // Boost saturation (miniature look)
     float lum = dot(result, vec3(0.299, 0.587, 0.114));
     result = mix(vec3(lum), result, 1.0 + saturation_boost);
-    result = clamp(result, 0.0, 1.0);
-
+    result = max(result, 0.0);
     fragColor = vec4(result, src.a);
 }

@@ -113,6 +113,6 @@ void main() {
 
     vec4 color = mix(color2, color1, shape_mask);
     color.rgb += color1.rgb * glow;
-    color.rgb = clamp(color.rgb, 0.0, 1.0);
+    color.rgb = max(color.rgb, 0.0);
     fragColor = vec4(color.rgb * color.a, color.a);
 }

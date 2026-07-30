@@ -372,7 +372,7 @@ void main() {
             col += nodeCol * (core + glow);
         }
 
-        col = clamp(col + _keep, 0.0, 1.0);
+        col = max(col + _keep, 0.0);
         fragColor = vec4(col, 1.0);
     }
 }

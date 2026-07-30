@@ -70,7 +70,7 @@ layout(set = 0, binding = 3) uniform UserParams {
     float edge_strength;
     float glow_amount;
     vec4 glow_color;
-    float show_original;
+    uint show_original;  // bool stored as uint
 };
 
 float luminance(vec3 c) {
@@ -102,7 +102,7 @@ void main() {
     vec4 original = texture(sampler2D(inputImage, texSampler), uv);
     vec3 glow = glow_color.rgb * edge * glow_amount;
 
-    if (show_original > 0.5) {
+    if (show_original != 0u) {
         fragColor = vec4(original.rgb + glow, 1.0);
     } else {
         fragColor = vec4(glow, 1.0);

@@ -24,7 +24,10 @@ struct BlitParams {
     /// 1 = source is premultiplied-alpha (scale rgb+a by opacity); 0 = straight
     /// (scale alpha only). See composite.wgsl / spec/linear-light-compositing.md.
     premultiplied: u32,
-    _pad2: f32,
+    /// 1 = apply the sRGB transfer function on output (linear → gamma). Used when
+    /// blitting linear content into a non-sRGB target whose consumer expects
+    /// gamma-encoded samples. See `BlitPipeline::set_srgb_encode`.
+    srgb_encode: u32,
 }
 
 pub struct BlitPipeline {
@@ -95,7 +98,7 @@ impl BlitPipeline {
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
                 premultiplied: 0,
-                _pad2: 0.0,
+                srgb_encode: 0,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -232,7 +235,7 @@ impl BlitPipeline {
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
                 premultiplied: 0,
-                _pad2: 0.0,
+                srgb_encode: 0,
             }]),
         );
     }
@@ -254,7 +257,33 @@ impl BlitPipeline {
                 uv_scale,
                 uv_offset,
                 premultiplied: 0,
-                _pad2: 0.0,
+                srgb_encode: 0,
+            }]),
+        );
+    }
+
+    /// Blit with an explicit linear → sRGB encode on output.
+    ///
+    /// For previews: egui assumes any texture handed to it is already
+    /// gamma-encoded ("We expect 'normal' textures that are NOT sRGB-aware" —
+    /// egui-wgpu's `egui.wgsl`). Handing it a linear texture makes it apply the
+    /// inverse transfer function, which the sRGB framebuffer then undoes, so the
+    /// raw linear values reach the screen and everything looks too dark. Encoding
+    /// here, into a plain `Rgba8Unorm` target, gives egui what it expects.
+    ///
+    /// Note the target must NOT be `*UnormSrgb`, or the hardware would decode on
+    /// sample and cancel this out.
+    pub fn set_srgb_encode(&self, queue: &wgpu::Queue, encode: bool) {
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::cast_slice(&[BlitParams {
+                opacity: 1.0,
+                rotation: 0,
+                uv_scale: [1.0, 1.0],
+                uv_offset: [0.0, 0.0],
+                premultiplied: 0,
+                srgb_encode: u32::from(encode),
             }]),
         );
     }
@@ -270,7 +299,7 @@ impl BlitPipeline {
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
                 premultiplied: 0,
-                _pad2: 0.0,
+                srgb_encode: 0,
             }]),
         );
     }
@@ -318,7 +347,7 @@ impl BlitPipeline {
                 uv_scale,
                 uv_offset,
                 premultiplied: premultiplied as u32,
-                _pad2: 0.0,
+                srgb_encode: 0,
             }]),
         );
     }

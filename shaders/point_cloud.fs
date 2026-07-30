@@ -245,5 +245,5 @@ void main() {
     col += glowAccum;
     col *= brightness;
 
-    fragColor = vec4(clamp(col + keep, 0.0, 1.0), 1.0);
+    fragColor = vec4(max(col + keep, 0.0), 1.0);
 }

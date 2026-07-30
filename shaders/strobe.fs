@@ -67,7 +67,7 @@ void main() {
     } else if (mode == 1) {
         // Add: add flash color on top
         result = src + strobe_color * flash;
-        result = clamp(result, 0.0, 1.0);
+        result = max(result, 0.0);
     } else {
         // Invert on flash
         vec4 inv = vec4(1.0 - src.rgb, src.a);

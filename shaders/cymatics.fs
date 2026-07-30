@@ -203,5 +203,5 @@ void main() {
     }
 
     color = mix(bg_color.rgb * 0.3, color * bnd, bnd);
-    fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+    fragColor = vec4(max(color, 0.0), 1.0);
 }

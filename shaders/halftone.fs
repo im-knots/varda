@@ -110,8 +110,7 @@ void main() {
         col -= vec3(0.0, dM, 0.0); // Magenta removes green
         col -= vec3(0.0, 0.0, dY); // Yellow removes blue
         col -= vec3(dK);           // Key (black)
-        col = clamp(col, 0.0, 1.0);
-
+        col = max(col, 0.0);
         fragColor = vec4(col, src.a);
     }
 }

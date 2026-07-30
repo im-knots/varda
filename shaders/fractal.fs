@@ -94,7 +94,7 @@ void main() {
         // Palette
         vec3 col = 0.5 + 0.5 * cos(6.283 * (t + vec3(0.0, 0.1, 0.2)));
         col *= mix(color1.rgb, color2.rgb, t);
-        col = clamp(col * 1.5, 0.0, 1.0);
+        col = max(col * 1.5, 0.0);
         fragColor = vec4(col, 1.0);
     }
 }

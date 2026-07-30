@@ -79,7 +79,6 @@ void main() {
     float lumaFactor = mix(1.0, 1.0 - lum, luma_response);
 
     vec3 result = src.rgb + grainVec * grain_amount * lumaFactor;
-    result = clamp(result, 0.0, 1.0);
-
+    result = max(result, 0.0);
     fragColor = vec4(result, src.a);
 }

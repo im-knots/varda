@@ -60,5 +60,5 @@ void main() {
     vec4 blur = (top + bot + lft + rgt) * 0.25;
     vec4 sharp = src + (src - blur) * sharpen_amount;
 
-    fragColor = vec4(clamp(sharp.rgb, 0.0, 1.0), src.a);
+    fragColor = vec4(max(sharp.rgb, 0.0), src.a);
 }

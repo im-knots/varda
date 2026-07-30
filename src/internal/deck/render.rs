@@ -39,6 +39,8 @@ fn upload_texture_to_slot(
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
+            // Data texture (packed analyzer output) — NOT part of the color path.
+            // Format is the encoding; do not make this float.
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
@@ -914,12 +916,6 @@ impl Deck {
                 None => continue,
             };
 
-            let format = if pass.float.unwrap_or(false) {
-                wgpu::TextureFormat::Rgba32Float
-            } else {
-                wgpu::TextureFormat::Rgba8Unorm
-            };
-
             // Use the pass buffer's actual dimensions as RENDERSIZE so
             // shaders that store per-pixel state (e.g. particle buffers)
             // can address their own texels correctly.
@@ -997,7 +993,7 @@ impl Deck {
                         multiview_mask: None,
                     });
 
-                    render_pass.set_pipeline(multi_pass.pipeline_for_format(format));
+                    render_pass.set_pipeline(&multi_pass.pipeline);
                     render_pass.set_bind_group(0, &bind_group, &[]);
                     render_pass.draw(0..3, 0..1);
                 }
@@ -1073,8 +1069,7 @@ impl Deck {
                     multiview_mask: None,
                 });
 
-                render_pass
-                    .set_pipeline(multi_pass.pipeline_for_format(wgpu::TextureFormat::Rgba8Unorm));
+                render_pass.set_pipeline(&multi_pass.pipeline);
                 render_pass.set_bind_group(0, &bind_group, &[]);
                 render_pass.draw(0..3, 0..1);
             }
@@ -1225,7 +1220,7 @@ impl Deck {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: context.compositing_format,
             usage,
             view_formats: &[],
         });
@@ -1242,7 +1237,7 @@ impl Deck {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: context.compositing_format,
             usage,
             view_formats: &[],
         });

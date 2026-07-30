@@ -83,7 +83,7 @@ layout(set = 0, binding = 1) uniform UserParams {
     float time_scale; float soften; float reset;
 };
 
-layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
 
 layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
     vec4 particle_data[];

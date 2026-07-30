@@ -11,6 +11,17 @@ pub use super::config::{
     StreamingCodec,
 };
 
+/// Linear-light format used by the entire color path: deck render targets, all
+/// three effect tiers, ISF pass buffers, compute output, channel/mixer
+/// composites, and the dome/edge-blend intermediates.
+///
+/// Single source of truth — see spec/unified-color-pipeline.md. 8-bit appears
+/// only at the two boundaries where it is correct: sRGB-tagged source ingest
+/// (hardware EOTF on sample) and sRGB output encode (hardware OETF on write).
+/// Non-color data textures (analyzer, audio, calibration, MSDF atlases) keep
+/// their own formats and are deliberately excluded.
+pub const COLOR_PATH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
 /// GPU rendering context — device, queue, and adapter.
 ///
 /// Owns the GPU resources needed for rendering (mixer, deck, channel, effects).
@@ -29,8 +40,8 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub texture_format: wgpu::TextureFormat,
-    /// Linear-light compositing format (Rgba16Float) for channel/mixer composites.
-    /// Distinct from `texture_format` which is the surface/presentation format.
+    /// Linear-light color-path format (`COLOR_PATH_FORMAT`). Distinct from
+    /// `texture_format`, which is the surface/presentation format.
     pub compositing_format: wgpu::TextureFormat,
     pub timestamp_supported: bool,
 }
@@ -166,7 +177,7 @@ impl GpuContext {
             device,
             queue,
             texture_format: surface_format,
-            compositing_format: wgpu::TextureFormat::Rgba16Float,
+            compositing_format: COLOR_PATH_FORMAT,
             timestamp_supported,
         };
         let win_surface = WindowSurface {
@@ -260,7 +271,7 @@ impl GpuContext {
             device,
             queue,
             texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            compositing_format: wgpu::TextureFormat::Rgba16Float,
+            compositing_format: COLOR_PATH_FORMAT,
             timestamp_supported,
         })
     }

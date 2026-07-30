@@ -768,7 +768,7 @@ impl VardaApp {
             &mut slot.deck.effects,
             &config.effects,
             context,
-            wgpu::TextureFormat::Rgba8Unorm,
+            context.compositing_format,
             &mut Vec::new(),
         );
 

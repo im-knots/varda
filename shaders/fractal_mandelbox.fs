@@ -338,6 +338,6 @@ void main() {
     col *= 0.5;
 
     // Gamma
-    col = sqrt(clamp(col, 0.0, 1.0));
+    col = sqrt(max(col, 0.0));
     fragColor = vec4(col, 1.0);
 }

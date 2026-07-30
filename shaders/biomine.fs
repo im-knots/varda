@@ -336,5 +336,5 @@ void main() {
     vec3 sky = sky_color.rgb * 2.0;
     sceneCol = mix(sky, sceneCol, 1.0 / (t * t / FAR / FAR * 8.0 + 1.0));
 
-    fragColor = vec4(sqrt(clamp(sceneCol, 0.0, 1.0)), 1.0);
+    fragColor = vec4(sqrt(max(sceneCol, 0.0)), 1.0);
 }
