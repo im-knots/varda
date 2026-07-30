@@ -120,7 +120,10 @@ impl ComputePipeline {
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::StorageTexture {
                 access: wgpu::StorageTextureAccess::WriteOnly,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                // Must match the `.comp` layout qualifier (rgba16f) and the deck
+                // texture it is copied into — copy_texture_to_texture requires
+                // format parity. See spec/unified-color-pipeline.md.
+                format: super::context::COLOR_PATH_FORMAT,
                 view_dimension: wgpu::TextureViewDimension::D2,
             },
             count: None,
@@ -176,7 +179,7 @@ impl ComputePipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: super::context::COLOR_PATH_FORMAT,
             usage: wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,

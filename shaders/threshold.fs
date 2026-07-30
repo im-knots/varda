@@ -43,7 +43,7 @@ layout(set = 0, binding = 2) uniform texture2D inputImage;
 layout(set = 0, binding = 3) uniform UserParams {
     float threshold_val;
     float smoothness;
-    float invert_output;
+    uint invert_output;  // bool stored as uint
     vec4 color_above;
     vec4 color_below;
 };
@@ -66,7 +66,7 @@ void main() {
         t = step(threshold_val, lum);
     }
 
-    if (invert_output > 0.5) {
+    if (invert_output != 0u) {
         t = 1.0 - t;
     }
 

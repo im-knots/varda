@@ -96,6 +96,6 @@ void main() {
     float vigFactor = clamp(pow(vig.x * vig.y * 15.0, vignette * 0.8), 0.0, 1.0);
     col *= vigFactor;
 
-    col = clamp(col, 0.0, 1.0);
+    col = max(col, 0.0);
     fragColor = vec4(col, src.a);
 }

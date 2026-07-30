@@ -43,7 +43,7 @@ layout(set = 0, binding = 1) uniform UserParams {
 };
 
 // Binding 2: Output storage texture
-layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);

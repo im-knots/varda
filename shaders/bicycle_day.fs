@@ -326,6 +326,6 @@ void main() {
         color = mix(vec3(0.0), color, vig);
     }
 
-    color = clamp(color, 0.0, 1.0);
+    color = max(color, 0.0);
     fragColor = vec4(color, 1.0);
 }

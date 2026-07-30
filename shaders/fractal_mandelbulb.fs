@@ -343,6 +343,6 @@ void main() {
              + renderSample(uv + vec2(-0.33,  0.33) * px);
     col *= 0.5;
 
-    col = sqrt(clamp(col, 0.0, 1.0)); // gamma correction
+    col = sqrt(max(col, 0.0)); // gamma correction
     fragColor = vec4(col, 1.0);
 }

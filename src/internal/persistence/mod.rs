@@ -1508,7 +1508,7 @@ pub(crate) fn restore_deck(
 
     // Restore effects
     for eff_config in &config.effects {
-        match restore_effect(eff_config, context, wgpu::TextureFormat::Rgba8Unorm) {
+        match restore_effect(eff_config, context, context.compositing_format) {
             Ok(eff) => deck.effects.push(eff),
             Err(e) => log::warn!("Failed to restore deck effect '{}': {}", eff_config.path, e),
         }
@@ -1518,8 +1518,8 @@ pub(crate) fn restore_deck(
 }
 
 /// Restore a single effect from config.
-/// `target_format` should be `Rgba8Unorm` for deck effects,
-/// or `context.compositing_format` (Rgba16Float) for channel/master effects.
+/// `target_format` is `context.compositing_format` for every tier — deck,
+/// channel, and master effects all target the unified color-path format.
 pub(crate) fn restore_effect(
     config: &EffectConfig,
     context: &GpuContext,

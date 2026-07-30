@@ -90,6 +90,6 @@ void main() {
     vigAmount = clamp(pow(vigAmount, vignette_amount * 0.5), 0.0, 1.0);
     col *= vigAmount;
 
-    col = clamp(col, 0.0, 1.0);
+    col = max(col, 0.0);
     fragColor = vec4(col, 1.0);
 }

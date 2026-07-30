@@ -8,7 +8,20 @@ struct BlitParams {
     uv_offset: vec2<f32>,
     // 1 = source is premultiplied-alpha (scale rgb+a by opacity); 0 = straight (scale alpha only).
     premultiplied: u32,
-    _pad2: f32,
+    // 1 = apply the sRGB transfer function on output. Used when blitting
+    // linear-light content into a NON-sRGB target that will be sampled by a
+    // consumer expecting gamma-encoded data (egui previews). Leave 0 for sRGB
+    // targets, where the hardware does the encode on write.
+    srgb_encode: u32,
+}
+
+// Linear → sRGB (IEC 61966-2-1). Mirrors what an *UnormSrgb render target does
+// in hardware, for the cases where we must do it explicitly.
+fn gamma_from_linear_rgb(rgb: vec3<f32>) -> vec3<f32> {
+    let c = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    let lower = c * 12.92;
+    let higher = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(higher, lower, c < vec3<f32>(0.0031308));
 }
 
 @group(0) @binding(0)
@@ -58,6 +71,9 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     } else {
         // Straight source: scale coverage only (rgb is the un-premultiplied colour).
         color.a *= params.opacity;
+    }
+    if (params.srgb_encode == 1u) {
+        color = vec4<f32>(gamma_from_linear_rgb(color.rgb), color.a);
     }
     return color;
 }

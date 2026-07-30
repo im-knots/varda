@@ -71,7 +71,7 @@ layout(set = 0, binding = 2) uniform texture2D inputImage;
 layout(set = 0, binding = 3) uniform UserParams {
     float hue_shift;
     float saturation;
-    float auto_cycle;
+    uint auto_cycle;  // bool stored as uint
     float cycle_speed;
 };
 
@@ -95,7 +95,7 @@ void main() {
     vec3 hsv = rgb2hsv(color.rgb);
     
     float shift = hue_shift;
-    if (auto_cycle > 0.5) {
+    if (auto_cycle != 0u) {
         shift += TIME * cycle_speed;
     }
     

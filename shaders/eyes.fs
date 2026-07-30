@@ -181,6 +181,6 @@ void main() {
     col = max(col, col2);
     col += grain * (rand((uv * RENDERSIZE) / 3.0 + t) - 0.5);
 
-    col = clamp(col, 0.0, 1.0);
+    col = max(col, 0.0);
     fragColor = vec4(col, 1.0);
 }

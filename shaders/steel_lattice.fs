@@ -275,5 +275,5 @@ void main() {
         sceneCol *= atten * ao * shadow;
     }
 
-    fragColor = vec4(clamp(sceneCol, 0.0, 1.0), 1.0);
+    fragColor = vec4(max(sceneCol, 0.0), 1.0);
 }

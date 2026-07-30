@@ -105,7 +105,6 @@ void main() {
     // Boost saturation
     float lum = dot(col, vec3(0.299, 0.587, 0.114));
     col = mix(vec3(lum), col, 1.4);
-    col = clamp(col, 0.0, 1.0);
-
+    col = max(col, 0.0);
     fragColor = vec4(col, 1.0);
 }

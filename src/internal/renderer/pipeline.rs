@@ -52,13 +52,10 @@ impl Default for ISFUniforms {
 ///   Multi-pass filter:  [0: Uniforms, 1: Sampler, 2: inputImage, 3..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: UserParams]
 ///   With imported:      [0: Uniforms, 1: Sampler, ..., N+1..M: imported, M+1..P: preprocessor, P+1: UserParams]
 pub struct UnifiedPipeline {
-    /// Pipeline for the primary target format (surface_format passed at creation)
+    /// Pipeline for the color-path format. Every render target this pipeline
+    /// draws into — final target and pass buffers alike — is
+    /// `COLOR_PATH_FORMAT`, so one pipeline covers all of them.
     pub pipeline: wgpu::RenderPipeline,
-    /// Optional pipeline for float (Rgba32Float) targets (multi-pass only)
-    pub float_pipeline: Option<wgpu::RenderPipeline>,
-    /// Optional pipeline for Rgba8Unorm intermediate pass buffers
-    /// (needed when surface_format != Rgba8Unorm, i.e. master effects with passes)
-    pub rgba8_pipeline: Option<wgpu::RenderPipeline>,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub uniform_buffer: wgpu::Buffer,
     /// Sampler — present when shader has textures (input image, pass buffers, or imported)
@@ -84,10 +81,9 @@ impl UnifiedPipeline {
     ///
     /// - `has_input_image`: true for filters (binding for inputImage texture)
     /// - `num_pass_buffers`: number of persistent/pass buffer textures
-    /// - `needs_float_pipeline`: create additional pipeline for Rgba32Float targets
     /// - `num_imported_textures`: number of ISF IMPORTED image textures
     /// - `num_preprocessor_textures`: number of preprocessor texture bindings
-    /// - `surface_format`: target texture format (Rgba8Unorm for decks, surface format for master)
+    /// - `surface_format`: target texture format — always `COLOR_PATH_FORMAT`
     // Pipeline construction takes many distinct GPU descriptors; no shared invariant to bundle.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -96,7 +92,6 @@ impl UnifiedPipeline {
         surface_format: wgpu::TextureFormat,
         has_input_image: bool,
         num_pass_buffers: usize,
-        needs_float_pipeline: bool,
         num_imported_textures: usize,
         num_preprocessor_textures: usize,
     ) -> Result<Self> {
@@ -151,16 +146,13 @@ impl UnifiedPipeline {
         });
         next_binding += 1;
 
-        // Sampler (only if shader uses textures)
+        // Sampler (only if shader uses textures).
+        //
+        // Always filtering: Rgba16Float is a filterable format, so pass buffers no
+        // longer force NonFiltering/Nearest on every input the way Rgba32Float did.
+        // Multipass shaders keep bilinear filtering. See spec/unified-color-pipeline.md.
         let sampler = if has_textures {
-            // NOTE: When pass buffers are present we must use NonFiltering because float
-            // textures are not filterable in WebGPU. This also forces Nearest on input
-            // textures. A dual-sampler approach would fix this but requires shader changes.
-            let sampler_type = if num_pass_buffers > 0 {
-                wgpu::SamplerBindingType::NonFiltering
-            } else {
-                wgpu::SamplerBindingType::Filtering
-            };
+            let sampler_type = wgpu::SamplerBindingType::Filtering;
             layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: next_binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -169,11 +161,7 @@ impl UnifiedPipeline {
             });
             next_binding += 1;
 
-            let filter_mode = if num_pass_buffers > 0 {
-                wgpu::FilterMode::Nearest
-            } else {
-                wgpu::FilterMode::Linear
-            };
+            let filter_mode = wgpu::FilterMode::Linear;
             Some(device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("ISF Sampler"),
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -188,14 +176,19 @@ impl UnifiedPipeline {
             None
         };
 
-        // Input image texture (for filters)
+        // Input image texture (for filters).
+        //
+        // Filterable unconditionally: every texture this pipeline samples — input
+        // image, pass buffers, imported images — is now COLOR_PATH_FORMAT
+        // (Rgba16Float), which is a filterable format. This must stay in agreement
+        // with the sampler above; wgpu rejects a filtering sampler paired with a
+        // non-filterable texture at pipeline creation.
         if has_input_image {
-            let filterable = num_pass_buffers == 0; // float textures aren't filterable
             layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: next_binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable },
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -210,7 +203,7 @@ impl UnifiedPipeline {
                 binding: next_binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -220,15 +213,12 @@ impl UnifiedPipeline {
         }
 
         // Imported image textures (ISF IMPORTED)
-        let imported_filterable = num_pass_buffers == 0;
         for _ in 0..num_imported_textures {
             layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: next_binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float {
-                        filterable: imported_filterable,
-                    },
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -293,11 +283,9 @@ impl UnifiedPipeline {
 
         // Helper to create a render pipeline for a specific format
         let create_pipeline = |format: wgpu::TextureFormat, label: &str| {
-            let blend_state = if format == wgpu::TextureFormat::Rgba32Float {
-                None
-            } else {
-                Some(wgpu::BlendState::REPLACE)
-            };
+            // Rgba16Float is blendable, so there is no longer a format for which
+            // blending must be disabled.
+            let blend_state = Some(wgpu::BlendState::REPLACE);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -338,31 +326,9 @@ impl UnifiedPipeline {
         };
 
         let pipeline = create_pipeline(surface_format, "ISF Unified Render Pipeline");
-        let float_pipeline = if needs_float_pipeline {
-            Some(create_pipeline(
-                wgpu::TextureFormat::Rgba32Float,
-                "ISF Unified Float Pipeline",
-            ))
-        } else {
-            None
-        };
-        // Create Rgba8Unorm pipeline for intermediate pass buffers when the primary
-        // format is not Rgba8Unorm (e.g. master effects use Bgra8UnormSrgb but pass
-        // buffers use Rgba8Unorm)
-        let rgba8_pipeline =
-            if num_pass_buffers > 0 && surface_format != wgpu::TextureFormat::Rgba8Unorm {
-                Some(create_pipeline(
-                    wgpu::TextureFormat::Rgba8Unorm,
-                    "ISF Unified Rgba8 Pipeline",
-                ))
-            } else {
-                None
-            };
 
         Ok(Self {
             pipeline,
-            float_pipeline,
-            rgba8_pipeline,
             bind_group_layout,
             uniform_buffer,
             sampler,
@@ -474,16 +440,5 @@ impl UnifiedPipeline {
     /// Update uniforms
     pub fn update_uniforms(&self, queue: &wgpu::Queue, uniforms: &ISFUniforms) {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[*uniforms]));
-    }
-
-    /// Get the pipeline for a specific target format
-    pub fn pipeline_for_format(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
-        if format == wgpu::TextureFormat::Rgba32Float {
-            self.float_pipeline.as_ref().unwrap_or(&self.pipeline)
-        } else if format == wgpu::TextureFormat::Rgba8Unorm && format != self.surface_format {
-            self.rgba8_pipeline.as_ref().unwrap_or(&self.pipeline)
-        } else {
-            &self.pipeline
-        }
     }
 }

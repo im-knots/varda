@@ -70,6 +70,6 @@ void main() {
     hsv.y *= saturation;  // Saturation
     c = hsv2rgb(hsv);
     
-    fragColor = vec4(clamp(c, 0.0, 1.0), color.a);
+    fragColor = vec4(max(c, 0.0), color.a);
 }
 

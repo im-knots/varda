@@ -131,7 +131,7 @@ void main() {
     col = mix(col, color_node.rgb, clamp(nodes, 0.0, 1.0));
     col += vec3(1.0, 0.95, 0.85) * pow(clamp(nodes, 0.0, 1.0), 2.0) * 0.5;
 
-    col = clamp(col, 0.0, 1.0);
+    col = max(col, 0.0);
     float alpha = clamp(noise * 3.0, 0.0, 1.0);
     fragColor = vec4(col, alpha);
 }

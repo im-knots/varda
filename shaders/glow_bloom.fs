@@ -71,7 +71,6 @@ void main() {
     bloom /= total;
 
     vec3 result = src.rgb + bloom * glow_amount * glow_color.rgb;
-    result = clamp(result, 0.0, 1.0);
-
+    result = max(result, 0.0);
     fragColor = vec4(result, src.a);
 }

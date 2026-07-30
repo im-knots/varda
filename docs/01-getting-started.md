@@ -80,11 +80,29 @@ cargo build --release
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
 brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
+
+# Depth-sensor support (the default-on `depth` feature)
+brew install libfreenect
 ```
 
 ```bash
+# Homebrew's lib directory is not on the linker's default search path, and
+# libfreenect's crate does not emit one. Without this the build fails at link
+# time with: ld: library 'freenect' not found
+export LIBRARY_PATH=/opt/homebrew/lib      # Apple Silicon
+# export LIBRARY_PATH=/usr/local/lib       # Intel
+
 cargo build --release
 ./target/release/varda
+```
+
+Prefer `LIBRARY_PATH` over adding `-L` to `RUSTFLAGS`: changing `RUSTFLAGS`
+invalidates the whole build cache, and this project has a heavy dependency tree.
+
+To build without depth-sensor support instead, drop the feature:
+
+```bash
+cargo build --release --no-default-features --features face-detection,html
 ```
 
 ### Run from source

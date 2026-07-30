@@ -9,9 +9,13 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 
 impl Effect {
-    /// Create a new effect from an ISF filter shader
+    /// Create a new effect from an ISF filter shader.
+    ///
+    /// Targets `compositing_format`, the same as channel and master effects, so
+    /// an effect behaves identically at any of the three tiers. See
+    /// spec/unified-color-pipeline.md.
     pub fn new(context: &GpuContext, shader: ISFShader) -> Result<Self> {
-        Self::new_with_format(context, shader, wgpu::TextureFormat::Rgba8Unorm)
+        Self::new_with_format(context, shader, context.compositing_format)
     }
 
     /// Create a new effect with a specific target format
@@ -25,7 +29,6 @@ impl Effect {
 
         let passes: Vec<ISFPass> = shader.metadata.passes.clone().unwrap_or_default();
         let num_passes = passes.iter().filter(|p| p.target.is_some()).count();
-        let uses_float = passes.iter().any(|p| p.float.unwrap_or(false));
 
         // Load ISF IMPORTED images
         let imported_textures =
@@ -48,6 +51,8 @@ impl Effect {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
+                    // Data texture (packed analyzer output) — NOT part of the
+                    // color path. Format is the encoding; do not make this float.
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
@@ -69,7 +74,6 @@ impl Effect {
             target_format,
             true, // has_input_image — it's a filter
             num_passes,
-            uses_float,
             imported_textures.len(),
             preprocessor_textures.len(),
         )
@@ -90,11 +94,9 @@ impl Effect {
             let pass_height = Deck::parse_size_expression(&pass.height, height);
             let is_persistent = pass.persistent.unwrap_or(false);
 
-            let format = if pass.float.unwrap_or(false) {
-                wgpu::TextureFormat::Rgba32Float
-            } else {
-                wgpu::TextureFormat::Rgba8Unorm
-            };
+            // Pass buffers follow the effect's own target format so a deck,
+            // channel, and master instance of the same shader behave identically.
+            let format = target_format;
 
             let tex_a = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("Effect Pass Buffer A: {}", target_name)),
@@ -246,12 +248,6 @@ impl Effect {
                     None => continue, // Final pass handled below
                 };
 
-                let format = if pass.float.unwrap_or(false) {
-                    wgpu::TextureFormat::Rgba32Float
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                };
-
                 let iterations = 1;
 
                 for _iter in 0..iterations {
@@ -308,7 +304,7 @@ impl Effect {
                                 multiview_mask: None,
                             });
 
-                        render_pass.set_pipeline(self.pipeline.pipeline_for_format(format));
+                        render_pass.set_pipeline(&self.pipeline.pipeline);
                         render_pass.set_bind_group(0, &bind_group, &[]);
                         render_pass.draw(0..3, 0..1);
                     }
@@ -371,7 +367,7 @@ impl Effect {
                     multiview_mask: None,
                 });
 
-                render_pass.set_pipeline(self.pipeline.pipeline_for_format(self.target_format));
+                render_pass.set_pipeline(&self.pipeline.pipeline);
                 render_pass.set_bind_group(0, &bind_group, &[]);
                 render_pass.draw(0..3, 0..1);
             }

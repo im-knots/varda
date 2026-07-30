@@ -308,6 +308,6 @@ void main() {
     float beatFlash = exp(-audio_beat_phase * 8.0) * audio_level * gain * 0.08;
     col += color1.rgb * beatFlash;
 
-    col = clamp(col, 0.0, 1.0);
+    col = max(col, 0.0);
     fragColor = vec4(col, 1.0);
 }

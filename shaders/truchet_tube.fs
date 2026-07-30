@@ -182,6 +182,6 @@ void main() {
     col *= vignette;
     col *= tint.rgb;
 
-    col = clamp(col, 0.0, 1.0);
+    col = max(col, 0.0);
     fragColor = vec4(col, 1.0);
 }

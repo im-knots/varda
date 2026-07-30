@@ -66,18 +66,18 @@ layout(set = 0, binding = 2) uniform texture2D inputImage;
 
 layout(set = 0, binding = 3) uniform UserParams {
     float amount;
-    float invert_r;
-    float invert_g;
-    float invert_b;
+    uint invert_r;  // bool stored as uint
+    uint invert_g;  // bool stored as uint
+    uint invert_b;  // bool stored as uint
 };
 
 void main() {
     vec4 color = texture(sampler2D(inputImage, texSampler), uv);
     
     vec3 inverted = color.rgb;
-    if (invert_r > 0.5) inverted.r = 1.0 - inverted.r;
-    if (invert_g > 0.5) inverted.g = 1.0 - inverted.g;
-    if (invert_b > 0.5) inverted.b = 1.0 - inverted.b;
+    if (invert_r != 0u) inverted.r = 1.0 - inverted.r;
+    if (invert_g != 0u) inverted.g = 1.0 - inverted.g;
+    if (invert_b != 0u) inverted.b = 1.0 - inverted.b;
     
     fragColor = vec4(mix(color.rgb, inverted, amount), color.a);
 }

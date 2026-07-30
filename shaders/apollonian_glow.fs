@@ -204,6 +204,6 @@ void main() {
     col += col * ref + g_light / 10.0;
 
     col = tanh(col * exposure / 16.0 * exp(-d / fog_distance));
-    col = clamp(col, 0.0, 1.0);
+    col = max(col, 0.0);
     fragColor = vec4(col, 1.0);
 }

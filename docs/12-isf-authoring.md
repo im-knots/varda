@@ -183,6 +183,42 @@ Varda's JSON header is ISF-compatible, so the metadata usually needs no changes 
 | Fragment coords | `isf_FragNormCoord`, **bottom-left** origin | `uv` varying, **top-left** origin |
 | Output | `gl_FragColor` | `layout(location = 0) out vec4 fragColor` |
 | Bindings | Host-managed, invisible | Explicit `layout(set = 0, binding = N)` |
+| Output range | Effectively `[0,1]` — clamped at an 8-bit target | **Unbounded** — linear-light float all the way to the tonemap |
+
+### Don't clamp your output
+
+Varda composites in linear-light float from the deck stage onward, so values above
+1.0 are meaningful and survive to the tonemap, which rolls them off (ACES by
+default). A terminal
+
+```glsl
+col = clamp(col, 0.0, 1.0);   // ← don't
+```
+
+throws that away. It flattens emissive highlights in a generator, and in a
+**filter** it is worse: it destroys headroom produced by the deck upstream, so one
+clamping filter anywhere in a chain acts as an HDR limiter for everything before
+it.
+
+If you need to keep negatives out of the blend math — worth doing, since negative
+light is not meaningful and some blend modes will propagate it — floor without
+capping:
+
+```glsl
+col = max(col, 0.0);          // ← floor only, no ceiling
+```
+
+Alpha is the exception: it is coverage, not light, and belongs in `[0, 1]`.
+
+Two related traps when porting:
+
+- **Don't apply your own gamma.** `col = sqrt(col)` or `pow(col, 1.0/2.2)` at the
+  end of a Shadertoy port is display encoding, which Varda does at the output
+  boundary. Doing it in the shader double-encodes. A few bundled shaders still do
+  this and are flagged for review.
+- **`IMPORTED` textures are sRGB-tagged**, so sampling them already decodes to
+  linear. If a port does `pow(tex, 1.0/2.2)` on an imported atlas it is
+  compensating for that decode deliberately — leave it alone.
 
 ### Steps
 
@@ -190,7 +226,8 @@ Varda's JSON header is ISF-compatible, so the metadata usually needs no changes 
 2. **Add `#version 450`** as the first line after the header, and delete any existing `#version`.
 3. **Add the standard prologue** — `in vec2 uv`, `out vec4 fragColor`, the `ISFUniforms` block, the sampler, your textures, and a `UserParams` block listing every non-image `INPUTS` entry **in declaration order**. Copy the layout from the [Filter example](#filter) above.
 4. **Delete any `varying` declarations.** Not valid in GLSL 450 core.
-5. **Replace `gl_FragColor`** with `fragColor`.
+5. **Replace `gl_FragColor`** with `fragColor`, and drop any terminal
+   `clamp(col, 0.0, 1.0)` — see [Don't clamp your output](#dont-clamp-your-output).
 6. **Rewrite sampling calls:**
    ```glsl
    texture2D(inputImage, c)      →  texture(sampler2D(inputImage, texSampler), c)
@@ -315,7 +352,7 @@ Compute shaders are **generators**: each one renders into its own output image t
 A compute shader uses the `.comp` extension and requires `"TYPE": "compute"` plus a `"COMPUTE"` block in the header. Three things must line up:
 
 1. The JSON `"COMPUTE".WORKGROUP_SIZE` must equal the GLSL `layout(local_size_*)` declaration.
-2. The output is **always** a write-only `rgba8` storage image at **`binding = 2`**.
+2. The output is **always** a write-only `rgba16f` storage image at **`binding = 2`**.
 3. Every `INPUTS` entry maps, in order, into the `UserParams` uniform block at `binding = 1`.
 
 ### Compute Metadata Fields
@@ -338,10 +375,18 @@ Compute bindings are fixed and assigned in this order:
 |---------|----------|-------|
 | `set=0, binding=0` | `ISFUniforms` | Same fields as fragment shaders (`TIME`, `RENDERSIZE`, audio, `PHASE_TIME_*`, etc.) |
 | `set=0, binding=1` | `UserParams` | Your `INPUTS`, packed in declaration order |
-| `set=0, binding=2` | Output image | `rgba8`, `writeonly` — this is what the deck displays |
+| `set=0, binding=2` | Output image | `rgba16f`, `writeonly` — this is what the deck displays |
 | `set=0, binding=3 …` | Storage buffers | One per `BUFFERS` entry, in declaration order |
 
-The output format is hard-wired to `rgba8`; declare it exactly as `rgba8` in the layout qualifier and write with `imageStore`.
+The output format is hard-wired to `rgba16f`; declare it exactly as `rgba16f` in the layout qualifier and write with `imageStore`.
+
+> **Changed in 0.1.12.** The output was previously `rgba8`. The whole color path now
+> composites in linear-light `Rgba16Float` (see the manual's
+> [Core Concepts → Signal Flow](02-concepts.md)), so compute output is float too.
+> **Existing `.comp` shaders need one edit:** change `rgba8` to `rgba16f` in the
+> `binding = 2` layout qualifier. Nothing else changes. The upside is that
+> `imageStore` values above 1.0 are no longer clamped — additive and accumulation
+> sims keep their headroom and roll off through the tonemap instead of clipping.
 
 ### Dispatch Model
 
@@ -404,8 +449,8 @@ layout(set = 0, binding = 1) uniform UserParams {
     float speed;
 };
 
-// Binding 2: the output image (always rgba8, writeonly).
-layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+// Binding 2: the output image (always rgba16f, writeonly).
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -474,7 +519,7 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform ISFUniforms { /* ...full block as in Example 1... */ };
 layout(set = 0, binding = 1) uniform UserParams { float gravity; };
-layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
 
 // Persistent particle state: 2 vec4 per particle (pos.xyz + vel.xyz).
 layout(std430, set = 0, binding = 3) buffer ParticleBuffer {
@@ -528,7 +573,7 @@ This "simulate, then render" split is exactly how `black_hole_sim.comp` works: p
 ### Limitations
 
 - **Generators only** — no compute-effect (input-texture) path. Use a fragment filter to process upstream frames.
-- **Output is `rgba8`** — no HDR/float compute output yet.
+- **Generators write float** — output is `rgba16f`; values above 1.0 survive to the compositor and the tonemap. No clamping at the deck boundary.
 - **`DISPATCH: "custom"` is not implemented** — only `"resolution"` works.
 
 ### See Also

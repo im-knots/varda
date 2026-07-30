@@ -20,10 +20,10 @@ use std::time::Instant;
 /// the ALPHA_BLENDING pipeline flattens the source over an opaque black clear (the
 /// default, so an HTML source with alpha<1 stays opaque). See /spec/html-source.md §2.
 fn external_blit_pipelines(context: &GpuContext) -> Result<(BlitPipeline, BlitPipeline)> {
-    let replace = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+    let replace = BlitPipeline::new(&context.device, context.compositing_format)?;
     let over_black = BlitPipeline::with_blend(
         &context.device,
-        wgpu::TextureFormat::Rgba8Unorm,
+        context.compositing_format,
         wgpu::BlendState::ALPHA_BLENDING,
     )?;
     Ok((replace, over_black))
@@ -173,7 +173,7 @@ impl Deck {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: context.compositing_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
@@ -189,7 +189,7 @@ impl Deck {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: context.compositing_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
@@ -211,11 +211,10 @@ impl Deck {
             let pass_height = Self::parse_size_expression(&pass.height, height);
             let is_persistent = pass.persistent.unwrap_or(false);
 
-            let format = if pass.float.unwrap_or(false) {
-                wgpu::TextureFormat::Rgba32Float
-            } else {
-                wgpu::TextureFormat::Rgba8Unorm
-            };
+            // All pass buffers use the unified color-path format. ISF `"FLOAT": true`
+            // is still parsed but no longer selects a format — Rgba16Float is both
+            // filterable and blendable, which Rgba32Float was not.
+            let format = context.compositing_format;
 
             let tex_a = context.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("Pass Buffer A: {}", target_name)),
@@ -272,8 +271,6 @@ impl Deck {
             );
         }
 
-        let uses_float = passes.iter().any(|p| p.float.unwrap_or(false));
-
         // Load ISF IMPORTED images
         let imported_textures =
             load_imported_textures(&shader.metadata, shader.file_path.as_deref(), context);
@@ -294,6 +291,8 @@ impl Deck {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
+                    // Data texture (packed analyzer output) — NOT part of the
+                    // color path. Format is the encoding; do not make this float.
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
@@ -312,10 +311,9 @@ impl Deck {
         let pipeline = UnifiedPipeline::new(
             &context.device,
             &spirv,
-            wgpu::TextureFormat::Rgba8Unorm,
+            context.compositing_format,
             false,
             pass_buffers.len(),
-            uses_float,
             imported_textures.len(),
             preprocessor_textures.len(),
         )
@@ -526,9 +524,8 @@ impl Deck {
             let dummy_alpha_view = dummy_alpha.create_view(&wgpu::TextureViewDescriptor::default());
 
             let convert_pipeline =
-                HapConvertPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
-            let blit_pipeline =
-                BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+                HapConvertPipeline::new(&context.device, context.compositing_format)?;
+            let blit_pipeline = BlitPipeline::new(&context.device, context.compositing_format)?;
 
             log::info!("Using HAP GPU path for '{}' ({:?})", source_name, hap_fmt);
 
@@ -588,8 +585,7 @@ impl Deck {
             });
             let video_texture_view =
                 video_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let blit_pipeline =
-                BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+            let blit_pipeline = BlitPipeline::new(&context.device, context.compositing_format)?;
 
             let staging = VideoStagingBuffers::new(
                 &context.device,
@@ -692,7 +688,7 @@ impl Deck {
         );
 
         let img_texture_view = img_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let blit_pipeline = BlitPipeline::new(&context.device, wgpu::TextureFormat::Rgba8Unorm)?;
+        let blit_pipeline = BlitPipeline::new(&context.device, context.compositing_format)?;
 
         let source = DeckSource::Image {
             texture: img_texture,
@@ -811,7 +807,7 @@ impl Deck {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: context.compositing_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
@@ -829,7 +825,7 @@ impl Deck {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: context.compositing_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
@@ -1105,7 +1101,7 @@ impl Deck {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: context.compositing_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
@@ -1124,7 +1120,7 @@ impl Deck {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: context.compositing_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
