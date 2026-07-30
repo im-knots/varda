@@ -278,6 +278,9 @@ pub struct DepthPreprocessPipeline {
     /// Ping-pong depth history for temporal smoothing and motion differencing.
     history: [wgpu::TextureView; 2],
     _history_tex: [wgpu::Texture; 2],
+    /// Ping-pong silhouette history, for the mask's temporal hysteresis.
+    mask_history: [wgpu::TextureView; 2],
+    _mask_history_tex: [wgpu::Texture; 2],
     read_idx: usize,
 
     width: u32,
@@ -326,7 +329,11 @@ impl DepthPreprocessPipeline {
         });
         let mask_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Depth Preprocess Mask BGL"),
-            entries: &[uniform_entry, tex_entry(3, unfiltered)],
+            entries: &[
+                uniform_entry,
+                tex_entry(3, unfiltered),
+                tex_entry(5, unfiltered),
+            ],
         });
         let color_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Depth Preprocess Color BGL"),
@@ -388,7 +395,10 @@ impl DepthPreprocessPipeline {
             "Depth Preprocess Mask",
             &mask_bgl,
             "fs_mask",
-            &[plain(Output::Mask.wgpu_format())],
+            &[
+                plain(Output::Mask.wgpu_format()),
+                plain(Output::Mask.wgpu_format()),
+            ],
         );
         let color = make_pipeline(
             "Depth Preprocess Color",
@@ -446,6 +456,14 @@ impl DepthPreprocessPipeline {
             history_tex[0].create_view(&wgpu::TextureViewDescriptor::default()),
             history_tex[1].create_view(&wgpu::TextureViewDescriptor::default()),
         ];
+        let mask_history_tex = [
+            make_texture("Depth Preprocess Mask History 0", Output::Mask.wgpu_format()),
+            make_texture("Depth Preprocess Mask History 1", Output::Mask.wgpu_format()),
+        ];
+        let mask_history = [
+            mask_history_tex[0].create_view(&wgpu::TextureViewDescriptor::default()),
+            mask_history_tex[1].create_view(&wgpu::TextureViewDescriptor::default()),
+        ];
 
         Self {
             normalize,
@@ -458,6 +476,8 @@ impl DepthPreprocessPipeline {
             outputs,
             history,
             _history_tex: history_tex,
+            mask_history,
+            _mask_history_tex: mask_history_tex,
             read_idx: 0,
             width,
             height,
@@ -557,6 +577,10 @@ impl DepthPreprocessPipeline {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(self.view_of(Output::Depth)),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.mask_history[self.read_idx]),
+                },
             ],
         });
 
@@ -584,7 +608,10 @@ impl DepthPreprocessPipeline {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Depth Preprocess Mask Pass"),
-                color_attachments: &[attachment(self.view_of(Output::Mask))],
+                color_attachments: &[
+                    attachment(self.view_of(Output::Mask)),
+                    attachment(&self.mask_history[write_idx]),
+                ],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,

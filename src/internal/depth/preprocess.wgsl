@@ -157,16 +157,25 @@ fn fs_normalize(@builtin(position) pos: vec4<f32>) -> NormalizeOut {
 // ── Pass B: silhouette mask ──────────────────────────────────────────────────
 
 @group(0) @binding(3) var depth_norm: texture_2d<f32>;
+@group(0) @binding(5) var prev_mask: texture_2d<f32>;
+
+struct MaskOut {
+    @location(0) mask: f32,
+    // Ping-pong history so the next frame can decay against this one.
+    @location(1) history: f32,
+};
 
 @fragment
-fn fs_mask(@builtin(position) pos: vec4<f32>) -> @location(0) f32 {
+fn fs_mask(@builtin(position) pos: vec4<f32>) -> MaskOut {
     // `depth` is already in output space and already mirrored by pass A.
     let c = vec2<i32>(i32(pos.x), i32(pos.y));
     let d = dims_i();
     let radius = i32(round(P.dims.w));
 
+    var occupancy = 0.0;
     if (radius <= 0) {
-        return select(0.0, 1.0, textureLoad(depth_norm, c, 0).r > INVALID);
+        occupancy = select(0.0, 1.0, textureLoad(depth_norm, c, 0).r > INVALID);
+        return finish_mask(c, occupancy);
     }
 
     var sum = 0.0;
@@ -183,7 +192,26 @@ fn fs_mask(@builtin(position) pos: vec4<f32>) -> @location(0) f32 {
             count = count + 1.0;
         }
     }
-    return sum / max(count, 1.0);
+    return finish_mask(c, sum / max(count, 1.0));
+}
+
+// Temporal hysteresis on the silhouette.
+//
+// Kinect depth validity flickers texel-to-texel along a body's edge — a texel
+// resolves this frame, drops out the next — so a mask taken straight from
+// per-frame validity crawls with speckle no amount of spatial feathering fixes.
+// Rising edges are instant (a subject appearing must not lag) while falling
+// edges decay, so a texel that merely blinked out stays filled.
+fn finish_mask(c: vec2<i32>, occupancy: f32) -> MaskOut {
+    let prev = textureLoad(prev_mask, c, 0).r;
+    // `smoothing` also governs how long a dropped texel is held.
+    let decay = mix(0.35, 0.02, clamp(P.range.w, 0.0, 0.99));
+    let held = max(occupancy, prev - decay);
+
+    var out: MaskOut;
+    out.mask = held;
+    out.history = held;
+    return out;
 }
 
 // ── Pass C: colour passthrough ───────────────────────────────────────────────
