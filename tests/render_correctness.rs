@@ -345,6 +345,115 @@ fn blend_multiply_of_disjoint_primaries_is_black() {
     assert_lo(px[2], "mul.B");
 }
 
+// ── Blend space: pivot modes (spec/blend-modes.md § Blend Space) ─────
+//
+// Overlay, Hard Light, and Soft Light pin a branch (or, for Pegtop Soft Light,
+// an identity point) to the constant 0.5 — perceptual middle grey in a
+// gamma-encoded space. Middle grey is linear 0.214, so evaluating these three
+// on linear operands relocates the pivot to sRGB 0.735.
+//
+// The existing blend tests above use only 0.0/1.0 channels, which are
+// gamma-invariant — that is precisely why this shipped undetected. These tests
+// use mid-tones, the only place the defect is observable.
+
+/// Linear value of sRGB 0.5 — perceptual middle grey.
+const MID_GREY_LINEAR: f32 = 0.214_041_14;
+
+/// `Rgba16Float` carries ~10-11 mantissa bits; 5e-3 is comfortably above the
+/// format's resolution and far below the ~0.1 deltas these tests discriminate.
+const BLEND_TOL: f32 = 0.005;
+
+/// Base deck at `dst` grey, top deck at `src` grey in `mode`. Greys keep R=G=B
+/// so any channel witnesses the result.
+fn grey_blend_mixer(ctx: &GpuContext, mode: BlendMode, src: f32, dst: f32) -> Mixer {
+    let mut mixer = new_mixer(ctx);
+    let base = Deck::new_solid_color(ctx, [dst, dst, dst, 1.0], W, H).expect("base");
+    let top = Deck::new_solid_color(ctx, [src, src, src, 1.0], W, H).expect("top");
+    let ch = mixer.channel_mut(0).unwrap();
+    ch.add_deck(base);
+    ch.add_deck(top);
+    ch.set_deck_blend_mode(1, mode);
+    mixer
+}
+
+fn assert_grey(px: [f32; 4], target: f32, label: &str) {
+    assert_near(px[0], target, BLEND_TOL, &format!("{label}.R"));
+    assert_near(px[1], target, BLEND_TOL, &format!("{label}.G"));
+    assert_near(px[2], target, BLEND_TOL, &format!("{label}.B"));
+}
+
+/// Overlay of middle grey over middle grey is identity.
+///
+/// Both branches of Overlay agree at the pivot, so this is exact regardless of
+/// which side the comparison lands on — no knife-edge on `dst < 0.5`.
+/// Linear-operand evaluation instead yields 2·0.214·0.214 = 0.092.
+#[test]
+fn blend_overlay_of_middle_grey_is_identity() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = grey_blend_mixer(&ctx, BlendMode::Overlay, MID_GREY_LINEAR, MID_GREY_LINEAR);
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    assert_grey(px, MID_GREY_LINEAR, "overlay_mid");
+}
+
+/// Hard Light of middle grey over middle grey is identity (same pivot, roles
+/// swapped). Linear-operand evaluation yields 0.092.
+#[test]
+fn blend_hard_light_of_middle_grey_is_identity() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = grey_blend_mixer(&ctx, BlendMode::HardLight, MID_GREY_LINEAR, MID_GREY_LINEAR);
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    assert_grey(px, MID_GREY_LINEAR, "hard_light_mid");
+}
+
+/// Pegtop Soft Light is identity when the source is middle grey: the
+/// `(1-2s)` term vanishes at s = 0.5, leaving `2·0.5·d = d`. Linear-operand
+/// evaluation yields 0.118.
+#[test]
+fn blend_soft_light_of_middle_grey_is_identity() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = grey_blend_mixer(&ctx, BlendMode::SoftLight, MID_GREY_LINEAR, MID_GREY_LINEAR);
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    assert_grey(px, MID_GREY_LINEAR, "soft_light_mid");
+}
+
+/// Off-pivot reference value, computed from the sRGB-operand formula:
+/// src sRGB 0.25 over dst sRGB 0.75 takes Overlay's screen branch —
+/// `1 - 2·(1-0.25)·(1-0.75) = 0.625` → linear 0.34851.
+/// Linear-operand evaluation yields 0.0936, a 0.255 error.
+#[test]
+fn blend_overlay_off_pivot_matches_perceptual_reference() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    // sRGB 0.25 and 0.75 expressed as the linear values the deck stores.
+    let mut mixer = grey_blend_mixer(&ctx, BlendMode::Overlay, 0.050_875_9, 0.522_522_2);
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    assert_grey(px, 0.348_51, "overlay_off_pivot");
+}
+
+/// Guard: the fix must stay scoped to the pivot modes. Screen is a physical
+/// mode and must keep evaluating on linear operands.
+///
+/// Linear (correct): `1 - (1-0.214)² = 0.3823`.
+/// If Screen were wrongly encoded too it would give `1 - 0.5² = 0.75` → linear
+/// 0.5225 — far outside tolerance.
+#[test]
+fn blend_screen_stays_linear() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = grey_blend_mixer(&ctx, BlendMode::Screen, MID_GREY_LINEAR, MID_GREY_LINEAR);
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    let expected = 1.0 - (1.0 - MID_GREY_LINEAR) * (1.0 - MID_GREY_LINEAR);
+    assert_grey(px, expected, "screen_linear");
+}
+
 // ── Unified color path (spec/unified-color-pipeline.md) ──────────────
 //
 // These three tests replace the unfalsifiable revisit trigger that the

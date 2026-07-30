@@ -24,6 +24,7 @@ use varda::{
     mixer::Mixer,
     modulation::{AnalyzerValues, AudioValues},
     renderer::context::GpuContext,
+    BlendMode,
 };
 
 const WIDTH: u32 = 1920;
@@ -205,6 +206,64 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
     group.finish();
 }
 
+/// Solid decks with a pivot blend mode on every layer above the base.
+///
+/// Overlay/Hard Light/Soft Light encode their operands before the blend math
+/// (spec/blend-modes.md § Blend Space), so they carry two `pow`s per channel
+/// that the physical modes do not. This group isolates that cost — compare
+/// against `channel_composite_solid` at the same deck count for the delta.
+fn setup_mixer_blend(context: &GpuContext, n_decks: usize, mode: BlendMode) -> Mixer {
+    let mut mixer = Mixer::new(context, WIDTH, HEIGHT).expect("mixer");
+    let ch = mixer.channel_mut(0).expect("channel 0");
+    for i in 0..n_decks {
+        let t = i as f32 / n_decks.max(1) as f32;
+        let deck = Deck::new_solid_color(context, [t, 0.5, 1.0 - t, 1.0], WIDTH, HEIGHT)
+            .expect("solid color deck");
+        ch.add_deck(deck);
+        // Deck 0 is a plain blit (LoadOp::Clear); only layers above it blend.
+        if i > 0 {
+            ch.set_deck_blend_mode(i, mode);
+        }
+    }
+    mixer
+}
+
+fn bench_channel_composite_blend(c: &mut Criterion) {
+    let Some(ctx) = make_context() else {
+        eprintln!("no GPU adapter — skipping");
+        return;
+    };
+
+    let audio = AudioData::default();
+    let audio_values = AudioValues {
+        sources: Default::default(),
+    };
+    let analyzer_values = AnalyzerValues::default();
+
+    let mut group = c.benchmark_group("channel_composite_blend");
+    group.sample_size(50);
+
+    for (label, mode) in [
+        ("overlay", BlendMode::Overlay),
+        ("soft_light", BlendMode::SoftLight),
+        ("screen", BlendMode::Screen),
+    ] {
+        for n_decks in [4, 8] {
+            let mut mixer = setup_mixer_blend(&ctx, n_decks, mode);
+            group.bench_with_input(BenchmarkId::new(label, n_decks), &n_decks, |b, _| {
+                b.iter(|| {
+                    mixer
+                        .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                        .expect("render");
+                    poll(&ctx);
+                });
+            });
+        }
+    }
+
+    group.finish();
+}
+
 /// Re-times solid composites at 1 and 8 decks (warmed, median of 11) and
 /// prints the per-deck slope to stderr.
 fn report_per_deck_slope(_c: &mut Criterion) {
@@ -224,6 +283,7 @@ criterion_group!(
     benches,
     bench_channel_composite_solid,
     bench_channel_composite_shader,
+    bench_channel_composite_blend,
     bench_mixer_crossfade,
     report_per_deck_slope,
 );
