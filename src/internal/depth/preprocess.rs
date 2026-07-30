@@ -457,8 +457,14 @@ impl DepthPreprocessPipeline {
             history_tex[1].create_view(&wgpu::TextureViewDescriptor::default()),
         ];
         let mask_history_tex = [
-            make_texture("Depth Preprocess Mask History 0", Output::Mask.wgpu_format()),
-            make_texture("Depth Preprocess Mask History 1", Output::Mask.wgpu_format()),
+            make_texture(
+                "Depth Preprocess Mask History 0",
+                Output::Mask.wgpu_format(),
+            ),
+            make_texture(
+                "Depth Preprocess Mask History 1",
+                Output::Mask.wgpu_format(),
+            ),
         ];
         let mask_history = [
             mask_history_tex[0].create_view(&wgpu::TextureViewDescriptor::default()),
