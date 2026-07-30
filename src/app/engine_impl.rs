@@ -22,6 +22,36 @@ fn sanitize_unit(value: f32, fallback: f32) -> f32 {
 }
 
 impl VardaApp {
+    /// Post-construction wiring every new shader deck needs before it joins a
+    /// channel: start its CPU analyzers and acquire any device its
+    /// `PREPROCESSORS` block requires.
+    ///
+    /// **Every** path that builds a deck must call this. There are two — the
+    /// synchronous `add_deck` command and the UI's background loader
+    /// (`spawn_deck_loads`, completed in `usecases/ui/runner.rs`) — and they
+    /// silently diverged: a shader dropped from the Library skipped analyzer
+    /// startup and device acquisition entirely, so a `depth_sensor` shader
+    /// rendered against blank 1x1 textures with no error.
+    ///
+    /// Returns `Err` when a required preprocessor cannot be satisfied; the
+    /// caller must discard the deck and surface the message.
+    pub(crate) fn finalize_new_deck(&mut self, deck: &mut Deck) -> Result<()> {
+        deck.ensure_preprocessor_analyzers(&self.analyzer_registry);
+        let Some(metadata) = deck.shader().map(|s| s.metadata.clone()) else {
+            return Ok(());
+        };
+        let name = deck.source_name().to_string();
+        if let Some(sensor) = self.acquire_depth_preprocessor(&metadata, &name)? {
+            deck.attach_depth_preprocessor(
+                sensor.id,
+                sensor.name,
+                sensor.pipeline,
+                DepthPreprocessParams::default(),
+            );
+        }
+        Ok(())
+    }
+
     /// Acquire the depth sensor a shader's `PREPROCESSORS` block requires.
     ///
     /// `Ok(None)` when the shader declares no `depth_sensor` preprocessor; `Err`
@@ -102,7 +132,6 @@ impl MixerCommands for VardaApp {
             .context("Shader not found")?;
         let shader_clone = (*shader).clone();
         let is_compute = shader_clone.metadata.is_compute();
-        let metadata = shader_clone.metadata.clone();
         let mut deck = if is_compute {
             Deck::new_from_compute_shader(
                 &self.context,
@@ -118,20 +147,9 @@ impl MixerCommands for VardaApp {
                 self.render_height,
             )?
         };
-        deck.ensure_preprocessor_analyzers(&self.analyzer_registry);
-        // Required device-backed preprocessors are acquired here rather than in
-        // `Deck`: device managers live in the app layer, and this is the last
-        // point at which a failure can abort the load. On failure the deck is
-        // dropped and the error surfaces as a toast.
-        // See spec/depth-sensor-preprocessor.md § Device Acquisition.
-        if let Some(sensor) = self.acquire_depth_preprocessor(&metadata, shader_name)? {
-            deck.attach_depth_preprocessor(
-                sensor.id,
-                sensor.name,
-                sensor.pipeline,
-                DepthPreprocessParams::default(),
-            );
-        }
+        // Shared with the UI's background loader — see `finalize_new_deck`.
+        // On failure the deck is dropped and the error surfaces as a toast.
+        self.finalize_new_deck(&mut deck)?;
         let uuid = deck.uuid().to_string();
         let ch = self
             .mixer
@@ -1561,6 +1579,35 @@ mod tests {
         );
         // The load aborted, so no deck was left behind.
         assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 0);
+    }
+
+    #[test]
+    fn background_constructed_decks_are_finalized_too() {
+        // Regression: the UI's background loader builds the `Deck` off-thread
+        // and adds it straight to a channel, bypassing `add_deck`. A
+        // `depth_sensor` shader dropped from the Library therefore skipped
+        // acquisition entirely and rendered blank preprocessor textures with no
+        // error. Both paths now share `finalize_new_deck`; this asserts it
+        // rejects the same case `add_deck` does.
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        if !app.depth_manager.devices().is_empty() {
+            return;
+        }
+        let shader = app
+            .registry
+            .generators()
+            .iter()
+            .find(|s| s.name() == "liquid_light_depth")
+            .map(|s| (*s).clone())
+            .expect("showcase shader is registered");
+        let mut deck = Deck::new(&app.context, shader, 64, 64).expect("deck builds");
+        let err = app
+            .finalize_new_deck(&mut deck)
+            .expect_err("must reject without a depth sensor");
+        assert!(err.to_string().contains("none detected"), "{err}");
+        assert!(deck.depth_prepro.is_none());
     }
 
     #[test]

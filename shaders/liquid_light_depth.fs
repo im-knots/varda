@@ -129,6 +129,9 @@ vec2 curl_flow(vec2 p, float t) {
     return vec2(n0 - n1, n3 - n2) / (2.0 * e);
 }
 
+/// Fixed UV offset for the mask gradient — see the note at the sample site.
+const float GRAD_STEP = 1.0 / 200.0;
+
 float mask_at(vec2 p) {
     return texture(sampler2D(mask, texSampler), clamp(p, 0.0, 1.0)).r;
 }
@@ -178,10 +181,16 @@ void main() {
     float m = mask_at(uv);
 
     // Silhouette gradient: points out of the body, so bodies push fluid away.
-    float mx = mask_at(uv + vec2(texel.x, 0.0)) - mask_at(uv - vec2(texel.x, 0.0));
-    float my = mask_at(uv + vec2(0.0, texel.y)) - mask_at(uv - vec2(0.0, texel.y));
-    vec2 mgrad = vec2(mx, my) / (2.0 * max(texel.x, texel.y));
-    float edge = length(mgrad);
+    //
+    // Sampled across a fixed UV step rather than one render texel. A per-texel
+    // difference scales with render resolution, which would make every
+    // threshold below behave differently at 720p and 1440p. The mask is
+    // 640-wide and feathered, so GRAD_STEP is chosen to straddle the feather.
+    float mx = mask_at(uv + vec2(GRAD_STEP, 0.0)) - mask_at(uv - vec2(GRAD_STEP, 0.0));
+    float my = mask_at(uv + vec2(0.0, GRAD_STEP)) - mask_at(uv - vec2(0.0, GRAD_STEP));
+    vec2 mgrad = vec2(mx, my);
+    // 0 in flat regions (inside a body or in empty space), peaking at the contour.
+    float edge = clamp(length(mgrad), 0.0, 1.0);
 
     // ── Pass 0: velocity — self-advect, add ambient churn, inject body force ──
     if (PASSINDEX == 0) {
@@ -195,7 +204,7 @@ void main() {
         v += curl_flow(uv * blob_scale * 3.0, t * 0.35) * agitation * 0.06;
 
         // Bodies displace fluid outward along the silhouette normal ...
-        v += mgrad * silhouette_force * 0.02;
+        v += mgrad * silhouette_force * 4.0;
         // ... and drag it along when they actually move. This is what makes the
         // dye swirl on a gesture rather than merely sitting around a shape.
         v += texture(sampler2D(motion, texSampler), uv).xy * motion_force * 0.05;
@@ -220,7 +229,7 @@ void main() {
         d = mix(d, blur * 0.25, dye_spread * 0.35);
 
         // The contour is the dye source: emit where the mask gradient is strong.
-        float emit = smoothstep(0.05, 0.6, edge * 0.02);
+        float emit = smoothstep(0.04, 0.35, edge);
         // Nearer subjects emit hotter dye, so depth reads as colour temperature.
         float near = 1.0 - clamp(texture(sampler2D(depth, texSampler), uv).r, 0.0, 1.0);
         float hue = clamp(0.35 + near * depth_tint * 0.65, 0.0, 1.0);
@@ -254,7 +263,7 @@ void main() {
     col += palette_color(1.0, palette) * length(vec2(dx, dy)) * edge_glow * 6.0;
 
     // The literal fluid outline of the person, riding the live mask contour.
-    float rim = smoothstep(0.02, 0.02 + outline_width * 0.5, edge * 0.02);
+    float rim = smoothstep(0.35 - outline_width * 0.3, 0.4, edge);
     col += palette_color(0.85, palette) * rim * (0.4 + edge_glow * 0.6);
 
     // Warm tungsten cast of an overhead projector lamp.
@@ -264,7 +273,10 @@ void main() {
     vec2 c = uv - 0.5;
     col *= mix(1.0, 1.0 - dot(c, c) * 2.2, vignette_amt);
 
-    col *= density * 0.6 + 0.35;
+    // No dye means no light. The previous constant 0.35 floor rendered a flat
+    // blue field at zero density, which looks like a working shader and hides a
+    // sensor that never attached or a near/far range that excludes everyone.
+    col *= density * 0.6 + 0.4 * smoothstep(0.0, 0.06, density);
 
     fragColor = vec4(max(col + keep, 0.0), 1.0);
 }
