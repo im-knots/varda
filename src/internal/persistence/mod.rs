@@ -383,6 +383,25 @@ pub fn restore_sequence_steps(
         .collect()
 }
 
+/// Serialize a deck's depth-sensor preprocessor binding, if it has one.
+///
+/// Stores the device *name* rather than its id, matching how cameras and
+/// depth-sensor decks restore — ids shift when devices are replugged.
+fn depth_prepro_config(deck: &Deck) -> Option<crate::scene::DepthPreproConfig> {
+    let state = deck.depth_prepro.as_ref()?;
+    let p = &state.params;
+    Some(crate::scene::DepthPreproConfig {
+        sensor_name: state.sensor_name.clone(),
+        near_mm: p.near_mm,
+        far_mm: p.far_mm,
+        smoothing: p.smoothing,
+        hole_fill: p.hole_fill,
+        mask_feather: p.mask_feather,
+        motion_gain: p.motion_gain,
+        mirror: p.mirror,
+    })
+}
+
 /// Build a SceneConfig snapshot from live app state (show-specific: channels, effects, modulation).
 pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> SceneConfig {
     let channels = mixer
@@ -399,6 +418,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                             SourceConfig::Shader {
                                 path,
                                 params: slot.deck.generator_params.values.clone(),
+                                depth_prepro: depth_prepro_config(&slot.deck),
                             }
                         }
                         "video" => {
@@ -1209,6 +1229,70 @@ pub fn restore_scene(
 
 /// Restore a single deck from config.
 // Needs many independent GPU/context inputs to rebuild a deck; no shared invariant to bundle.
+/// Reacquire and attach a shader deck's depth-sensor preprocessor on restore.
+///
+/// Resolves the sensor by saved name when the scene recorded one, falling back
+/// to the ISF header's device selection for scenes written before the binding
+/// was persisted. Returns `Err` when the shader needs a sensor and none is
+/// available, so the caller skips the deck.
+fn restore_depth_preprocessor(
+    deck: &mut Deck,
+    saved: Option<&crate::scene::DepthPreproConfig>,
+    metadata: &crate::isf::ISFMetadata,
+    shader_path: &str,
+    depth_manager: &mut crate::depth::DepthSensorManager,
+    context: &GpuContext,
+) -> Result<()> {
+    use crate::depth::preprocess::{DepthPreprocessParams, DepthPreprocessPipeline};
+
+    if crate::depth::preprocess::requested_device(metadata).is_none() {
+        return Ok(());
+    }
+
+    let params = saved.map_or_else(DepthPreprocessParams::default, |c| DepthPreprocessParams {
+        near_mm: c.near_mm,
+        far_mm: c.far_mm.max(c.near_mm + 1.0),
+        smoothing: c.smoothing,
+        hole_fill: c.hole_fill,
+        mask_feather: c.mask_feather,
+        motion_gain: c.motion_gain,
+        mirror: c.mirror,
+    });
+
+    // Prefer the saved device name; fall back to the header's selection.
+    let by_name = saved.and_then(|c| {
+        depth_manager
+            .devices()
+            .iter()
+            .find(|d| d.name == c.sensor_name)
+            .cloned()
+    });
+
+    let (id, name, width, height) = if let Some(info) = by_name {
+        let (w, h) = crate::depth::open_depth_sensor(depth_manager, info.id, &context.device)
+            .with_context(|| format!("Failed to open depth sensor '{}'", info.name))?;
+        (info.id, info.name, w, h)
+    } else {
+        let sensor = crate::depth::preprocess::acquire_for_shader(
+            depth_manager,
+            &context.device,
+            metadata,
+            shader_path,
+        )?
+        .context("depth_sensor preprocessor declared but not acquired")?;
+        deck.attach_depth_preprocessor(sensor.id, sensor.name, sensor.pipeline, params);
+        return Ok(());
+    };
+
+    deck.attach_depth_preprocessor(
+        id,
+        name,
+        DepthPreprocessPipeline::new(&context.device, width, height),
+        params,
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn restore_deck(
     config: &DeckConfig,
@@ -1223,9 +1307,14 @@ pub(crate) fn restore_deck(
     render_height: u32,
 ) -> Result<Deck> {
     let mut deck = match &config.source {
-        SourceConfig::Shader { path, params } => {
+        SourceConfig::Shader {
+            path,
+            params,
+            depth_prepro,
+        } => {
             let shader = ISFShader::from_file(path)
                 .with_context(|| format!("Failed to load shader: {}", path))?;
+            let metadata = shader.metadata.clone();
             let mut deck = if shader.metadata.is_compute() {
                 Deck::new_from_compute_shader(context, shader, render_width, render_height)?
             } else {
@@ -1235,6 +1324,18 @@ pub(crate) fn restore_deck(
             for (name, value) in params {
                 deck.generator_params.set(name, *value);
             }
+            // Reacquire the depth sensor this shader needs. `depth_sensor` is a
+            // required preprocessor, so a missing device fails the restore and
+            // the caller skips the deck with a warning — the same handling a
+            // missing camera or depth-sensor deck already gets.
+            restore_depth_preprocessor(
+                &mut deck,
+                depth_prepro.as_ref(),
+                &metadata,
+                path,
+                depth_manager,
+                context,
+            )?;
             deck
         }
         SourceConfig::Video {
@@ -1605,7 +1706,8 @@ mod tests {
             &deck,
             &SourceConfig::Shader {
                 path: "test.fs".into(),
-                params: HashMap::new()
+                params: HashMap::new(),
+                depth_prepro: None
             }
         ));
     }

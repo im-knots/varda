@@ -355,6 +355,13 @@ pub enum SourceConfig {
         path: String,
         #[serde(default)]
         params: HashMap<String, ParamValue>,
+        /// Depth-sensor preprocessor binding, present only when the shader
+        /// declares a `depth_sensor` PREPROCESSOR. Absent on every legacy scene
+        /// and on every shader that does not use one, so `.varda/` directories
+        /// written by earlier builds are unaffected.
+        /// See spec/depth-sensor-preprocessor.md § Persistence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depth_prepro: Option<DepthPreproConfig>,
     },
     /// Video file (ffmpeg or HAP)
     Video {
@@ -407,6 +414,35 @@ pub enum SourceConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         params: Option<DepthParamsConfig>,
     },
+}
+
+/// Serializable depth-sensor preprocessor binding for shader decks.
+///
+/// The sensor is matched by **name** on restore, matching the convention used by
+/// cameras and depth-sensor decks — device ids are not stable across replugs.
+/// If no matching sensor is present the deck is skipped with a warning, because
+/// `depth_sensor` is a required preprocessor.
+///
+/// Params are stored denormalized (physical units), matching the runtime
+/// `DepthPreprocessParams`. Every field is `#[serde(default)]` so scenes written
+/// before a field existed still load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepthPreproConfig {
+    pub sensor_name: String,
+    #[serde(default)]
+    pub near_mm: f32,
+    #[serde(default)]
+    pub far_mm: f32,
+    #[serde(default)]
+    pub smoothing: f32,
+    #[serde(default)]
+    pub hole_fill: f32,
+    #[serde(default)]
+    pub mask_feather: f32,
+    #[serde(default)]
+    pub motion_gain: f32,
+    #[serde(default)]
+    pub mirror: bool,
 }
 
 /// Serializable point-cloud view params for depth-sensor decks. All fields are
@@ -886,6 +922,7 @@ mod tests {
                     source: SourceConfig::Shader {
                         path: "shaders/color_burn.fs".into(),
                         params: HashMap::new(),
+                        depth_prepro: None,
                     },
                     effects: vec![],
                     opacity: 0.8,
@@ -1236,6 +1273,7 @@ mod tests {
                     source: SourceConfig::Shader {
                         path: "test.fs".into(),
                         params: HashMap::new(),
+                        depth_prepro: None,
                     },
                     effects: vec![],
                     opacity: 0.5,
@@ -1329,6 +1367,7 @@ mod tests {
             source: SourceConfig::Shader {
                 path: "ok.fs".into(),
                 params: HashMap::new(),
+                depth_prepro: None,
             },
             effects: vec![],
             opacity: -0.5,
@@ -1350,6 +1389,7 @@ mod tests {
         let s = SourceConfig::Shader {
             path: "".into(),
             params: HashMap::new(),
+            depth_prepro: None,
         };
         assert!(!s.validate("src").is_empty());
         let s = SourceConfig::Video {

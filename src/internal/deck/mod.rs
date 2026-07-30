@@ -353,6 +353,49 @@ impl ExternalSourceKind {
     }
 }
 
+/// Live state for a deck's `depth_sensor` shader preprocessor.
+///
+/// The sensor reference is ref-counted on `DepthSensorManager`; it is acquired
+/// before the deck is constructed and released when the deck is removed, so any
+/// number of preprocessor decks and point-cloud decks can share one device.
+pub struct DepthPreprocessState {
+    /// The acquired sensor. Held so deck teardown can release the reference.
+    pub sensor_id: crate::depth::DepthSensorId,
+    /// Device name, captured at acquisition. Persistence matches sensors by name
+    /// (ids are not stable across replugs), and snapshotting a scene must not
+    /// need the device manager.
+    pub sensor_name: String,
+    /// Router-exposed params (`deck/<uuid>/depth_prepro/*`).
+    pub params: crate::depth::preprocess::DepthPreprocessParams,
+    /// The conversion pipeline and its owned output textures.
+    pub pipeline: crate::depth::preprocess::DepthPreprocessPipeline,
+    /// Whether any consuming shader declared the `rgb` output. When false the
+    /// colour pass is skipped entirely.
+    pub wants_rgb: bool,
+    /// Last sensor frame generation processed, so a 30 Hz sensor does not drive
+    /// 60 Hz of redundant passes.
+    pub last_generation: Option<u64>,
+    /// Set while the sensor reports disconnected, so the warning fires once.
+    pub warned_disconnected: bool,
+    /// This frame's sensor inputs, pushed by the app render loop (which owns the
+    /// manager). `None` before the first tick or while the sensor is gone.
+    pub input: Option<DepthPreprocessInput>,
+}
+
+/// Per-frame sensor inputs handed to a deck's depth preprocessor by the app layer.
+pub struct DepthPreprocessInput {
+    /// Shared `R16Uint` depth texture owned by `DepthSensorManager`.
+    pub depth_view: wgpu::TextureView,
+    /// Shared colour texture owned by `DepthSensorManager`.
+    pub rgb_view: wgpu::TextureView,
+    /// Manager upload counter, used to skip redundant passes.
+    pub generation: u64,
+    /// Measured seconds between the last two sensor frames.
+    pub frame_dt: f32,
+    /// Whether the sensor is currently producing frames.
+    pub connected: bool,
+}
+
 /// A preprocessor texture slot — holds a GPU texture that gets updated with analyzer output.
 pub struct PreprocessorSlot {
     /// Name prefix for shader uniforms (e.g. "depth" → `depth_depth_map`)
@@ -486,6 +529,11 @@ pub struct Deck {
 
     /// Lazily-built point-cloud pipeline for DepthSensor decks.
     point_cloud_pipeline: Option<crate::depth::point_cloud::PointCloudPipeline>,
+
+    /// Depth-sensor shader preprocessor, present when this deck's shader (or one
+    /// of its effects) declared a `depth_sensor` PREPROCESSOR and the device was
+    /// successfully acquired. See spec/depth-sensor-preprocessor.md.
+    pub depth_prepro: Option<DepthPreprocessState>,
 
     /// Smoothed FPS derived from actual render pipeline timing (EMA of 1/time_delta)
     fps_smoothed: f32,
@@ -678,6 +726,160 @@ impl Deck {
             return false;
         }
         self.point_cloud_params.set_normalized_param(name, value)
+    }
+
+    /// Normalized (`0..1`) value of a point-cloud parameter, for snapshots.
+    /// `None` when this deck is not a depth-sensor source, so a consumer cannot
+    /// render faders for a deck that has no point cloud.
+    pub fn depth_param(&self, name: &str) -> Option<f32> {
+        if !matches!(
+            self.external_source_kind(),
+            Some(ExternalSourceKind::DepthSensor(_))
+        ) {
+            return None;
+        }
+        self.point_cloud_params.normalized_param(name)
+    }
+
+    /// Set a depth-preprocessor parameter from a normalized value (0.0–1.0).
+    /// Returns `false` if this deck has no `depth_sensor` preprocessor.
+    /// See spec/depth-sensor-preprocessor.md.
+    pub fn set_depth_prepro_param(&mut self, name: &str, value: f32) -> bool {
+        self.depth_prepro
+            .as_mut()
+            .is_some_and(|s| s.params.set_normalized_param(name, value))
+    }
+
+    /// Normalized (`0..1`) value of a depth-preprocessor parameter, for snapshots.
+    pub fn depth_prepro_param(&self, name: &str) -> Option<f32> {
+        self.depth_prepro
+            .as_ref()
+            .and_then(|s| s.params.normalized_param(name))
+    }
+
+    /// Attach an acquired depth sensor's preprocessor to this deck.
+    ///
+    /// Rebinds every `depth_sensor` preprocessor slot — on the source shader and
+    /// on every effect — to the pipeline's owned output textures. The clones are
+    /// `Arc`-backed handles to the same GPU resources, so this is a rebind, not a
+    /// copy. Called by the app layer after `open_depth_sensor` succeeds, because
+    /// device managers live above `internal::deck`.
+    pub fn attach_depth_preprocessor(
+        &mut self,
+        sensor_id: crate::depth::DepthSensorId,
+        sensor_name: String,
+        pipeline: crate::depth::preprocess::DepthPreprocessPipeline,
+        params: crate::depth::preprocess::DepthPreprocessParams,
+    ) {
+        self.depth_prepro = Some(DepthPreprocessState {
+            sensor_id,
+            sensor_name,
+            params,
+            pipeline,
+            wants_rgb: false,
+            last_generation: None,
+            warned_disconnected: false,
+            input: None,
+        });
+        self.rebind_depth_preprocessor_slots();
+    }
+
+    /// Point every `depth_sensor` preprocessor slot at the attached pipeline's
+    /// outputs, and recompute whether the colour pass is needed.
+    ///
+    /// Idempotent, and must be re-run after adding an effect that declares the
+    /// preprocessor to a deck that already has one attached.
+    pub fn rebind_depth_preprocessor_slots(&mut self) {
+        use crate::depth::preprocess::{Output, PREPROCESSOR_TYPE};
+
+        // Take the state so the pipeline can be read while `self.source` and
+        // `self.effects` are mutably borrowed.
+        let Some(mut state) = self.depth_prepro.take() else {
+            return;
+        };
+        let mut wants_rgb = false;
+        let mut rebind = |slots: &mut Vec<PreprocessorSlot>| {
+            for slot in slots {
+                if slot.analyzer_type != PREPROCESSOR_TYPE {
+                    continue;
+                }
+                let Some(output) = Output::from_name(&slot.name) else {
+                    log::warn!(
+                        "Shader declared unknown depth_sensor output '{}'; leaving it blank",
+                        slot.name
+                    );
+                    continue;
+                };
+                if output == Output::Rgb {
+                    wants_rgb = true;
+                }
+                if let Some((texture, view)) = state.pipeline.output(output) {
+                    slot.texture = texture;
+                    slot.view = view;
+                }
+            }
+        };
+
+        if let DeckSource::Shader {
+            preprocessor_textures,
+            ..
+        } = &mut self.source
+        {
+            rebind(preprocessor_textures);
+        }
+        for effect in &mut self.effects {
+            rebind(&mut effect.preprocessor_textures);
+        }
+
+        state.wants_rgb = wants_rgb;
+        self.depth_prepro = Some(state);
+    }
+
+    /// Whether any slot on this deck still consumes the `depth_sensor`
+    /// preprocessor. Used after removing an effect to decide whether the sensor
+    /// reference is still needed.
+    fn wants_depth_preprocessor(&self) -> bool {
+        let ty = crate::depth::preprocess::PREPROCESSOR_TYPE;
+        let source_wants = matches!(
+            &self.source,
+            DeckSource::Shader { preprocessor_textures, .. }
+                if preprocessor_textures.iter().any(|s| s.analyzer_type == ty)
+        );
+        source_wants
+            || self.effects.iter().any(|e| {
+                e.preprocessor_textures
+                    .iter()
+                    .any(|s| s.analyzer_type == ty)
+            })
+    }
+
+    /// Drop the depth preprocessor if nothing on this deck consumes it any more,
+    /// returning the sensor ID the caller must release on the manager.
+    ///
+    /// Called after removing an effect: if that effect was the only consumer,
+    /// holding the device open would keep a capture thread and three GPU passes
+    /// alive for nothing.
+    pub fn detach_depth_preprocessor_if_unused(&mut self) -> Option<crate::depth::DepthSensorId> {
+        if self.depth_prepro.is_none() || self.wants_depth_preprocessor() {
+            return None;
+        }
+        self.depth_prepro.take().map(|s| s.sensor_id)
+    }
+
+    /// Sensor IDs this deck holds ref-counted references to, for release on
+    /// removal. Covers both point-cloud depth sources and shader preprocessors.
+    pub fn held_depth_sensors(&self) -> Vec<crate::depth::DepthSensorId> {
+        let mut ids = Vec::new();
+        if let Some(id) = self
+            .external_source_kind()
+            .and_then(|k| k.depth_sensor_id())
+        {
+            ids.push(id);
+        }
+        if let Some(state) = &self.depth_prepro {
+            ids.push(state.sensor_id);
+        }
+        ids
     }
 
     /// Whether this deck preserves source alpha (transparent compositing).

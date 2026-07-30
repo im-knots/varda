@@ -38,6 +38,24 @@ pub(crate) struct TextureOutputDef {
     pub format: String,
 }
 
+/// Resolve a [`TextureOutputDef::format`] string to a `wgpu` format.
+///
+/// `"color_path"` resolves to the compositing colour format so preprocessor
+/// outputs that carry colour stay in the unified pipeline
+/// (see `/spec/unified-color-pipeline.md`); every other key is an explicit
+/// data format that must not be colour-managed.
+pub(crate) fn texture_format_from_str(format: &str) -> Option<wgpu::TextureFormat> {
+    Some(match format {
+        "r8unorm" => wgpu::TextureFormat::R8Unorm,
+        "r16float" => wgpu::TextureFormat::R16Float,
+        "rg16float" => wgpu::TextureFormat::Rg16Float,
+        "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
+        "rgba16float" => wgpu::TextureFormat::Rgba16Float,
+        "color_path" => crate::renderer::context::COLOR_PATH_FORMAT,
+        _ => return None,
+    })
+}
+
 /// Schema declaring all outputs an analyzer can produce.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AnalyzerSchema {

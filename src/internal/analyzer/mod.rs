@@ -22,10 +22,42 @@ use traits::{Analyzer, AnalyzerInput, AnalyzerSchema, AnalyzerSnapshot};
 
 type AnalyzerFactory = Box<dyn Fn() -> Box<dyn Analyzer> + Send + Sync>;
 
-/// Registry of available analyzer types. Built at app startup via builder pattern.
+/// Execution category of a preprocessor type.
+///
+/// Shaders declare all categories identically in their ISF `PREPROCESSORS` block;
+/// the category tells the engine how to run the thing and whether a shader that
+/// declares it can load without it. See `/spec/effect-preprocessing.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreprocessorCategory {
+    /// Worker thread consuming a CPU readback of the deck's own frame, publishing
+    /// `AnalyzerSnapshot`s. Optional — degrades to default outputs.
+    CpuAnalyzer,
+    /// GPU passes reading textures owned by an external device manager. The device
+    /// is acquired at load time; if it is unavailable the shader does not load.
+    GpuDeviceBacked,
+    // A third category — GPU passes reading the deck's own frame (`GpuFrameDerived`,
+    // e.g. edge detect) — is designed in /spec/effect-preprocessing.md but not yet
+    // implemented; it needs a frame-input path no current preprocessor uses.
+}
+
+impl PreprocessorCategory {
+    /// Whether this category runs as GPU passes rather than an analyzer thread.
+    /// GPU categories have no factory and must never be handed to `DeckAnalyzers`.
+    pub(crate) fn is_gpu(self) -> bool {
+        !matches!(self, Self::CpuAnalyzer)
+    }
+
+    /// Whether a shader declaring this type must fail to load when it is unavailable.
+    pub(crate) fn is_required(self) -> bool {
+        matches!(self, Self::GpuDeviceBacked)
+    }
+}
+
+/// Registry of available preprocessor types. Built at app startup via builder pattern.
 pub(crate) struct AnalyzerRegistry {
     factories: HashMap<String, AnalyzerFactory>,
     schemas: HashMap<String, AnalyzerSchema>,
+    categories: HashMap<String, PreprocessorCategory>,
 }
 
 impl AnalyzerRegistry {
@@ -33,10 +65,11 @@ impl AnalyzerRegistry {
         Self {
             factories: HashMap::new(),
             schemas: HashMap::new(),
+            categories: HashMap::new(),
         }
     }
 
-    /// Register an analyzer type with a factory function.
+    /// Register a CPU-async analyzer type with a factory function.
     pub(crate) fn register<F>(mut self, analyzer_type: &str, factory: F) -> Self
     where
         F: Fn() -> Box<dyn Analyzer> + Send + Sync + 'static,
@@ -46,22 +79,49 @@ impl AnalyzerRegistry {
         self.schemas.insert(analyzer_type.to_owned(), schema);
         self.factories
             .insert(analyzer_type.to_owned(), Box::new(factory));
+        self.categories
+            .insert(analyzer_type.to_owned(), PreprocessorCategory::CpuAnalyzer);
         self
     }
 
-    /// Create a new instance of the given analyzer type.
+    /// Register a GPU-inline preprocessor type. These have no factory and no worker
+    /// thread — the deck render path owns their passes — so the schema is supplied
+    /// directly rather than read off an instance.
+    pub(crate) fn register_gpu(
+        mut self,
+        preprocessor_type: &str,
+        category: PreprocessorCategory,
+        schema: AnalyzerSchema,
+    ) -> Self {
+        debug_assert!(
+            category.is_gpu(),
+            "register_gpu called with a CPU category for '{preprocessor_type}'"
+        );
+        self.schemas.insert(preprocessor_type.to_owned(), schema);
+        self.categories
+            .insert(preprocessor_type.to_owned(), category);
+        self
+    }
+
+    /// Create a new instance of the given analyzer type. Returns `None` for GPU
+    /// categories, which have no factory by construction.
     pub(crate) fn create(&self, analyzer_type: &str) -> Option<Box<dyn Analyzer>> {
         self.factories.get(analyzer_type).map(|f| f())
     }
 
-    /// List all registered analyzer type names.
+    /// List all registered preprocessor type names, GPU and CPU alike.
     pub(crate) fn available_types(&self) -> Vec<&str> {
-        self.factories.keys().map(|s| s.as_str()).collect()
+        self.categories.keys().map(String::as_str).collect()
     }
 
-    /// Get the output schema for a registered analyzer type.
+    /// Get the output schema for a registered preprocessor type.
     pub(crate) fn schema_for(&self, analyzer_type: &str) -> Option<&AnalyzerSchema> {
         self.schemas.get(analyzer_type)
+    }
+
+    /// Get the execution category for a registered preprocessor type.
+    pub(crate) fn category_for(&self, preprocessor_type: &str) -> Option<PreprocessorCategory> {
+        self.categories.get(preprocessor_type).copied()
     }
 }
 
@@ -384,6 +444,15 @@ pub(crate) fn default_registry() -> AnalyzerRegistry {
             Box::new(face_detect::FaceDetectAnalyzer::new())
         });
     }
+    // Device-backed GPU preprocessor: no factory, no worker thread. Registered
+    // unconditionally — without the `depth` feature no sensor enumerates, so a
+    // shader declaring it fails its pre-flight with a clear message rather than
+    // an "unknown preprocessor type". See /spec/depth-sensor-preprocessor.md.
+    registry = registry.register_gpu(
+        crate::depth::preprocess::PREPROCESSOR_TYPE,
+        PreprocessorCategory::GpuDeviceBacked,
+        crate::depth::preprocess::schema(),
+    );
     registry
 }
 

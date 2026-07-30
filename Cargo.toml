@@ -160,6 +160,10 @@ harness = false
 name = "uuid_resolution"
 harness = false
 
+[[bench]]
+name = "depth_preprocess"
+harness = false
+
 
 [profile.release]
 opt-level = 3

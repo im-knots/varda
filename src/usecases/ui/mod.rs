@@ -379,6 +379,37 @@ pub struct AutoTransitionUI {
     pub phase: crate::channel::DeckTransitionPhase,
 }
 
+/// Normalized (`0..1`) point-cloud params backing the bottom-bar faders.
+/// See spec/depth-sensors.md.
+#[derive(Clone)]
+pub struct PointCloudUI {
+    pub orbit_yaw: f32,
+    pub orbit_pitch: f32,
+    pub zoom: f32,
+    pub point_size: f32,
+    pub depth_min: f32,
+    pub depth_max: f32,
+    pub seed: f32,
+    pub drift: f32,
+    pub disruption: f32,
+    /// 0 = Rgb, 1 = DepthRamp, 2 = Solid.
+    pub color_mode: u8,
+}
+
+/// Normalized (`0..1`) depth-preprocessor params backing the bottom-bar faders.
+/// See spec/depth-sensor-preprocessor.md.
+#[derive(Clone)]
+pub struct DepthPreproUI {
+    pub sensor_name: String,
+    pub near: f32,
+    pub far: f32,
+    pub smoothing: f32,
+    pub hole_fill: f32,
+    pub mask_feather: f32,
+    pub motion_gain: f32,
+    pub mirror: bool,
+}
+
 /// Deck info for UI display
 #[derive(Clone)]
 pub struct DeckUIInfo {
@@ -389,6 +420,10 @@ pub struct DeckUIInfo {
     pub is_html: bool,
     /// True when this deck's source is a depth sensor (point-cloud) source.
     pub is_depth_sensor: bool,
+    /// Point-cloud controls (None = not a depth-sensor source).
+    pub point_cloud: Option<PointCloudUI>,
+    /// Depth-preprocessor controls (None = no `depth_sensor` preprocessor).
+    pub depth_prepro: Option<DepthPreproUI>,
     /// True when the interactive window is currently open for this deck.
     pub is_html_interactive: bool,
     pub opacity: f32,
@@ -1166,6 +1201,8 @@ impl UIData {
             name: "test_generator_a".to_string(),
             is_html: false,
             is_depth_sensor: false,
+            point_cloud: None,
+            depth_prepro: None,
             is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
@@ -1213,6 +1250,8 @@ impl UIData {
             name: "test_generator_b".to_string(),
             is_html: false,
             is_depth_sensor: false,
+            point_cloud: None,
+            depth_prepro: None,
             is_html_interactive: false,
             opacity: 0.8,
             effective_opacity: 0.8,
@@ -1258,6 +1297,8 @@ impl UIData {
             name: "test_generator_c".to_string(),
             is_html: false,
             is_depth_sensor: false,
+            point_cloud: None,
+            depth_prepro: None,
             is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,
@@ -1285,6 +1326,8 @@ impl UIData {
             name: "test_generator_d".to_string(),
             is_html: false,
             is_depth_sensor: false,
+            point_cloud: None,
+            depth_prepro: None,
             is_html_interactive: false,
             opacity: 1.0,
             effective_opacity: 1.0,

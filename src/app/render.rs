@@ -342,6 +342,32 @@ impl VardaApp {
                         }
                     };
                 }
+
+                // Shader decks with a `depth_sensor` preprocessor read the same
+                // shared sensor textures, but convert them via their own GPU
+                // passes rather than reprojecting a point cloud. The manager
+                // lives here, so the views are pushed down once per frame — the
+                // deck layer never reaches up into a device.
+                // See spec/depth-sensor-preprocessor.md.
+                if let Some(state) = &mut slot.deck.depth_prepro {
+                    let id = state.sensor_id;
+                    state.input = match (
+                        self.depth_manager.depth_view(id),
+                        self.depth_manager.rgb_view(id),
+                        self.depth_manager.frame_generation(id),
+                    ) {
+                        (Some(depth), Some(rgb), Some(generation)) => {
+                            Some(crate::deck::DepthPreprocessInput {
+                                depth_view: depth.clone(),
+                                rgb_view: rgb.clone(),
+                                generation,
+                                frame_dt: self.depth_manager.frame_dt(id).unwrap_or(1.0 / 30.0),
+                                connected: self.depth_manager.is_connected(id),
+                            })
+                        }
+                        _ => None,
+                    };
+                }
             }
         }
 

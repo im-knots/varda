@@ -63,4 +63,4 @@ Outputs, their targets, rotation, surface assignments, and warp calibration are 
 
 ---
 
-[← Prev: Macro Controls](15-macro-controls.md) · [Home](README.md) · [Next: Projection Mapping →](08-projection.md)
+[← Prev: Control Surfaces & Macros](06-control-surfaces.md) · [Home](README.md) · [Next: Projection Mapping →](08-projection.md)

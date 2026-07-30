@@ -123,9 +123,11 @@ An analyzer runs on a background thread at its own cadence (it never blocks the 
 | `contrast` | Standard deviation of luminance |
 | `red` / `green` / `blue` | Average per-channel value |
 
-**Optional analyzer: `face_detect`** — available in builds compiled with the `face-detection` feature. It uses an ONNX model to expose face position and size outputs. When the feature isn't compiled in, only `brightness` appears in the picker.
+**Optional analyzer: `face_detect`** — available in builds compiled with the `face-detection` feature. It exposes `face_x`, `face_y`, `face_size`, `face_rotation`, and `face_count`. When the feature isn't compiled in, only `brightness` appears in the picker.
 
 Multiple modulation sources can share one running analyzer on a deck (it is reference-counted), so mapping several outputs costs only one analysis pass.
+
+> The Analyzer source is one of two ways Varda turns a picture into data — the same engine also feeds depth/face textures to shaders. For the whole subsystem (full output tables, the depth sensor, lifecycle, and the HTTP API) see [Frame Analysis & Preprocessors](14-frame-analysis.md).
 
 ---
 

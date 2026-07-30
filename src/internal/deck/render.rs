@@ -2,7 +2,7 @@
 
 use super::{Deck, DeckSource, ExternalSourceKind, PassBuffer, PreprocessorSlot, ScalingMode};
 use crate::analyzer::traits::TextureData;
-use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers};
+use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers, PreprocessorCategory};
 use crate::audio::AudioData;
 use crate::isf::{ISFPass, PhaseInput};
 use crate::modulation::ModulationEngine;
@@ -194,6 +194,16 @@ impl Deck {
         // Deduplicate by analyzer_type and request each
         let mut seen = std::collections::HashSet::new();
         for (analyzer_type, options) in &needed {
+            // GPU-inline preprocessors have no factory and no worker thread —
+            // their passes are driven from the deck render path. Handing one to
+            // `DeckAnalyzers` would log a spurious failure every load.
+            // See /spec/effect-preprocessing.md § Preprocessor Categories.
+            if registry
+                .category_for(analyzer_type)
+                .is_some_and(PreprocessorCategory::is_gpu)
+            {
+                continue;
+            }
             if seen.insert(analyzer_type.clone())
                 && self.analyzers.latest_snapshot(analyzer_type).is_none()
             {
@@ -297,6 +307,10 @@ impl Deck {
         if is_depth {
             self.render_point_cloud(context, source_to_b, time, cmd_buffers);
         }
+
+        // Depth-sensor preprocessor passes run before the shader so its bindings
+        // hold this frame's fields. See spec/depth-sensor-preprocessor.md.
+        self.run_depth_preprocess(context, cmd_buffers);
 
         let generator_target = if source_to_b {
             &self.texture_b_view
@@ -1135,6 +1149,63 @@ impl Deck {
             cmd_buffers,
         );
         self.point_cloud_pipeline = Some(pipeline);
+    }
+
+    /// Run the depth-sensor preprocessor's conversion passes for this frame.
+    ///
+    /// No-op unless a sensor frame has actually arrived since the last run: the
+    /// sensor is ~30 Hz and the deck is typically 60, so gating on the manager's
+    /// upload counter halves this work. Also a no-op while the sensor reports
+    /// disconnected, which freezes the outputs at their last good values rather
+    /// than tearing down a live deck. See spec/depth-sensor-preprocessor.md.
+    fn run_depth_preprocess(
+        &mut self,
+        context: &GpuContext,
+        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+    ) {
+        let Some(state) = &mut self.depth_prepro else {
+            return;
+        };
+        let Some(input) = &state.input else {
+            return;
+        };
+
+        if !input.connected {
+            if !state.warned_disconnected {
+                log::warn!(
+                    "Deck '{}': depth sensor {} disconnected — preprocessor outputs frozen",
+                    self.uuid,
+                    state.sensor_id
+                );
+                state.warned_disconnected = true;
+            }
+            return;
+        }
+        if state.warned_disconnected {
+            log::info!(
+                "Deck '{}': depth sensor {} reconnected",
+                self.uuid,
+                state.sensor_id
+            );
+            state.warned_disconnected = false;
+        }
+
+        if state.last_generation == Some(input.generation) {
+            return;
+        }
+        state.last_generation = Some(input.generation);
+
+        state
+            .pipeline
+            .update_uniform(&context.queue, &state.params, input.frame_dt);
+        let rgb = state.wants_rgb.then_some(&input.rgb_view);
+        // Split the borrow: `run` needs `&mut pipeline` while `input` is behind
+        // the same `&mut state`, so clone the cheap view handles first.
+        let depth_view = input.depth_view.clone();
+        let rgb_view = rgb.cloned();
+        state
+            .pipeline
+            .run(&context.device, &depth_view, rgb_view.as_ref(), cmd_buffers);
     }
 
     /// Blit an external source (Camera, NDI, Syphon) with scaling to the generator target.

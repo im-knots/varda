@@ -31,6 +31,15 @@ impl ColorMode {
             _ => ColorMode::Solid,
         }
     }
+
+    /// Inverse of [`Self::from_u8`], for persistence and snapshots.
+    pub fn as_u8(self) -> u8 {
+        match self {
+            ColorMode::Rgb => 0,
+            ColorMode::DepthRamp => 1,
+            ColorMode::Solid => 2,
+        }
+    }
 }
 
 /// User-facing point-cloud parameters (router-exposed).
@@ -92,6 +101,29 @@ impl PointCloudParams {
             _ => return false,
         }
         true
+    }
+
+    /// Normalized (`0..1`) value of `name` — the inverse of
+    /// [`Self::set_normalized_param`]. Returns `None` for an unknown param.
+    ///
+    /// Consumers render faders from this rather than caching their own copy of
+    /// the position, so a fader always reflects real engine state after a scene
+    /// load, a preset recall, or a MIDI/OSC/modulation write.
+    pub(crate) fn normalized_param(&self, name: &str) -> Option<f32> {
+        use std::f32::consts::{PI, TAU};
+        Some(match name {
+            "orbit_yaw" => self.orbit_yaw / TAU + 0.5,
+            "orbit_pitch" => self.orbit_pitch / PI + 0.5,
+            "zoom" => (self.zoom - 0.1) / 4.9,
+            "point_size" => (self.point_size - 0.25) / 9.75,
+            "color_mode" => (self.color_mode.as_f32() + 0.5) / 3.0,
+            "depth_min" => self.depth_min_mm / 8000.0,
+            "depth_max" => self.depth_max_mm / 8000.0,
+            "seed" => self.seed / 0.1,
+            "drift" => self.drift,
+            "disruption" => self.disruption,
+            _ => return None,
+        })
     }
 }
 
@@ -407,6 +439,43 @@ mod tests {
         assert!((p.zoom - 0.1).abs() < 1e-5);
         p.set_normalized_param("zoom", 9.0);
         assert!((p.zoom - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn normalized_params_round_trip_through_the_inverse() {
+        // The bottom-bar faders render straight from `normalized_param`, so any
+        // asymmetry with `set_normalized_param` shows up as a slider that jumps
+        // when you touch it. `color_mode` is excluded: it is bucketed, so it is
+        // lossy by construction and is asserted separately below.
+        let mut p = PointCloudParams::default();
+        for (name, value) in [
+            ("orbit_yaw", 0.2_f32),
+            ("orbit_pitch", 0.8),
+            ("zoom", 0.35),
+            ("point_size", 0.6),
+            ("depth_min", 0.05),
+            ("depth_max", 0.7),
+            ("seed", 0.45),
+            ("drift", 0.9),
+            ("disruption", 0.15),
+        ] {
+            assert!(p.set_normalized_param(name, value), "{name} not applied");
+            let got = p.normalized_param(name).expect("readable");
+            assert!((got - value).abs() < 1e-5, "{name}: {got} != {value}");
+        }
+        assert_eq!(p.normalized_param("nope"), None);
+    }
+
+    #[test]
+    fn color_mode_normalized_value_lands_back_in_its_own_bucket() {
+        let mut p = PointCloudParams::default();
+        for mode in [ColorMode::Rgb, ColorMode::DepthRamp, ColorMode::Solid] {
+            p.color_mode = mode;
+            let norm = p.normalized_param("color_mode").expect("readable");
+            p.set_normalized_param("color_mode", norm);
+            assert_eq!(p.color_mode, mode, "bucket round-trip lost {mode:?}");
+            assert_eq!(ColorMode::from_u8(mode.as_u8()), mode);
+        }
     }
 
     #[test]

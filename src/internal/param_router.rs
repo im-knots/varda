@@ -300,6 +300,18 @@ pub fn apply_param_by_path(
                 .set_depth_param(name, clamp_norm(value));
             ok_or_state(applied, path, "deck is not a depth sensor source")
         }
+        // Depth-sensor *preprocessor* params, distinct from the point-cloud
+        // params above: these configure the fields fed to a shader that declared
+        // `depth_sensor`. See spec/depth-sensor-preprocessor.md.
+        ["deck", uuid, "depth_prepro", name] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let applied = mixer.channels_mut()[ch].decks[dk]
+                .deck
+                .set_depth_prepro_param(name, clamp_norm(value));
+            ok_or_state(applied, path, "deck has no depth-sensor preprocessor")
+        }
         ["deck", uuid, "param", name] => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)

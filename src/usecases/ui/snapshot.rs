@@ -59,12 +59,36 @@ pub(crate) fn build_ui_data(
                         transition_shader_name: at.transition_shader_name.clone(),
                         phase: at.phase,
                     });
+                    let point_cloud = d.point_cloud_params.as_ref().map(|p| PointCloudUI {
+                        orbit_yaw: p.orbit_yaw,
+                        orbit_pitch: p.orbit_pitch,
+                        zoom: p.zoom,
+                        point_size: p.point_size,
+                        depth_min: p.depth_min,
+                        depth_max: p.depth_max,
+                        seed: p.seed,
+                        drift: p.drift,
+                        disruption: p.disruption,
+                        color_mode: p.color_mode,
+                    });
+                    let depth_prepro = d.depth_prepro_params.as_ref().map(|p| DepthPreproUI {
+                        sensor_name: p.sensor_name.clone(),
+                        near: p.near,
+                        far: p.far,
+                        smoothing: p.smoothing,
+                        hole_fill: p.hole_fill,
+                        mask_feather: p.mask_feather,
+                        motion_gain: p.motion_gain,
+                        mirror: p.mirror,
+                    });
                     DeckUIInfo {
                         deck_idx: d.idx,
                         uuid: d.uuid.clone(),
                         name: d.name.clone(),
                         is_html: d.is_html,
                         is_depth_sensor: d.is_depth_sensor,
+                        point_cloud,
+                        depth_prepro,
                         is_html_interactive: d.is_html_interactive,
                         opacity: d.opacity,
                         effective_opacity: d.effective_opacity,
