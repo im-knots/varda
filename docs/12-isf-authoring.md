@@ -325,7 +325,19 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 - **Persistent** buffers survive across frames — essential for feedback loops and simulations (Game of Life, reaction-diffusion)
 - The final pass (empty `{}`) renders to the output
 - Access pass buffers as `texture2D` samplers with the target name
-- Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers. Only `$WIDTH`, `$HEIGHT`, `$WIDTH/N` and `$WIDTH*N` with integer `N` are parsed — `$WIDTH/2.0` and arithmetic like `max($WIDTH,$HEIGHT)` are not, and fall back to full resolution.
+- Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers. Only `$WIDTH`, `$HEIGHT`, `$WIDTH/N` and `$WIDTH*N` with integer `N` are parsed — `$WIDTH/2.0` and arithmetic like `max($WIDTH,$HEIGHT)` are not, and fall back to full resolution. A bare integer literal (`"WIDTH": "32"`) sets a fixed size, which is how you build a reduction pyramid.
+
+> **`RENDERSIZE` is the size of the pass you are currently rendering**, not the deck's. In a
+> `"WIDTH": "1", "HEIGHT": "1"` pass, `RENDERSIZE` is `(1, 1)`. Anything that needs the deck's
+> dimensions or aspect ratio — a letterbox fit, a screen-space offset — has to be computed in a
+> full-size pass. `eyes_depth.fs` carries its gaze target in sensor space through a 1x1 pass and
+> converts to deck space in the final pass for exactly this reason.
+
+**Reductions.** A fragment shader cannot reduce an image to one value in a single pass, and doing
+it inline in the final pass repeats the whole scan for every output pixel. Use fixed-size passes
+as a pyramid instead: `eyes_depth.fs` tallies the sensor image into a 32x32 buffer, reduces that
+to a 1x1 gaze target, and reads one texel in the final pass — about 110k texture fetches per
+frame, versus billions for the naive version.
 - Optional `FLOAT: true` for 32-bit float buffers (HDR, simulation data)
 
 ### Two behaviours that will surprise you

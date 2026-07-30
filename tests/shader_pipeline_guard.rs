@@ -38,10 +38,10 @@ fn every_shipped_shader_builds_a_pipeline() {
                     varda::deck::Effect::new(&gpu, shader).map(|_| ())
                 };
                 if let Err(e) = built {
-                    failures.push(format!("{name}: {e}"));
+                    failures.push(format!("{name}: {e:#}"));
                 }
             }
-            Err(e) => failures.push(format!("{}: parse: {e}", path.display())),
+            Err(e) => failures.push(format!("{}: parse: {e:#}", path.display())),
         }
     }
     assert!(checked > 100, "only found {checked} shaders");

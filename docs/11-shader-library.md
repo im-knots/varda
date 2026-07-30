@@ -29,6 +29,7 @@ Shaders are classified automatically by type:
 | `dark_matter.fs` | Cosmic web filament network (neuro noise) |
 | `digital_brain.fs` | Glowing voronoi-noise plasma with drifting camera and pulsing "moving electrons" octaves |
 | `eyes.fs` | Tiled grid of procedural cartoon eyes — autonomous blink, drifting gaze, IQ cosine-palette irises |
+| `eyes_depth.fs` | The same eyes, tracking people seen by a Kinect: the gaze follows the motion-weighted centroid of whoever is in view, lids wake as someone approaches, pupils dilate on sudden movement. **Requires an attached depth sensor** — see [ISF authoring § `depth_sensor`](12-isf-authoring.md#depth_sensor--live-depth-camera) |
 | `fire.fs` | Procedural animated fire effect |
 | `fractal.fs` | Mandelbrot / Julia set generator |
 | `fractal_mandelbox.fs` | Raymarched 3D Mandelbox explorer with flythrough camera and orbit-trap coloring |
