@@ -546,6 +546,12 @@ pub struct Deck {
 
     /// Per-deck analyzer instances (brightness, beat detection, etc.)
     pub(crate) analyzers: crate::analyzer::DeckAnalyzers,
+
+    /// Set when this deck raised a GPU error, which quarantines it: it stops
+    /// rendering and holds its last good frame instead of aborting the process.
+    /// Cleared by [`Deck::clear_gpu_error`] when the shader is reloaded.
+    /// See spec/error-handling.md § Shader Errors.
+    gpu_error: Option<String>,
 }
 
 /// Accessors for Deck properties.
@@ -880,6 +886,22 @@ impl Deck {
             ids.push(state.sensor_id);
         }
         ids
+    }
+
+    /// The GPU error that quarantined this deck, if any.
+    pub fn gpu_error(&self) -> Option<&str> {
+        self.gpu_error.as_deref()
+    }
+
+    /// Lift the quarantine and let the deck render again.
+    ///
+    /// Called on shader hot-reload: the author has just changed the source, so
+    /// the thing that failed may no longer exist. Without this a single bad save
+    /// would black out the deck until the app restarts.
+    pub fn clear_gpu_error(&mut self) {
+        if self.gpu_error.take().is_some() {
+            log::info!("Deck '{}': GPU quarantine lifted", self.uuid);
+        }
     }
 
     /// Whether this deck preserves source alpha (transparent compositing).

@@ -116,7 +116,10 @@ impl Effect {
             });
             let view_a = tex_a.create_view(&wgpu::TextureViewDescriptor::default());
 
-            let (tex_b, view_b) = if is_persistent {
+            // Double-buffered whether persistent or not — see the note in
+            // source.rs: a single-textured pass target aliases COLOR_TARGET with
+            // RESOURCE in its own pass and wgpu rejects it.
+            let (tex_b, view_b) = {
                 let tex = context.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&format!("Effect Pass Buffer B: {}", target_name)),
                     size: wgpu::Extent3d {
@@ -135,8 +138,6 @@ impl Effect {
                 });
                 let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
                 (Some(tex), Some(view))
-            } else {
-                (None, None)
             };
 
             pass_buffers.insert(
@@ -433,21 +434,24 @@ impl PassBuffer {
         }
     }
 
-    /// Get the current write texture view (opposite of read for persistent)
+    /// Get the current write texture view — always the one not being read.
     pub fn write_view(&self) -> &wgpu::TextureView {
-        if !self.persistent {
-            &self.view_a
-        } else if self.read_idx == 0 {
+        if self.read_idx == 0 {
             self.view_b.as_ref().unwrap_or(&self.view_a)
         } else {
             &self.view_a
         }
     }
 
-    /// Swap read/write buffers (call after rendering for persistent buffers)
+    /// Swap read/write buffers. Call after rendering the pass that targets this
+    /// buffer, so later passes (and the next frame) read what was just written.
+    ///
+    /// Unconditional, including for non-persistent buffers: the read and write
+    /// views must never be the same texture, or the pass that targets it binds
+    /// it as both a colour attachment and a sampled resource. `persistent` now
+    /// governs only whether the contents carry meaning across frames — which is
+    /// what the ISF key actually means — not the buffering strategy.
     pub fn swap(&mut self) {
-        if self.persistent {
-            self.read_idx = 1 - self.read_idx;
-        }
+        self.read_idx = 1 - self.read_idx;
     }
 }

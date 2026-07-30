@@ -412,6 +412,52 @@ impl VardaApp {
         ) {
             log::error!("Failed to render mixer: {}", e);
         }
+
+        self.report_gpu_faults();
+    }
+
+    /// Surface quarantined decks to the performer, and drain anything the GPU
+    /// error guard caught that no deck owned.
+    ///
+    /// Toasts are keyed per deck so a shader failing every frame reports once
+    /// rather than burying the notification history.
+    /// See spec/error-handling.md § Shader Errors.
+    fn report_gpu_faults(&mut self) {
+        let quarantined: Vec<(String, String, String)> = self
+            .mixer
+            .channels()
+            .iter()
+            .flat_map(|ch| ch.decks.iter())
+            .filter_map(|slot| {
+                slot.deck.gpu_error().map(|err| {
+                    (
+                        slot.deck.uuid().to_string(),
+                        slot.deck.source_name().to_string(),
+                        err.to_string(),
+                    )
+                })
+            })
+            .collect();
+
+        for (uuid, name, error) in quarantined {
+            self.session.notifications.notify_once(
+                format!("gpu_fault:{uuid}"),
+                crate::notifications::NotificationLevel::Error,
+                format!("'{name}' disabled — GPU error. Deck frozen; the rest of the show is unaffected. {error}"),
+            );
+        }
+
+        // Faults raised outside any deck (channel/master effect chains, output
+        // compositing). Nothing to quarantine, but they must not vanish.
+        for fault in self.context.errors.take_faults() {
+            if fault.context.is_none() {
+                self.session.notifications.notify_once(
+                    format!("gpu_fault_global:{}", fault.message),
+                    crate::notifications::NotificationLevel::Error,
+                    format!("GPU error: {}", fault.message),
+                );
+            }
+        }
     }
 
     /// Render content to all outputs (windowed + headless) using the surface layout.

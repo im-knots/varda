@@ -124,6 +124,16 @@ impl NotificationSystem {
         }
     }
 
+    /// Forget `notify_once` keys beginning with `prefix`, so the same condition
+    /// can report again.
+    ///
+    /// Used when the underlying cause may have been resolved — a shader
+    /// hot-reload lifts GPU quarantines, and a deck that fails again afterwards
+    /// is new information the performer needs.
+    pub fn clear_once_key_prefix(&mut self, prefix: &str) {
+        self.once_keys.retain(|k| !k.starts_with(prefix));
+    }
+
     /// Remove expired notifications
     pub fn update(&mut self) {
         self.active.retain(|n| !n.is_expired());

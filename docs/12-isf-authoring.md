@@ -333,6 +333,13 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 > full-size pass. `eyes_depth.fs` carries its gaze target in sensor space through a 1x1 pass and
 > converts to deck space in the final pass for exactly this reason.
 
+**Every pass buffer is double-buffered**, `PERSISTENT` or not. `PERSISTENT` controls whether the
+contents mean anything across frames, not the buffering strategy — a pass reads the last value
+written to its target and writes to the other texture. This exists because the bind group binds
+*all* pass buffers as sampled textures on every pass, so a single-textured target would be a
+colour attachment and a sampled resource at the same time, which wgpu rejects outright. Budget
+two textures per declared pass when sizing large buffers.
+
 **Reductions.** A fragment shader cannot reduce an image to one value in a single pass, and doing
 it inline in the final pass repeats the whole scan for every output pixel. Use fixed-size passes
 as a pyramid instead: `eyes_depth.fs` tallies the sensor image into a 32x32 buffer, reduces that

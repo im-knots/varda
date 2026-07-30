@@ -234,7 +234,15 @@ impl Deck {
             });
             let view_a = tex_a.create_view(&wgpu::TextureViewDescriptor::default());
 
-            let (tex_b_buf, view_b) = if is_persistent {
+            // Every pass buffer is double-buffered, persistent or not.
+            //
+            // The bind group binds *all* pass buffers as sampled textures on
+            // every pass, so a single-textured target would be simultaneously
+            // COLOR_TARGET and RESOURCE in its own pass — which wgpu rejects
+            // outright. Persistent buffers were already safe because they
+            // ping-pong; non-persistent ones aliased and aborted the process
+            // the first time anyone declared one.
+            let (tex_b_buf, view_b) = {
                 let tex = context.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&format!("Pass Buffer B: {}", target_name)),
                     size: wgpu::Extent3d {
@@ -253,8 +261,6 @@ impl Deck {
                 });
                 let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
                 (Some(tex), Some(view))
-            } else {
-                (None, None)
             };
 
             pass_buffers.insert(
@@ -372,6 +378,7 @@ impl Deck {
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,
             analyzers: crate::analyzer::DeckAnalyzers::new(),
+            gpu_error: None,
         })
     }
 
@@ -869,6 +876,7 @@ impl Deck {
             phase_accumulators: [0.0; 4],
             generator_phase_inputs: None,
             analyzers: crate::analyzer::DeckAnalyzers::new(),
+            gpu_error: None,
         })
     }
 
@@ -1164,6 +1172,7 @@ impl Deck {
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,
             analyzers: crate::analyzer::DeckAnalyzers::new(),
+            gpu_error: None,
         })
     }
 }

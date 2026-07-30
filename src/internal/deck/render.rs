@@ -229,7 +229,67 @@ impl Deck {
     }
 
     /// Render the deck with a custom param prefix for modulation key lookup
+    /// Render this deck, containing any GPU error it raises.
+    ///
+    /// wgpu reports validation errors through a device-wide handler rather than
+    /// a `Result`, and the default handler panics — which on the render thread
+    /// ends the show. A malformed shader is a user-authored input, so it must be
+    /// survivable: the deck is quarantined, keeps displaying its last good
+    /// frame, and everything else carries on rendering.
+    /// See spec/error-handling.md § Shader Errors.
     pub fn render_with_prefix(
+        &mut self,
+        context: &GpuContext,
+        audio_data: &AudioData,
+        modulation: &ModulationEngine,
+        param_prefix: &str,
+        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+        gpu_timing: Option<(&wgpu::QuerySet, u32, u32)>,
+    ) -> Result<()> {
+        if self.gpu_error.is_some() {
+            // Quarantined. The deck's texture still holds its last good frame,
+            // which is the "freeze the last good frame" fallback the spec allows.
+            return Ok(());
+        }
+
+        let before = cmd_buffers.len();
+        let result = {
+            let scope = context.errors.scope(&format!("deck {}", self.uuid));
+            let result = self.render_with_prefix_inner(
+                context,
+                audio_data,
+                modulation,
+                param_prefix,
+                cmd_buffers,
+                gpu_timing,
+            );
+            match scope.faulted() {
+                Some(message) => Err(message),
+                None => Ok(result),
+            }
+        };
+
+        match result {
+            Ok(inner) => inner,
+            Err(message) => {
+                // Drop anything this deck encoded before failing: submitting a
+                // partial frame from a deck we are about to quarantine risks
+                // raising the same error again downstream.
+                cmd_buffers.truncate(before);
+                log::error!(
+                    "Deck '{}' ({}) raised a GPU error and was disabled: {}",
+                    self.uuid,
+                    self.source_name,
+                    message
+                );
+                self.gpu_error = Some(message);
+                Ok(())
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_with_prefix_inner(
         &mut self,
         context: &GpuContext,
         audio_data: &AudioData,
