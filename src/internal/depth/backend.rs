@@ -109,6 +109,12 @@ impl DepthBackend for MockBackend {
         let cy = h as f32 * 0.5;
         let phase = (self.frame as f32) * 0.05;
         let mut depth = vec![0u16; (w * h) as usize];
+        // RGBA8, matching what a real backend delivers. Producing colour here is
+        // what makes `DepthSensorManager::upload_rgb` reachable from tests — it
+        // previously wrote rows at the wrong stride for the texture's format and
+        // aborted on the first real colour frame, invisible to a suite whose only
+        // backend returned `None`.
+        let mut rgb = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {
             for x in 0..w {
                 let dx = x as f32 - cx;
@@ -116,12 +122,17 @@ impl DepthBackend for MockBackend {
                 let r = (dx * dx + dy * dy).sqrt();
                 // 800mm..3000mm ring that breathes with `phase`.
                 let d = 800.0 + 1000.0 * (0.5 + 0.5 * (r * 0.02 - phase).sin());
-                depth[(y * w + x) as usize] = d as u16;
+                let i = (y * w + x) as usize;
+                depth[i] = d as u16;
+                rgb[i * 4] = (x * 255 / w.max(1)) as u8;
+                rgb[i * 4 + 1] = (y * 255 / h.max(1)) as u8;
+                rgb[i * 4 + 2] = ((d - 800.0) * 0.255) as u8;
+                rgb[i * 4 + 3] = 255;
             }
         }
         Some(DepthFrame {
             depth,
-            rgb: None,
+            rgb: Some(rgb),
             width: w,
             height: h,
         })
@@ -140,7 +151,8 @@ mod tests {
         assert_eq!(f.width, 64);
         assert_eq!(f.height, 48);
         assert_eq!(f.depth.len(), 64 * 48);
-        assert!(f.rgb.is_none());
+        // RGBA8: four bytes per texel, the stride `upload_rgb` assumes.
+        assert_eq!(f.rgb.expect("mock produces colour").len(), 64 * 48 * 4);
     }
 
     #[test]

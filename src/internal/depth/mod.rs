@@ -143,7 +143,16 @@ impl DepthSensorManager {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: crate::renderer::context::COLOR_PATH_FORMAT,
+            // 8-bit sRGB, matching the bytes the backend actually delivers and
+            // the format `CameraManager` uses for the same kind of source.
+            //
+            // This was `COLOR_PATH_FORMAT` (`Rgba16Float`, 8 bytes/texel) while
+            // `upload_rgb` wrote RGBA8 rows at `width * 4`, so the first colour
+            // frame from a real sensor aborted the process on a wgpu validation
+            // error. The mock backend yields `rgb: None`, so no test reached it.
+            // `Srgb` rather than plain `Unorm` so the hardware decodes to linear
+            // light on sample — see spec/unified-color-pipeline.md.
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -514,10 +523,55 @@ mod tests {
         let Some(gpu) = headless() else { return };
         let mut mgr = DepthSensorManager::new();
         mgr.open_mock(0, 16, 16, &gpu.device).expect("open mock");
-        // Give the capture thread a moment to produce a frame.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        mgr.update(&gpu.queue);
+        // Wait for a real frame rather than a fixed sleep: the upload is the
+        // thing under test, and a `continue` on an empty slot would pass
+        // vacuously. The mock now produces colour, so this exercises the RGB
+        // path too — a wrong row stride aborts the process here.
+        let mut uploaded = false;
+        for _ in 0..200 {
+            mgr.update(&gpu.queue);
+            if mgr.frame_generation(0) == Some(0) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                continue;
+            }
+            uploaded = true;
+            break;
+        }
+        assert!(uploaded, "mock backend never produced a frame to upload");
         gpu.queue.submit(std::iter::empty());
+        mgr.release(0);
+    }
+
+    #[test]
+    fn shared_texture_formats_match_the_bytes_the_backend_delivers() {
+        // Guard for the class of bug that took down a live session: the colour
+        // texture was `Rgba16Float` (8 bytes/texel) while `upload_rgb` wrote
+        // RGBA8 rows at `width * 4`, which wgpu rejects as a short row. Depth is
+        // `u16`, colour is RGBA8 — assert both against the frame layout rather
+        // than trusting the two sites to stay in agreement.
+        let Some(gpu) = headless() else { return };
+        let mut mgr = DepthSensorManager::new();
+        mgr.open_mock(0, 16, 16, &gpu.device).expect("open mock");
+        let active = mgr.active.get(&0).expect("session open");
+
+        let depth_bpt = active
+            .depth_texture
+            .format()
+            .block_copy_size(None)
+            .expect("uncompressed");
+        assert_eq!(depth_bpt, 2, "depth frames are Vec<u16>");
+
+        let rgb_bpt = active
+            .rgb_texture
+            .format()
+            .block_copy_size(None)
+            .expect("uncompressed");
+        assert_eq!(rgb_bpt, 4, "colour frames are RGBA8");
+        assert!(
+            active.rgb_texture.format().is_srgb(),
+            "sensor colour is sRGB-encoded and must decode to linear light on \
+             sample — see spec/unified-color-pipeline.md"
+        );
         mgr.release(0);
     }
 }
