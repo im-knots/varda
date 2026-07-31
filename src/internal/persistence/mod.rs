@@ -1064,7 +1064,7 @@ pub fn restore_scene(
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    log::debug!("Skipping Syphon deck '{}' on non-macOS restore", name);
+                    log::debug!("Skipping Syphon deck '{name}' on non-macOS restore");
                 }
                 continue;
             }

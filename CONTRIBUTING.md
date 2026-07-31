@@ -97,6 +97,14 @@ a pedantic finding fails your PR. Run it before pushing:
 cargo clippy --all-targets -- -D warnings
 ```
 
+**Clippy only sees code that compiles for your host platform.** Anything behind
+`#[cfg(target_os = "…")]` for a *different* OS is invisible to your local run — the NDI library
+loader, the CLI installer, shader search paths, and the Syphon restore path all have per-platform
+branches. `clippy.yml` therefore runs three jobs (linux, macos, windows) so every branch is linted
+somewhere. If CI reports a lint you cannot reproduce, check whether the file is platform-gated before
+assuming a version difference. The Windows job matches the release build's feature set
+(`--no-default-features --features face-detection,html`), since `depth` has no vcpkg port.
+
 Five pedantic lints are allowed crate-wide. Each has a rationale comment in `Cargo.toml`:
 
 | Lint | Why it's off |

@@ -127,8 +127,7 @@ fn install_linux(exe: &Path) -> Result<(), String> {
     let appimage_var = std::env::var("APPIMAGE").ok();
     let appimage_path = appimage_var
         .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| exe.to_path_buf());
+        .map_or_else(|| exe.to_path_buf(), PathBuf::from);
 
     // Heuristic: AppImage sets $APPIMAGE env var
     if appimage_var.is_none() {
@@ -150,9 +149,8 @@ fn install_linux(exe: &Path) -> Result<(), String> {
     }
 
     log::info!("Installing CLI symlink to ~/.local/bin/varda...");
-    std::fs::create_dir_all(&bin_dir).map_err(|e| format!("mkdir ~/.local/bin: {}", e))?;
-    std::os::unix::fs::symlink(&appimage_path, &link_path)
-        .map_err(|e| format!("symlink: {}", e))?;
+    std::fs::create_dir_all(&bin_dir).map_err(|e| format!("mkdir ~/.local/bin: {e}"))?;
+    std::os::unix::fs::symlink(&appimage_path, &link_path).map_err(|e| format!("symlink: {e}"))?;
 
     log::info!(
         "CLI symlink installed: {} → {}",
