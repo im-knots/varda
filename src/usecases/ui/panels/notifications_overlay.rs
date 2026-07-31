@@ -25,10 +25,8 @@ pub(super) fn render_notifications(
         let toast_rect =
             egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(toast_width, toast_height));
 
-        let layer_id = egui::LayerId::new(
-            egui::Order::Foreground,
-            egui::Id::new(format!("notif_{}", i)),
-        );
+        let layer_id =
+            egui::LayerId::new(egui::Order::Foreground, egui::Id::new(format!("notif_{i}")));
         let painter = ctx.layer_painter(layer_id);
 
         // Background
@@ -62,7 +60,6 @@ pub(super) fn render_notifications(
         );
 
         // Message text (truncated)
-        let _max_msg_width = toast_width - 50.0;
         let msg = if notif.message.len() > 60 {
             format!("{}…", &notif.message[..59])
         } else {
@@ -85,7 +82,7 @@ pub(super) fn render_notifications(
         painter.rect_filled(progress_rect, 0.0, accent_color.linear_multiply(0.5));
 
         // Dismiss button ("x") — use an Area so it's clickable
-        let dismiss_id = egui::Id::new(format!("dismiss_notif_{}", i));
+        let dismiss_id = egui::Id::new(format!("dismiss_notif_{i}"));
         egui::Area::new(dismiss_id)
             .fixed_pos(egui::pos2(
                 toast_rect.right() - 24.0,

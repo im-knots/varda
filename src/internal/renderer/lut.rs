@@ -13,7 +13,7 @@ pub struct ParsedLut {
     pub title: Option<String>,
     /// 3D LUT grid size per axis (e.g. 17, 33, 65).
     pub size_3d: u32,
-    /// 3D LUT data as flat RGB triplets, R-major ordering. Length = size_3d^3 * 3.
+    /// 3D LUT data as flat RGB triplets, R-major ordering. Length = `size_3d^3` * 3.
     pub data_3d: Vec<f32>,
     /// Domain minimum for the 3D LUT input range.
     pub domain_min: [f32; 3],
@@ -37,11 +37,16 @@ pub struct ShaperLut {
 }
 
 /// Parse a LUT file, auto-detecting format from extension.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, if the extension is neither
+/// `.cube` nor `.3dl`, or if the file contents fail to parse.
 pub fn parse_lut_file(path: &Path) -> Result<ParsedLut> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read LUT file: {}", path.display()))?;
@@ -193,9 +198,8 @@ fn parse_3dl(content: &str) -> Result<ParsedLut> {
 
         // Try to parse as numbers
         let nums: Result<Vec<f32>, _> = parts.iter().map(|s| s.parse::<f32>()).collect();
-        let nums = match nums {
-            Ok(n) => n,
-            Err(_) => continue,
+        let Ok(nums) = nums else {
+            continue;
         };
 
         // First numeric line is the input range definition (any length).
@@ -233,7 +237,7 @@ fn parse_3dl(content: &str) -> Result<ParsedLut> {
     let max_val = data_lines
         .iter()
         .flat_map(|v| v.iter())
-        .cloned()
+        .copied()
         .fold(0.0f32, f32::max);
     // Common .3dl ranges: 0-1023 (10-bit), 0-4095 (12-bit), 0-65535 (16-bit), or 0-1 (float)
     let scale = if max_val > 4095.0 {
@@ -264,7 +268,7 @@ fn parse_3dl(content: &str) -> Result<ParsedLut> {
 }
 
 fn parse_float_line(s: &str, expected: usize) -> Result<Vec<f32>> {
-    let vals: Result<Vec<f32>, _> = s.split_whitespace().map(|v| v.parse::<f32>()).collect();
+    let vals: Result<Vec<f32>, _> = s.split_whitespace().map(str::parse::<f32>).collect();
     let vals = vals.context("Failed to parse float values")?;
     if vals.len() < expected {
         bail!("Expected {} values, got {}", expected, vals.len());
@@ -276,7 +280,7 @@ fn parse_float_line(s: &str, expected: usize) -> Result<Vec<f32>> {
 // GPU pipeline
 // ---------------------------------------------------------------------------
 
-/// GPU uniform for LUT shader — matches LutParams in lut.wgsl.
+/// GPU uniform for LUT shader — matches `LutParams` in lut.wgsl.
 /// Must be 16-byte aligned (64 bytes total).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -408,7 +412,7 @@ impl LoadedLut {
         };
 
         // Create params buffer
-        let has_shaper = if parsed.shaper.is_some() { 1u32 } else { 0u32 };
+        let has_shaper = u32::from(parsed.shaper.is_some());
         let shaper_ref = parsed.shaper.as_ref();
         let params = LutParams {
             domain_min: parsed.domain_min,
@@ -439,6 +443,14 @@ impl LoadedLut {
 }
 
 impl LutPipeline {
+    /// Create the LUT application pipeline for the given target format.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("LUT Bind Group Layout"),
@@ -529,7 +541,7 @@ impl LutPipeline {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -539,7 +551,7 @@ impl LutPipeline {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -610,7 +622,12 @@ impl LutPipeline {
         })
     }
 
-    /// Run the LUT pass: reads from source_view, writes to target_view using the loaded LUT.
+    /// Run the LUT pass: reads from `source_view`, writes to `target_view` using the loaded LUT.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size_of::<LutParams>()` is zero, which cannot happen for a
+    /// non-empty `#[repr(C)]` struct.
     pub fn render(
         &self,
         device: &wgpu::Device,

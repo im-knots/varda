@@ -2,7 +2,7 @@
 //! `VardaApp` state. Presentation mapping (`UIData`, which names `egui::TextureId`)
 //! lives in `usecases::ui::snapshot` — see `/spec/app-presentation-boundary.md`.
 //!
-//! PERF: Every frame clones the full EngineState (params, effects, FFT data,
+//! PERF: Every frame clones the full `EngineState` (params, effects, FFT data,
 //! modulation assignments). At 8+ decks with effects, this is dozens of heap
 //! allocations per frame. Not a bottleneck at 60fps with current deck counts,
 //! but worth profiling if deck/effect counts grow significantly (16+ decks).
@@ -11,9 +11,15 @@
 
 use super::VardaApp;
 use crate::channel::{DeckTransitionPhase, DurationSpec, TransitionTrigger};
-use crate::engine::types::*;
+use crate::engine::types::{
+    AutoTransitionSnapshot, CameraSnapshot, ChannelSnapshot, ClockSnapshot, DeckSnapshot,
+    DepthPreproParamsSnapshot, EffectSnapshot, EngineState, MidiDeviceSnapshot,
+    MidiMappingSnapshot, MidiSnapshot, MixerSnapshot, ParamSnapshot, PointCloudParamsSnapshot,
+    RegistrySnapshot, RunningAnalyzerSnapshot, SequenceSnapshot, SequenceStepKindSnapshot,
+    SequenceStepSnapshot, ShaderParamsSnapshot, VideoPlaybackSnapshot,
+};
 
-/// Build a MixerSnapshot from the current VardaApp state.
+/// Build a `MixerSnapshot` from the current `VardaApp` state.
 pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
     let mixer = &app.mixer;
 
@@ -235,7 +241,9 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
         transition_names,
         sequences,
         tonemap_mode: mixer.tonemap_mode(),
-        active_lut: mixer.active_lut_filename().map(|s| s.to_string()),
+        active_lut: mixer
+            .active_lut_filename()
+            .map(std::string::ToString::to_string),
     }
 }
 
@@ -298,7 +306,7 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
                             target_amount,
                         } => {
                             let unit_label = duration.unit().label();
-                            let easing_name = format!("{:?}", easing);
+                            let easing_name = format!("{easing:?}");
                             let label = format!(
                                 "Fade {} -> {} ({:.1}{})",
                                 channel_names.get(from_ch.as_str()).copied().unwrap_or("?"),
@@ -331,7 +339,7 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
                             )
                         }
                         crate::mixer::StepKind::GoTo { step_index } => {
-                            let label = format!("GoTo step {}", step_index);
+                            let label = format!("GoTo step {step_index}");
                             (
                                 label,
                                 SequenceStepKindSnapshot::GoTo {
@@ -356,7 +364,7 @@ fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot
         .collect()
 }
 
-/// Build a RegistrySnapshot from the current VardaApp state.
+/// Build a `RegistrySnapshot` from the current `VardaApp` state.
 pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
     let mut generators: Vec<(String, usize)> = app
         .registry
@@ -381,7 +389,7 @@ pub(crate) fn build_registry_snapshot(app: &VardaApp) -> RegistrySnapshot {
     }
 }
 
-/// Build a MidiSnapshot from the current VardaApp state.
+/// Build a `MidiSnapshot` from the current `VardaApp` state.
 pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
     let devices = app
         .input
@@ -411,11 +419,10 @@ pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
                     .midi_devices
                     .as_ref()
                     .and_then(|mgr| mgr.device(key.device_id()))
-                    .map(|d| d.name.clone())
-                    .unwrap_or_else(|| format!("Device {}", key.device_id()));
+                    .map_or_else(|| format!("Device {}", key.device_id()), |d| d.name.clone());
                 MidiMappingSnapshot {
                     key: *key,
-                    key_display: format!("{}", key),
+                    key_display: format!("{key}"),
                     device_name: dev_name,
                     param_path: path.clone(),
                 }
@@ -431,7 +438,7 @@ pub(crate) fn build_midi_snapshot(app: &VardaApp) -> MidiSnapshot {
     }
 }
 
-/// Build a CameraSnapshot from the current VardaApp state.
+/// Build a `CameraSnapshot` from the current `VardaApp` state.
 pub(crate) fn build_camera_snapshot(app: &VardaApp) -> CameraSnapshot {
     CameraSnapshot {
         devices: app
@@ -443,7 +450,7 @@ pub(crate) fn build_camera_snapshot(app: &VardaApp) -> CameraSnapshot {
     }
 }
 
-/// Build a DepthSensorSnapshot from the current VardaApp state.
+/// Build a `DepthSensorSnapshot` from the current `VardaApp` state.
 pub(crate) fn build_depth_sensor_snapshot(app: &VardaApp) -> crate::engine::DepthSensorSnapshot {
     crate::engine::DepthSensorSnapshot {
         devices: app
@@ -455,7 +462,7 @@ pub(crate) fn build_depth_sensor_snapshot(app: &VardaApp) -> crate::engine::Dept
     }
 }
 
-/// Build a ClockSnapshot from the current clock manager state.
+/// Build a `ClockSnapshot` from the current clock manager state.
 pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
     use crate::engine::types::DetectedClockSourceSnapshot;
 
@@ -485,7 +492,7 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
     let (preference_label, preference_force_device_id) = match preference {
         crate::clock::ClockPreference::Auto => ("Auto".to_string(), None),
         crate::clock::ClockPreference::ForceMidi { device_id } => {
-            (format!("ForceMidi({})", device_id), Some(*device_id))
+            (format!("ForceMidi({device_id})"), Some(*device_id))
         }
         crate::clock::ClockPreference::ForceOsc => ("ForceOsc".to_string(), None),
         crate::clock::ClockPreference::ForceAudio => ("ForceAudio".to_string(), None),
@@ -512,9 +519,11 @@ pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
     }
 }
 
-/// Build a full EngineState from all subsystem snapshots.
+/// Build a full `EngineState` from all subsystem snapshots.
 pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
-    use crate::engine::traits::*;
+    use crate::engine::traits::{
+        AnalyzerQueries, AudioQueries, MacroQueries, MixerQueries, ModulationQueries, OutputQueries,
+    };
     EngineState {
         mixer: app.mixer_snapshot(),
         audio: app.audio_snapshot(),
@@ -560,7 +569,7 @@ fn build_stream_receiver_snapshots(
         });
         result.push(crate::engine::types::StreamReceiverSnapshot {
             url: url.clone(),
-            mode: format!("{}", mode).to_lowercase(),
+            mode: format!("{mode}").to_lowercase(),
             connected,
         });
     }
@@ -574,7 +583,7 @@ fn build_stream_receiver_snapshots(
             if !result.iter().any(|r| r.url == url) {
                 result.push(crate::engine::types::StreamReceiverSnapshot {
                     url: url.to_string(),
-                    mode: format!("{}", mode).to_lowercase(),
+                    mode: format!("{mode}").to_lowercase(),
                     connected: app.external_io.stream_manager.is_connected(i),
                 });
             }
@@ -738,7 +747,7 @@ mod tests {
         // All URLs should be unique
         let urls: Vec<&str> = receivers.iter().map(|r| r.url.as_str()).collect();
         let mut deduped = urls.clone();
-        deduped.sort();
+        deduped.sort_unstable();
         deduped.dedup();
         assert_eq!(
             urls.len(),

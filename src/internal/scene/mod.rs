@@ -459,7 +459,7 @@ pub struct DepthParamsConfig {
     pub zoom: f32,
     #[serde(default)]
     pub point_size: f32,
-    /// 0 = Rgb, 1 = DepthRamp, 2 = Solid
+    /// 0 = Rgb, 1 = `DepthRamp`, 2 = Solid
     #[serde(default)]
     pub color_mode: u8,
     #[serde(default)]
@@ -702,69 +702,69 @@ impl SourceConfig {
         match self {
             SourceConfig::Shader { path, .. } => {
                 if path.trim().is_empty() {
-                    errors.push(format!("{}: shader path is empty", prefix));
+                    errors.push(format!("{prefix}: shader path is empty"));
                 }
             }
             SourceConfig::Video { path, .. } => {
                 if path.trim().is_empty() {
-                    errors.push(format!("{}: video path is empty", prefix));
+                    errors.push(format!("{prefix}: video path is empty"));
                 }
             }
             SourceConfig::Image { path, .. } => {
                 if path.trim().is_empty() {
-                    errors.push(format!("{}: image path is empty", prefix));
+                    errors.push(format!("{prefix}: image path is empty"));
                 }
             }
             SourceConfig::SolidColor { color } => {
                 for (i, c) in color.iter().enumerate() {
                     if !c.is_finite() {
-                        errors.push(format!("{}: color[{}] is not finite", prefix, i));
+                        errors.push(format!("{prefix}: color[{i}] is not finite"));
                     }
                 }
             }
             SourceConfig::Camera { name } => {
                 if name.trim().is_empty() {
-                    errors.push(format!("{}: camera name is empty", prefix));
+                    errors.push(format!("{prefix}: camera name is empty"));
                 }
             }
             SourceConfig::Ndi { name } => {
                 if name.trim().is_empty() {
-                    errors.push(format!("{}: NDI name is empty", prefix));
+                    errors.push(format!("{prefix}: NDI name is empty"));
                 }
             }
             SourceConfig::Syphon { name } => {
                 if name.trim().is_empty() {
-                    errors.push(format!("{}: Syphon name is empty", prefix));
+                    errors.push(format!("{prefix}: Syphon name is empty"));
                 }
             }
             SourceConfig::Srt { url, .. } => {
                 if url.trim().is_empty() {
-                    errors.push(format!("{}: SRT url is empty", prefix));
+                    errors.push(format!("{prefix}: SRT url is empty"));
                 }
             }
             SourceConfig::Hls { url } => {
                 if url.trim().is_empty() {
-                    errors.push(format!("{}: HLS url is empty", prefix));
+                    errors.push(format!("{prefix}: HLS url is empty"));
                 }
             }
             SourceConfig::Dash { url } => {
                 if url.trim().is_empty() {
-                    errors.push(format!("{}: DASH url is empty", prefix));
+                    errors.push(format!("{prefix}: DASH url is empty"));
                 }
             }
             SourceConfig::Rtmp { url, .. } => {
                 if url.trim().is_empty() {
-                    errors.push(format!("{}: RTMP url is empty", prefix));
+                    errors.push(format!("{prefix}: RTMP url is empty"));
                 }
             }
             SourceConfig::Html { url } => {
                 if url.trim().is_empty() {
-                    errors.push(format!("{}: HTML url is empty", prefix));
+                    errors.push(format!("{prefix}: HTML url is empty"));
                 }
             }
             SourceConfig::DepthSensor { name, .. } => {
                 if name.trim().is_empty() {
-                    errors.push(format!("{}: depth sensor name is empty", prefix));
+                    errors.push(format!("{prefix}: depth sensor name is empty"));
                 }
             }
         }
@@ -777,7 +777,7 @@ impl EffectConfig {
     pub fn validate(&self, prefix: &str) -> Vec<String> {
         let mut errors = Vec::new();
         if self.path.trim().is_empty() {
-            errors.push(format!("{}: effect path is empty", prefix));
+            errors.push(format!("{prefix}: effect path is empty"));
         }
         errors
     }
@@ -793,9 +793,9 @@ impl DeckConfig {
                 prefix, self.opacity
             ));
         }
-        errors.extend(self.source.validate(&format!("{}/source", prefix)));
+        errors.extend(self.source.validate(&format!("{prefix}/source")));
         for (i, fx) in self.effects.iter().enumerate() {
-            errors.extend(fx.validate(&format!("{}/effects[{}]", prefix, i)));
+            errors.extend(fx.validate(&format!("{prefix}/effects[{i}]")));
         }
         errors
     }
@@ -812,10 +812,10 @@ impl ChannelConfig {
             ));
         }
         for (i, deck) in self.decks.iter().enumerate() {
-            errors.extend(deck.validate(&format!("{}/decks[{}]", prefix, i)));
+            errors.extend(deck.validate(&format!("{prefix}/decks[{i}]")));
         }
         for (i, fx) in self.effects.iter().enumerate() {
-            errors.extend(fx.validate(&format!("{}/effects[{}]", prefix, i)));
+            errors.extend(fx.validate(&format!("{prefix}/effects[{i}]")));
         }
         errors
     }
@@ -845,15 +845,22 @@ impl SceneConfig {
             }
         }
         for (i, ch) in self.channels.iter().enumerate() {
-            errors.extend(ch.validate(&format!("channels[{}]", i)));
+            errors.extend(ch.validate(&format!("channels[{i}]")));
         }
         for (i, fx) in self.master_effects.iter().enumerate() {
-            errors.extend(fx.validate(&format!("master_effects[{}]", i)));
+            errors.extend(fx.validate(&format!("master_effects[{i}]")));
         }
         errors
     }
 
     /// Load from a JSON file
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `path` cannot be read (missing file, permissions) or
+    /// if its contents are not valid JSON for a [`SceneConfig`]. Validation
+    /// problems in an otherwise-parseable scene are logged as warnings, not
+    /// returned as errors.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read scene file: {}", path.as_ref().display()))?;
@@ -867,10 +874,15 @@ impl SceneConfig {
     }
 
     /// Save to a JSON file
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scene cannot be serialized to JSON, or if the
+    /// atomic write fails (temp file creation, write, or rename).
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let errors = self.validate();
         for e in &errors {
-            log::error!("Scene config save: {}", e);
+            log::error!("Scene config save: {e}");
         }
         let content = serde_json::to_string_pretty(self).context("Failed to serialize scene")?;
         crate::persistence::atomic_write(path.as_ref(), &content)?;
@@ -892,8 +904,8 @@ mod tests {
             crossfader: 0.5,
             active_transition: None,
             master_effects: vec![],
-            modulation: Default::default(),
-            macros: Default::default(),
+            modulation: ModulationEngine::default(),
+            macros: MacroBank::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
@@ -940,8 +952,8 @@ mod tests {
             crossfader: 0.0,
             active_transition: Some("dissolve".into()),
             master_effects: vec![],
-            modulation: Default::default(),
-            macros: Default::default(),
+            modulation: ModulationEngine::default(),
+            macros: MacroBank::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
@@ -975,8 +987,8 @@ mod tests {
                     p
                 },
             }],
-            modulation: Default::default(),
-            macros: Default::default(),
+            modulation: ModulationEngine::default(),
+            macros: MacroBank::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
@@ -1108,7 +1120,7 @@ mod tests {
         for mode in BlendMode::all() {
             let config: BlendModeConfig = (*mode).into();
             let back: BlendMode = config.into();
-            assert_eq!(back, *mode, "Roundtrip failed for {:?}", mode);
+            assert_eq!(back, *mode, "Roundtrip failed for {mode:?}");
         }
     }
 
@@ -1237,8 +1249,8 @@ mod tests {
             crossfader: 0.42,
             active_transition: None,
             master_effects: vec![],
-            modulation: Default::default(),
-            macros: Default::default(),
+            modulation: ModulationEngine::default(),
+            macros: MacroBank::default(),
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
@@ -1291,8 +1303,8 @@ mod tests {
             crossfader: 0.5,
             active_transition: None,
             master_effects: vec![],
-            modulation: Default::default(),
-            macros: Default::default(),
+            modulation: ModulationEngine::default(),
+            macros: MacroBank::default(),
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
@@ -1310,8 +1322,8 @@ mod tests {
             crossfader: 1.5,
             active_transition: None,
             master_effects: vec![],
-            modulation: Default::default(),
-            macros: Default::default(),
+            modulation: ModulationEngine::default(),
+            macros: MacroBank::default(),
             transition_sequences: vec![],
             render_width: None,
             render_height: None,
@@ -1332,8 +1344,8 @@ mod tests {
             crossfader: 0.0,
             active_transition: None,
             master_effects: vec![],
-            modulation: Default::default(),
-            macros: Default::default(),
+            modulation: ModulationEngine::default(),
+            macros: MacroBank::default(),
             transition_sequences: vec![],
             render_width: Some(0),
             render_height: Some(0),
@@ -1387,23 +1399,23 @@ mod tests {
     #[test]
     fn validate_source_empty_path() {
         let s = SourceConfig::Shader {
-            path: "".into(),
+            path: String::new(),
             params: HashMap::new(),
             depth_prepro: None,
         };
         assert!(!s.validate("src").is_empty());
         let s = SourceConfig::Video {
             path: " ".into(),
-            loop_mode: Default::default(),
+            loop_mode: crate::video::LoopMode::default(),
             speed: 1.0,
             in_point: 0.0,
             out_point: 0.0,
-            scaling_mode: Default::default(),
+            scaling_mode: crate::deck::ScalingMode::default(),
         };
         assert!(!s.validate("src").is_empty());
         let s = SourceConfig::Image {
-            path: "".into(),
-            scaling_mode: Default::default(),
+            path: String::new(),
+            scaling_mode: crate::deck::ScalingMode::default(),
         };
         assert!(!s.validate("src").is_empty());
     }
@@ -1421,7 +1433,7 @@ mod tests {
     fn validate_effect_empty_path() {
         let fx = EffectConfig {
             uuid: "test0001".into(),
-            path: "".into(),
+            path: String::new(),
             enabled: true,
             params: HashMap::new(),
         };

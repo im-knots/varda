@@ -16,9 +16,8 @@ use varda::renderer::{context::GpuContext, BlitPipeline, COLOR_PATH_FORMAT};
 const W: u32 = 16;
 const H: u32 = 16;
 
-fn headless_gpu() -> Option<GpuContext> {
-    GpuContext::new_headless().ok()
-}
+mod common;
+use common::headless_gpu;
 
 /// Reference linear → sRGB (IEC 61966-2-1), to check the shader against.
 fn srgb_from_linear(c: f32) -> f32 {
@@ -120,7 +119,7 @@ fn encode_solid(ctx: &GpuContext, linear: [f64; 3], encode: bool) -> [u8; 4] {
         (W * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buf = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: (padded * H) as u64,
+        size: u64::from(padded * H),
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -173,16 +172,15 @@ fn encode_solid(ctx: &GpuContext, linear: [f64; 3], encode: bool) -> [u8; 4] {
 #[test]
 fn encode_applies_the_srgb_transfer_function() {
     let Some(ctx) = headless_gpu() else {
-        eprintln!("no GPU adapter — skipping");
         return;
     };
     // Mid and deep-shadow values: the shadows are where the mismatch was worst.
     for linear in [0.2_f32, 0.05, 0.5] {
-        let px = encode_solid(&ctx, [linear as f64; 3], true);
+        let px = encode_solid(&ctx, [f64::from(linear); 3], true);
         let want = (srgb_from_linear(linear) * 255.0).round();
         for (i, ch) in px[..3].iter().enumerate() {
             assert!(
-                (*ch as f32 - want).abs() <= 2.0,
+                (f32::from(*ch) - want).abs() <= 2.0,
                 "linear {linear}: channel {i} encoded to {ch}, expected ~{want}"
             );
         }
@@ -198,18 +196,18 @@ fn without_encode_the_raw_linear_value_passes_through() {
         return;
     };
     let linear = 0.2_f32;
-    let raw = encode_solid(&ctx, [linear as f64; 3], false);
-    let encoded = encode_solid(&ctx, [linear as f64; 3], true);
+    let raw = encode_solid(&ctx, [f64::from(linear); 3], false);
+    let encoded = encode_solid(&ctx, [f64::from(linear); 3], true);
 
     assert!(
-        (raw[0] as f32 - linear * 255.0).abs() <= 2.0,
+        (f32::from(raw[0]) - linear * 255.0).abs() <= 2.0,
         "passthrough should be the raw linear value, got {}",
         raw[0]
     );
     // linear 0.2 → 51/255 raw vs ~124/255 encoded. If these ever converge the
     // encode has stopped doing anything.
     assert!(
-        encoded[0] as i32 - raw[0] as i32 > 40,
+        i32::from(encoded[0]) - i32::from(raw[0]) > 40,
         "encoded ({}) should be much brighter than raw ({})",
         encoded[0],
         raw[0]

@@ -29,9 +29,8 @@ use varda::{
 const W: u32 = 16;
 const H: u32 = 16;
 
-fn headless_gpu() -> Option<GpuContext> {
-    GpuContext::new_headless().ok()
-}
+mod common;
+use common::headless_gpu;
 
 /// Decode an IEEE-754 half-precision float (as raw bits) to f32.
 fn f16_to_f32(bits: u16) -> f32 {
@@ -40,7 +39,7 @@ fn f16_to_f32(bits: u16) -> f32 {
     let frac = bits & 0x3ff;
     let sign_f = if sign == 1 { -1.0 } else { 1.0 };
     let mag = if exp == 0 {
-        (frac as f32) * 2f32.powi(-24) // subnormal
+        f32::from(frac) * 2f32.powi(-24) // subnormal
     } else if exp == 0x1f {
         if frac == 0 {
             f32::INFINITY
@@ -48,7 +47,7 @@ fn f16_to_f32(bits: u16) -> f32 {
             f32::NAN
         }
     } else {
-        (1.0 + (frac as f32) / 1024.0) * 2f32.powi(exp as i32 - 15)
+        (1.0 + f32::from(frac) / 1024.0) * 2f32.powi(i32::from(exp) - 15)
     };
     sign_f * mag
 }
@@ -59,7 +58,7 @@ fn f16_to_f32(bits: u16) -> f32 {
 fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
     let audio = AudioData::default();
     let audio_values = AudioValues {
-        sources: Default::default(),
+        sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
     mixer
@@ -74,7 +73,7 @@ fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
 
     let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("render-test readback"),
-        size: (padded * H) as u64,
+        size: u64::from(padded * H),
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -166,7 +165,6 @@ fn assert_near(v: f32, target: f32, tol: f32, label: &str) {
 #[test]
 fn full_opacity_solid_deck_renders_its_color() {
     let Some(ctx) = headless_gpu() else {
-        eprintln!("no GPU adapter — skipping");
         return;
     };
     let mut mixer = new_mixer(&ctx);
@@ -473,7 +471,6 @@ fn blend_screen_stays_linear() {
 #[test]
 fn deck_stage_preserves_shadow_gradation() {
     let Some(ctx) = headless_gpu() else {
-        eprintln!("no GPU adapter — skipping");
         return;
     };
 
@@ -510,9 +507,7 @@ fn deck_stage_preserves_shadow_gradation() {
     for w in observed.windows(2) {
         assert!(
             w[1] > w[0],
-            "shadow ramp not monotonic: {:?} (full ramp {:?})",
-            w,
-            observed
+            "shadow ramp not monotonic: {w:?} (full ramp {observed:?})"
         );
     }
 }
@@ -557,7 +552,6 @@ fn deck_headroom_above_one_survives_to_the_composite() {
 #[test]
 fn deck_effects_run_at_composite_precision() {
     let Some(ctx) = headless_gpu() else {
-        eprintln!("no GPU adapter — skipping");
         return;
     };
     // Repo path, not `get_bundled_shader_path()` — that resolves relative to the
@@ -603,7 +597,6 @@ fn deck_effects_run_at_composite_precision() {
 #[test]
 fn every_bundled_shader_builds_a_pipeline() {
     let Some(ctx) = headless_gpu() else {
-        eprintln!("no GPU adapter — skipping");
         return;
     };
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders");
@@ -730,7 +723,6 @@ fn every_bundled_shader_builds_a_pipeline() {
 #[test]
 fn deck_effect_transforms_pixels() {
     let Some(ctx) = headless_gpu() else {
-        eprintln!("no GPU adapter — skipping");
         return;
     };
     let invert = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/invert.fs");
@@ -781,7 +773,6 @@ fn deck_effect_transforms_pixels() {
 #[test]
 fn additive_filter_emits_above_display_white() {
     let Some(ctx) = headless_gpu() else {
-        eprintln!("no GPU adapter — skipping");
         return;
     };
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/glow_bloom.fs");

@@ -17,7 +17,7 @@ use std::time::Instant;
 /// Create the pair of blit pipelines used by every external/live source deck:
 /// `(replace, over_black)`. The REPLACE pipeline writes the source's straight
 /// RGBA verbatim (used when the deck is flagged `transparent`, preserving alpha);
-/// the ALPHA_BLENDING pipeline flattens the source over an opaque black clear (the
+/// the `ALPHA_BLENDING` pipeline flattens the source over an opaque black clear (the
 /// default, so an HTML source with alpha<1 stays opaque). See /spec/html-source.md §2.
 fn external_blit_pipelines(context: &GpuContext) -> Result<(BlitPipeline, BlitPipeline)> {
     let replace = BlitPipeline::new(&context.device, context.compositing_format)?;
@@ -43,13 +43,11 @@ pub(crate) fn load_imported_textures(
         _ => return Vec::new(),
     };
 
-    let shader_dir = shader_file_path
-        .map(|p| {
-            std::path::Path::new(p)
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-        })
-        .unwrap_or(std::path::Path::new("."));
+    let shader_dir = shader_file_path.map_or(std::path::Path::new("."), |p| {
+        std::path::Path::new(p)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+    });
 
     let mut entries: Vec<_> = imported.iter().collect();
     entries.sort_by_key(|(name, _)| (*name).clone());
@@ -101,7 +99,7 @@ pub(crate) fn load_imported_textures(
     for (name, img) in &decoded {
         let (w, h) = img.dimensions();
         let texture = context.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("Imported: {}", name)),
+            label: Some(&format!("Imported: {name}")),
             size: wgpu::Extent3d {
                 width: w,
                 height: h,
@@ -154,6 +152,11 @@ pub(crate) fn load_imported_textures(
 
 impl Deck {
     /// Create a new deck from an ISF shader
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ISF fragment source fails to compile to SPIR-V,
+    /// or if the render pipeline cannot be created.
     pub fn new(context: &GpuContext, shader: ISFShader, width: u32, height: u32) -> Result<Self> {
         // Compile to SPIR-V
         let spirv = compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
@@ -207,8 +210,8 @@ impl Deck {
                 None => continue,
             };
 
-            let pass_width = Self::parse_size_expression(&pass.width, width);
-            let pass_height = Self::parse_size_expression(&pass.height, height);
+            let pass_width = Self::parse_size_expression(pass.width.as_deref(), width);
+            let pass_height = Self::parse_size_expression(pass.height.as_deref(), height);
             let is_persistent = pass.persistent.unwrap_or(false);
 
             // All pass buffers use the unified color-path format. ISF `"FLOAT": true`
@@ -217,7 +220,7 @@ impl Deck {
             let format = context.compositing_format;
 
             let tex_a = context.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("Pass Buffer A: {}", target_name)),
+                label: Some(&format!("Pass Buffer A: {target_name}")),
                 size: wgpu::Extent3d {
                     width: pass_width,
                     height: pass_height,
@@ -244,7 +247,7 @@ impl Deck {
             // the first time anyone declared one.
             let (tex_b_buf, view_b) = {
                 let tex = context.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("Pass Buffer B: {}", target_name)),
+                    label: Some(&format!("Pass Buffer B: {target_name}")),
                     size: wgpu::Extent3d {
                         width: pass_width,
                         height: pass_height,
@@ -347,7 +350,7 @@ impl Deck {
         };
 
         let uuid = super::generate_short_uuid();
-        let param_prefix = format!("deck_{}", uuid);
+        let param_prefix = format!("deck_{uuid}");
 
         Ok(Self {
             uuid,
@@ -383,7 +386,7 @@ impl Deck {
     }
 
     /// Parse ISF size expressions like "$WIDTH", "$WIDTH/2", "1024", etc.
-    pub(crate) fn parse_size_expression(expr: &Option<String>, base_size: u32) -> u32 {
+    pub(crate) fn parse_size_expression(expr: Option<&str>, base_size: u32) -> u32 {
         match expr {
             None => base_size,
             Some(s) => {
@@ -426,7 +429,12 @@ impl Deck {
     }
 
     /// Create a new deck from a video file.
-    /// Auto-detects HAP codec and uses GPU-native BCn path when available.
+    /// Auto-detects HAP codec and uses GPU-native `BCn` path when available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened as a HAP or generic video
+    /// stream, or if the blit/HAP-convert pipelines cannot be created.
     pub fn new_from_video<P: AsRef<Path>>(
         context: &GpuContext,
         path: P,
@@ -535,7 +543,7 @@ impl Deck {
                 HapConvertPipeline::new(&context.device, context.compositing_format)?;
             let blit_pipeline = BlitPipeline::new(&context.device, context.compositing_format)?;
 
-            log::info!("Using HAP GPU path for '{}' ({:?})", source_name, hap_fmt);
+            log::info!("Using HAP GPU path for '{source_name}' ({hap_fmt:?})");
 
             let blocks_x = vid_w.div_ceil(4);
             let blocks_y = vid_h.div_ceil(4);
@@ -616,17 +624,22 @@ impl Deck {
             }
         };
 
-        Self::build_media_deck(
+        Ok(Self::build_media_deck(
             context,
             source_name,
             Some(source_path_str),
             source,
             width,
             height,
-        )
+        ))
     }
 
     /// Create a new deck from an image file (PNG, JPG, BMP, etc.)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the image cannot be opened or decoded, or if the
+    /// blit pipeline cannot be created.
     pub fn new_from_image<P: AsRef<Path>>(
         context: &GpuContext,
         path: P,
@@ -645,14 +658,18 @@ impl Deck {
             .unwrap_or("image")
             .to_string();
 
-        Self::new_from_rgba(context, rgba, source_name, source_path_str, width, height)
+        Self::new_from_rgba(context, &rgba, source_name, source_path_str, width, height)
     }
 
     /// Create a new deck from pre-decoded RGBA image data.
     /// Used by parallel image loading to separate CPU decode from GPU upload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blit pipeline cannot be created.
     pub fn new_from_rgba(
         context: &GpuContext,
-        rgba: image::RgbaImage,
+        rgba: &image::RgbaImage,
         source_name: String,
         source_path_str: String,
         width: u32,
@@ -682,7 +699,7 @@ impl Deck {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * img_w),
@@ -707,17 +724,22 @@ impl Deck {
             scaling_mode: ScalingMode::default(),
         };
 
-        Self::build_media_deck(
+        Ok(Self::build_media_deck(
             context,
             source_name,
             Some(source_path_str),
             source,
             width,
             height,
-        )
+        ))
     }
 
     /// Create a new deck with a solid color fill
+    ///
+    /// # Errors
+    ///
+    /// Never fails today — a solid-color source needs no pipeline. The `Result`
+    /// keeps this constructor uniform with the other `new_from_*` constructors.
     pub fn new_solid_color(
         context: &GpuContext,
         color: [f32; 4],
@@ -733,18 +755,29 @@ impl Deck {
 
         let source = DeckSource::SolidColor {
             color: [
-                color[0] as f64,
-                color[1] as f64,
-                color[2] as f64,
-                color[3] as f64,
+                f64::from(color[0]),
+                f64::from(color[1]),
+                f64::from(color[2]),
+                f64::from(color[3]),
             ],
         };
 
-        Self::build_media_deck(context, source_name, None, source, width, height)
+        Ok(Self::build_media_deck(
+            context,
+            source_name,
+            None,
+            source,
+            width,
+            height,
+        ))
     }
 
     /// Create a new deck from a camera source.
-    /// The camera is managed by CameraManager — this deck reads from the shared texture.
+    /// The camera is managed by `CameraManager` — this deck reads from the shared texture.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the external-source blit pipelines cannot be created.
     pub fn new_from_camera(
         context: &GpuContext,
         camera_id: crate::camera::CameraId,
@@ -754,7 +787,7 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_name = format!("📹 {}", camera_name);
+        let source_name = format!("📹 {camera_name}");
         let (blit_pipeline, blit_pipeline_over_black) = external_blit_pipelines(context)?;
 
         let source = DeckSource::ExternalSource {
@@ -766,12 +799,23 @@ impl Deck {
             scaling_mode: ScalingMode::default(),
         };
 
-        Self::build_media_deck(context, source_name, None, source, width, height)
+        Ok(Self::build_media_deck(
+            context,
+            source_name,
+            None,
+            source,
+            width,
+            height,
+        ))
     }
 
     /// Create a new deck from a depth sensor (Kinect/LIDAR point cloud).
-    /// The sensor is managed by DepthSensorManager; this deck reprojects the
+    /// The sensor is managed by `DepthSensorManager`; this deck reprojects the
     /// shared depth texture as a point cloud. See spec/depth-sensors.md.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the external-source blit pipelines cannot be created.
     pub fn new_from_depth_sensor(
         context: &GpuContext,
         sensor_id: crate::depth::DepthSensorId,
@@ -781,7 +825,7 @@ impl Deck {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_name = format!("🛰 {}", sensor_name);
+        let source_name = format!("🛰 {sensor_name}");
         let (blit_pipeline, blit_pipeline_over_black) = external_blit_pipelines(context)?;
 
         let source = DeckSource::ExternalSource {
@@ -793,10 +837,17 @@ impl Deck {
             scaling_mode: ScalingMode::default(),
         };
 
-        Self::build_media_deck(context, source_name, None, source, width, height)
+        Ok(Self::build_media_deck(
+            context,
+            source_name,
+            None,
+            source,
+            width,
+            height,
+        ))
     }
 
-    /// Shared helper to build a Deck from a pre-built DeckSource with standard render targets.
+    /// Shared helper to build a Deck from a pre-built `DeckSource` with standard render targets.
     fn build_media_deck(
         context: &GpuContext,
         source_name: String,
@@ -804,7 +855,7 @@ impl Deck {
         source: DeckSource,
         width: u32,
         height: u32,
-    ) -> Result<Self> {
+    ) -> Self {
         let texture = context.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Deck Texture"),
             size: wgpu::Extent3d {
@@ -845,9 +896,9 @@ impl Deck {
         let generator_params = ShaderParams::from_inputs(&[]);
 
         let uuid = super::generate_short_uuid();
-        let param_prefix = format!("deck_{}", uuid);
+        let param_prefix = format!("deck_{uuid}");
 
-        Ok(Self {
+        Self {
             uuid,
             param_prefix,
             source_name,
@@ -877,10 +928,14 @@ impl Deck {
             generator_phase_inputs: None,
             analyzers: crate::analyzer::DeckAnalyzers::new(),
             gpu_error: None,
-        })
+        }
     }
 
     /// Create a new deck from an external source (NDI, Syphon, SRT, HLS, DASH, RTMP).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the external-source blit pipelines cannot be created.
     pub fn new_from_external(
         context: &GpuContext,
         kind: ExternalSourceKind,
@@ -901,10 +956,21 @@ impl Deck {
             scaling_mode: ScalingMode::default(),
         };
 
-        Self::build_media_deck(context, display_name, None, source, width, height)
+        Ok(Self::build_media_deck(
+            context,
+            display_name,
+            None,
+            source,
+            width,
+            height,
+        ))
     }
 
     /// Create a new deck from an NDI network source.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Deck::new_from_external`].
     pub fn new_from_ndi(
         context: &GpuContext,
         receiver_idx: usize,
@@ -917,7 +983,7 @@ impl Deck {
         Self::new_from_external(
             context,
             ExternalSourceKind::Ndi(receiver_idx),
-            format!("📡 {}", source_name),
+            format!("📡 {source_name}"),
             source_width,
             source_height,
             width,
@@ -926,6 +992,10 @@ impl Deck {
     }
 
     /// Create a new deck from a Syphon server (macOS inter-app sharing).
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Deck::new_from_external`].
     pub fn new_from_syphon(
         context: &GpuContext,
         client_idx: usize,
@@ -938,7 +1008,7 @@ impl Deck {
         Self::new_from_external(
             context,
             ExternalSourceKind::Syphon(client_idx),
-            format!("🔗 {}", server_name),
+            format!("🔗 {server_name}"),
             source_width,
             source_height,
             width,
@@ -947,6 +1017,10 @@ impl Deck {
     }
 
     /// Create a new deck from an SRT network source.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Deck::new_from_external`].
     pub fn new_from_srt(
         context: &GpuContext,
         receiver_idx: usize,
@@ -959,7 +1033,7 @@ impl Deck {
         Self::new_from_external(
             context,
             ExternalSourceKind::Srt(receiver_idx),
-            format!("📺 {}", url),
+            format!("📺 {url}"),
             source_width,
             source_height,
             width,
@@ -968,6 +1042,10 @@ impl Deck {
     }
 
     /// Create a new deck from an HLS stream source.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Deck::new_from_external`].
     pub fn new_from_hls(
         context: &GpuContext,
         receiver_idx: usize,
@@ -980,7 +1058,7 @@ impl Deck {
         Self::new_from_external(
             context,
             ExternalSourceKind::Hls(receiver_idx),
-            format!("📡 {}", url),
+            format!("📡 {url}"),
             source_width,
             source_height,
             width,
@@ -989,6 +1067,10 @@ impl Deck {
     }
 
     /// Create a new deck from a DASH stream source.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Deck::new_from_external`].
     pub fn new_from_dash(
         context: &GpuContext,
         receiver_idx: usize,
@@ -1001,7 +1083,7 @@ impl Deck {
         Self::new_from_external(
             context,
             ExternalSourceKind::Dash(receiver_idx),
-            format!("📡 {}", url),
+            format!("📡 {url}"),
             source_width,
             source_height,
             width,
@@ -1010,6 +1092,10 @@ impl Deck {
     }
 
     /// Create a new deck from an RTMP stream source.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Deck::new_from_external`].
     pub fn new_from_rtmp(
         context: &GpuContext,
         receiver_idx: usize,
@@ -1022,7 +1108,7 @@ impl Deck {
         Self::new_from_external(
             context,
             ExternalSourceKind::Rtmp(receiver_idx),
-            format!("📺 {}", url),
+            format!("📺 {url}"),
             source_width,
             source_height,
             width,
@@ -1031,6 +1117,10 @@ impl Deck {
     }
 
     /// Create a new deck from an HTML source (Servo offscreen render).
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Deck::new_from_external`].
     pub fn new_from_html(
         context: &GpuContext,
         instance_idx: usize,
@@ -1043,7 +1133,7 @@ impl Deck {
         Self::new_from_external(
             context,
             ExternalSourceKind::Html(instance_idx),
-            format!("🌐 {}", url),
+            format!("🌐 {url}"),
             source_width,
             source_height,
             width,
@@ -1052,6 +1142,12 @@ impl Deck {
     }
 
     /// Create a new deck from a GLSL compute shader (.comp file)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the shader has no `COMPUTE` configuration block, if
+    /// the GLSL fails to compile to SPIR-V, or if the compute pipeline cannot
+    /// be created.
     pub fn new_from_compute_shader(
         context: &GpuContext,
         shader: ISFShader,
@@ -1141,7 +1237,7 @@ impl Deck {
 
         let now = Instant::now();
         let uuid = super::generate_short_uuid();
-        let param_prefix = format!("deck_{}", uuid);
+        let param_prefix = format!("deck_{uuid}");
 
         Ok(Self {
             uuid,
@@ -1183,72 +1279,45 @@ mod tests {
 
     #[test]
     fn parse_size_none_returns_base() {
-        assert_eq!(Deck::parse_size_expression(&None, 1920), 1920);
+        assert_eq!(Deck::parse_size_expression(None, 1920), 1920);
     }
 
     #[test]
     fn parse_size_width_variable() {
-        assert_eq!(
-            Deck::parse_size_expression(&Some("$WIDTH".into()), 1920),
-            1920
-        );
-        assert_eq!(
-            Deck::parse_size_expression(&Some("$HEIGHT".into()), 1080),
-            1080
-        );
+        assert_eq!(Deck::parse_size_expression(Some("$WIDTH"), 1920), 1920);
+        assert_eq!(Deck::parse_size_expression(Some("$HEIGHT"), 1080), 1080);
     }
 
     #[test]
     fn parse_size_divide() {
-        assert_eq!(
-            Deck::parse_size_expression(&Some("$WIDTH/2".into()), 1920),
-            960
-        );
-        assert_eq!(
-            Deck::parse_size_expression(&Some("$HEIGHT/4".into()), 1080),
-            270
-        );
+        assert_eq!(Deck::parse_size_expression(Some("$WIDTH/2"), 1920), 960);
+        assert_eq!(Deck::parse_size_expression(Some("$HEIGHT/4"), 1080), 270);
     }
 
     #[test]
     fn parse_size_multiply() {
-        assert_eq!(
-            Deck::parse_size_expression(&Some("$WIDTH*2".into()), 960),
-            1920
-        );
-        assert_eq!(
-            Deck::parse_size_expression(&Some("$HEIGHT*3".into()), 360),
-            1080
-        );
+        assert_eq!(Deck::parse_size_expression(Some("$WIDTH*2"), 960), 1920);
+        assert_eq!(Deck::parse_size_expression(Some("$HEIGHT*3"), 360), 1080);
     }
 
     #[test]
     fn parse_size_literal() {
-        assert_eq!(Deck::parse_size_expression(&Some("512".into()), 1920), 512);
-        assert_eq!(
-            Deck::parse_size_expression(&Some("1024".into()), 1080),
-            1024
-        );
+        assert_eq!(Deck::parse_size_expression(Some("512"), 1920), 512);
+        assert_eq!(Deck::parse_size_expression(Some("1024"), 1080), 1024);
     }
 
     #[test]
     fn parse_size_invalid_literal_falls_back() {
-        assert_eq!(Deck::parse_size_expression(&Some("abc".into()), 1920), 1920);
+        assert_eq!(Deck::parse_size_expression(Some("abc"), 1920), 1920);
     }
 
     #[test]
     fn parse_size_divide_by_zero_safe() {
-        assert_eq!(
-            Deck::parse_size_expression(&Some("$WIDTH/0".into()), 1920),
-            1920
-        );
+        assert_eq!(Deck::parse_size_expression(Some("$WIDTH/0"), 1920), 1920);
     }
 
     #[test]
     fn parse_size_whitespace_trim() {
-        assert_eq!(
-            Deck::parse_size_expression(&Some(" $WIDTH ".into()), 1920),
-            1920
-        );
+        assert_eq!(Deck::parse_size_expression(Some(" $WIDTH "), 1920), 1920);
     }
 }

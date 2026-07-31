@@ -110,7 +110,7 @@ fn bench_render_thread(c: &mut Criterion) {
             warmup(&gpu, &mut mgr, Duration::from_secs(3));
         }
         group.bench_function(format!("{decks}_decks"), |b| {
-            b.iter(|| frame(&gpu, &mut mgr))
+            b.iter(|| frame(&gpu, &mut mgr));
         });
     }
 

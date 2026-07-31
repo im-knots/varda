@@ -13,6 +13,7 @@
 //! ```
 
 use std::collections::{BTreeMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use utoipa::OpenApi;
@@ -40,7 +41,7 @@ fn method_rank(method: &str) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// Every documented operation, grouped by its first OpenAPI tag.
+/// Every documented operation, grouped by its first `OpenAPI` tag.
 fn operations_by_tag() -> BTreeMap<String, Vec<Operation>> {
     let json = serde_json::to_value(varda::usecases::api::runner::ApiDoc::openapi())
         .expect("serialize openapi");
@@ -107,13 +108,10 @@ fn render_reference() -> String {
     );
 
     for (tag, group) in operations_by_tag() {
-        out.push_str(&format!("\n### {}\n\n", tag));
+        let _ = writeln!(out, "\n### {tag}\n");
         out.push_str("| Method | Path | Description |\n|---|---|---|\n");
         for op in group {
-            out.push_str(&format!(
-                "| `{}` | `{}` | {} |\n",
-                op.method, op.path, op.summary
-            ));
+            let _ = writeln!(out, "| `{}` | `{}` | {} |", op.method, op.path, op.summary);
         }
     }
 
@@ -196,7 +194,7 @@ fn every_registered_route_is_documented() {
         if exempt.contains(&route.as_str()) || documented.contains(&route) {
             continue;
         }
-        undocumented.push(format!("`{}`", route));
+        undocumented.push(format!("`{route}`"));
     }
     undocumented.sort();
     undocumented.dedup();

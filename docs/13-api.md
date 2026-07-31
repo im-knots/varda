@@ -374,6 +374,10 @@ See [/spec/api-addressing.md] for the full rationale.
 
 For request and response schemas, see the Swagger UI at `/api/docs`.
 
+Analyzer routes cover frame analysis (brightness, face detection, depth sensor); see
+[Frame Analysis & Preprocessors](14-frame-analysis.md#analyzer-http-api) for request
+bodies and workflow.
+
 <!-- BEGIN GENERATED ROUTES -->
 
 <!-- Generated from ApiDoc::openapi() by tests/api_docs.rs.
@@ -383,8 +387,6 @@ Writes address entities by UUID. Positional integers appear only as reorder
 ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 ### Analyzers
-
-Frame analysis (brightness, face detection, depth sensor). See [Frame Analysis & Preprocessors](14-frame-analysis.md#analyzer-http-api) for request bodies and workflow.
 
 | Method | Path | Description |
 |---|---|---|
@@ -726,7 +728,7 @@ Frame analysis (brightness, face detection, depth sensor). See [Frame Analysis &
 | `POST` | `/api/redo` |  |
 | `PUT` | `/api/resolution` |  |
 | `POST` | `/api/shutdown` |  |
-| `GET` | `/api/state` |  |
+| `GET` | `/api/state` | The full engine state snapshot. |
 | `PUT` | `/api/target-fps` |  |
 | `POST` | `/api/undo` |  |
 | `POST` | `/api/workspace/load` |  |

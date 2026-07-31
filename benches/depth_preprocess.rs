@@ -6,9 +6,9 @@
 //! the preprocessor, so it needs a number rather than an assurance.
 //!
 //! Two groups:
-//!   depth_preprocess_passes — one full conversion at VGA and at QVGA, drained
+//!   `depth_preprocess_passes` — one full conversion at VGA and at QVGA, drained
 //!                             each iteration. This is the per-sensor-frame cost.
-//!   depth_preprocess_decks  — N decks each running their own conversion, since
+//!   `depth_preprocess_decks`  — N decks each running their own conversion, since
 //!                             the spec chose per-deck pipelines (so each deck
 //!                             gets its own near/far framing) over one shared
 //!                             conversion per device. This group is what would

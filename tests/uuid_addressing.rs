@@ -13,12 +13,15 @@ use varda::engine::{CommandResult, EffectTarget, EngineCommand, ErrorCode};
 
 use clap::Parser;
 
+mod common;
+
 fn headless_app() -> Option<VardaApp> {
-    let gpu = varda::renderer::context::GpuContext::new_headless().ok()?;
+    let gpu = common::headless_gpu()?;
     let config = AppConfig::parse_from(
         ["varda", "--headless", "--no-osc", "--no-ndi", "--no-syphon"].iter(),
     );
-    VardaApp::new(gpu, &config).ok()
+    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
 fn send_cmd(app: &mut VardaApp, cmd: EngineCommand) -> CommandResult {
@@ -69,8 +72,7 @@ fn deck_opacity(app: &VardaApp, deck_uuid: &str) -> f32 {
         .iter()
         .flat_map(|ch| ch.decks.iter())
         .find(|d| d.uuid == deck_uuid)
-        .map(|d| d.opacity)
-        .unwrap_or_else(|| panic!("deck {deck_uuid} not found"))
+        .map_or_else(|| panic!("deck {deck_uuid} not found"), |d| d.opacity)
 }
 
 // ── The race this migration exists to close ────────────────────────

@@ -36,13 +36,13 @@ pub struct ReadbackBuffer {
 }
 
 impl ReadbackBuffer {
-    /// Create a new ReadbackBuffer for a given resolution.
+    /// Create a new `ReadbackBuffer` for a given resolution.
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let unpadded_bytes_per_row = width * 4; // RGBA8
                                                 // wgpu requires COPY_BYTES_PER_ROW_ALIGNMENT (256) alignment
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
-        let buffer_size = (padded_bytes_per_row * height) as u64;
+        let buffer_size = u64::from(padded_bytes_per_row * height);
 
         let buffers = [
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -89,9 +89,8 @@ impl ReadbackBuffer {
         encoder: &mut wgpu::CommandEncoder,
         source_texture: &wgpu::Texture,
     ) {
-        let idx = match self.slots.iter().position(|s| matches!(s, SlotState::Free)) {
-            Some(i) => i,
-            None => return,
+        let Some(idx) = self.slots.iter().position(|s| matches!(s, SlotState::Free)) else {
+            return;
         };
 
         encoder.copy_texture_to_buffer(

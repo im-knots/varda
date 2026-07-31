@@ -1,3 +1,9 @@
+// Test assertions compare floats against the exact literals the test itself just
+// assigned (`assert_eq!(snap.speed, 2.0)`), where exact equality is the correct
+// assertion and an epsilon would weaken it. `float_cmp` stays live in non-test
+// code, where an exact float comparison usually is a bug.
+#![cfg_attr(test, allow(clippy::float_cmp))]
+
 pub mod app;
 pub mod engine;
 mod internal;

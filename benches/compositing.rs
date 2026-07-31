@@ -1,18 +1,18 @@
 /// GPU compositing benchmarks at 1080p.
 ///
-///   channel_composite_solid  — solid-color decks (LoadOp::Clear, no fragment shader).
+///   `channel_composite_solid`  — solid-color decks (`LoadOp::Clear`, no fragment shader).
 ///                              The slope across deck counts isolates per-deck
 ///                              copy-on-composite cost. The level at decks/1
 ///                              includes fixed render-pass setup, not just
 ///                              compositing.
 ///
-///   channel_composite_shader — same shape but with bars.fs running on every
+///   `channel_composite_shader` — same shape but with bars.fs running on every
 ///                              pixel. Difference vs solid at N decks ≈
 ///                              N × per-deck shader execution cost.
 ///
-///   mixer_crossfade          — two channels through the crossfader at 50%.
+///   `mixer_crossfade`          — two channels through the crossfader at 50%.
 ///
-///   composite_resolution     — solid decks at 1080p and 4K. Compositing traffic
+///   `composite_resolution`     — solid decks at 1080p and 4K. Compositing traffic
 ///                              scales with texel count, so the 4K/1080p ratio at
 ///                              a fixed deck count isolates how bandwidth-bound
 ///                              the stage is. Solid decks keep fragment cost flat
@@ -88,7 +88,7 @@ fn setup_mixer_shader(context: &GpuContext, n_decks: usize) -> Mixer {
 fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
     let audio = AudioData::default();
     let audio_values = AudioValues {
-        sources: Default::default(),
+        sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
     for _ in 0..3 {
@@ -111,19 +111,18 @@ fn time_render_us(ctx: &GpuContext, mixer: &mut Mixer, samples: usize) -> u128 {
 }
 
 /// Preflight: assert the 8-deck render fits the 60fps budget. Runs once
-/// before any criterion sampling. Skipped when VARDA_BENCH_SKIP_SLO is set.
+/// before any criterion sampling. Skipped when `VARDA_BENCH_SKIP_SLO` is set.
 fn preflight_slo(ctx: &GpuContext) {
     if std::env::var_os("VARDA_BENCH_SKIP_SLO").is_some() {
         return;
     }
     let mut mixer = setup_mixer_solid(ctx, 8);
     let median = time_render_us(ctx, &mut mixer, 11);
-    if median > FRAME_BUDGET_US {
-        panic!(
-            "SLO violation: 8-deck solid composite at {WIDTH}x{HEIGHT} \
-             median = {median}µs, exceeds 60fps budget {FRAME_BUDGET_US}µs"
-        );
-    }
+    assert!(
+        median <= FRAME_BUDGET_US,
+        "SLO violation: 8-deck solid composite at {WIDTH}x{HEIGHT} \
+         median = {median}µs, exceeds 60fps budget {FRAME_BUDGET_US}µs"
+    );
     eprintln!("preflight: 8-deck solid composite median = {median}µs (budget {FRAME_BUDGET_US}µs)");
 }
 
@@ -136,7 +135,7 @@ fn bench_channel_composite_solid(c: &mut Criterion) {
 
     let audio = AudioData::default();
     let audio_values = AudioValues {
-        sources: Default::default(),
+        sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
 
@@ -240,7 +239,7 @@ fn bench_composite_resolution(c: &mut Criterion) {
 
     let audio = AudioData::default();
     let audio_values = AudioValues {
-        sources: Default::default(),
+        sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
 
@@ -272,7 +271,7 @@ fn bench_channel_composite_shader(c: &mut Criterion) {
 
     let audio = AudioData::default();
     let audio_values = AudioValues {
-        sources: Default::default(),
+        sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
 
@@ -302,7 +301,7 @@ fn bench_mixer_crossfade(c: &mut Criterion) {
 
     let audio = AudioData::default();
     let audio_values = AudioValues {
-        sources: Default::default(),
+        sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
 
@@ -355,7 +354,7 @@ fn bench_channel_composite_blend(c: &mut Criterion) {
 
     let audio = AudioData::default();
     let audio_values = AudioValues {
-        sources: Default::default(),
+        sources: std::collections::HashMap::default(),
     };
     let analyzer_values = AnalyzerValues::default();
 
@@ -391,7 +390,8 @@ fn report_per_deck_slope(_c: &mut Criterion) {
     let mut m8 = setup_mixer_solid(&ctx, 8);
     let t1 = time_render_us(&ctx, &mut m1, 11);
     let t8 = time_render_us(&ctx, &mut m8, 11);
-    let slope = (t8 as i128 - t1 as i128) / 7;
+    let slope =
+        (i128::try_from(t8).unwrap_or(i128::MAX) - i128::try_from(t1).unwrap_or(i128::MAX)) / 7;
     eprintln!(
         "per-deck copy-on-composite slope (solid, {WIDTH}x{HEIGHT}): \
          {slope}µs/deck   [decks/1={t1}µs, decks/8={t8}µs]"

@@ -46,7 +46,7 @@ pub(super) fn polygon_shape(
 
 /// Ear-clipping triangulation for a simple polygon.
 /// Returns triangle indices into the vertex array.
-pub(super) fn triangulate_polygon(verts: &[egui::Pos2]) -> Vec<u32> {
+fn triangulate_polygon(verts: &[egui::Pos2]) -> Vec<u32> {
     let n = verts.len();
     if n < 3 {
         return Vec::new();
@@ -100,11 +100,11 @@ pub(super) fn triangulate_polygon(verts: &[egui::Pos2]) -> Vec<u32> {
     result
 }
 
-pub(super) fn cross_2d(o: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+fn cross_2d(o: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
     (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
 }
 
-pub(super) fn is_ear(
+fn is_ear(
     verts: &[egui::Pos2],
     idx: &[usize],
     prev: usize,
@@ -134,12 +134,7 @@ pub(super) fn is_ear(
     true
 }
 
-pub(super) fn point_in_triangle(
-    p: egui::Pos2,
-    a: egui::Pos2,
-    b: egui::Pos2,
-    c: egui::Pos2,
-) -> bool {
+fn point_in_triangle(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> bool {
     let d0 = cross_2d(a, b, p);
     let d1 = cross_2d(b, c, p);
     let d2 = cross_2d(c, a, p);

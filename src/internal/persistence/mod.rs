@@ -14,6 +14,12 @@ use std::path::{Path, PathBuf};
 
 /// Atomic file write: writes to a `.tmp` sibling then renames into place.
 /// Prevents data loss if the process crashes mid-write.
+///
+/// # Errors
+///
+/// Returns an error if the temporary sibling file cannot be written (missing
+/// parent directory, permissions, disk full) or if renaming it over `path`
+/// fails.
 pub fn atomic_write<P: AsRef<Path>>(path: P, content: &str) -> Result<()> {
     let path = path.as_ref();
     let tmp = path.with_extension("tmp");
@@ -27,6 +33,8 @@ pub fn atomic_write<P: AsRef<Path>>(path: P, content: &str) -> Result<()> {
 /// Stage configuration persisted in `.varda/stage.json`.
 /// Contains venue-specific data: surfaces, outputs, and editor preferences.
 /// Kept separate from scene.json so users can share deck layouts without stage geometry.
+// Flags are independent persisted UI toggles; bundling them would change scene/stage JSON.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagePrefs {
     #[serde(default = "default_grid_size")]
@@ -98,9 +106,9 @@ impl StagePrefs {
             ));
         }
         for (i, output) in self.outputs.iter().enumerate() {
-            let prefix = format!("outputs[{}]", i);
+            let prefix = format!("outputs[{i}]");
             if output.name.trim().is_empty() {
-                errors.push(format!("{}: name is empty", prefix));
+                errors.push(format!("{prefix}: name is empty"));
             }
         }
         // Warp now lives on surfaces — validate their corner-pin finiteness.
@@ -110,8 +118,7 @@ impl StagePrefs {
                     for (k, v) in corner.iter().enumerate() {
                         if !v.is_finite() {
                             errors.push(format!(
-                                "surfaces[{}]: warp corner[{}][{}] is not finite",
-                                i, c, k
+                                "surfaces[{i}]: warp corner[{c}][{k}] is not finite"
                             ));
                         }
                     }
@@ -121,6 +128,13 @@ impl StagePrefs {
         errors
     }
 
+    /// Load stage prefs from a JSON file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `path` cannot be read (missing file, permissions) or
+    /// if its contents are not valid JSON for a [`StagePrefs`]. Validation
+    /// problems in an otherwise-parseable file are logged as warnings only.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read stage prefs: {}", path.as_ref().display()))?;
@@ -133,10 +147,16 @@ impl StagePrefs {
         Ok(prefs)
     }
 
+    /// Save stage prefs to a JSON file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the prefs cannot be serialized to JSON, or if the
+    /// atomic write fails (temp file write or rename).
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let errors = self.validate();
         for e in &errors {
-            log::error!("Stage prefs save: {}", e);
+            log::error!("Stage prefs save: {e}");
         }
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize stage prefs")?;
@@ -158,6 +178,11 @@ impl Workspace {
     }
 
     /// Create a workspace rooted at the current working directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current working directory cannot be determined
+    /// (e.g. it was deleted, or the process lacks permission to read it).
     pub fn from_cwd() -> Result<Self> {
         let cwd = std::env::current_dir().context("Failed to get current directory")?;
         Ok(Self::new(cwd))
@@ -234,6 +259,11 @@ impl Workspace {
     }
 
     /// Ensure preset directories exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `.varda/` or either of the `presets/decks/` and
+    /// `presets/channels/` directories cannot be created.
     pub fn ensure_preset_dirs(&self) -> Result<()> {
         self.ensure_dir()?;
         let dirs = [self.deck_presets_dir(), self.channel_presets_dir()];
@@ -252,6 +282,11 @@ impl Workspace {
     }
 
     /// Ensure the `.varda/` directory exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory does not exist and cannot be created
+    /// (permissions, or a non-directory file already at that path).
     pub fn ensure_dir(&self) -> Result<()> {
         let dir = self.varda_dir();
         if !dir.exists() {
@@ -287,7 +322,10 @@ impl Workspace {
 
 use crate::mixer::Mixer;
 use crate::renderer::context::{OutputTarget, RecordingCodec, UnifiedOutput};
-use crate::scene::*;
+use crate::scene::{
+    AutoTransitionConfig, ChannelConfig, DeckConfig, EffectConfig, OutputConfig,
+    OutputTargetConfig, SceneConfig, SourceConfig, SurfaceAssignmentConfig, TriggerConfig,
+};
 
 // ── DurationSpec ↔ DurationSpecConfig helpers ───────────────────────
 
@@ -350,24 +388,23 @@ pub fn restore_sequence_steps(
                         .filter(|(from, to)| {
                             channel_uuids.contains(from) && channel_uuids.contains(to)
                         });
-                    match resolved {
-                        Some((from_ch, to_ch)) => StepKind::Fade {
+                    if let Some((from_ch, to_ch)) = resolved {
+                        StepKind::Fade {
                             from_ch,
                             to_ch,
                             duration: duration_config_to_spec(duration),
                             easing: (*easing).into(),
                             transition_shader: transition_shader.clone(),
                             target_amount: *target_amount,
-                        },
-                        None => {
-                            let msg = "Fade step references a channel that no longer exists; \
-                                       kept as a wait so later GoTo targets stay valid"
-                                .to_string();
-                            log::warn!("{}", msg);
-                            warnings.push(msg);
-                            StepKind::Wait {
-                                duration: duration_config_to_spec(duration),
-                            }
+                        }
+                    } else {
+                        let msg = "Fade step references a channel that no longer exists; \
+                                   kept as a wait so later GoTo targets stay valid"
+                            .to_string();
+                        log::warn!("{msg}");
+                        warnings.push(msg);
+                        StepKind::Wait {
+                            duration: duration_config_to_spec(duration),
                         }
                     }
                 }
@@ -402,7 +439,7 @@ fn depth_prepro_config(deck: &Deck) -> Option<crate::scene::DepthPreproConfig> {
     })
 }
 
-/// Build a SceneConfig snapshot from live app state (show-specific: channels, effects, modulation).
+/// Build a `SceneConfig` snapshot from live app state (show-specific: channels, effects, modulation).
 pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> SceneConfig {
     let channels = mixer
         .channels()
@@ -426,9 +463,9 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                             SourceConfig::Video {
                                 path: slot.deck.source_path().unwrap_or_default().to_string(),
                                 loop_mode: pb.as_ref().map(|p| p.loop_mode).unwrap_or_default(),
-                                speed: pb.as_ref().map(|p| p.speed).unwrap_or(1.0),
-                                in_point: pb.as_ref().map(|p| p.in_point).unwrap_or(0.0),
-                                out_point: pb.as_ref().map(|p| p.out_point).unwrap_or(0.0),
+                                speed: pb.as_ref().map_or(1.0, |p| p.speed),
+                                in_point: pb.as_ref().map_or(0.0, |p| p.in_point),
+                                out_point: pb.as_ref().map_or(0.0, |p| p.out_point),
                                 scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
                             }
                         }
@@ -672,11 +709,13 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
         render_width: Some(render_width),
         render_height: Some(render_height),
         tonemap_mode: mixer.tonemap_mode(),
-        active_lut: mixer.active_lut_filename().map(|s| s.to_string()),
+        active_lut: mixer
+            .active_lut_filename()
+            .map(std::string::ToString::to_string),
     }
 }
 
-/// Convert a live OutputTarget to a serializable OutputTargetConfig.
+/// Convert a live `OutputTarget` to a serializable `OutputTargetConfig`.
 fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
     match target {
         OutputTarget::Windowed => OutputTargetConfig::Windowed,
@@ -737,7 +776,7 @@ fn target_to_config(target: &OutputTarget) -> OutputTargetConfig {
     }
 }
 
-/// Convert a serializable OutputTargetConfig back to a live OutputTarget.
+/// Convert a serializable `OutputTargetConfig` back to a live `OutputTarget`.
 /// Public variant for use from outputs.rs.
 pub fn config_to_target_pub(config: &OutputTargetConfig) -> OutputTarget {
     config_to_target(config)
@@ -830,9 +869,10 @@ fn config_to_target(config: &OutputTargetConfig) -> OutputTarget {
     }
 }
 
-/// Build a StagePrefs snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
+/// Build a `StagePrefs` snapshot from live app state (venue-specific: surfaces, outputs, editor prefs).
 // Aggregates many independent live-state sources into one snapshot; no shared invariant to bundle.
-#[allow(clippy::too_many_arguments)]
+// The bools mirror independent persisted `StagePrefs` toggles one-for-one.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub fn snapshot_stage(
     surface_manager: &crate::surface::SurfaceManager,
     outputs_list: &[UnifiedOutput],
@@ -933,7 +973,7 @@ use crate::renderer::GpuContext;
 /// for late binding. Varda is the *client* of externally-owned Syphon servers;
 /// on restart the producer may not be publishing yet, so the named server is not in
 /// `SyphonServerDirectory`. Rather than fail the restore (the old behaviour:
-/// "restoration not yet implemented" → black_hole placeholder), we record the
+/// "restoration not yet implemented" → `black_hole` placeholder), we record the
 /// intent here and let `VardaApp::reconcile_syphon` auto-attach the real deck
 /// the moment the server appears. Startup order becomes irrelevant.
 #[derive(Debug, Clone)]
@@ -956,7 +996,14 @@ pub struct RestoreResult {
     pub pending_syphon: Vec<PendingSyphonDeck>,
 }
 
-/// Reconstruct live state from a SceneConfig.
+/// Reconstruct live state from a `SceneConfig`.
+///
+/// # Errors
+///
+/// Returns an error if the mixer or any deck/effect in `config` cannot be
+/// constructed on the GPU — for example a shader or media file that fails to
+/// load or compile. Individually recoverable problems are collected into
+/// [`RestoreResult::warnings`] instead.
 // Writes back into many independent live-state targets; no shared invariant to bundle.
 #[allow(clippy::too_many_arguments)]
 pub fn restore_scene(
@@ -981,7 +1028,7 @@ pub fn restore_scene(
     // Clear default channels — we'll create from config
     mixer.channels_mut().clear();
 
-    for ch_config in config.channels.iter() {
+    for ch_config in &config.channels {
         let mut channel = crate::channel::Channel::new(
             ch_config.name.clone(),
             context,
@@ -1017,7 +1064,7 @@ pub fn restore_scene(
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    log::debug!("Skipping Syphon deck '{}' on non-macOS restore", name);
+                    log::debug!("Skipping Syphon deck '{name}' on non-macOS restore");
                 }
                 continue;
             }
@@ -1055,7 +1102,8 @@ pub fn restore_scene(
                         at.play_duration = duration_config_to_spec(&at_config.play_duration);
                         at.transition_duration =
                             duration_config_to_spec(&at_config.transition_duration);
-                        at.transition_shader_name = at_config.transition_shader.clone();
+                        at.transition_shader_name
+                            .clone_from(&at_config.transition_shader);
                         slot.auto_transition = Some(at);
 
                         // Compile transition shader if specified
@@ -1069,15 +1117,12 @@ pub fn restore_scene(
                                     slot.set_transition_shader(context, (*shader).clone())
                                 {
                                     log::warn!(
-                                        "Failed to restore deck transition shader '{}': {}",
-                                        shader_name,
-                                        e
+                                        "Failed to restore deck transition shader '{shader_name}': {e}"
                                     );
                                 }
                             } else {
                                 log::warn!(
-                                    "Deck transition shader '{}' not found in registry",
-                                    shader_name
+                                    "Deck transition shader '{shader_name}' not found in registry"
                                 );
                             }
                         }
@@ -1087,7 +1132,7 @@ pub fn restore_scene(
                 }
                 Err(e) => {
                     let msg = format!("Failed to restore deck '{}': {}", deck_config.name, e);
-                    log::warn!("{}", msg);
+                    log::warn!("{msg}");
                     warnings.push(msg);
                 }
             }
@@ -1102,7 +1147,7 @@ pub fn restore_scene(
                         "Failed to restore channel effect '{}': {}",
                         eff_config.path, e
                     );
-                    log::warn!("{}", msg);
+                    log::warn!("{msg}");
                     warnings.push(msg);
                 }
             }
@@ -1122,8 +1167,7 @@ pub fn restore_scene(
                 .and_then(|s| s.parse::<usize>().ok())
         })
         .max()
-        .map(|n| n + 1)
-        .unwrap_or(mixer.channel_count());
+        .map_or(mixer.channel_count(), |n| n + 1);
     mixer.set_next_channel_index(max_idx);
 
     // Restore master effects
@@ -1135,7 +1179,7 @@ pub fn restore_scene(
                     "Failed to restore master effect '{}': {}",
                     eff_config.path, e
                 );
-                log::warn!("{}", msg);
+                log::warn!("{msg}");
                 warnings.push(msg);
             }
         }
@@ -1160,15 +1204,14 @@ pub fn restore_scene(
             match mixer.set_transition(context, (*shader).clone()) {
                 Ok(()) => {}
                 Err(e) => {
-                    let msg = format!("Failed to restore transition '{}': {}", transition_name, e);
-                    log::warn!("{}", msg);
+                    let msg = format!("Failed to restore transition '{transition_name}': {e}");
+                    log::warn!("{msg}");
                     warnings.push(msg);
                 }
             }
         } else {
             warnings.push(format!(
-                "Transition '{}' not found in registry",
-                transition_name
+                "Transition '{transition_name}' not found in registry"
             ));
         }
     }
@@ -1210,11 +1253,11 @@ pub fn restore_scene(
                     &parsed,
                     lut_filename.clone(),
                 );
-                log::info!("Restored LUT: {}", lut_filename);
+                log::info!("Restored LUT: {lut_filename}");
             }
             Err(e) => {
-                let msg = format!("Failed to restore LUT '{}': {}", lut_filename, e);
-                log::warn!("{}", msg);
+                let msg = format!("Failed to restore LUT '{lut_filename}': {e}");
+                log::warn!("{msg}");
                 warnings.push(msg);
             }
         }
@@ -1313,7 +1356,7 @@ pub(crate) fn restore_deck(
             depth_prepro,
         } => {
             let shader = ISFShader::from_file(path)
-                .with_context(|| format!("Failed to load shader: {}", path))?;
+                .with_context(|| format!("Failed to load shader: {path}"))?;
             let metadata = shader.metadata.clone();
             let mut deck = if shader.metadata.is_compute() {
                 Deck::new_from_compute_shader(context, shader, render_width, render_height)?
@@ -1368,13 +1411,13 @@ pub(crate) fn restore_deck(
                 .devices()
                 .iter()
                 .find(|d| d.name == *name)
-                .ok_or_else(|| anyhow::anyhow!("Camera '{}' not found — is it connected?", name))?;
+                .ok_or_else(|| anyhow::anyhow!("Camera '{name}' not found — is it connected?"))?;
             let camera_id = device.id;
             let cam_name = device.name.clone();
 
             let (src_w, src_h) = camera_manager
                 .open_camera(camera_id, &context.device)
-                .with_context(|| format!("Failed to open camera '{}'", name))?;
+                .with_context(|| format!("Failed to open camera '{name}'"))?;
 
             Deck::new_from_camera(
                 context,
@@ -1403,20 +1446,17 @@ pub(crate) fn restore_deck(
             }
             None => {
                 return Err(anyhow::anyhow!(
-                    "NDI source '{}' not available for restore",
-                    name
+                    "NDI source '{name}' not available for restore"
                 ));
             }
         },
         SourceConfig::Syphon { name } => {
             // Syphon sources are resolved at runtime — skip if not on macOS
             log::warn!(
-                "Syphon source '{}' restoration not yet implemented (needs SyphonManager)",
-                name
+                "Syphon source '{name}' restoration not yet implemented (needs SyphonManager)"
             );
             return Err(anyhow::anyhow!(
-                "Syphon source '{}' not available for restore",
-                name
+                "Syphon source '{name}' not available for restore"
             ));
         }
         SourceConfig::Srt { url, mode } => {
@@ -1424,7 +1464,7 @@ pub(crate) fn restore_deck(
                 "listener" => crate::stream::SrtMode::Listener,
                 "caller" => crate::stream::SrtMode::Caller,
                 other => {
-                    log::warn!("Unknown SRT mode '{}', defaulting to Caller", other);
+                    log::warn!("Unknown SRT mode '{other}', defaulting to Caller");
                     crate::stream::SrtMode::Caller
                 }
             };
@@ -1445,8 +1485,7 @@ pub(crate) fn restore_deck(
                 }
                 None => {
                     return Err(anyhow::anyhow!(
-                        "SRT source '{}' not available for restore",
-                        url
+                        "SRT source '{url}' not available for restore"
                     ));
                 }
             }
@@ -1473,8 +1512,7 @@ pub(crate) fn restore_deck(
                 }
                 None => {
                     return Err(anyhow::anyhow!(
-                        "HLS source '{}' not available for restore",
-                        url
+                        "HLS source '{url}' not available for restore"
                     ));
                 }
             }
@@ -1501,8 +1539,7 @@ pub(crate) fn restore_deck(
                 }
                 None => {
                     return Err(anyhow::anyhow!(
-                        "DASH source '{}' not available for restore",
-                        url
+                        "DASH source '{url}' not available for restore"
                     ));
                 }
             }
@@ -1529,8 +1566,7 @@ pub(crate) fn restore_deck(
                 }
                 None => {
                     return Err(anyhow::anyhow!(
-                        "RTMP source '{}' not available for restore",
-                        url
+                        "RTMP source '{url}' not available for restore"
                     ));
                 }
             }
@@ -1553,8 +1589,7 @@ pub(crate) fn restore_deck(
                 }
                 None => {
                     return Err(anyhow::anyhow!(
-                        "HTML source '{}' not available for restore",
-                        url
+                        "HTML source '{url}' not available for restore"
                     ));
                 }
             }
@@ -1568,11 +1603,11 @@ pub(crate) fn restore_deck(
                 .find(|d| d.name == *name)
                 .cloned()
                 .ok_or_else(|| {
-                    anyhow::anyhow!("Depth sensor '{}' not found — is it connected?", name)
+                    anyhow::anyhow!("Depth sensor '{name}' not found — is it connected?")
                 })?;
             let (src_w, src_h) =
                 crate::depth::open_depth_sensor(depth_manager, device.id, &context.device)
-                    .with_context(|| format!("Failed to open depth sensor '{}'", name))?;
+                    .with_context(|| format!("Failed to open depth sensor '{name}'"))?;
             let mut deck = Deck::new_from_depth_sensor(
                 context,
                 device.id,
@@ -1629,7 +1664,7 @@ pub(crate) fn restore_effect(
     let shader = ISFShader::from_file(&config.path)
         .with_context(|| format!("Failed to load effect shader: {}", config.path))?;
     let mut effect = Effect::new_with_format(context, shader, target_format)?;
-    effect.uuid = config.uuid.clone();
+    effect.uuid.clone_from(&config.uuid);
     effect.enabled = config.enabled;
     // Restore parameter values
     for (name, value) in &config.params {
@@ -1638,8 +1673,11 @@ pub(crate) fn restore_effect(
     Ok(effect)
 }
 
-/// Check if a live deck's source matches a target SourceConfig (same type + same path/name).
+/// Check if a live deck's source matches a target `SourceConfig` (same type + same path/name).
 /// Used by diff-apply to decide whether a deck can be patched in place or must be rebuilt.
+// Each arm pairs one source_type string with its matching config variant; merging
+// same-bodied arms would let mismatched type/config pairs compare equal.
+#[allow(clippy::match_same_arms)]
 pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
     match (deck.source_type(), config) {
         ("shader", SourceConfig::Shader { path, .. }) => deck.source_path() == Some(path.as_str()),
@@ -1695,11 +1733,11 @@ mod tests {
             &deck,
             &SourceConfig::Video {
                 path: "test.mp4".into(),
-                loop_mode: Default::default(),
+                loop_mode: crate::video::LoopMode::default(),
                 speed: 1.0,
                 in_point: 0.0,
                 out_point: 0.0,
-                scaling_mode: Default::default()
+                scaling_mode: crate::deck::ScalingMode::default()
             }
         ));
         assert!(!source_configs_match(
@@ -1720,7 +1758,7 @@ mod tests {
             &deck,
             &SourceConfig::Image {
                 path: "test.png".into(),
-                scaling_mode: Default::default()
+                scaling_mode: crate::deck::ScalingMode::default()
             }
         ));
         assert!(!source_configs_match(

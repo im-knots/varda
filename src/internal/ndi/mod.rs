@@ -1,7 +1,7 @@
 //! NDI (Network Device Interface) — send and receive video over LAN.
 //!
 //! Uses dynamic loading (`libloading`) so the NDI SDK is only required at runtime.
-//! Input follows the CameraManager pattern: background receive thread →
+//! Input follows the `CameraManager` pattern: background receive thread →
 //! Arc<Mutex<Option<Vec<u8>>>> → main-thread GPU upload.
 
 #[allow(non_camel_case_types, non_snake_case, dead_code)]
@@ -44,7 +44,7 @@ struct NdiReceiver {
     frame_data: Arc<Mutex<Option<NdiFrame>>>,
     stop_flag: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
-    _thread: Option<std::thread::JoinHandle<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
     #[allow(dead_code)]
     recv_instance: ffi::NDIlib_recv_instance_t,
     width: u32,
@@ -110,15 +110,14 @@ impl NdiManager {
 
     /// Scan for NDI sources on the network (2s timeout).
     pub fn discover(&mut self) {
-        let sdk = match &self.sdk {
-            Some(s) => s,
-            None => return,
+        let Some(sdk) = &self.sdk else {
+            return;
         };
         self.sources.clear();
 
         unsafe {
             let find_settings = ffi::NDIlib_find_create_t::default();
-            let finder = (sdk.find_create_v2)(&find_settings);
+            let finder = (sdk.find_create_v2)(&raw const find_settings);
             if finder.is_null() {
                 log::warn!("NDI find_create_v2 returned null");
                 return;
@@ -128,7 +127,7 @@ impl NdiManager {
             (sdk.find_wait_for_sources)(finder, 2000);
 
             let mut count: std::os::raw::c_uint = 0;
-            let sources_ptr = (sdk.find_get_current_sources)(finder, &mut count);
+            let sources_ptr = (sdk.find_get_current_sources)(finder, &raw mut count);
 
             if !sources_ptr.is_null() && count > 0 {
                 let sources_slice = std::slice::from_raw_parts(sources_ptr, count as usize);
@@ -148,13 +147,15 @@ impl NdiManager {
 
     /// Start receiving from a named NDI source.
     /// Spawns a background thread that captures frames into shared memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the fixed receiver-name literal `"Varda Receiver"` cannot be
+    /// converted to a `CString`, which is impossible for that literal.
     pub fn start_receive(&mut self, source_name: &str, device: &wgpu::Device) -> Option<usize> {
-        let sdk = match &self.sdk {
-            Some(s) => s,
-            None => {
-                log::warn!("Cannot receive NDI: SDK not available");
-                return None;
-            }
+        let Some(sdk) = &self.sdk else {
+            log::warn!("Cannot receive NDI: SDK not available");
+            return None;
         };
 
         let frame_data: Arc<Mutex<Option<NdiFrame>>> = Arc::new(Mutex::new(None));
@@ -177,16 +178,16 @@ impl NdiManager {
             p_ndi_recv_name: recv_name.as_ptr(),
         };
 
-        let recv_instance = unsafe { (sdk.recv_create_v3)(&recv_settings) };
+        let recv_instance = unsafe { (sdk.recv_create_v3)(&raw const recv_settings) };
         if recv_instance.is_null() {
-            log::error!("NDI recv_create_v3 returned null for '{}'", source_name);
+            log::error!("NDI recv_create_v3 returned null for '{source_name}'");
             return None;
         }
 
         let width = width.max(1);
         let height = height.max(1);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("NDI Receive: {}", source_name)),
+            label: Some(&format!("NDI Receive: {source_name}")),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -216,7 +217,7 @@ impl NdiManager {
 
         let source_name_log = source_name.to_string();
         let thread = std::thread::Builder::new()
-            .name(format!("ndi-recv-{}", source_name))
+            .name(format!("ndi-recv-{source_name}"))
             .spawn(move || {
                 let recv = recv_ptr as ffi::NDIlib_recv_instance_t;
                 let capture_fn: unsafe extern "C" fn(ffi::NDIlib_recv_instance_t, *mut ffi::NDIlib_video_frame_v2_t, *mut std::ffi::c_void, *mut std::ffi::c_void, std::os::raw::c_uint) -> ffi::NDIlib_frame_type_e
@@ -249,24 +250,24 @@ impl NdiManager {
                                 *guard = Some(NdiFrame { data: rgba, width: w, height: h });
                             }
                         }
-                        unsafe { free_fn(recv, &vf) };
+                        unsafe { free_fn(recv, &raw const vf) };
                     } else if frame_type == ffi::NDIlib_frame_type_e::NONE {
                         none_count += 1;
                         if none_count == 30 {
-                            log::warn!("NDI '{}': 30 consecutive empty captures — source may not be sending", source_name_log);
+                            log::warn!("NDI '{source_name_log}': 30 consecutive empty captures — source may not be sending");
                         }
                         if none_count >= 50 {
                             connected_clone.store(false, Ordering::SeqCst);
                         }
                     } else if frame_type == ffi::NDIlib_frame_type_e::STATUS_CHANGE {
-                        log::info!("NDI '{}': connection status changed", source_name_log);
+                        log::info!("NDI '{source_name_log}': connection status changed");
                     } else if frame_type == ffi::NDIlib_frame_type_e::ERROR {
-                        log::warn!("NDI '{}': received ERROR frame", source_name_log);
+                        log::warn!("NDI '{source_name_log}': received ERROR frame");
                         connected_clone.store(false, Ordering::SeqCst);
                     }
                 }
 
-                log::info!("NDI '{}': receive thread stopping (captured {} frames)", source_name_log, frame_count);
+                log::info!("NDI '{source_name_log}': receive thread stopping (captured {frame_count} frames)");
                 let destroy_fn: unsafe extern "C" fn(ffi::NDIlib_recv_instance_t)
                     = unsafe { std::mem::transmute(recv_destroy_fn) };
                 unsafe { destroy_fn(recv) };
@@ -279,13 +280,13 @@ impl NdiManager {
             frame_data,
             stop_flag,
             connected,
-            _thread: thread,
+            thread,
             recv_instance: std::ptr::null_mut(), // Owned by the thread now
             width,
             height,
         });
         self.textures.push((texture, texture_view));
-        log::info!("NDI receiver started for '{}'", source_name);
+        log::info!("NDI receiver started for '{source_name}'");
         Some(idx)
     }
 
@@ -374,23 +375,20 @@ impl NdiManager {
     pub fn is_connected(&self, idx: usize) -> bool {
         self.receivers
             .get(idx)
-            .map(|r| r.connected.load(Ordering::SeqCst))
-            .unwrap_or(false)
+            .is_some_and(|r| r.connected.load(Ordering::SeqCst))
     }
 
     /// Send a frame via NDI for a specific sender name.
     /// Creates the sender instance on first call for a given name.
     pub fn send_frame(&mut self, sender_name: &str, rgba: &[u8], width: u32, height: u32) {
-        let sdk = match &self.sdk {
-            Some(s) => s,
-            None => return,
+        let Some(sdk) = &self.sdk else {
+            return;
         };
 
         // Get or create sender for this name
         if !self.senders.contains_key(sender_name) {
-            let name_c = match std::ffi::CString::new(sender_name) {
-                Ok(c) => c,
-                Err(_) => return,
+            let Ok(name_c) = std::ffi::CString::new(sender_name) else {
+                return;
             };
             let settings = ffi::NDIlib_send_create_t {
                 p_ndi_name: name_c.as_ptr(),
@@ -398,9 +396,9 @@ impl NdiManager {
                 clock_video: true,
                 clock_audio: false,
             };
-            let instance = unsafe { (sdk.send_create)(&settings) };
+            let instance = unsafe { (sdk.send_create)(&raw const settings) };
             if instance.is_null() {
-                log::error!("NDI send_create returned null for '{}'", sender_name);
+                log::error!("NDI send_create returned null for '{sender_name}'");
                 return;
             }
             let uyvy_size = (width as usize) * (height as usize) * 2;
@@ -411,13 +409,11 @@ impl NdiManager {
                     uyvy_buf: vec![0u8; uyvy_size],
                 },
             );
-            log::info!("NDI sender created: '{}'", sender_name);
+            log::info!("NDI sender created: '{sender_name}'");
         }
 
-        let sender = if let Some(s) = self.senders.get_mut(sender_name) {
-            s
-        } else {
-            log::error!("NDI sender '{}' not found after creation", sender_name);
+        let Some(sender) = self.senders.get_mut(sender_name) else {
+            log::error!("NDI sender '{sender_name}' not found after creation");
             return;
         };
 
@@ -428,9 +424,12 @@ impl NdiManager {
         }
         rgba_to_uyvy(rgba, &mut sender.uyvy_buf, width, height);
 
+        // The NDI C ABI takes signed dimensions; frame sizes come from GPU
+        // textures and are orders of magnitude below i32::MAX, so clamp rather
+        // than let an implausible value wrap into a negative extent.
         let frame = ffi::NDIlib_video_frame_v2_t {
-            xres: width as i32,
-            yres: height as i32,
+            xres: i32::try_from(width).unwrap_or(i32::MAX),
+            yres: i32::try_from(height).unwrap_or(i32::MAX),
             FourCC: ffi::NDIlib_FourCC_video_type_e::UYVY,
             frame_rate_N: 30,
             frame_rate_D: 1,
@@ -438,12 +437,12 @@ impl NdiManager {
             frame_format_type: 1, // progressive
             timecode: 0,          // auto
             p_data: sender.uyvy_buf.as_mut_ptr(),
-            line_stride_in_bytes: (width * 2) as i32,
+            line_stride_in_bytes: i32::try_from(width.saturating_mul(2)).unwrap_or(i32::MAX),
             p_metadata: std::ptr::null(),
             timestamp: 0,
         };
 
-        unsafe { (sdk.send_send_video_v2)(sender.instance, &frame) };
+        unsafe { (sdk.send_send_video_v2)(sender.instance, &raw const frame) };
     }
 
     /// Destroy a specific sender by name.
@@ -452,14 +451,14 @@ impl NdiManager {
             if let Some(ref sdk) = self.sdk {
                 unsafe { (sdk.send_destroy)(sender.instance) };
             }
-            log::info!("NDI sender destroyed: '{}'", sender_name);
+            log::info!("NDI sender destroyed: '{sender_name}'");
         }
     }
 
     pub fn stop_receive(&mut self, idx: usize) {
         if let Some(r) = self.receivers.get_mut(idx) {
             r.stop_flag.store(true, Ordering::SeqCst);
-            if let Some(t) = r._thread.take() {
+            if let Some(t) = r.thread.take() {
                 let _ = t.join();
             }
         }
@@ -471,7 +470,7 @@ impl Drop for NdiManager {
         // Stop all receivers and join their threads before SDK cleanup
         for r in &mut self.receivers {
             r.stop_flag.store(true, Ordering::SeqCst);
-            if let Some(t) = r._thread.take() {
+            if let Some(t) = r.thread.take() {
                 let _ = t.join();
             }
         }
@@ -538,10 +537,10 @@ fn uyvy_to_rgba(uyvy: &[u8], rgba: &mut [u8], w: u32, h: u32, stride: usize) {
             if src + 3 >= uyvy.len() {
                 break;
             }
-            let u = uyvy[src] as f32 - 128.0;
-            let y0 = uyvy[src + 1] as f32;
-            let v = uyvy[src + 2] as f32 - 128.0;
-            let y1 = uyvy[src + 3] as f32;
+            let u = f32::from(uyvy[src]) - 128.0;
+            let y0 = f32::from(uyvy[src + 1]);
+            let v = f32::from(uyvy[src + 2]) - 128.0;
+            let y1 = f32::from(uyvy[src + 3]);
 
             let dst0 = (y * w as usize + x) * 4;
             let dst1 = dst0 + 4;
@@ -568,15 +567,15 @@ fn rgba_to_uyvy(rgba: &[u8], uyvy: &mut [u8], w: u32, h: u32) {
             let src0 = (y * w as usize + x) * 4;
             let src1 = src0 + 4;
 
-            let r0 = rgba[src0] as f32;
-            let g0 = rgba[src0 + 1] as f32;
-            let b0 = rgba[src0 + 2] as f32;
+            let r0 = f32::from(rgba[src0]);
+            let g0 = f32::from(rgba[src0 + 1]);
+            let b0 = f32::from(rgba[src0 + 2]);
 
             let (r1, g1, b1) = if x + 1 < w as usize && src1 + 2 < rgba.len() {
                 (
-                    rgba[src1] as f32,
-                    rgba[src1 + 1] as f32,
-                    rgba[src1 + 2] as f32,
+                    f32::from(rgba[src1]),
+                    f32::from(rgba[src1 + 1]),
+                    f32::from(rgba[src1 + 2]),
                 )
             } else {
                 (r0, g0, b0)
@@ -643,7 +642,7 @@ mod tests {
         let src = NdiSource {
             name: "Test Source".to_string(),
         };
-        let debug = format!("{:?}", src);
+        let debug = format!("{src:?}");
         assert!(debug.contains("Test Source"));
     }
 
@@ -707,7 +706,7 @@ mod tests {
         uyvy_to_rgba(&uyvy, &mut rgba, w, h, stride);
         // Check all alphas are 255
         for i in 0..(w * h) as usize {
-            assert_eq!(rgba[i * 4 + 3], 255, "alpha at pixel {} should be 255", i);
+            assert_eq!(rgba[i * 4 + 3], 255, "alpha at pixel {i} should be 255");
         }
     }
 
@@ -748,15 +747,11 @@ mod tests {
         // Allow ±2 tolerance for floating point in color space conversion
         for i in 0..2 {
             for c in 0..3 {
-                let orig = original_rgba[i * 4 + c] as i32;
-                let rest = restored[i * 4 + c] as i32;
+                let orig = i32::from(original_rgba[i * 4 + c]);
+                let rest = i32::from(restored[i * 4 + c]);
                 assert!(
                     (orig - rest).abs() <= 2,
-                    "pixel {} channel {} mismatch: {} vs {}",
-                    i,
-                    c,
-                    orig,
-                    rest
+                    "pixel {i} channel {c} mismatch: {orig} vs {rest}"
                 );
             }
         }
@@ -773,12 +768,12 @@ mod tests {
 
         // Red should survive roundtrip within tolerance
         for i in 0..2 {
-            let r = restored[i * 4] as i32;
-            let g = restored[i * 4 + 1] as i32;
-            let b = restored[i * 4 + 2] as i32;
-            assert!(r > 200, "red channel should be high: {}", r);
-            assert!(g < 50, "green channel should be low: {}", g);
-            assert!(b < 50, "blue channel should be low: {}", b);
+            let r = i32::from(restored[i * 4]);
+            let g = i32::from(restored[i * 4 + 1]);
+            let b = i32::from(restored[i * 4 + 2]);
+            assert!(r > 200, "red channel should be high: {r}");
+            assert!(g < 50, "green channel should be low: {g}");
+            assert!(b < 50, "blue channel should be low: {b}");
         }
     }
 

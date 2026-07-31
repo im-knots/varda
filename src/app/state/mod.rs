@@ -1,4 +1,4 @@
-//! Engine state mutation methods on VardaApp.
+//! Engine state mutation methods on `VardaApp`.
 //!
 //! These methods encapsulate all mixer/modulation/sequence mutations.
 //! They access self.mixer internally — callers never need &mut Mixer.

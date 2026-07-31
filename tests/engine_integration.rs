@@ -1,4 +1,4 @@
-//! Engine integration tests — multi-step command workflows through real headless VardaApp.
+//! Engine integration tests — multi-step command workflows through real headless `VardaApp`.
 
 use varda::app::{AppConfig, VardaApp};
 use varda::engine::{
@@ -10,14 +10,17 @@ use varda::surface::SurfacePath;
 
 use clap::Parser;
 
+mod common;
+
 fn parse_args(args: &[&str]) -> AppConfig {
     AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
 }
 
 fn headless_app() -> Option<VardaApp> {
-    let gpu = varda::renderer::context::GpuContext::new_headless().ok()?;
+    let gpu = common::headless_gpu()?;
     let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
-    VardaApp::new(gpu, &config).ok()
+    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
 /// Send a command with reply channel, process, and return result.
@@ -1676,7 +1679,7 @@ fn bezier_warp_convert_and_edit() {
     assert_eq!((b.anchor_cols, b.anchor_rows), (3, 3));
 }
 
-/// Setting subdivisions on a non-existent surface surfaces NotFound rather than
+/// Setting subdivisions on a non-existent surface surfaces `NotFound` rather than
 /// silently succeeding.
 #[test]
 fn mesh_warp_subdivisions_bad_index_errs() {
@@ -1856,7 +1859,7 @@ fn punch_surface_hole_workflow() {
 /// `MixerCommands::add_effect` resolves its *target* before doing anything.
 /// An unresolvable Deck/Channel target is a precondition failure: the wire
 /// result is `NotFound` and no effect is created anywhere. The existing
-/// NotFound sweep only covers `Toggle`/`RemoveEffect` (which resolve the effect
+/// `NotFound` sweep only covers `Toggle`/`RemoveEffect` (which resolve the effect
 /// uuid); `AddEffect` resolves the target chain, a separate code path.
 #[test]
 fn add_effect_on_unknown_target_is_not_found_and_creates_nothing() {

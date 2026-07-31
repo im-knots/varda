@@ -42,6 +42,11 @@ pub struct ComputePipeline {
 
 impl ComputePipeline {
     /// Create a compute pipeline from SPIR-V bytecode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SPIR-V fails to parse, fails naga validation, or
+    /// cannot be transpiled to WGSL.
     // Pipeline construction takes many distinct GPU descriptors; no shared invariant to bundle.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -164,7 +169,7 @@ impl ComputePipeline {
             layout: Some(&pipeline_layout),
             module: &shader_module,
             entry_point: Some("main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
 
@@ -200,7 +205,7 @@ impl ComputePipeline {
         let storage_buffers: Vec<StorageBuffer> = buffer_decls
             .iter()
             .map(|decl| {
-                let size = (decl.count * decl.stride) as u64;
+                let size = u64::from(decl.count * decl.stride);
                 let data = vec![0u8; size as usize];
                 let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(&format!("Storage Buffer: {}", decl.name)),

@@ -63,6 +63,11 @@ impl Output {
 
     /// Resolved from [`Self::format_key`] so the schema string and the texture
     /// the pipeline actually allocates cannot drift apart.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a format key returned by [`Self::format_key`] is not a known
+    /// texture format — a programming error, covered by unit tests.
     pub fn wgpu_format(self) -> wgpu::TextureFormat {
         crate::analyzer::traits::texture_format_from_str(self.format_key())
             .expect("depth_sensor output format keys are resolvable")
@@ -195,6 +200,12 @@ pub fn requested_device(metadata: &crate::isf::ISFMetadata) -> Option<u32> {
 ///
 /// The sensor is opened through the ref-counted manager, so it is shared with
 /// any point-cloud decks or other preprocessor decks already using it.
+///
+/// # Errors
+///
+/// Returns an error when the shader declares a `depth_sensor` preprocessor but
+/// no device is detected, the requested device cannot be resolved or opened, or
+/// the preprocess pipeline cannot be built.
 pub fn acquire_for_shader(
     manager: &mut super::DepthSensorManager,
     device: &wgpu::Device,
@@ -598,9 +609,9 @@ impl DepthPreprocessPipeline {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Depth Preprocess Normalize Pass"),
                 color_attachments: &[
-                    attachment(self.view_of(Output::Depth)),
-                    attachment(&self.history[write_idx]),
-                    attachment(self.view_of(Output::Motion)),
+                    Some(attachment(self.view_of(Output::Depth))),
+                    Some(attachment(&self.history[write_idx])),
+                    Some(attachment(self.view_of(Output::Motion))),
                 ],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -615,8 +626,8 @@ impl DepthPreprocessPipeline {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Depth Preprocess Mask Pass"),
                 color_attachments: &[
-                    attachment(self.view_of(Output::Mask)),
-                    attachment(&self.mask_history[write_idx]),
+                    Some(attachment(self.view_of(Output::Mask))),
+                    Some(attachment(&self.mask_history[write_idx])),
                 ],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -644,7 +655,7 @@ impl DepthPreprocessPipeline {
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Depth Preprocess Color Pass"),
-                color_attachments: &[attachment(self.view_of(Output::Rgb))],
+                color_attachments: &[Some(attachment(self.view_of(Output::Rgb)))],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -660,8 +671,8 @@ impl DepthPreprocessPipeline {
     }
 }
 
-fn attachment(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachment<'_>> {
-    Some(wgpu::RenderPassColorAttachment {
+fn attachment(view: &wgpu::TextureView) -> wgpu::RenderPassColorAttachment<'_> {
+    wgpu::RenderPassColorAttachment {
         view,
         resolve_target: None,
         ops: wgpu::Operations {
@@ -670,7 +681,7 @@ fn attachment(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachmen
             store: wgpu::StoreOp::Store,
         },
         depth_slice: None,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -731,10 +742,10 @@ mod tests {
         // Raising `near` past `far` must push `far` up, not invert the range.
         p.set_normalized_param("far", 0.1);
         p.set_normalized_param("near", 0.9);
-        assert!(p.far_mm > p.near_mm, "{:?}", p);
+        assert!(p.far_mm > p.near_mm, "{p:?}");
         // And lowering `far` below `near` must clamp rather than invert.
         p.set_normalized_param("far", 0.0);
-        assert!(p.far_mm > p.near_mm, "{:?}", p);
+        assert!(p.far_mm > p.near_mm, "{p:?}");
     }
 
     #[test]

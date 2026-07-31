@@ -1,0 +1,4 @@
+# Proper nouns that `clippy::doc_markdown` mistakes for un-backticked code items.
+# These are product/protocol names in prose, so backticking them would be wrong.
+# `".."` keeps clippy's own default list rather than replacing it.
+doc-valid-idents = ["FFmpeg", "GStreamer", "OpenCV", "TouchDesigner", "MadMapper", "WebSocket", ".."]

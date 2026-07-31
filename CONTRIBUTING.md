@@ -81,8 +81,58 @@ These are the practices we hold changes to. They apply whether you're fixing a b
 - **No dead code.** Remove old code paths when you replace them; don't leave unused branches or backwards-compatibility shims around "just in case." Refactor in place rather than duplicating a module under a new name.
 - **`.varda/` compatibility.** If a change alters the shape of `scene.json`, `stage.json`, or anything else persisted under `.varda/`, call it out explicitly in your PR description. Prefer backwards-compatible migrations, but don't contort the design to preserve compatibility with old files — flag the break and describe the migration path instead.
 - **Use `log`, not `println!`.** Use the existing `log`/`env_logger` macros (`log::info!`, `log::warn!`, `log::error!`, etc.) so log output stays consistent and filterable; don't add ad hoc `println!`/`eprintln!` debugging output to committed code.
-- **Zero warnings.** `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check` must be clean. CI enforces both (see `.github/workflows/clippy.yml` and `fmt.yml`) run them locally before pushing.
+- **Zero warnings, pedantic included.** `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check` must be clean. CI enforces both (see `.github/workflows/clippy.yml` and `fmt.yml`) run them locally before pushing. `clippy::pedantic` is part of that gate — see [Lints](#lints) for how it is configured and when an `#[allow]` is acceptable.
 - **Performance-sensitive changes get benchmarked.** If your change touches rendering, compositing, GPU pipelines, audio processing, or another hot path, use the criterion harness in [`benches/`](benches/) — see [Benchmarking](#benchmarking) below for the suites and the before/after baseline workflow. Don't eyeball performance against a stale run; save a baseline before your change and compare after.
+
+## Lints
+
+The lint configuration lives in the `[lints.clippy]` section of `Cargo.toml`, not in CI flags or
+`#![allow]` attributes at the crate root. That means `cargo clippy` locally reproduces CI exactly,
+and the config applies uniformly to the library, the binary, tests, benches, and examples.
+
+`clippy::pedantic` is enabled at `warn`, and CI runs `cargo clippy --all-targets -- -D warnings`, so
+a pedantic finding fails your PR. Run it before pushing:
+
+```sh
+cargo clippy --all-targets -- -D warnings
+```
+
+**Clippy only sees code that compiles for your host platform.** Anything behind
+`#[cfg(target_os = "…")]` for a *different* OS is invisible to your local run — the NDI library
+loader, the CLI installer, shader search paths, and the Syphon restore path all have per-platform
+branches. `clippy.yml` therefore runs three jobs (linux, macos, windows) so every branch is linted
+somewhere. If CI reports a lint you cannot reproduce, check whether the file is platform-gated before
+assuming a version difference. The Windows job matches the release build's feature set
+(`--no-default-features --features face-detection,html`), since `depth` has no vcpkg port.
+
+Five pedantic lints are allowed crate-wide. Each has a rationale comment in `Cargo.toml`:
+
+| Lint | Why it's off |
+|---|---|
+| `cast_precision_loss`, `cast_possible_truncation`, `cast_sign_loss` | Pixel/sample/vertex math converts between integer extents and float coordinates constantly. The conversions are intentional, and the alternatives push `try_from` error handling into the render hot path. |
+| `must_use_candidate` | Fires on essentially every `&self` snapshot accessor in the engine trait impls — hundreds of attributes that catch no bugs. |
+| `too_many_lines` | The one deferred entry: ~130 functions exceed 100 lines and splitting them is a real refactor, not a lint fix. Tracked in [`/spec/roadmap.md`](spec/roadmap.md) § DEBT: Function Decomposition. |
+
+Adding to that list needs a strong argument and a rationale comment — reach for it only when a lint's
+advice is wrong for the whole codebase, not when a specific site is awkward.
+
+`clippy::float_cmp` is additionally allowed under `cfg(test)` only (see `src/lib.rs`): test
+assertions compare against the exact literals the test just assigned, where exact equality is the
+correct assertion. It stays live in non-test code, where an exact float comparison usually is a bug.
+
+For a specific site, use a narrowly scoped `#[allow(clippy::lint_name)]` on the function, struct, or
+statement, with a one-line comment saying why. The cases that come up legitimately:
+
+- **`many_single_char_names` / `similar_names` in geometry and DSP math.** `x`, `y`, `u`, `v`, `t`,
+  and pairs like `minx`/`miny` are the clearest possible names for bezier, matrix, and blend math.
+  Renaming them to satisfy the lint makes the math harder to read, which is the opposite of the point.
+- **`float_cmp` in tests** that assert against a literal the test itself just assigned. An exact
+  comparison is the correct assertion there; an epsilon would weaken it.
+
+Prefer a real fix everywhere else. "Fixing it is tedious" is not a rationale — in particular,
+`missing_errors_doc` and `missing_panics_doc` should be answered with an accurate `# Errors` /
+`# Panics` section describing the real failure conditions, not with an `#[allow]` or with filler
+prose like "Returns an error if it fails."
 
 ## Benchmarking
 
@@ -136,7 +186,7 @@ Criterion HTML reports land in `target/criterion/`.
 1. Fork the repo and create a branch off `main`.
 2. Keep PRs focused to one feature or fix. Its easier to review than a bundle of unrelated changes.
 3. Prefix your PR title with FEAT for features, FIX for fixes, PERF for performance improvements, and DEBT for technical debt cleanup.
-4. Make sure `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and the test suites above all pass locally; CI re-runs all of them on `src/**`, `tests/**`, and `Cargo.toml`/`Cargo.lock` changes.
+4. Make sure `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` (pedantic included — see [Lints](#lints)), and the test suites above all pass locally; CI re-runs all of them on `src/**`, `tests/**`, `benches/**`, `examples/**`, and `Cargo.toml`/`Cargo.lock` changes.
 5. Describe what changed and why, and call out any `.varda/` compatibility impact or benchmark results if applicable.
 6. A maintainer will review and merge.
 

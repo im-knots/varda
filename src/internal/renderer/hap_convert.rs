@@ -22,6 +22,14 @@ pub struct HapConvertPipeline {
 }
 
 impl HapConvertPipeline {
+    /// Create the HAP colour-conversion pipeline for the given target format.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("HAP Convert Bind Group Layout"),
@@ -105,7 +113,7 @@ impl HapConvertPipeline {
                 module: &vertex_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -121,7 +129,7 @@ impl HapConvertPipeline {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             multiview_mask: None,
             cache: None,

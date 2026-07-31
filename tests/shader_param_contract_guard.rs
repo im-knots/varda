@@ -76,12 +76,7 @@ fn isf_params_are_declared_with_the_glsl_types_the_engine_writes() {
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
         .expect("read shaders/")
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            matches!(
-                p.extension().and_then(|s| s.to_str()),
-                Some("fs") | Some("comp")
-            )
-        })
+        .filter(|p| matches!(p.extension().and_then(|s| s.to_str()), Some("fs" | "comp")))
         .collect();
     files.sort();
     assert!(

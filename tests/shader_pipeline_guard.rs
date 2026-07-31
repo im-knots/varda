@@ -8,7 +8,7 @@
 //! The bug that motivated the render half: every pass buffer is bound as a
 //! sampled texture on every pass, and non-persistent pass buffers used a single
 //! texture for both reading and writing. Any shader declaring one therefore
-//! bound it as COLOR_TARGET and RESOURCE simultaneously and killed the app on
+//! bound it as `COLOR_TARGET` and RESOURCE simultaneously and killed the app on
 //! its first frame. No shipped shader had a non-persistent pass, so nothing
 //! caught it until one was written — and a build-only check never would have.
 //!
@@ -16,7 +16,9 @@
 //! to parse is a failure here too, not a silent omission.
 
 use varda::isf::ISFShader;
-use varda::renderer::GpuContext;
+
+mod common;
+use common::headless_gpu;
 
 /// Small enough to keep 130+ shaders fast, large enough that fixed-size passes
 /// and derivative-based effects still have somewhere to render.
@@ -36,8 +38,7 @@ fn shader_paths() -> Vec<std::path::PathBuf> {
 
 #[test]
 fn every_shipped_shader_builds_a_pipeline() {
-    let Ok(gpu) = GpuContext::new_headless() else {
-        eprintln!("no headless adapter; skipping");
+    let Some(gpu) = headless_gpu() else {
         return;
     };
     let mut checked = 0;
@@ -76,8 +77,7 @@ fn every_shipped_shader_builds_a_pipeline() {
 
 #[test]
 fn every_generator_survives_a_rendered_frame() {
-    let Ok(gpu) = GpuContext::new_headless() else {
-        eprintln!("no headless adapter; skipping");
+    let Some(gpu) = headless_gpu() else {
         return;
     };
     let audio = varda::audio::AudioData::default();

@@ -1,4 +1,4 @@
-//! ModulationEngine — manages sources, assignments, and per-frame evaluation.
+//! `ModulationEngine` — manages sources, assignments, and per-frame evaluation.
 
 use super::{
     AnalyzerValues, AudioValues, ModulationSource, ModulationSourceEntry, ParamModulation,
@@ -25,7 +25,7 @@ pub struct ModulationEngine {
     /// Cached topological evaluation order. Invalidated when assignments change.
     #[serde(skip)]
     cached_order: Vec<usize>,
-    /// Whether cached_order needs recomputation.
+    /// Whether `cached_order` needs recomputation.
     #[serde(skip)]
     order_dirty: bool,
     /// Per-source flag: does this source have any mod-on-mod assignments targeting it?
@@ -45,7 +45,7 @@ impl ModulationEngine {
         }
     }
 
-    /// Ensure uuid_to_idx is populated (needed after deserialization)
+    /// Ensure `uuid_to_idx` is populated (needed after deserialization)
     pub fn ensure_index(&mut self) {
         if self.uuid_to_idx.len() != self.sources.len() {
             self.rebuild_uuid_index();
@@ -103,7 +103,7 @@ impl ModulationEngine {
                 mods.retain(|m| m.source_id != uuid);
             }
             // Remove mod-on-mod assignments targeting this source
-            let mod_prefix = format!("mod:{}:", uuid);
+            let mod_prefix = format!("mod:{uuid}:");
             self.assignments.retain(|k, _| !k.starts_with(&mod_prefix));
             self.rebuild_uuid_index();
             self.invalidate_order();
@@ -118,11 +118,7 @@ impl ModulationEngine {
         let removed = before - self.assignments.len();
         if removed > 0 {
             self.invalidate_order();
-            log::info!(
-                "Removed {} orphaned modulation assignments with prefix '{}'",
-                removed,
-                prefix
-            );
+            log::info!("Removed {removed} orphaned modulation assignments with prefix '{prefix}'");
         }
     }
 
@@ -158,13 +154,13 @@ impl ModulationEngine {
         modulator_uuid: &str,
         amount: f32,
     ) {
-        let key = format!("mod:{}:{}", target_uuid, param_name);
+        let key = format!("mod:{target_uuid}:{param_name}");
         self.assign(&key, modulator_uuid, amount, None);
         // assign() already calls invalidate_order()
     }
 
     pub fn clear_mod_on_mod(&mut self, target_uuid: &str, param_name: &str) {
-        let key = format!("mod:{}:{}", target_uuid, param_name);
+        let key = format!("mod:{target_uuid}:{param_name}");
         self.assignments.remove(&key);
         self.invalidate_order();
     }
@@ -226,9 +222,7 @@ impl ModulationEngine {
             {
                 let mut total = 0.0;
                 for m in mods {
-                    let idx = if let Some(&i) = self.uuid_to_idx.get(&m.source_id) {
-                        i
-                    } else {
+                    let Some(&idx) = self.uuid_to_idx.get(&m.source_id) else {
                         continue;
                     };
                     if idx < self.current_values.len() {

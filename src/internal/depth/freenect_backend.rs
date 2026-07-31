@@ -59,19 +59,24 @@ impl FreenectBackend {
     ///
     /// The device + both streams are opened once and stored; the process thread
     /// then feeds the stored streams' receivers for the session's lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if libfreenect fails to initialise, if no device with
+    /// `index` is present, or if the depth/video streams cannot be started.
     pub fn open(index: u32) -> Result<Self> {
         // Leak the context to `'static` so the device (and thus the streams)
         // can be stored. Reclaimed on process exit; the process thread is
         // stopped via `Drop`.
         let ctx: &'static FreenectContext = Box::leak(Box::new(
             freenect::FreenectContext::init_with_video()
-                .map_err(|e| anyhow::anyhow!("libfreenect init failed: {:?}", e))?,
+                .map_err(|e| anyhow::anyhow!("libfreenect init failed: {e:?}"))?,
         ));
 
         // Leak the device to `'static` so its borrowed streams can be stored.
         let device: &'static FreenectDevice<'static, 'static> =
             Box::leak(Box::new(ctx.open_device(index).map_err(|e| {
-                anyhow::anyhow!("open Kinect {} failed: {:?}", index, e)
+                anyhow::anyhow!("open Kinect {index} failed: {e:?}")
             })?));
 
         device
@@ -79,24 +84,24 @@ impl FreenectBackend {
                 freenect::FreenectResolution::Medium,
                 freenect::FreenectDepthFormat::MM,
             )
-            .map_err(|e| anyhow::anyhow!("set_depth_mode failed: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("set_depth_mode failed: {e:?}"))?;
         device
             .set_video_mode(
                 freenect::FreenectResolution::Medium,
                 freenect::FreenectVideoFormat::Rgb,
             )
-            .map_err(|e| anyhow::anyhow!("set_video_mode failed: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("set_video_mode failed: {e:?}"))?;
 
         // Open each stream exactly once; hold them for the whole session.
         let dstream = device
             .depth_stream()
-            .map_err(|e| anyhow::anyhow!("depth_stream failed: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("depth_stream failed: {e:?}"))?;
         let vstream = device
             .video_stream()
-            .map_err(|e| anyhow::anyhow!("video_stream failed: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("video_stream failed: {e:?}"))?;
 
         ctx.spawn_process_thread()
-            .map_err(|e| anyhow::anyhow!("spawn_process_thread failed: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("spawn_process_thread failed: {e:?}"))?;
 
         Ok(Self {
             ctx,
@@ -108,6 +113,10 @@ impl FreenectBackend {
     }
 
     /// Enumerate connected Kinect devices without holding them open.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if libfreenect fails to initialise.
     pub fn enumerate() -> Result<u32> {
         let ctx = freenect::FreenectContext::init_with_video()
             .context("libfreenect init failed during enumeration")?;
@@ -122,7 +131,7 @@ impl Drop for FreenectBackend {
         // to `'static`, so their `Drop` never runs — stop the thread explicitly
         // here so the capture thread's USB polling ends cleanly.
         if let Err(e) = self.ctx.stop_process_thread() {
-            log::warn!("freenect: stop_process_thread failed on drop: {:?}", e);
+            log::warn!("freenect: stop_process_thread failed on drop: {e:?}");
         }
     }
 }

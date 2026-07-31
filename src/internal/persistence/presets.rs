@@ -37,10 +37,15 @@ impl PresetLibrary {
     }
 
     /// Save a deck preset to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `presets/decks/` directory cannot be created, if
+    /// `config` cannot be serialized to JSON, or if the atomic write fails.
     pub fn save_deck_preset(workspace: &Workspace, name: &str, config: &DeckConfig) -> Result<()> {
         let errors = config.validate("deck_preset");
         for e in &errors {
-            log::error!("Deck preset '{}' save: {}", name, e);
+            log::error!("Deck preset '{name}' save: {e}");
         }
         workspace.ensure_preset_dirs()?;
         let filename = sanitize_filename(name);
@@ -53,6 +58,11 @@ impl PresetLibrary {
     }
 
     /// Save a channel preset to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `presets/channels/` directory cannot be created,
+    /// if `config` cannot be serialized to JSON, or if the atomic write fails.
     pub fn save_channel_preset(
         workspace: &Workspace,
         name: &str,
@@ -60,7 +70,7 @@ impl PresetLibrary {
     ) -> Result<()> {
         let errors = config.validate("channel_preset");
         for e in &errors {
-            log::error!("Channel preset '{}' save: {}", name, e);
+            log::error!("Channel preset '{name}' save: {e}");
         }
         workspace.ensure_preset_dirs()?;
         let filename = sanitize_filename(name);
@@ -81,9 +91,9 @@ impl PresetLibrary {
     }
 
     fn scan_dir(&mut self, dir: &std::path::Path, is_deck: bool) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return, // Directory doesn't exist yet
+        // Directory doesn't exist yet
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -106,7 +116,7 @@ impl PresetLibrary {
             if is_deck {
                 match serde_json::from_str::<DeckConfig>(&content) {
                     Ok(config) => {
-                        let warnings = config.validate(&format!("deck_preset '{}'", stem));
+                        let warnings = config.validate(&format!("deck_preset '{stem}'"));
                         for w in &warnings {
                             log::warn!("Preset {}: {}", path.display(), w);
                         }
@@ -117,7 +127,7 @@ impl PresetLibrary {
             } else {
                 match serde_json::from_str::<ChannelConfig>(&content) {
                     Ok(config) => {
-                        let warnings = config.validate(&format!("channel_preset '{}'", stem));
+                        let warnings = config.validate(&format!("channel_preset '{stem}'"));
                         for w in &warnings {
                             log::warn!("Preset {}: {}", path.display(), w);
                         }
@@ -125,7 +135,7 @@ impl PresetLibrary {
                             .push(ChannelPreset { name: stem, config });
                     }
                     Err(e) => {
-                        log::warn!("Failed to parse channel preset {}: {}", path.display(), e)
+                        log::warn!("Failed to parse channel preset {}: {}", path.display(), e);
                     }
                 }
             }
@@ -158,7 +168,7 @@ pub fn sanitize_filename(name: &str) -> String {
     } else {
         sanitized
     };
-    format!("{}.json", truncated)
+    format!("{truncated}.json")
 }
 
 #[cfg(test)]

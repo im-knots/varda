@@ -22,7 +22,7 @@ impl VardaApp {
     pub fn save_workspace(&mut self, layout: &UILayoutState) {
         self.session.last_layout = layout.clone();
         if let Err(e) = self.session.workspace.ensure_dir() {
-            log::error!("Failed to create .varda directory: {}", e);
+            log::error!("Failed to create .varda directory: {e}");
             return;
         }
         {
@@ -36,7 +36,7 @@ impl VardaApp {
                     "Saved scene to {}",
                     self.session.workspace.scene_path().display()
                 ),
-                Err(e) => log::error!("Failed to save scene: {}", e),
+                Err(e) => log::error!("Failed to save scene: {e}"),
             }
         }
         if let Some(midi) = &self.input.midi_devices {
@@ -49,7 +49,7 @@ impl VardaApp {
                     "Saved MIDI mappings to {}",
                     self.session.workspace.midi_path().display()
                 ),
-                Err(e) => log::error!("Failed to save MIDI config: {}", e),
+                Err(e) => log::error!("Failed to save MIDI config: {e}"),
             }
         }
         let stage = crate::persistence::snapshot_stage(
@@ -70,7 +70,7 @@ impl VardaApp {
                 "Saved stage to {}",
                 self.session.workspace.stage_path().display()
             ),
-            Err(e) => log::error!("Failed to save stage: {}", e),
+            Err(e) => log::error!("Failed to save stage: {e}"),
         }
         // Save keyboard shortcuts
         let keymap_config = self.input.keymap.to_config();
@@ -79,7 +79,7 @@ impl VardaApp {
                 "Saved keymap to {}",
                 self.session.workspace.keymap_path().display()
             ),
-            Err(e) => log::error!("Failed to save keymap: {}", e),
+            Err(e) => log::error!("Failed to save keymap: {e}"),
         }
         // Save OSC config
         match self
@@ -91,7 +91,7 @@ impl VardaApp {
                 "Saved OSC config to {}",
                 self.session.workspace.osc_path().display()
             ),
-            Err(e) => log::error!("Failed to save OSC config: {}", e),
+            Err(e) => log::error!("Failed to save OSC config: {e}"),
         }
     }
 
@@ -149,7 +149,7 @@ impl VardaApp {
                         self.ensure_domemaster();
                     }
                 }
-                Err(e) => log::warn!("Failed to load stage: {}", e),
+                Err(e) => log::warn!("Failed to load stage: {e}"),
             }
         }
         if self.session.workspace.has_scene() {
@@ -162,7 +162,7 @@ impl VardaApp {
                         if w > 0 && h > 0 {
                             self.render_width = w;
                             self.render_height = h;
-                            log::info!("Scene render resolution: {}×{}", w, h);
+                            log::info!("Scene render resolution: {w}×{h}");
                         }
                     }
                     match crate::persistence::restore_scene(
@@ -217,18 +217,18 @@ impl VardaApp {
                             );
                         }
                         Err(e) => {
-                            log::error!("Failed to restore scene: {}", e);
+                            log::error!("Failed to restore scene: {e}");
                             self.session
                                 .notifications
-                                .error(format!("Failed to load scene: {}", e));
+                                .error(format!("Failed to load scene: {e}"));
                         }
                     }
                 }
                 Err(e) => {
-                    log::warn!("Failed to load scene file: {}", e);
+                    log::warn!("Failed to load scene file: {e}");
                     self.session
                         .notifications
-                        .warn(format!("Failed to load scene: {}", e));
+                        .warn(format!("Failed to load scene: {e}"));
                 }
             }
         }
@@ -246,7 +246,7 @@ impl VardaApp {
                         );
                     }
                 }
-                Err(e) => log::warn!("Failed to load MIDI config: {}", e),
+                Err(e) => log::warn!("Failed to load MIDI config: {e}"),
             }
         }
         // Load keyboard shortcuts
@@ -256,7 +256,7 @@ impl VardaApp {
                     self.input.keymap.load_config(&keymap_config);
                     log::info!("Loaded {} keyboard shortcuts", keymap_config.bindings.len());
                 }
-                Err(e) => log::warn!("Failed to load keymap config: {}", e),
+                Err(e) => log::warn!("Failed to load keymap config: {e}"),
             }
         }
         // Load OSC config (already loaded in new(), but refresh feedback targets on workspace load)
@@ -267,7 +267,7 @@ impl VardaApp {
                     if let Some(ref mut sender) = self.input.osc_feedback {
                         for target in &config.feedback_targets {
                             if let Err(e) = sender.add_target(target) {
-                                log::warn!("Failed to add OSC feedback target '{}': {}", target, e);
+                                log::warn!("Failed to add OSC feedback target '{target}': {e}");
                             }
                         }
                     }
@@ -279,7 +279,7 @@ impl VardaApp {
                         self.input.osc_config.feedback_targets.len()
                     );
                 }
-                Err(e) => log::warn!("Failed to load OSC config: {}", e),
+                Err(e) => log::warn!("Failed to load OSC config: {e}"),
             }
         }
         if let Some(layout) = &loaded_layout {
@@ -288,8 +288,8 @@ impl VardaApp {
         loaded_layout
     }
 
-    /// Apply a scene diff: compare current mixer state to a target SceneConfig
-    /// and patch only what changed. Returns (warnings, structural_changed).
+    /// Apply a scene diff: compare current mixer state to a target `SceneConfig`
+    /// and patch only what changed. Returns (warnings, `structural_changed`).
     /// `structural_changed` is true when channels/decks were added/removed/rebuilt
     /// (requiring texture re-registration).
     pub fn apply_scene_diff(
@@ -326,13 +326,11 @@ impl VardaApp {
                             if let Err(e) =
                                 self.mixer.set_transition(&self.context, (*shader).clone())
                             {
-                                warnings.push(format!(
-                                    "Failed to restore transition '{}': {}",
-                                    name, e
-                                ));
+                                warnings
+                                    .push(format!("Failed to restore transition '{name}': {e}"));
                             }
                         } else {
-                            warnings.push(format!("Transition '{}' not found in registry", name));
+                            warnings.push(format!("Transition '{name}' not found in registry"));
                         }
                     }
                     None => self.mixer.clear_transition(),
@@ -351,7 +349,7 @@ impl VardaApp {
             let ch = &mut self.mixer.channels_mut()[ch_idx];
 
             // Patch channel properties (zero cost)
-            ch.name = ch_config.name.clone();
+            ch.name.clone_from(&ch_config.name);
             ch.opacity = ch_config.opacity;
             ch.blend_mode = ch_config.blend_mode.into();
 
@@ -511,7 +509,7 @@ impl VardaApp {
                         ) {
                             Ok(eff) => channel.add_effect(eff),
                             Err(e) => {
-                                warnings.push(format!("Failed to restore channel effect: {}", e))
+                                warnings.push(format!("Failed to restore channel effect: {e}"));
                             }
                         }
                     }
@@ -538,8 +536,7 @@ impl VardaApp {
                     .and_then(|s| s.parse::<usize>().ok())
             })
             .max()
-            .map(|n| n + 1)
-            .unwrap_or(self.mixer.channels().len());
+            .map_or(self.mixer.channels().len(), |n| n + 1);
         self.mixer.set_next_channel_index(max_idx);
 
         // (e) Master effects — diff
@@ -671,7 +668,7 @@ impl VardaApp {
         self.apply_stage_diff(&snapshot.stage);
         self.mixer.clear_sub_mix_cache();
         for w in &warnings {
-            log::warn!("History restore warning: {}", w);
+            log::warn!("History restore warning: {w}");
         }
         super::history::HistoryRestore {
             snapshot,
@@ -702,7 +699,7 @@ impl VardaApp {
     /// Apply a stage diff: restore the authored stage state from a `StagePrefs`
     /// snapshot onto live state for undo/redo.
     ///
-    /// Restores surfaces (geometry, warp, holes, combine, stacking, dome_setup)
+    /// Restores surfaces (geometry, warp, holes, combine, stacking, `dome_setup`)
     /// and per-output surface assignments. Deliberately does NOT recreate,
     /// remove, move, or resize output windows/monitors, and does NOT touch
     /// cosmetic editor prefs (grid size, snap, panel-open flags) — those are not
@@ -720,7 +717,7 @@ impl VardaApp {
         //     snapshot's OutputConfig. Never create/destroy/reposition windows;
         //     outputs present in the snapshot but not live (or vice versa) are
         //     ignored for lifecycle.
-        for output in self.output.outputs.iter_mut() {
+        for output in &mut self.output.outputs {
             let uuid = output.uuid().to_string();
             if let Some(cfg) = target.outputs.iter().find(|c| c.uuid == uuid) {
                 *output.surface_assignments_mut() = cfg
@@ -729,7 +726,7 @@ impl VardaApp {
                     .map(|a| crate::renderer::context::SurfaceAssignment {
                         surface_uuid: a.surface_uuid.clone(),
                         enabled: a.enabled,
-                        overlap_zones: Default::default(),
+                        overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
                     })
                     .collect();
             }
@@ -740,7 +737,7 @@ impl VardaApp {
         self.recompute_auto_edge_blend();
     }
 
-    /// Patch a DeckSlot's properties from config without rebuilding the source.
+    /// Patch a `DeckSlot`'s properties from config without rebuilding the source.
     fn patch_deck_slot(
         slot: &mut crate::channel::DeckSlot,
         config: &crate::scene::DeckConfig,
@@ -755,7 +752,7 @@ impl VardaApp {
 
         // Patch generator params for shader sources
         if let crate::scene::SourceConfig::Shader { params, .. } = &config.source {
-            slot.deck.generator_params.values = params.clone();
+            slot.deck.generator_params.values.clone_from(params);
         }
 
         // Patch solid color
@@ -783,7 +780,8 @@ impl VardaApp {
             };
             at.play_duration = duration_config_to_spec(&at_config.play_duration);
             at.transition_duration = duration_config_to_spec(&at_config.transition_duration);
-            at.transition_shader_name = at_config.transition_shader.clone();
+            at.transition_shader_name
+                .clone_from(&at_config.transition_shader);
             slot.auto_transition = Some(at);
 
             // Compile transition shader if specified
@@ -792,8 +790,7 @@ impl VardaApp {
                 let needs_compile = slot
                     .transition_effect
                     .as_ref()
-                    .map(|te| te.shader.name() != *shader_name)
-                    .unwrap_or(true);
+                    .is_none_or(|te| te.shader.name() != *shader_name);
                 if needs_compile {
                     if let Some(shader) = registry
                         .transitions()
@@ -802,9 +799,7 @@ impl VardaApp {
                     {
                         if let Err(e) = slot.set_transition_shader(context, (*shader).clone()) {
                             log::warn!(
-                                "Failed to restore deck transition shader '{}': {}",
-                                shader_name,
-                                e
+                                "Failed to restore deck transition shader '{shader_name}': {e}"
                             );
                         }
                     }
@@ -837,13 +832,13 @@ impl VardaApp {
             if current_path == cfg.path {
                 // Same shader — patch params + enabled (zero cost)
                 eff.enabled = cfg.enabled;
-                eff.params.values = cfg.params.clone();
+                eff.params.values.clone_from(&cfg.params);
             } else {
                 // Different shader — rebuild this effect
                 match crate::persistence::restore_effect(cfg, context, target_format) {
                     Ok(new_eff) => effects[i] = new_eff,
                     Err(e) => {
-                        warnings.push(format!("Failed to restore effect '{}': {}", cfg.path, e))
+                        warnings.push(format!("Failed to restore effect '{}': {}", cfg.path, e));
                     }
                 }
             }
@@ -1071,8 +1066,8 @@ mod tests {
             crossfader: 0.42,
             active_transition: None,
             master_effects: vec![],
-            modulation: Default::default(),
-            macros: Default::default(),
+            modulation: crate::modulation::ModulationEngine::default(),
+            macros: crate::macros::MacroBank::default(),
             transition_sequences: vec![],
             render_width: Some(1920),
             render_height: Some(1080),
@@ -1080,7 +1075,7 @@ mod tests {
             active_lut: None,
         };
         let (warnings, _structural) = app.apply_scene_diff(&scene, 1920, 1080);
-        assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
         let snap = app.mixer_snapshot();
         assert!(
             (snap.crossfader - 0.42).abs() < 1e-4,

@@ -7,7 +7,7 @@
 //!   2. For each grid point, cast a ray from the projector through that pixel
 //!   3. Intersect the ray with the dome hemisphere
 //!   4. Convert the dome-surface hit point to equidistant azimuthal (domemaster) UV
-//!   5. Store as WarpMesh { position = output grid, uv = domemaster coords }
+//!   5. Store as `WarpMesh` { position = output grid, uv = domemaster coords }
 
 use super::warp::{MeshPoint, WarpMesh};
 
@@ -214,12 +214,12 @@ impl DomePreset {
         }
     }
 
-    /// Generate a DomeSetup with default geometry and evenly-spaced projectors.
+    /// Generate a `DomeSetup` with default geometry and evenly-spaced projectors.
     pub fn to_setup(self) -> DomeSetup {
         self.to_setup_with_geometry(DomeGeometry::default())
     }
 
-    /// Generate a DomeSetup with custom geometry and evenly-spaced projectors.
+    /// Generate a `DomeSetup` with custom geometry and evenly-spaced projectors.
     pub fn to_setup_with_geometry(self, geometry: DomeGeometry) -> DomeSetup {
         let n = self.count();
 
@@ -421,8 +421,7 @@ mod tests {
         let r = (dx * dx + dy * dy).sqrt();
         assert!(
             (r - 0.5).abs() < 1e-3,
-            "Horizon radius should be 0.5, got {}",
-            r
+            "Horizon radius should be 0.5, got {r}"
         );
     }
 

@@ -46,7 +46,13 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
     }
 
     // Mappings list
-    if !data.midi_mappings.is_empty() {
+    if data.midi_mappings.is_empty() {
+        ui.label(
+            egui::RichText::new("No mappings. Right-click anywhere → Enter MIDI Learn.")
+                .small()
+                .weak(),
+        );
+    } else {
         ui.collapsing(format!("Mappings ({})", data.midi_mappings.len()), |ui| {
             ui.horizontal(|ui| {
                 if ui.button("🗑 Clear All").clicked() {
@@ -80,12 +86,6 @@ pub(super) fn render_midi_section(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     }
                 });
         });
-    } else {
-        ui.label(
-            egui::RichText::new("No mappings. Right-click anywhere → Enter MIDI Learn.")
-                .small()
-                .weak(),
-        );
     }
 }
 

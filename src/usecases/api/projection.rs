@@ -3,11 +3,21 @@
 //! Pure functions, no HTTP/axum dependency. This is the API consumer's
 //! equivalent of `usecases::ui::build_ui_data()` in the UI consumer.
 
-use crate::engine::types::*;
+use crate::engine::types::{
+    CameraId, ChannelSnapshot, DeckSnapshot, EffectSnapshot, EngineState, ModulationSnapshot,
+    MonitorSnapshot, OutputWindowSnapshot, SequenceSnapshot, StreamReceiverSnapshot,
+    SurfaceSnapshot,
+};
 use serde::Serialize;
 use utoipa::ToSchema;
 
 /// Helper to read the engine state or return a 503-appropriate error.
+///
+/// # Errors
+///
+/// Returns [`StateReadError::LockPoisoned`] if the state lock was poisoned by a
+/// panicking writer, or [`StateReadError::NotInitialized`] if the engine has not
+/// published a snapshot yet.
 pub fn read_state(
     engine_state: &std::sync::RwLock<Option<EngineState>>,
 ) -> Result<EngineState, StateReadError> {
@@ -155,6 +165,11 @@ pub fn find_output<'a>(state: &'a EngineState, uuid: &str) -> Option<&'a OutputW
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::engine::types::{
+        AudioPassthroughSnapshot, AudioSnapshot, BlendMode, CameraSnapshot, ClockSnapshot,
+        ContentMapping, DeckRenderFps, MidiSnapshot, MixerSnapshot, OutputSnapshot, OutputSource,
+        RegistrySnapshot, ShaderParamsSnapshot, SurfaceOutputType,
+    };
     pub(crate) fn make_test_state() -> EngineState {
         EngineState {
             mixer: MixerSnapshot {
@@ -223,8 +238,8 @@ pub(crate) mod tests {
             },
             modulation: ModulationSnapshot {
                 sources: vec![],
-                current_values: Default::default(),
-                assignments: Default::default(),
+                current_values: std::collections::HashMap::default(),
+                assignments: std::collections::HashMap::default(),
             },
             outputs: OutputSnapshot {
                 windows: vec![OutputWindowSnapshot {
@@ -336,10 +351,10 @@ pub(crate) mod tests {
     #[test]
     fn test_project_stage() {
         let state = make_test_state();
-        let stage = project_stage(&state);
-        assert_eq!(stage.surfaces.len(), 1);
-        assert_eq!(stage.outputs.len(), 1);
-        assert_eq!(stage.monitors.len(), 1);
+        let projected = project_stage(&state);
+        assert_eq!(projected.surfaces.len(), 1);
+        assert_eq!(projected.outputs.len(), 1);
+        assert_eq!(projected.monitors.len(), 1);
     }
 
     #[test]

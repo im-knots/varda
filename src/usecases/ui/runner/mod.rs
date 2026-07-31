@@ -1,344 +1,32 @@
-//! UIRunner — windowed delivery layer for the Varda engine.
+//! `UIRunner` — windowed delivery layer for the Varda engine.
 //!
-//! Owns the window, egui state, blit pipeline, texture registrations, and WindowSurface.
+//! Owns the window, egui state, blit pipeline, texture registrations, and `WindowSurface`.
 //! The engine (`VardaApp`) is owned here and driven each frame.
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
-use crate::app::render::{DeckLoadResult, DeckLoadToken, FileDialogKind, FileDialogResult};
+use crate::app::render::{DeckLoadResult, FileDialogKind, FileDialogResult};
 use crate::app::{AppConfig, VardaApp};
 use crate::renderer::blit::BlitPipeline;
 use crate::renderer::context::{GpuContext, WindowSurface};
 use crate::usecases::ui;
 
 use winit::{
-    application::ApplicationHandler,
-    event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
     window::{Window, WindowId},
 };
 
-/// Work item sent to the background detection thread.
-struct DetectRequest {
-    rgba: Vec<u8>,
-    w: u32,
-    h: u32,
-    params: crate::surface::detect::DetectionParams,
-    /// When true, this is a capture (freeze-frame) request — the response
-    /// triggers a transition to Preview mode rather than just updating overlays.
-    is_capture: bool,
-    camera_id: crate::camera::CameraId,
-}
+mod camera_detect;
+mod deck_load;
+mod detect;
+mod event_loop;
+mod preview;
 
-/// Result returned from the background detection thread.
-struct DetectResponse {
-    contours: Vec<crate::surface::detect::DetectedContour>,
-    is_capture: bool,
-    camera_id: crate::camera::CameraId,
-}
+pub(crate) use event_loop::WindowHost;
 
-/// Spawn a long-lived detection worker thread. It reads requests from `rx`,
-/// runs detection (which is wrapped in `catch_unwind` inside `detect_from_rgba`),
-/// and sends results back on the returned receiver.
-fn spawn_detect_thread(
-    rx: std::sync::mpsc::Receiver<DetectRequest>,
-) -> std::sync::mpsc::Receiver<DetectResponse> {
-    let (tx, result_rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("varda-detect".into())
-        .spawn(move || {
-            let mut consecutive_errors: u32 = 0;
-            while let Ok(req) = rx.recv() {
-                let contours = match crate::surface::import::detect_from_rgba(
-                    &req.rgba,
-                    req.w,
-                    req.h,
-                    &req.params,
-                ) {
-                    Ok(result) => {
-                        consecutive_errors = 0;
-                        result.contours
-                    }
-                    Err(e) => {
-                        // Rate-limit error logging: log first, then every 60th
-                        if !matches!(e, crate::surface::import::ImportError::NoContours) {
-                            consecutive_errors += 1;
-                            if consecutive_errors == 1 || consecutive_errors.is_multiple_of(60) {
-                                log::warn!("Detection error (count={}): {}", consecutive_errors, e);
-                            }
-                        }
-                        Vec::new()
-                    }
-                };
-                if tx
-                    .send(DetectResponse {
-                        contours,
-                        is_capture: req.is_capture,
-                        camera_id: req.camera_id,
-                    })
-                    .is_err()
-                {
-                    break; // main thread dropped the receiver — exit
-                }
-            }
-            log::info!("Detection worker thread exiting");
-        })
-        .expect("Failed to spawn detection thread");
-    result_rx
-}
+use preview::PreviewEncoder;
 
-/// Register a single deck's preview texture, keyed by its UUID.
-///
-/// Lives here, not on `VardaApp`, because egui texture handles are a
-/// presentation concern the engine never touches — see
-/// `/spec/app-presentation-boundary.md`.
-fn register_deck_preview_texture(
-    egui_renderer: &mut egui_wgpu::Renderer,
-    context: &GpuContext,
-    mixer: &crate::mixer::Mixer,
-    deck_uuid: &str,
-    deck_preview_textures: &mut std::collections::HashMap<String, egui::TextureId>,
-) {
-    let Some((ch_idx, deck_idx)) = mixer.find_deck_by_uuid(deck_uuid) else {
-        log::warn!("No deck {} to register a preview texture for", deck_uuid);
-        return;
-    };
-    if let Some(slot) = mixer
-        .channels()
-        .get(ch_idx)
-        .and_then(|ch| ch.decks.get(deck_idx))
-    {
-        let texture_id = egui_renderer.register_native_texture(
-            &context.device,
-            &slot.deck.texture_view,
-            wgpu::FilterMode::Linear,
-        );
-        deck_preview_textures.insert(deck_uuid.to_string(), texture_id);
-    }
-}
-
-/// Apply the egui texture post-step for a frame's `apply_engine_actions`
-/// outcomes: register a preview for each newly-created deck. Reorder and
-/// removal need no repair pass — the map is UUID-keyed, so positions shifting
-/// cannot invalidate an entry.
-fn apply_deck_texture_outcomes(
-    outcomes: &[crate::engine::CommandOutcome],
-    egui_renderer: &mut egui_wgpu::Renderer,
-    context: &GpuContext,
-    mixer: &crate::mixer::Mixer,
-    deck_preview_textures: &mut std::collections::HashMap<String, egui::TextureId>,
-) {
-    for outcome in outcomes {
-        if let crate::engine::CommandOutcome::DecksCreated { uuids } = outcome {
-            for uuid in uuids {
-                register_deck_preview_texture(
-                    egui_renderer,
-                    context,
-                    mixer,
-                    uuid,
-                    deck_preview_textures,
-                );
-            }
-        }
-    }
-}
-
-/// Target channel of each in-flight background deck load, keyed by the token
-/// handed to `spawn_deck_loads` and echoed back in `DeckLoadResult::token`.
-///
-/// A decode or shader compile can outlive the channel it was aimed at, so the
-/// target is stored as a UUID and resolved when the load lands, never at spawn.
-/// See [`/spec/api-addressing.md`].
-#[derive(Default)]
-struct DeckLoadTargets {
-    by_token: std::collections::HashMap<DeckLoadToken, String>,
-    next_token: usize,
-}
-
-impl DeckLoadTargets {
-    /// Record a load's target channel and return the token that carries it back.
-    fn record(&mut self, channel_uuid: String) -> DeckLoadToken {
-        let token = DeckLoadToken(self.next_token);
-        self.next_token += 1;
-        self.by_token.insert(token, channel_uuid);
-        token
-    }
-
-    /// Claim a completed load's target. `None` means the token was never issued
-    /// or has already been claimed.
-    fn claim(&mut self, token: DeckLoadToken) -> Option<String> {
-        self.by_token.remove(&token)
-    }
-}
-
-/// Which preview a `PreviewEncoder` target belongs to.
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum PreviewSlot {
-    Deck(String),
-    Channel(usize),
-    Main,
-    Output(usize),
-}
-
-impl PreviewSlot {
-    fn key(&self) -> String {
-        match self {
-            PreviewSlot::Deck(uuid) => format!("deck:{uuid}"),
-            PreviewSlot::Channel(idx) => format!("ch:{idx}"),
-            PreviewSlot::Main => "main".to_string(),
-            PreviewSlot::Output(idx) => format!("out:{idx}"),
-        }
-    }
-}
-
-/// Gamma-encodes linear engine textures so egui previews match the real output.
-///
-/// egui assumes every texture handed to it is already gamma-encoded ("We expect
-/// 'normal' textures that are NOT sRGB-aware" — egui-wgpu's `egui.wgsl`), and
-/// compensates by applying the inverse transfer function before writing to its
-/// sRGB framebuffer. Handing it a linear texture therefore round-trips to raw
-/// linear light on screen, which reads as far too dark: linear 0.2 displays as
-/// 0.2 where the output window correctly shows 0.48.
-///
-/// Fix: blit each preview source through an explicit linear→sRGB encode into a
-/// plain (non-sRGB) `Rgba8Unorm` texture, and register *that* with egui. The
-/// target must not be `*UnormSrgb` or the hardware would decode on sample and
-/// cancel the encode out.
-///
-/// One mechanism covers both kinds of source: linear float color-path textures
-/// are sampled as-is, and already-sRGB output previews are hardware-decoded to
-/// linear on sample. Either way the shader receives linear and emits gamma.
-///
-/// Targets are cached per key and recreated only when the source size changes.
-/// They are capped to `MAX_DIM` on the long edge — previews are thumbnails, so
-/// this also makes egui sample far less than the full render resolution.
-struct PreviewEncoder {
-    pipeline: crate::renderer::BlitPipeline,
-    targets: std::collections::HashMap<String, (wgpu::Texture, wgpu::TextureView)>,
-}
-
-impl PreviewEncoder {
-    /// Long-edge cap for preview targets.
-    const MAX_DIM: u32 = 960;
-
-    fn new(device: &wgpu::Device) -> anyhow::Result<Self> {
-        Ok(Self {
-            // Non-sRGB target on purpose — see the type-level comment.
-            pipeline: crate::renderer::BlitPipeline::new(device, wgpu::TextureFormat::Rgba8Unorm)?,
-            targets: std::collections::HashMap::new(),
-        })
-    }
-
-    /// Scale `(w, h)` down so the long edge is at most `MAX_DIM`, preserving aspect.
-    fn preview_size(w: u32, h: u32) -> (u32, u32) {
-        let long = w.max(h);
-        if long <= Self::MAX_DIM || long == 0 {
-            return (w.max(1), h.max(1));
-        }
-        let scale = Self::MAX_DIM as f32 / long as f32;
-        (
-            ((w as f32 * scale).round() as u32).max(1),
-            ((h as f32 * scale).round() as u32).max(1),
-        )
-    }
-
-    /// Create or resize the target for `key`. Returns true when the target was
-    /// (re)created, meaning the caller must re-register it with egui — a
-    /// `TextureId` is bound to a specific texture, so a resize invalidates it.
-    fn ensure_target(
-        &mut self,
-        context: &crate::renderer::GpuContext,
-        key: &str,
-        src_w: u32,
-        src_h: u32,
-    ) -> bool {
-        let (w, h) = Self::preview_size(src_w, src_h);
-        let stale = self
-            .targets
-            .get(key)
-            .is_none_or(|(t, _)| t.width() != w || t.height() != h);
-        if stale {
-            let texture = context.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Preview Encode Target"),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            self.targets.insert(key.to_string(), (texture, view));
-        }
-        stale
-    }
-
-    fn target_view(&self, key: &str) -> Option<&wgpu::TextureView> {
-        self.targets.get(key).map(|(_, v)| v)
-    }
-
-    /// Encode all `sources` into their cached targets in a single command buffer.
-    ///
-    /// Must run every frame *after* the engine has rendered, and after output
-    /// windows have drawn (window previews source their intermediate texture).
-    /// Registration is separate: `TextureId`s must already exist when the UI is
-    /// built earlier in the frame.
-    ///
-    /// One encoder and one submit for every preview — a submit per thumbnail
-    /// would add a dozen per frame, which is exactly the cost the compositing
-    /// path batches away for weaker GPUs. All previews share the same blit
-    /// params, so those are written once up front.
-    fn encode_all(
-        &self,
-        context: &crate::renderer::GpuContext,
-        sources: &[(PreviewSlot, &wgpu::TextureView, u32, u32)],
-    ) {
-        if sources.is_empty() {
-            return;
-        }
-        self.pipeline.set_srgb_encode(&context.queue, true);
-        let mut encoder = context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Preview Encode"),
-            });
-        for (slot, src, ..) in sources {
-            let key = slot.key();
-            let Some(target_view) = self.target_view(&key) else {
-                continue;
-            };
-            let bind_group = self.pipeline.create_bind_group(&context.device, src);
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Preview Encode Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.pipeline.render(&mut pass, &bind_group);
-        }
-        context.queue.submit(std::iter::once(encoder.finish()));
-    }
-
-    /// Drop cached targets whose key is no longer live (removed decks/outputs).
-    fn retain_keys(&mut self, live: &std::collections::HashSet<String>) {
-        self.targets.retain(|k, _| live.contains(k));
-    }
-}
+use deck_load::{apply_deck_texture_outcomes, register_deck_preview_texture, DeckLoadTargets};
+use detect::{spawn_detect_thread, DetectRequest, DetectResponse};
 
 pub struct UIRunner {
     // ── Session config (CLI flags + workspace defaults) ──────────────
@@ -476,6 +164,12 @@ impl UIRunner {
     }
 
     /// Run the UI event loop. Blocks until the window is closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the winit event loop cannot be created (no display
+    /// server, or one already exists on this thread), or if the event loop
+    /// itself terminates with an error.
     pub fn run(mut self) -> anyhow::Result<()> {
         // Install Ctrl-C handler for graceful shutdown (especially useful in headless)
         let flag = self.shutdown_flag.clone();
@@ -487,234 +181,8 @@ impl UIRunner {
         let event_loop = EventLoop::new()?;
         event_loop
             .run_app(&mut self)
-            .map_err(|e| anyhow::anyhow!("Event loop error: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("Event loop error: {e:?}"))?;
         Ok(())
-    }
-}
-
-impl ApplicationHandler for UIRunner {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // Guard re-entry (resumed can be called multiple times on some platforms)
-        if self.varda.is_some() {
-            return;
-        }
-
-        let startup_t0 = std::time::Instant::now();
-        log::info!("[STARTUP] resumed() entered — beginning initialization");
-
-        if self.config.headless {
-            // Headless: no main window, no egui — GPU without window surface
-            log::info!("[STARTUP] Headless mode: skipping main window creation");
-            let gpu = match GpuContext::new_headless() {
-                Ok(gpu) => gpu,
-                Err(e) => {
-                    log::error!("Failed to create headless GPU context: {}", e);
-                    event_loop.exit();
-                    return;
-                }
-            };
-            self.finish_init(gpu, None, startup_t0, event_loop);
-        } else {
-            // Windowed: create main UI window, then spawn GPU init on a background
-            // thread so we return from resumed() immediately.  On macOS (especially
-            // under Rosetta / Intel), blocking the main thread during Metal device
-            // creation causes a GCD dispatch-queue deadlock because Metal needs to
-            // dispatch work back to the main queue.  By returning to the event loop
-            // we keep that queue alive; about_to_wait() polls the thread handle and
-            // finishes initialization once the GPU is ready.
-            let window_icon = {
-                static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
-                image::load_from_memory(ICON_BYTES).ok().and_then(|img| {
-                    let rgba = img.into_rgba8();
-                    let (w, h) = (rgba.width(), rgba.height());
-                    winit::window::Icon::from_rgba(rgba.into_raw(), w, h).ok()
-                })
-            };
-            let mut window_attrs = Window::default_attributes()
-                .with_title("Varda VJ Software")
-                .with_inner_size(winit::dpi::LogicalSize::new(1920, 1080));
-            if let Some(icon) = window_icon {
-                window_attrs = window_attrs.with_window_icon(Some(icon));
-            }
-
-            let window_static: &'static Window = match event_loop.create_window(window_attrs) {
-                Ok(w) => {
-                    log::info!("[STARTUP] Window created ({:.0?})", startup_t0.elapsed());
-                    Box::leak(Box::new(w))
-                }
-                Err(e) => {
-                    log::error!("Failed to create window: {}", e);
-                    event_loop.exit();
-                    return;
-                }
-            };
-            self.main_window_id = Some(window_static.id());
-            self.window = Some(window_static);
-
-            // Kick a redraw so macOS marks the window as "live" — required for
-            // Metal/CALayer to function correctly (see wgpu#5722).
-            window_static.request_redraw();
-
-            // Create wgpu instance + surface on the main thread (macOS requires
-            // NSView/CAMetalLayer access from the main thread), then hand off
-            // adapter/device creation to a background thread.
-            log::info!("[STARTUP] Creating surface on main thread...");
-            let (instance, surface, size) =
-                match GpuContext::create_surface_for_window(window_static) {
-                    Ok(triple) => triple,
-                    Err(e) => {
-                        log::error!("Failed to create surface: {}", e);
-                        event_loop.exit();
-                        return;
-                    }
-                };
-
-            log::info!("[STARTUP] Spawning GPU adapter/device init on background thread...");
-            self.startup_t0 = Some(startup_t0);
-            self.gpu_init_handle = Some(std::thread::spawn(move || {
-                pollster::block_on(GpuContext::new_with_surface(instance, surface, size))
-            }));
-
-            // Return immediately — about_to_wait() will complete initialization.
-            // Keep polling so the event loop stays responsive.
-            event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-        }
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        let Some(varda) = self.varda.as_mut() else {
-            return;
-        };
-        if self.main_window_id == Some(window_id) {
-            if let (Some(window), Some(egui_state)) = (self.window, &mut self.egui_state) {
-                if egui_state.on_window_event(window, &event).consumed {
-                    return;
-                }
-            }
-            match event {
-                WindowEvent::CloseRequested => {
-                    log::info!("Close requested, saving workspace and exiting...");
-                    varda.save_workspace(&self.layout);
-                    if let Some(api) = self.api_handle.take() {
-                        api.shutdown();
-                    }
-                    event_loop.exit();
-                }
-                WindowEvent::Resized(new_size) => {
-                    self.cached_screen_size = new_size;
-                    let device = &varda.gpu_context().device;
-                    if let Some(ws) = &mut self.window_surface {
-                        ws.resize(device, new_size);
-                    }
-                }
-                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                    self.cached_scale_factor = scale_factor as f32;
-                }
-                WindowEvent::RedrawRequested => {
-                    self.render(event_loop);
-                    // Frame pacing: don't request_redraw() here.
-                    // about_to_wait() schedules the next frame via WaitUntil.
-                }
-                _ => {}
-            }
-        } else {
-            // Interactive HTML window: forward input to the WebView and consume.
-            #[cfg(feature = "html")]
-            if varda.handle_interactive_event(window_id, &event) {
-                return;
-            }
-            match event {
-                WindowEvent::CloseRequested => {
-                    if let Some(name) = varda.close_output_window_by_id(window_id) {
-                        log::info!("Output window '{}' closed", name);
-                    }
-                }
-                WindowEvent::Resized(new_size) => {
-                    varda.resize_output_window_by_id(window_id, new_size);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // ── Phase 2 of deferred GPU init: poll the background thread ────
-        if let Some(handle) = self.gpu_init_handle.as_ref() {
-            if handle.is_finished() {
-                let handle = self.gpu_init_handle.take().unwrap();
-                let startup_t0 = self.startup_t0.take().unwrap();
-                match handle.join().expect("GPU init thread panicked") {
-                    Ok((gpu, win_surface)) => {
-                        log::info!("[STARTUP] GPU context ready ({:.0?})", startup_t0.elapsed());
-                        self.finish_init(gpu, Some(win_surface), startup_t0, event_loop);
-                    }
-                    Err(e) => {
-                        log::error!("Failed to create render context: {}", e);
-                        event_loop.exit();
-                        return;
-                    }
-                }
-            } else {
-                // GPU init still in progress — keep the event loop alive.
-                event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-                return;
-            }
-        }
-
-        // Read target_fps from engine state (runtime-mutable via UI/API).
-        let target_fps = self
-            .varda
-            .as_ref()
-            .map(|v| v.target_fps())
-            .unwrap_or(self.config.target_fps);
-
-        if self.config.headless {
-            // Headless: adaptive sleep-based pacing
-            if target_fps > 0 {
-                if let Some(deadline) = self.cadence_anchor {
-                    let now = std::time::Instant::now();
-                    if deadline > now {
-                        std::thread::sleep(deadline - now);
-                    }
-                }
-            }
-            self.render_headless(event_loop);
-            self.advance_cadence_anchor(target_fps);
-        } else {
-            // Windowed: adaptive cadence pacing.
-            // Only request_redraw when the cadence anchor says it's time.
-            // Between frames, let WaitUntil handle OS-level sleeping so we
-            // don't burn CPU or produce burst-pause patterns.
-            if target_fps > 0 {
-                let now = std::time::Instant::now();
-                let deadline = self.cadence_anchor.unwrap_or(now);
-
-                if deadline > now {
-                    // Not time yet — let the OS sleep until the deadline.
-                    // Do NOT request_redraw; winit will call about_to_wait
-                    // again when the timer fires.
-                    event_loop
-                        .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline));
-                } else {
-                    // At or past deadline — render now.
-                    event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(now));
-                    if let Some(w) = self.window {
-                        w.request_redraw();
-                    }
-                }
-            } else {
-                // Uncapped: poll continuously
-                event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-                if let Some(w) = self.window {
-                    w.request_redraw();
-                }
-            }
-        }
     }
 }
 
@@ -750,11 +218,11 @@ impl UIRunner {
 
             // Set the application icon on egui's viewport (controls dock/taskbar icon)
             {
-                static ICON_BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
+                static ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
                 if let Ok(img) = image::load_from_memory(ICON_BYTES) {
                     let rgba = img.into_rgba8();
                     let icon_data = egui::IconData {
-                        rgba: rgba.as_raw().to_vec(),
+                        rgba: rgba.as_raw().clone(),
                         width: rgba.width(),
                         height: rgba.height(),
                     };
@@ -774,7 +242,7 @@ impl UIRunner {
         let mut varda = match VardaApp::new(gpu, &self.config) {
             Ok(v) => v,
             Err(e) => {
-                log::error!("Failed to initialize engine: {}", e);
+                log::error!("Failed to initialize engine: {e}");
                 event_loop.exit();
                 return;
             }
@@ -827,7 +295,7 @@ impl UIRunner {
             self.cadence_anchor = None;
             return;
         }
-        let budget = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
+        let budget = std::time::Duration::from_secs_f64(1.0 / f64::from(target_fps));
         let now = std::time::Instant::now();
         self.cadence_anchor = Some(match self.cadence_anchor {
             Some(anchor) => {
@@ -844,265 +312,8 @@ impl UIRunner {
         });
     }
 
-    /// Register GPU textures with egui for deck/channel/output previews and main output.
-    fn register_preview_textures(&mut self) {
-        self.sync_preview_registrations();
-
-        let Some(varda) = &self.varda else { return };
-        let Some(egui_renderer) = &mut self.egui_renderer else {
-            return;
-        };
-        let context = varda.gpu_context();
-
-        // Dome preview renderer + texture
-        if self.dome_preview_renderer.is_none() {
-            match crate::renderer::dome_preview::DomePreviewRenderer::new(
-                &context.device,
-                wgpu::TextureFormat::Bgra8UnormSrgb,
-            ) {
-                Ok(renderer) => {
-                    let tid = egui_renderer.register_native_texture(
-                        &context.device,
-                        &renderer.output_view,
-                        wgpu::FilterMode::Linear,
-                    );
-                    self.dome_preview_texture = Some(tid);
-                    self.dome_preview_renderer = Some(renderer);
-                }
-                Err(e) => log::error!("Failed to create dome preview renderer: {}", e),
-            }
-        }
-    }
-
-    /// Resolve an output preview's source view together with its dimensions, so
-    /// the preview encoder can size its target to the right aspect ratio.
-    ///
-    /// Windowed outputs preview their own intermediate texture (which carries
-    /// surface geometry and warp, and is the window's size); every headless
-    /// source is a render-resolution composite, deck, or sub-mix.
-    fn output_preview_source<'a>(
-        output: &'a crate::renderer::context::UnifiedOutput,
-        mixer: &'a crate::mixer::Mixer,
-    ) -> (&'a wgpu::TextureView, u32, u32) {
-        use crate::renderer::context::UnifiedOutput;
-        let view = Self::output_preview_view(output, mixer);
-        let (w, h) = match output {
-            UnifiedOutput::Window(w) => (w.preview_texture.width(), w.preview_texture.height()),
-            UnifiedOutput::Headless(_) => {
-                let ct = mixer.composite_texture();
-                (ct.width(), ct.height())
-            }
-        };
-        (view, w, h)
-    }
-
-    /// Resolve the texture view to use for an output preview.
-    /// Windowed outputs use their intermediate render texture (shows surface geometry + warp).
-    /// Headless outputs resolve their source.
-    fn output_preview_view<'a>(
-        output: &'a crate::renderer::context::UnifiedOutput,
-        mixer: &'a crate::mixer::Mixer,
-    ) -> &'a wgpu::TextureView {
-        use crate::renderer::context::{OutputSource, UnifiedOutput};
-        match output {
-            UnifiedOutput::Window(w) => &w.preview_texture_view,
-            UnifiedOutput::Headless(h) => match &h.source {
-                OutputSource::Master => mixer.composite_view(),
-                OutputSource::Channel(idx) => mixer
-                    .channels()
-                    .get(*idx)
-                    .map(|c| &c.composite_view)
-                    .unwrap_or_else(|| mixer.composite_view()),
-                OutputSource::Deck(ch, dk) => mixer
-                    .channels()
-                    .get(*ch)
-                    .and_then(|c| c.decks.get(*dk))
-                    .map(|s| &s.deck.texture_view)
-                    .unwrap_or_else(|| mixer.composite_view()),
-                OutputSource::Channels(indices) => {
-                    let mut sorted = indices.clone();
-                    sorted.sort();
-                    sorted.dedup();
-                    mixer
-                        .get_sub_mix_view(&sorted)
-                        .unwrap_or_else(|| mixer.composite_view())
-                }
-                OutputSource::Domemaster => {
-                    // Domemaster preview falls back to composite view;
-                    // the actual domemaster texture is rendered in the output pipeline.
-                    mixer.composite_view()
-                }
-            },
-        }
-    }
-
-    /// Re-register GPU textures when deck/channel/output layout changes.
-    /// Enumerate every live preview source: its slot, source view, and source size.
-    ///
-    /// Single source of truth shared by registration and encoding so the two
-    /// passes cannot drift out of step.
-    fn preview_sources(
-        varda: &crate::app::VardaApp,
-    ) -> Vec<(PreviewSlot, &wgpu::TextureView, u32, u32)> {
-        let mixer = varda.mixer_ref();
-        let mut out: Vec<(PreviewSlot, &wgpu::TextureView, u32, u32)> = Vec::new();
-        for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-            for slot in ch.decks.iter() {
-                out.push((
-                    PreviewSlot::Deck(slot.deck.uuid().to_string()),
-                    &slot.deck.texture_view,
-                    slot.deck.texture.width(),
-                    slot.deck.texture.height(),
-                ));
-            }
-            out.push((
-                PreviewSlot::Channel(ch_idx),
-                &ch.composite_view,
-                ch.composite_texture.width(),
-                ch.composite_texture.height(),
-            ));
-        }
-        let ct = mixer.composite_texture();
-        out.push((
-            PreviewSlot::Main,
-            mixer.composite_view(),
-            ct.width(),
-            ct.height(),
-        ));
-        for (out_idx, output) in varda.outputs_ref().iter().enumerate() {
-            let (view, w, h) = Self::output_preview_source(output, mixer);
-            out.push((PreviewSlot::Output(out_idx), view, w, h));
-        }
-        out
-    }
-
-    /// Create/resize preview encode targets and keep egui registrations in sync.
-    ///
-    /// Runs early in the frame because the UI is built (and needs `TextureId`s)
-    /// before any GPU work is submitted. Pixel content is filled in later by
-    /// `encode_previews`.
-    fn sync_preview_registrations(&mut self) {
-        let Some(varda) = &self.varda else { return };
-        let context = varda.gpu_context();
-
-        if self.preview_encoder.is_none() {
-            match PreviewEncoder::new(&context.device) {
-                Ok(e) => self.preview_encoder = Some(e),
-                Err(e) => {
-                    log::error!("Failed to create preview encoder: {e}");
-                    return;
-                }
-            }
-        }
-        let Some(egui_renderer) = self.egui_renderer.as_mut() else {
-            return;
-        };
-        let Some(encoder) = self.preview_encoder.as_mut() else {
-            return;
-        };
-
-        let sources = Self::preview_sources(varda);
-        let mut live: std::collections::HashSet<String> =
-            std::collections::HashSet::with_capacity(sources.len());
-
-        for (slot, _src, w, h) in &sources {
-            let key = slot.key();
-            live.insert(key.clone());
-            let recreated = encoder.ensure_target(context, &key, *w, *h);
-            let known = match slot {
-                PreviewSlot::Deck(uuid) => self.deck_preview_textures.contains_key(uuid),
-                PreviewSlot::Channel(idx) => self.channel_preview_textures.contains_key(idx),
-                PreviewSlot::Main => self.main_output_texture.is_some(),
-                PreviewSlot::Output(idx) => self.output_preview_textures.contains_key(idx),
-            };
-            if !recreated && known {
-                continue;
-            }
-            let Some(view) = encoder.target_view(&key) else {
-                continue;
-            };
-            let tid = egui_renderer.register_native_texture(
-                &context.device,
-                view,
-                wgpu::FilterMode::Linear,
-            );
-            // Retire the previous registration for this slot, if any — a resized
-            // target leaves the old TextureId dangling.
-            let stale = match slot {
-                PreviewSlot::Deck(uuid) => self.deck_preview_textures.insert(uuid.clone(), tid),
-                PreviewSlot::Channel(idx) => self.channel_preview_textures.insert(*idx, tid),
-                PreviewSlot::Main => self.main_output_texture.replace(tid),
-                PreviewSlot::Output(idx) => self.output_preview_textures.insert(*idx, tid),
-            };
-            if let Some(old) = stale {
-                egui_renderer.free_texture(&old);
-            }
-        }
-
-        // Retire registrations and targets for decks/outputs that are gone. This
-        // is the only place they are retired, so skipping it leaks one texture
-        // per removed entity.
-        let live_decks: std::collections::HashSet<String> = sources
-            .iter()
-            .filter_map(|(s, ..)| match s {
-                PreviewSlot::Deck(u) => Some(u.clone()),
-                _ => None,
-            })
-            .collect();
-        let stale_decks: Vec<String> = self
-            .deck_preview_textures
-            .keys()
-            .filter(|u| !live_decks.contains(*u))
-            .cloned()
-            .collect();
-        for uuid in stale_decks {
-            if let Some(tid) = self.deck_preview_textures.remove(&uuid) {
-                egui_renderer.free_texture(&tid);
-            }
-        }
-        let live_outputs: std::collections::HashSet<usize> = sources
-            .iter()
-            .filter_map(|(s, ..)| match s {
-                PreviewSlot::Output(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
-        let stale_outputs: Vec<usize> = self
-            .output_preview_textures
-            .keys()
-            .copied()
-            .filter(|i| !live_outputs.contains(i))
-            .collect();
-        for idx in stale_outputs {
-            if let Some(tid) = self.output_preview_textures.remove(&idx) {
-                egui_renderer.free_texture(&tid);
-            }
-        }
-        encoder.retain_keys(&live);
-    }
-
-    /// Gamma-encode every preview for this frame.
-    ///
-    /// Must run after the mixer render *and* after output windows have drawn, but
-    /// before egui paints. See the frame sequence in `render_frame`.
-    fn encode_previews(&mut self) {
-        let Some(varda) = &self.varda else { return };
-        let Some(encoder) = &self.preview_encoder else {
-            return;
-        };
-        let context = varda.gpu_context();
-        encoder.encode_all(context, &Self::preview_sources(varda));
-    }
-
-    /// Per-frame egui texture sync. Previews are gamma-encoded into dedicated
-    /// targets, so this only keeps targets and registrations in step; the pixels
-    /// are written later by `encode_previews`.
-    fn refresh_textures(&mut self) {
-        self.sync_preview_registrations();
-    }
-
     /// Headless render loop — engine processing without UI/egui.
-    fn render_headless(&mut self, event_loop: &ActiveEventLoop) {
+    fn render_headless(&mut self, host: &dyn WindowHost) {
         let Some(varda) = self.varda.as_mut() else {
             return;
         };
@@ -1118,7 +329,7 @@ impl UIRunner {
             if let Some(api) = self.api_handle.take() {
                 api.shutdown();
             }
-            event_loop.exit();
+            host.exit();
             return;
         }
 
@@ -1128,10 +339,10 @@ impl UIRunner {
         varda.process_inputs();
 
         // Create pending output windows (API-driven in headless)
-        varda.create_pending_outputs(event_loop);
-        varda.refresh_monitors(event_loop);
+        host.create_pending_outputs(varda);
+        host.refresh_monitors(varda);
         #[cfg(feature = "html")]
-        varda.create_pending_interactive(event_loop);
+        host.create_pending_interactive(varda);
 
         // Publish the cued channel(s) so off-air previews render live (issue #72).
         varda.set_preview_channels(self.layout.preview_channels());
@@ -1163,7 +374,7 @@ impl UIRunner {
         }
     }
 
-    /// Main render loop — delegates all logic to VardaApp.
+    /// Main render loop — delegates all logic to `VardaApp`.
     fn render(&mut self, event_loop: &ActiveEventLoop) {
         // 1. Frame timing + notifications + inputs
         {
@@ -1234,69 +445,7 @@ impl UIRunner {
             }
         }
 
-        // 3c. Camera detection mode — open/release camera as needed
-        {
-            let detect_camera_id = match &self.layout.camera_detect_mode {
-                ui::CameraDetectMode::Live { camera_id, .. } => Some(*camera_id),
-                ui::CameraDetectMode::Preview { camera_id, .. } => Some(*camera_id),
-                ui::CameraDetectMode::Off => None,
-            };
-
-            if let (Some(cam_id), Some(varda)) = (detect_camera_id, self.varda.as_mut()) {
-                if self.camera_detect_camera_id != Some(cam_id) {
-                    // Release previous camera if switching
-                    if let Some(prev_id) = self.camera_detect_camera_id.take() {
-                        varda.camera_manager_mut().release_camera(prev_id);
-                        if let (Some(tex_id), Some(egui_renderer)) = (
-                            self.camera_detect_texture.take(),
-                            self.egui_renderer.as_mut(),
-                        ) {
-                            egui_renderer.free_texture(&tex_id);
-                        }
-                    }
-                    // Open new camera (uses convenience method to avoid split-borrow)
-                    match varda.open_camera(cam_id) {
-                        Ok(_res) => {
-                            if let Some(tex_view) = varda.camera_manager().texture_view(cam_id) {
-                                let context = varda.gpu_context();
-                                if let Some(egui_renderer) = self.egui_renderer.as_mut() {
-                                    let tid = egui_renderer.register_native_texture(
-                                        &context.device,
-                                        tex_view,
-                                        wgpu::FilterMode::Linear,
-                                    );
-                                    self.camera_detect_texture = Some(tid);
-                                }
-                            }
-                            self.camera_detect_camera_id = Some(cam_id);
-                            log::info!("Camera detection: opened camera {}", cam_id);
-                        }
-                        Err(e) => {
-                            log::error!(
-                                "Camera detection: failed to open camera {}: {}",
-                                cam_id,
-                                e
-                            );
-                            self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
-                        }
-                    }
-                }
-            } else if detect_camera_id.is_none() && self.camera_detect_camera_id.is_some() {
-                // Mode is Off — release camera
-                if let Some(prev_id) = self.camera_detect_camera_id.take() {
-                    if let Some(varda) = self.varda.as_mut() {
-                        varda.camera_manager_mut().release_camera(prev_id);
-                    }
-                    if let (Some(tex_id), Some(egui_renderer)) = (
-                        self.camera_detect_texture.take(),
-                        self.egui_renderer.as_mut(),
-                    ) {
-                        egui_renderer.free_texture(&tex_id);
-                    }
-                }
-                self.camera_detect_contours.clear();
-            }
-        }
+        self.sync_camera_detect_capture();
 
         // 4. Collect UI data snapshot (engine → UI, with UI-owned layout state)
         let Some(varda_ref) = self.varda.as_ref() else {
@@ -1361,7 +510,9 @@ impl UIRunner {
             }
         }
 
-        ui_data.camera_detect_contours = self.camera_detect_contours.clone();
+        ui_data
+            .camera_detect_contours
+            .clone_from(&self.camera_detect_contours);
 
         // 5. Run egui frame
         let t_egui = std::time::Instant::now();
@@ -1444,99 +595,7 @@ impl UIRunner {
             }
         }
 
-        // 6a3. Camera detection actions
-        {
-            let actions: Vec<_> = ui_actions.session.camera_detect_actions.drain(..).collect();
-            for action in actions {
-                match action {
-                    ui::CameraDetectAction::Enter { camera_id } => {
-                        self.layout.camera_detect_mode = ui::CameraDetectMode::Live {
-                            camera_id,
-                            params: crate::surface::detect::DetectionParams::default(),
-                        };
-                    }
-                    ui::CameraDetectAction::Exit => {
-                        self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
-                        // Camera release handled by lifecycle block on next frame
-                    }
-                    ui::CameraDetectAction::UpdateParams(params) => {
-                        if let ui::CameraDetectMode::Live {
-                            params: ref mut p, ..
-                        } = self.layout.camera_detect_mode
-                        {
-                            *p = params.clone();
-                            // Detection runs every frame in the lifecycle block — no need to run here
-                        }
-                    }
-                    ui::CameraDetectAction::Capture => {
-                        // Send a capture request to the background thread — the
-                        // response (polled above) will transition to Preview mode.
-                        if let ui::CameraDetectMode::Live {
-                            camera_id,
-                            ref params,
-                        } = self.layout.camera_detect_mode
-                        {
-                            if let Some(varda) = &self.varda {
-                                if let Some(frame) =
-                                    varda.camera_manager().snapshot_frame(camera_id)
-                                {
-                                    let _ = self.detect_req_tx.send(DetectRequest {
-                                        rgba: frame.0,
-                                        w: frame.1,
-                                        h: frame.2,
-                                        params: params.clone(),
-                                        is_capture: true,
-                                        camera_id,
-                                    });
-                                    self.detect_in_flight = true;
-                                }
-                            }
-                        }
-                    }
-                    ui::CameraDetectAction::ToggleContour(idx) => {
-                        if let ui::CameraDetectMode::Preview {
-                            ref mut selected, ..
-                        } = self.layout.camera_detect_mode
-                        {
-                            if let Some(s) = selected.get_mut(idx) {
-                                *s = !*s;
-                            }
-                        }
-                    }
-                    ui::CameraDetectAction::SelectAll(val) => {
-                        if let ui::CameraDetectMode::Preview {
-                            ref mut selected, ..
-                        } = self.layout.camera_detect_mode
-                        {
-                            selected.iter_mut().for_each(|s| *s = val);
-                        }
-                    }
-                    ui::CameraDetectAction::Accept => {
-                        if let ui::CameraDetectMode::Preview {
-                            ref contours,
-                            ref selected,
-                            ..
-                        } = self.layout.camera_detect_mode
-                        {
-                            let chosen: Vec<_> = contours
-                                .iter()
-                                .zip(selected.iter())
-                                .filter(|(_, &s)| s)
-                                .map(|(c, _)| c.clone())
-                                .collect();
-                            if !chosen.is_empty() {
-                                ui_actions.commands.push(
-                                    crate::engine::EngineCommand::ConfirmDetectedContours {
-                                        contours: chosen,
-                                    },
-                                );
-                            }
-                        }
-                        self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
-                    }
-                }
-            }
-        }
+        self.apply_camera_detect_actions(&mut ui_actions);
 
         // 6b. Engine actions (delegated to VardaApp)
         {
@@ -1634,7 +693,7 @@ impl UIRunner {
                         let context = varda.gpu_context();
                         let mixer = varda.mixer_ref();
                         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-                            for slot in ch.decks.iter() {
+                            for slot in &ch.decks {
                                 let tex_id = egui_renderer.register_native_texture(
                                     &context.device,
                                     &slot.deck.texture_view,
@@ -1683,7 +742,7 @@ impl UIRunner {
                 let context = varda.gpu_context();
                 let mixer = varda.mixer_ref();
                 for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-                    for slot in ch.decks.iter() {
+                    for slot in &ch.decks {
                         if let Some(&tex_id) = self.deck_preview_textures.get(slot.deck.uuid()) {
                             egui_renderer.update_egui_texture_from_wgpu_texture(
                                 &context.device,
@@ -1814,7 +873,7 @@ impl UIRunner {
                         // preprocessor textures with no error shown.
                         let mut deck = deck;
                         if let Err(e) = varda.finalize_new_deck(&mut deck) {
-                            log::error!("Failed to add deck: {}", e);
+                            log::error!("Failed to add deck: {e}");
                             varda.notify_error(format!("Failed to add deck: {e}"));
                             continue;
                         }
@@ -1838,7 +897,7 @@ impl UIRunner {
                         );
                     }
                     Err(e) => {
-                        log::error!("Background deck load failed for '{}': {}", result.name, e)
+                        log::error!("Background deck load failed for '{}': {}", result.name, e);
                     }
                 }
             }
@@ -1917,7 +976,7 @@ impl UIRunner {
             window,
             full_output.shapes,
             full_output.pixels_per_point,
-            full_output.textures_delta,
+            &full_output.textures_delta,
         );
         let submit_us = t_submit.elapsed().as_micros();
 
@@ -1925,8 +984,7 @@ impl UIRunner {
         let target_fps = self
             .varda
             .as_ref()
-            .map(|v| v.target_fps())
-            .unwrap_or(self.config.target_fps);
+            .map_or(self.config.target_fps, crate::app::VardaApp::target_fps);
         self.advance_cadence_anchor(target_fps);
 
         // Frame loop timing (log every 120 frames)
@@ -1952,7 +1010,7 @@ impl UIRunner {
         window: &Window,
         shapes: Vec<egui::epaint::ClippedShape>,
         pixels_per_point: f32,
-        textures_delta: egui::TexturesDelta,
+        textures_delta: &egui::TexturesDelta,
     ) {
         let Some(varda) = &self.varda else { return };
         let context = varda.gpu_context();
@@ -1987,16 +1045,13 @@ impl UIRunner {
                     wgpu::CurrentSurfaceTexture::Success(o)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(o) => o,
                     other => {
-                        log::error!(
-                            "Failed to get surface texture after reconfigure: {:?}",
-                            other
-                        );
+                        log::error!("Failed to get surface texture after reconfigure: {other:?}");
                         return;
                     }
                 }
             }
             other => {
-                log::debug!("UI surface unavailable: {:?}", other);
+                log::debug!("UI surface unavailable: {other:?}");
                 return;
             }
         };
@@ -2065,5 +1120,277 @@ impl UIRunner {
 
         context.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // ── Frame pacing ────────────────────────────────────────────────
+    //
+    // `UIRunner::new` needs no window, GPU, or event loop — every such field is
+    // `None` — so the pacing logic is directly exercisable.
+
+    fn runner() -> UIRunner {
+        UIRunner::new(AppConfig::parse_from(["varda", "--headless"]))
+    }
+
+    #[test]
+    fn cadence_anchor_is_cleared_when_fps_is_uncapped() {
+        let mut runner = runner();
+        runner.advance_cadence_anchor(60);
+        assert!(runner.cadence_anchor.is_some());
+        runner.advance_cadence_anchor(0);
+        assert!(
+            runner.cadence_anchor.is_none(),
+            "target_fps 0 means uncapped — no pacing deadline"
+        );
+    }
+
+    #[test]
+    fn cadence_anchor_starts_one_budget_ahead() {
+        let mut runner = runner();
+        let before = std::time::Instant::now();
+        runner.advance_cadence_anchor(60);
+        let anchor = runner.cadence_anchor.expect("anchor set");
+        let budget = std::time::Duration::from_secs_f64(1.0 / 60.0);
+        assert!(anchor >= before + budget, "at least one budget out");
+        assert!(
+            anchor <= std::time::Instant::now() + budget,
+            "not more than one budget out"
+        );
+    }
+
+    /// A frame that finishes inside its budget keeps the existing cadence: the
+    /// anchor advances by exactly one budget rather than resetting to `now`.
+    /// This is what stops frame times from drifting.
+    #[test]
+    fn cadence_anchor_advances_by_one_budget_when_on_time() {
+        let mut runner = runner();
+        let budget = std::time::Duration::from_secs_f64(1.0 / 60.0);
+        // Far enough ahead that `now` is comfortably before the deadline.
+        let anchor = std::time::Instant::now() + budget * 10;
+        runner.cadence_anchor = Some(anchor);
+        runner.advance_cadence_anchor(60);
+        assert_eq!(
+            runner.cadence_anchor,
+            Some(anchor + budget),
+            "on-time frame advances the anchor by exactly one budget"
+        );
+    }
+
+    /// A frame that overshot its deadline restarts the cadence from `now` rather
+    /// than chasing the stale anchor, which would emit a burst of zero-budget
+    /// catch-up frames.
+    #[test]
+    fn cadence_anchor_snaps_forward_after_an_overshoot() {
+        let mut runner = runner();
+        let budget = std::time::Duration::from_secs_f64(1.0 / 60.0);
+        let stale = std::time::Instant::now()
+            .checked_sub(budget * 10)
+            .expect("clock is far enough past boot to subtract 10 frames");
+        runner.cadence_anchor = Some(stale);
+        let before = std::time::Instant::now();
+        runner.advance_cadence_anchor(60);
+        let anchor = runner.cadence_anchor.expect("anchor set");
+        assert!(
+            anchor >= before + budget,
+            "overshoot restarts from now, not from the stale anchor"
+        );
+        assert_ne!(anchor, stale + budget, "must not chase the stale deadline");
+    }
+
+    #[test]
+    fn cadence_budget_scales_with_target_fps() {
+        let mut fast = runner();
+        fast.advance_cadence_anchor(120);
+        let fast_anchor = fast.cadence_anchor.expect("anchor");
+        let mut slow = runner();
+        slow.advance_cadence_anchor(30);
+        let slow_anchor = slow.cadence_anchor.expect("anchor");
+        assert!(
+            fast_anchor < slow_anchor,
+            "a higher target fps yields a nearer deadline"
+        );
+    }
+
+    // ── Detection worker thread ─────────────────────────────────────
+
+    /// The worker echoes `is_capture` and `camera_id` back untouched, which is how
+    /// the runner tells a freeze-frame capture from a live overlay refresh.
+    #[test]
+    fn detect_worker_round_trips_request_metadata() {
+        let (req_tx, req_rx) = std::sync::mpsc::channel();
+        let res_rx = spawn_detect_thread(req_rx);
+
+        req_tx
+            .send(DetectRequest {
+                rgba: vec![0; 4 * 8 * 8],
+                w: 8,
+                h: 8,
+                params: crate::surface::detect::DetectionParams::default(),
+                is_capture: true,
+                camera_id: 7,
+            })
+            .expect("send request");
+
+        let res = res_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("worker replied");
+        assert!(res.is_capture, "capture flag echoed back");
+        assert_eq!(res.camera_id, 7);
+    }
+
+    /// A blank frame yields no contours rather than letting the error escape the
+    /// thread — the worker must survive undetectable input and stay available.
+    #[test]
+    fn detect_worker_survives_undetectable_input_and_keeps_serving() {
+        let (req_tx, req_rx) = std::sync::mpsc::channel();
+        let res_rx = spawn_detect_thread(req_rx);
+
+        for _ in 0..2 {
+            req_tx
+                .send(DetectRequest {
+                    rgba: vec![0; 4 * 8 * 8],
+                    w: 8,
+                    h: 8,
+                    params: crate::surface::detect::DetectionParams::default(),
+                    is_capture: false,
+                    camera_id: 1,
+                })
+                .expect("send request");
+            let res = res_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("worker replied");
+            assert!(res.contours.is_empty(), "blank frame has no contours");
+        }
+    }
+
+    // ── render_headless ─────────────────────────────────────────────
+    //
+    // A real `ActiveEventLoop` cannot be constructed in a test, so `WindowHost`
+    // stands in for it. Everything else is real: a headless `GpuContext` and a
+    // genuine `VardaApp`, driven frame by frame.
+
+    #[derive(Default)]
+    struct FakeHost {
+        exits: std::cell::Cell<u32>,
+        outputs_created: std::cell::Cell<u32>,
+        monitors_refreshed: std::cell::Cell<u32>,
+    }
+
+    impl WindowHost for FakeHost {
+        fn exit(&self) {
+            self.exits.set(self.exits.get() + 1);
+        }
+
+        fn create_pending_outputs(&self, _varda: &mut VardaApp) {
+            self.outputs_created.set(self.outputs_created.get() + 1);
+        }
+
+        fn refresh_monitors(&self, _varda: &mut VardaApp) {
+            self.monitors_refreshed
+                .set(self.monitors_refreshed.get() + 1);
+        }
+
+        #[cfg(feature = "html")]
+        fn create_pending_interactive(&self, _varda: &mut VardaApp) {}
+    }
+
+    fn headless_config() -> AppConfig {
+        AppConfig::parse_from(["varda", "--headless", "--no-osc", "--no-ndi", "--no-syphon"])
+    }
+
+    /// A runner with a real headless engine attached, or `None` when the machine
+    /// has no GPU adapter — matching the skip-without-adapter pattern used by the
+    /// other GPU tests.
+    fn headless_runner() -> Option<UIRunner> {
+        let gpu = GpuContext::new_headless().ok()?;
+        let varda = VardaApp::new(gpu, &headless_config()).expect("VardaApp::new");
+        let mut runner = UIRunner::new(headless_config());
+        runner.varda = Some(varda);
+        Some(runner)
+    }
+
+    #[test]
+    fn render_headless_drives_a_frame_with_no_window() {
+        let Some(mut runner) = headless_runner() else {
+            return;
+        };
+        let host = FakeHost::default();
+        runner.render_headless(&host);
+
+        assert_eq!(host.exits.get(), 0, "a normal frame must not exit");
+        assert_eq!(
+            host.outputs_created.get(),
+            1,
+            "each frame reconciles pending output windows"
+        );
+        assert_eq!(
+            host.monitors_refreshed.get(),
+            1,
+            "each frame refreshes the monitor list"
+        );
+        assert_eq!(runner.publish_counter, 1);
+    }
+
+    /// State publishing is gated to every tenth frame to keep snapshot cost off
+    /// the per-frame path. Observed through the shared reader the HTTP API uses.
+    #[test]
+    fn render_headless_publishes_state_every_tenth_frame() {
+        let Some(mut runner) = headless_runner() else {
+            return;
+        };
+        let reader = runner
+            .varda
+            .as_ref()
+            .expect("engine attached")
+            .state_reader();
+        // Start from a known-empty slot regardless of construction-time publishing.
+        reader.write().expect("state lock").take();
+
+        let host = FakeHost::default();
+        for frame in 1..10 {
+            runner.render_headless(&host);
+            assert!(
+                reader.read().expect("state lock").is_none(),
+                "frame {frame} must not publish"
+            );
+        }
+
+        runner.render_headless(&host);
+        assert_eq!(runner.publish_counter, 10);
+        assert!(
+            reader.read().expect("state lock").is_some(),
+            "the tenth frame publishes engine state"
+        );
+    }
+
+    /// A flagged shutdown exits and skips the frame's work entirely, so nothing
+    /// is rendered or reconciled after the signal.
+    #[test]
+    fn render_headless_exits_and_skips_work_when_shutdown_flagged() {
+        let Some(mut runner) = headless_runner() else {
+            return;
+        };
+        runner
+            .shutdown_flag
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let host = FakeHost::default();
+        runner.render_headless(&host);
+
+        assert_eq!(host.exits.get(), 1, "shutdown exits the event loop");
+        assert_eq!(
+            host.outputs_created.get(),
+            0,
+            "shutdown returns before reconciling outputs"
+        );
+        assert_eq!(
+            runner.publish_counter, 0,
+            "shutdown returns before the publish gate"
+        );
     }
 }

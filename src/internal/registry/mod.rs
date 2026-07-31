@@ -64,6 +64,10 @@ impl ShaderRegistry {
     /// callers get an `Err` and decide whether to warn-and-skip. Duplicate
     /// paths are ignored so overlapping libraries aren't scanned or watched
     /// twice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `path` does not exist or is not a directory.
     pub fn add_library_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let path = path.as_ref().to_path_buf();
 
@@ -86,6 +90,12 @@ impl ShaderRegistry {
     }
 
     /// Scan all library paths for ISF shaders
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible in practice — individual shaders that fail to parse
+    /// are logged and skipped — but the signature stays fallible so directory
+    /// traversal failures can be surfaced without a breaking change.
     pub fn scan(&mut self) -> Result<usize> {
         self.shaders.clear();
         self.path_to_name.clear();
@@ -97,7 +107,7 @@ impl ShaderRegistry {
             for entry in WalkDir::new(lib_path)
                 .follow_links(true)
                 .into_iter()
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
             {
                 let path = entry.path();
 
@@ -139,6 +149,11 @@ impl ShaderRegistry {
     }
 
     /// Start watching library paths for changes
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the platform file watcher cannot be created, or if any
+    /// existing library path cannot be registered for recursive watching.
     pub fn start_watching(&mut self) -> Result<()> {
         let (tx, rx) = mpsc::channel();
 
@@ -165,9 +180,8 @@ impl ShaderRegistry {
     pub fn poll_changes(&mut self) -> Vec<ShaderEvent> {
         // First, collect all pending notify events without holding a borrow
         let pending_events: Vec<(notify::EventKind, Vec<PathBuf>)> = {
-            let receiver = match &self.change_receiver {
-                Some(r) => r,
-                None => return Vec::new(),
+            let Some(receiver) = &self.change_receiver else {
+                return Vec::new();
             };
 
             let mut collected = Vec::new();
@@ -177,7 +191,7 @@ impl ShaderRegistry {
                         collected.push((event.kind, event.paths));
                     }
                     Ok(Err(e)) => {
-                        log::error!("File watcher error: {}", e);
+                        log::error!("File watcher error: {e}");
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
@@ -215,7 +229,7 @@ impl ShaderRegistry {
                                 shader_events.push(ShaderEvent::Changed(path));
                             }
                             Err(e) => {
-                                let err_msg = format!("{}", e);
+                                let err_msg = format!("{e}");
                                 log::warn!(
                                     "Failed to reload shader {}: {}",
                                     path.display(),
@@ -239,7 +253,7 @@ impl ShaderRegistry {
                                 );
                                 shader_events.push(ShaderEvent::Changed(path));
                             } else {
-                                log::info!("Removed shader: {}", name);
+                                log::info!("Removed shader: {name}");
                                 shader_events.push(ShaderEvent::Removed(path));
                             }
                         }
@@ -326,8 +340,7 @@ impl ShaderRegistry {
             Some(providers) => providers
                 .iter()
                 .max_by_key(|p| self.path_priority(p))
-                .map(|winner| winner.as_path() == path)
-                .unwrap_or(true),
+                .is_none_or(|winner| winner.as_path() == path),
             None => true,
         }
     }
@@ -416,7 +429,7 @@ impl Default for ShaderRegistry {
 }
 
 /// Get the bundled shader path relative to the current executable.
-/// Used when Varda is packaged as a .app (macOS) or AppImage (Linux).
+/// Used when Varda is packaged as a .app (macOS) or `AppImage` (Linux).
 pub fn get_bundled_shader_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;

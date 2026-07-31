@@ -70,7 +70,7 @@ fn upload_texture_to_slot(
     );
 }
 
-/// Accumulate phase times: for each PhaseInput, adds `dt * param_value * scale` to the accumulator.
+/// Accumulate phase times: for each `PhaseInput`, adds `dt * param_value * scale` to the accumulator.
 fn accumulate_phase_times(
     accumulators: &mut [f32; 4],
     dt: f32,
@@ -91,6 +91,12 @@ impl Deck {
     /// Update video frame using double-buffered staging uploads.
     /// Takes the latest decoded frame from the background decode thread
     /// and uploads it to the GPU texture via a pre-allocated mapped buffer.
+    ///
+    /// # Errors
+    ///
+    /// Never fails today — the upload path is infallible and non-video sources
+    /// are a no-op. The `Result` is kept so callers stay source-compatible if
+    /// staging-buffer allocation becomes fallible.
     pub fn update_video_frame(&mut self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
         match &mut self.source {
             DeckSource::Video {
@@ -136,7 +142,7 @@ impl Deck {
         Ok(())
     }
 
-    /// Request re-mapping of staging buffers after queue.submit().
+    /// Request re-mapping of staging buffers after `queue.submit()`.
     pub fn request_video_remap(&mut self) {
         match &mut self.source {
             DeckSource::Video {
@@ -157,6 +163,10 @@ impl Deck {
     }
 
     /// Render the deck to its texture (source + effect chain)
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`Deck::render_with_prefix`].
     pub fn render(
         &mut self,
         context: &GpuContext,
@@ -165,7 +175,7 @@ impl Deck {
         deck_idx: usize,
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
     ) -> Result<()> {
-        let prefix = format!("deck{}", deck_idx);
+        let prefix = format!("deck{deck_idx}");
         self.render_with_prefix(context, audio_data, modulation, &prefix, cmd_buffers, None)
     }
 
@@ -237,6 +247,12 @@ impl Deck {
     /// survivable: the deck is quarantined, keeps displaying its last good
     /// frame, and everything else carries on rendering.
     /// See spec/error-handling.md § Shader Errors.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors raised while encoding the source and effect chain
+    /// (for example a failed effect application). GPU validation errors are
+    /// *not* propagated: they quarantine the deck and return `Ok(())`.
     pub fn render_with_prefix(
         &mut self,
         context: &GpuContext,
@@ -411,7 +427,7 @@ impl Deck {
                         &preprocessor_views,
                         generator_phase_times,
                         cmd_buffers,
-                    )?;
+                    );
                 } else {
                     Self::render_simple_static(
                         context,
@@ -429,7 +445,7 @@ impl Deck {
                         &preprocessor_views,
                         generator_phase_times,
                         cmd_buffers,
-                    )?;
+                    );
                 }
             }
 
@@ -672,7 +688,7 @@ impl Deck {
                         time,
                         time_delta,
                         frame_index: self.frame_count,
-                        pass_index: pass_idx as i32,
+                        pass_index: i32::try_from(pass_idx).unwrap_or(i32::MAX),
                         render_size: [self.texture.width() as f32, self.texture.height() as f32],
                         audio_level: audio_data.level,
                         audio_bass: audio_data.bass(),
@@ -841,7 +857,7 @@ impl Deck {
         }
 
         for effect in effects.iter_mut() {
-            for slot in effect.preprocessor_textures.iter_mut() {
+            for slot in &mut effect.preprocessor_textures {
                 if let Some(snapshot) = analyzers.latest_snapshot(&slot.analyzer_type) {
                     if let Some(tex_data) = snapshot.textures.get(&slot.name) {
                         upload_texture_to_slot(device, queue, slot, tex_data);
@@ -870,7 +886,7 @@ impl Deck {
         preprocessor_views: &[&wgpu::TextureView],
         phase_times: [f32; 4],
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
-    ) -> Result<()> {
+    ) {
         let uniforms = ISFUniforms {
             time,
             time_delta,
@@ -938,7 +954,6 @@ impl Deck {
         }
 
         cmd_buffers.push(encoder.finish());
-        Ok(())
     }
 
     /// Render multi-pass shader with proper ping-pong buffers
@@ -963,7 +978,9 @@ impl Deck {
         preprocessor_views: &[&wgpu::TextureView],
         phase_times: [f32; 4],
         cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
-    ) -> Result<()> {
+    ) {
+        const SIMULATION_ITERATIONS: usize = 4;
+
         generator_params.ensure_buffer(&context.device);
         generator_params.update_buffer_with_modulation(
             &context.queue,
@@ -974,8 +991,6 @@ impl Deck {
             .buffer()
             .expect("Buffer should exist after ensure_buffer");
 
-        const SIMULATION_ITERATIONS: usize = 4;
-
         for pass_idx in 0..passes.len() {
             let pass = &passes[pass_idx];
 
@@ -985,21 +1000,20 @@ impl Deck {
                 1
             };
 
-            let target_name = match &pass.target {
-                Some(name) => name,
-                None => continue,
+            let Some(target_name) = &pass.target else {
+                continue;
             };
 
             // Use the pass buffer's actual dimensions as RENDERSIZE so
             // shaders that store per-pixel state (e.g. particle buffers)
             // can address their own texels correctly.
-            let pass_render_size = pass_buffers
-                .get(target_name)
-                .map(|pb| {
+            let pass_render_size = pass_buffers.get(target_name).map_or(
+                [render_width as f32, render_height as f32],
+                |pb| {
                     let sz = pb.texture_a.size();
                     [sz.width as f32, sz.height as f32]
-                })
-                .unwrap_or([render_width as f32, render_height as f32]);
+                },
+            );
 
             for iter in 0..iterations {
                 let effective_frame = frame_count * SIMULATION_ITERATIONS as u32 + iter as u32;
@@ -1008,7 +1022,7 @@ impl Deck {
                     time,
                     time_delta: time_delta / SIMULATION_ITERATIONS as f32,
                     frame_index: effective_frame,
-                    pass_index: pass_idx as i32,
+                    pass_index: i32::try_from(pass_idx).unwrap_or(i32::MAX),
                     render_size: pass_render_size,
                     audio_level: audio_data.level,
                     audio_bass: audio_data.bass(),
@@ -1025,7 +1039,7 @@ impl Deck {
                 let pass_buffer_views: Vec<&wgpu::TextureView> = passes
                     .iter()
                     .filter_map(|p| p.target.as_ref().and_then(|t| pass_buffers.get(t)))
-                    .map(|pb| pb.read_view())
+                    .map(super::PassBuffer::read_view)
                     .collect();
 
                 let bind_group = multi_pass.create_bind_group(
@@ -1039,8 +1053,7 @@ impl Deck {
 
                 let target_view = pass_buffers
                     .get(target_name)
-                    .map(|pb| pb.write_view())
-                    .unwrap_or(final_target);
+                    .map_or(final_target, super::PassBuffer::write_view);
 
                 let mut encoder =
                     context
@@ -1089,7 +1102,7 @@ impl Deck {
                 time,
                 time_delta,
                 frame_index: frame_count,
-                pass_index: passes.len() as i32,
+                pass_index: i32::try_from(passes.len()).unwrap_or(i32::MAX),
                 render_size: [render_width as f32, render_height as f32],
                 audio_level: audio_data.level,
                 audio_bass: audio_data.bass(),
@@ -1106,7 +1119,7 @@ impl Deck {
             let pass_buffer_views: Vec<&wgpu::TextureView> = passes
                 .iter()
                 .filter_map(|p| p.target.as_ref().and_then(|t| pass_buffers.get(t)))
-                .map(|pb| pb.read_view())
+                .map(super::PassBuffer::read_view)
                 .collect();
 
             let bind_group = multi_pass.create_bind_group(
@@ -1150,13 +1163,11 @@ impl Deck {
 
             cmd_buffers.push(encoder.finish());
         }
-
-        Ok(())
     }
 
     /// Reproject a depth-sensor deck's point cloud into `target`.
     ///
-    /// Needs `self.external_source_view` (R16Uint depth), `self.depth_rgb_view`,
+    /// Needs `self.external_source_view` (`R16Uint` depth), `self.depth_rgb_view`,
     /// `self.depth_intrinsics`, and `self.depth_source_size` — all set once per
     /// frame by the app render loop. Lazily builds the pipeline on first use.
     /// No-op until a depth frame + intrinsics are available.
@@ -1308,11 +1319,11 @@ impl Deck {
         let mut encoder = context
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(&format!("{} Blit Encoder", label)),
+                label: Some(&format!("{label} Blit Encoder")),
             });
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&format!("{} Blit Pass", label)),
+                label: Some(&format!("{label} Blit Pass")),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: generator_target,
                     resolve_target: None,
@@ -1383,7 +1394,7 @@ impl Deck {
     }
 }
 
-/// Get current date as [year, month, day, seconds_in_day]
+/// Get current date as [year, month, day, `seconds_in_day`]
 pub fn get_current_date() -> [f32; 4] {
     use std::time::SystemTime;
 
@@ -1512,10 +1523,7 @@ mod tests {
         let expected_delta = 0.016 * 3.0;
         assert!(
             (after_change - before_change - expected_delta).abs() < 1e-5,
-            "Phase time should be continuous: before={}, after={}, expected delta={}",
-            before_change,
-            after_change,
-            expected_delta
+            "Phase time should be continuous: before={before_change}, after={after_change}, expected delta={expected_delta}"
         );
     }
 

@@ -1,10 +1,10 @@
 use super::ISFUniforms;
-/// TransitionPipeline — renders an ISF transition shader with two input textures.
+/// `TransitionPipeline` — renders an ISF transition shader with two input textures.
 ///
 /// Binding layout (fixed):
-///   [0: ISFUniforms, 1: Sampler, 2: startImage, 3: endImage, 4: UserParams]
+///   [0: `ISFUniforms`, 1: Sampler, 2: startImage, 3: endImage, 4: `UserParams`]
 ///
-/// The `progress` uniform is the first float in the UserParams block (set by the mixer
+/// The `progress` uniform is the first float in the `UserParams` block (set by the mixer
 /// from the crossfader position). Additional user params follow.
 use anyhow::Result;
 use wgpu::util::DeviceExt;
@@ -19,6 +19,11 @@ pub struct TransitionPipeline {
 
 impl TransitionPipeline {
     /// Create from SPIR-V bytecode of a transition shader.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SPIR-V fails to parse, fails naga validation, or
+    /// cannot be transpiled to WGSL.
     pub fn new(
         device: &wgpu::Device,
         spirv: &[u32],
@@ -142,7 +147,7 @@ impl TransitionPipeline {
                 module: &vertex_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader_module,
@@ -152,7 +157,7 @@ impl TransitionPipeline {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,

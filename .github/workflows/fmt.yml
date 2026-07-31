@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'tests/**'
+      - 'benches/**'
+      - 'examples/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'

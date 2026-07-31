@@ -30,7 +30,7 @@ impl VardaApp {
         else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Deck preset '{}' not found", preset_name),
+                message: format!("Deck preset '{preset_name}' not found"),
             };
         };
         match Self::restore_deck_into_channel(
@@ -90,7 +90,7 @@ impl VardaApp {
         else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Channel preset '{}' not found", preset_name),
+                message: format!("Channel preset '{preset_name}' not found"),
             };
         };
 
@@ -128,10 +128,10 @@ impl VardaApp {
                     Some((idx, true))
                 }
                 Err(e) => {
-                    log::error!("Failed to create channel for preset: {}", e);
+                    log::error!("Failed to create channel for preset: {e}");
                     self.session
                         .notifications
-                        .error(format!("Failed to load channel preset: {}", e));
+                        .error(format!("Failed to load channel preset: {e}"));
                     return CommandResult::Err {
                         code: ErrorCode::InternalError,
                         message: e.to_string(),
@@ -202,7 +202,7 @@ impl VardaApp {
         let target_desc = if created_new {
             "new channel".to_string()
         } else {
-            format!("ch{}", ch_idx)
+            format!("ch{ch_idx}")
         };
         let msg = if had_errors {
             format!(
@@ -231,13 +231,13 @@ impl VardaApp {
         let Some(ch_config) = scene.channels.get(channel_idx) else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Channel {} not found", channel_idx),
+                message: format!("Channel {channel_idx} not found"),
             };
         };
         let Some(deck_config) = ch_config.decks.get(deck_idx) else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Deck {} not found in channel {}", deck_idx, channel_idx),
+                message: format!("Deck {deck_idx} not found in channel {channel_idx}"),
             };
         };
         let mut preset_config = deck_config.clone();
@@ -247,7 +247,7 @@ impl VardaApp {
             .and_then(|ch| ch.decks.get(deck_idx))
             .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
             .unwrap_or_default();
-        let prefix = format!("deck_{}", deck_uuid);
+        let prefix = format!("deck_{deck_uuid}");
         preset_config.modulation =
             extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
         match crate::persistence::presets::PresetLibrary::save_deck_preset(
@@ -265,14 +265,14 @@ impl VardaApp {
                 self.session.preset_library.refresh(&self.session.workspace);
                 self.session
                     .notifications
-                    .info(format!("💾 Saved deck preset '{}'", name));
+                    .info(format!("💾 Saved deck preset '{name}'"));
                 CommandResult::Ok
             }
             Err(e) => {
-                log::error!("Failed to save deck preset: {}", e);
+                log::error!("Failed to save deck preset: {e}");
                 self.session
                     .notifications
-                    .error(format!("Failed to save preset: {}", e));
+                    .error(format!("Failed to save preset: {e}"));
                 CommandResult::Err {
                     code: ErrorCode::InternalError,
                     message: e.to_string(),
@@ -297,7 +297,7 @@ impl VardaApp {
         let Some(ch_config) = scene.channels.get(channel_idx) else {
             return CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Channel {} not found", channel_idx),
+                message: format!("Channel {channel_idx} not found"),
             };
         };
         let mut preset_ch_config = ch_config.clone();
@@ -312,7 +312,7 @@ impl VardaApp {
                 .and_then(|ch| ch.decks.get(deck_idx))
                 .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
                 .unwrap_or_default();
-            let prefix = format!("deck_{}", deck_uuid);
+            let prefix = format!("deck_{deck_uuid}");
             deck_config.modulation =
                 extract_modulation_recipes(mixer.modulation(), &prefix, &effect_uuids);
         }
@@ -325,14 +325,14 @@ impl VardaApp {
                 self.session.preset_library.refresh(&self.session.workspace);
                 self.session
                     .notifications
-                    .info(format!("💾 Saved channel preset '{}'", name));
+                    .info(format!("💾 Saved channel preset '{name}'"));
                 CommandResult::Ok
             }
             Err(e) => {
-                log::error!("Failed to save channel preset: {}", e);
+                log::error!("Failed to save channel preset: {e}");
                 self.session
                     .notifications
-                    .error(format!("Failed to save preset: {}", e));
+                    .error(format!("Failed to save preset: {e}"));
                 CommandResult::Err {
                     code: ErrorCode::InternalError,
                     message: e.to_string(),
@@ -379,7 +379,7 @@ impl VardaApp {
         let dk_idx = {
             let ch = mixer
                 .channel_mut(ch_idx)
-                .ok_or_else(|| anyhow::anyhow!("Channel {} not found", ch_idx))?;
+                .ok_or_else(|| anyhow::anyhow!("Channel {ch_idx} not found"))?;
             let mut slot = crate::channel::DeckSlot::new(deck);
             slot.opacity = config.opacity;
             slot.blend_mode = config.blend_mode.into();
@@ -397,7 +397,7 @@ impl VardaApp {
                 .and_then(|ch| ch.decks.get(dk_idx))
                 .map(|slot| slot.deck.uuid().to_string())
                 .unwrap_or_default();
-            let new_prefix = format!("deck_{}", deck_uuid);
+            let new_prefix = format!("deck_{deck_uuid}");
             apply_modulation_recipes(&config.modulation, &new_prefix, mixer.modulation_mut());
         }
         Ok(())
@@ -412,14 +412,14 @@ fn extract_modulation_recipes(
     prefix: &str,
     effect_uuids: &[String],
 ) -> Vec<crate::scene::ModulationRecipe> {
-    let prefix_colon = format!("{}:", prefix);
+    let prefix_colon = format!("{prefix}:");
     let mut source_map: std::collections::HashMap<
         String,
         Vec<crate::scene::ModulationRecipeAssignment>,
     > = std::collections::HashMap::new();
 
     // Build a set of effect key prefixes for this deck's effects.
-    let fx_prefixes: Vec<String> = effect_uuids.iter().map(|u| format!("fx_{}:", u)).collect();
+    let fx_prefixes: Vec<String> = effect_uuids.iter().map(|u| format!("fx_{u}:")).collect();
 
     for (key, mods) in engine.assignments_iter() {
         // Match generator params: "deck_{uuid}:brightness" → relative "brightness".
@@ -475,7 +475,7 @@ fn apply_modulation_recipes(
         } else {
             let uuid =
                 engine.add_source_with_uuid(recipe.source_uuid.clone(), recipe.source.clone());
-            log::info!("Created new modulation source {} for preset", uuid);
+            log::info!("Created new modulation source {uuid} for preset");
             uuid
         };
         for assignment in &recipe.assignments {
@@ -526,7 +526,7 @@ mod tests {
             .iter()
             .map(|a| a.param.as_str())
             .collect();
-        params.sort();
+        params.sort_unstable();
         assert_eq!(params, vec!["brightness", "fx_effuuid1:amount"]);
     }
 

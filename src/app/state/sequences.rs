@@ -62,7 +62,7 @@ impl VardaApp {
         }
     }
 
-    /// Mutate the duration of a Fade or Wait step. GoTo steps have no duration.
+    /// Mutate the duration of a Fade or Wait step. `GoTo` steps have no duration.
     fn with_step_duration(
         &mut self,
         sequence_uuid: &str,
@@ -77,7 +77,7 @@ impl VardaApp {
 
     pub(crate) fn cmd_create_sequence(&mut self) -> CommandResult {
         let n = self.mixer.transition_sequences().len() + 1;
-        let seq = TransitionSequence::new(format!("Sequence {}", n));
+        let seq = TransitionSequence::new(format!("Sequence {n}"));
         let uuid = seq.uuid.clone();
         self.mixer.transition_sequences_mut().push(seq);
         CommandResult::OkWithId { uuid }
@@ -226,11 +226,11 @@ impl VardaApp {
         &mut self,
         sequence_uuid: &str,
         step_idx: usize,
-        easing: String,
+        easing: &str,
     ) -> CommandResult {
         self.with_step(sequence_uuid, step_idx, |step| {
             if let StepKind::Fade { easing: e, .. } = &mut step.kind {
-                *e = match easing.as_str() {
+                *e = match easing {
                     "Linear" => CrossfadeEasing::Linear,
                     "EaseIn" => CrossfadeEasing::EaseIn,
                     "EaseOut" => CrossfadeEasing::EaseOut,

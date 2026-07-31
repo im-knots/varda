@@ -92,7 +92,7 @@ impl SystemMonitor {
         if cpus.is_empty() {
             return 0.0;
         }
-        cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpus.len() as f32
+        cpus.iter().map(sysinfo::Cpu::cpu_usage).sum::<f32>() / cpus.len() as f32
     }
 }
 

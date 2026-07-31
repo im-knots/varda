@@ -4,7 +4,7 @@ use super::super::VardaApp;
 use crate::engine::{CommandResult, ErrorCode};
 
 impl VardaApp {
-    pub fn cmd_add_ndi_deck(&mut self, channel_uuid: &str, source_name: String) -> CommandResult {
+    pub fn cmd_add_ndi_deck(&mut self, channel_uuid: &str, source_name: &str) -> CommandResult {
         let channel_idx = match self.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
@@ -12,7 +12,7 @@ impl VardaApp {
         match self
             .external_io
             .ndi_manager
-            .start_receive(&source_name, &self.context.device)
+            .start_receive(source_name, &self.context.device)
         {
             Some(receiver_idx) => {
                 let (src_w, src_h) = self
@@ -23,7 +23,7 @@ impl VardaApp {
                 match crate::deck::Deck::new_from_ndi(
                     &self.context,
                     receiver_idx,
-                    &source_name,
+                    source_name,
                     src_w,
                     src_h,
                     self.render_width,
@@ -49,16 +49,12 @@ impl VardaApp {
             }
             None => CommandResult::Err {
                 code: ErrorCode::InvalidInput,
-                message: format!("Failed to start NDI receive for '{}'", source_name),
+                message: format!("Failed to start NDI receive for '{source_name}'"),
             },
         }
     }
 
-    pub fn cmd_add_syphon_deck(
-        &mut self,
-        channel_uuid: &str,
-        server_name: String,
-    ) -> CommandResult {
+    pub fn cmd_add_syphon_deck(&mut self, channel_uuid: &str, server_name: &str) -> CommandResult {
         #[cfg(target_os = "macos")]
         let channel_idx = match self.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
@@ -70,7 +66,7 @@ impl VardaApp {
             // server, do nothing. An external controller may re-subscribe on every
             // reconnect, and our own reconcile may also bind it — both must
             // converge to a single deck, not stack duplicates.
-            let display_name = format!("🔗 {}", server_name);
+            let display_name = format!("🔗 {server_name}");
             if let Some(ch) = self.mixer.channels().get(channel_idx) {
                 if ch
                     .decks
@@ -78,9 +74,7 @@ impl VardaApp {
                     .any(|s| s.deck.source_name() == display_name)
                 {
                     log::debug!(
-                        "Syphon deck '{}' already present on channel {}; add is a no-op",
-                        server_name,
-                        channel_idx
+                        "Syphon deck '{server_name}' already present on channel {channel_idx}; add is a no-op"
                     );
                     return CommandResult::Ok;
                 }
@@ -88,7 +82,7 @@ impl VardaApp {
             match self
                 .external_io
                 .syphon_manager
-                .start_receive(&server_name, &self.context.device)
+                .start_receive(server_name, &self.context.device)
             {
                 Some(client_idx) => {
                     let (src_w, src_h) = self
@@ -99,7 +93,7 @@ impl VardaApp {
                     match crate::deck::Deck::new_from_syphon(
                         &self.context,
                         client_idx,
-                        &server_name,
+                        server_name,
                         src_w,
                         src_h,
                         self.render_width,
@@ -125,7 +119,7 @@ impl VardaApp {
                 }
                 None => CommandResult::Err {
                     code: ErrorCode::InvalidInput,
-                    message: format!("Failed to start Syphon receive for '{}'", server_name),
+                    message: format!("Failed to start Syphon receive for '{server_name}'"),
                 },
             }
         }
@@ -142,7 +136,7 @@ impl VardaApp {
     pub fn cmd_add_srt_deck(
         &mut self,
         channel_uuid: &str,
-        url: String,
+        url: &str,
         mode: crate::stream::SrtMode,
     ) -> CommandResult {
         let channel_idx = match self.resolve_channel(channel_uuid) {
@@ -152,7 +146,7 @@ impl VardaApp {
         match self
             .external_io
             .stream_manager
-            .start_srt_receive(&url, mode, &self.context.device)
+            .start_srt_receive(url, mode, &self.context.device)
         {
             Some(receiver_idx) => {
                 let (src_w, src_h) = self
@@ -163,7 +157,7 @@ impl VardaApp {
                 match crate::deck::Deck::new_from_srt(
                     &self.context,
                     receiver_idx,
-                    &url,
+                    url,
                     src_w,
                     src_h,
                     self.render_width,
@@ -189,18 +183,18 @@ impl VardaApp {
             }
             None => CommandResult::Err {
                 code: ErrorCode::InvalidInput,
-                message: format!("Failed to start SRT receive for '{}'", url),
+                message: format!("Failed to start SRT receive for '{url}'"),
             },
         }
     }
 
-    pub fn cmd_add_hls_deck(&mut self, channel_uuid: &str, url: String) -> CommandResult {
+    pub fn cmd_add_hls_deck(&mut self, channel_uuid: &str, url: &str) -> CommandResult {
         let channel_idx = match self.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
         match self.external_io.stream_manager.start_receive(
-            &url,
+            url,
             crate::stream::StreamProtocol::Hls,
             &self.context.device,
         ) {
@@ -213,7 +207,7 @@ impl VardaApp {
                 match crate::deck::Deck::new_from_hls(
                     &self.context,
                     receiver_idx,
-                    &url,
+                    url,
                     src_w,
                     src_h,
                     self.render_width,
@@ -239,18 +233,18 @@ impl VardaApp {
             }
             None => CommandResult::Err {
                 code: ErrorCode::InvalidInput,
-                message: format!("Failed to start HLS receive for '{}'", url),
+                message: format!("Failed to start HLS receive for '{url}'"),
             },
         }
     }
 
-    pub fn cmd_add_html_deck(&mut self, channel_uuid: &str, url: String) -> CommandResult {
+    pub fn cmd_add_html_deck(&mut self, channel_uuid: &str, url: &str) -> CommandResult {
         let channel_idx = match self.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
         match self.external_io.html_manager.start_render(
-            &url,
+            url,
             self.render_width,
             self.render_height,
             &self.context.device,
@@ -264,7 +258,7 @@ impl VardaApp {
                 match crate::deck::Deck::new_from_html(
                     &self.context,
                     instance_idx,
-                    &url,
+                    url,
                     src_w,
                     src_h,
                     self.render_width,
@@ -290,7 +284,7 @@ impl VardaApp {
             }
             None => CommandResult::Err {
                 code: ErrorCode::InvalidInput,
-                message: format!("Failed to start HTML render for '{}'", url),
+                message: format!("Failed to start HTML render for '{url}'"),
             },
         }
     }
@@ -319,13 +313,13 @@ impl VardaApp {
         }
     }
 
-    pub fn cmd_add_dash_deck(&mut self, channel_uuid: &str, url: String) -> CommandResult {
+    pub fn cmd_add_dash_deck(&mut self, channel_uuid: &str, url: &str) -> CommandResult {
         let channel_idx = match self.resolve_channel(channel_uuid) {
             Ok(idx) => idx,
             Err(e) => return e.into(),
         };
         match self.external_io.stream_manager.start_receive(
-            &url,
+            url,
             crate::stream::StreamProtocol::Dash,
             &self.context.device,
         ) {
@@ -338,7 +332,7 @@ impl VardaApp {
                 match crate::deck::Deck::new_from_dash(
                     &self.context,
                     receiver_idx,
-                    &url,
+                    url,
                     src_w,
                     src_h,
                     self.render_width,
@@ -364,7 +358,7 @@ impl VardaApp {
             }
             None => CommandResult::Err {
                 code: ErrorCode::InvalidInput,
-                message: format!("Failed to start DASH receive for '{}'", url),
+                message: format!("Failed to start DASH receive for '{url}'"),
             },
         }
     }
@@ -372,7 +366,7 @@ impl VardaApp {
     pub fn cmd_add_rtmp_deck(
         &mut self,
         channel_uuid: &str,
-        url: String,
+        url: &str,
         mode: crate::stream::RtmpMode,
     ) -> CommandResult {
         let channel_idx = match self.resolve_channel(channel_uuid) {
@@ -382,7 +376,7 @@ impl VardaApp {
         match self
             .external_io
             .stream_manager
-            .start_rtmp_receive(&url, mode, &self.context.device)
+            .start_rtmp_receive(url, mode, &self.context.device)
         {
             Some(receiver_idx) => {
                 let (src_w, src_h) = self
@@ -393,7 +387,7 @@ impl VardaApp {
                 match crate::deck::Deck::new_from_rtmp(
                     &self.context,
                     receiver_idx,
-                    &url,
+                    url,
                     src_w,
                     src_h,
                     self.render_width,
@@ -419,7 +413,7 @@ impl VardaApp {
             }
             None => CommandResult::Err {
                 code: ErrorCode::InvalidInput,
-                message: format!("Failed to start RTMP receive for '{}'", url),
+                message: format!("Failed to start RTMP receive for '{url}'"),
             },
         }
     }
@@ -442,34 +436,34 @@ impl VardaApp {
         CommandResult::Ok
     }
 
-    pub fn cmd_remove_stream_library_entry(&mut self, url: String) -> CommandResult {
-        self.external_io.stream_library.retain(|(u, _)| u != &url);
+    pub fn cmd_remove_stream_library_entry(&mut self, url: &str) -> CommandResult {
+        self.external_io.stream_library.retain(|(u, _)| u != url);
         CommandResult::Ok
     }
 
     pub fn cmd_add_hls_library_entry(&mut self, url: String) -> CommandResult {
         if !self.external_io.hls_library.contains(&url) {
-            log::info!("Added HLS source to library via API: {}", url);
+            log::info!("Added HLS source to library via API: {url}");
             self.external_io.hls_library.push(url);
         }
         CommandResult::Ok
     }
 
-    pub fn cmd_remove_hls_library_entry(&mut self, url: String) -> CommandResult {
-        self.external_io.hls_library.retain(|u| u != &url);
+    pub fn cmd_remove_hls_library_entry(&mut self, url: &str) -> CommandResult {
+        self.external_io.hls_library.retain(|u| u != url);
         CommandResult::Ok
     }
 
     pub fn cmd_add_dash_library_entry(&mut self, url: String) -> CommandResult {
         if !self.external_io.dash_library.contains(&url) {
-            log::info!("Added DASH source to library via API: {}", url);
+            log::info!("Added DASH source to library via API: {url}");
             self.external_io.dash_library.push(url);
         }
         CommandResult::Ok
     }
 
-    pub fn cmd_remove_dash_library_entry(&mut self, url: String) -> CommandResult {
-        self.external_io.dash_library.retain(|u| u != &url);
+    pub fn cmd_remove_dash_library_entry(&mut self, url: &str) -> CommandResult {
+        self.external_io.dash_library.retain(|u| u != url);
         CommandResult::Ok
     }
 
@@ -479,27 +473,27 @@ impl VardaApp {
         mode: crate::stream::RtmpMode,
     ) -> CommandResult {
         if !self.external_io.rtmp_library.iter().any(|(u, _)| u == &url) {
-            log::info!("Added RTMP source to library via API: {} ({})", url, mode);
+            log::info!("Added RTMP source to library via API: {url} ({mode})");
             self.external_io.rtmp_library.push((url, mode));
         }
         CommandResult::Ok
     }
 
-    pub fn cmd_remove_rtmp_library_entry(&mut self, url: String) -> CommandResult {
-        self.external_io.rtmp_library.retain(|(u, _)| u != &url);
+    pub fn cmd_remove_rtmp_library_entry(&mut self, url: &str) -> CommandResult {
+        self.external_io.rtmp_library.retain(|(u, _)| u != url);
         CommandResult::Ok
     }
 
     pub fn cmd_add_html_library_entry(&mut self, url: String) -> CommandResult {
         if !self.external_io.html_library.contains(&url) {
-            log::info!("Added HTML source to library: {}", url);
+            log::info!("Added HTML source to library: {url}");
             self.external_io.html_library.push(url);
         }
         CommandResult::Ok
     }
 
-    pub fn cmd_remove_html_library_entry(&mut self, url: String) -> CommandResult {
-        self.external_io.html_library.retain(|u| u != &url);
+    pub fn cmd_remove_html_library_entry(&mut self, url: &str) -> CommandResult {
+        self.external_io.html_library.retain(|u| u != url);
         CommandResult::Ok
     }
 
@@ -513,7 +507,7 @@ impl VardaApp {
     ///      fresh for the UI and any external controller's GET fallback.
     ///   2. **Late-bind pending decks** — any Syphon deck deferred at restore
     ///      time (`persistence::PendingSyphonDeck`) is attached the moment its
-    ///      named server appears. No black_hole placeholder, no failed-restore.
+    ///      named server appears. No `black_hole` placeholder, no failed-restore.
     #[cfg(target_os = "macos")]
     pub fn reconcile_syphon(&mut self) {
         const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -556,13 +550,13 @@ impl VardaApp {
             };
             let server_name = name.clone();
             let channel_uuid = p.channel_uuid.clone();
-            match self.cmd_add_syphon_deck(&channel_uuid, server_name.clone()) {
+            match self.cmd_add_syphon_deck(&channel_uuid, &server_name) {
                 CommandResult::Ok
                 | CommandResult::OkWithId { .. }
                 | CommandResult::OkWithData { .. } => {
                     // Re-apply the persisted slot props onto the deck we just bound
                     // (matched by name so an idempotent no-op doesn't mis-target).
-                    let display_name = format!("🔗 {}", server_name);
+                    let display_name = format!("🔗 {server_name}");
                     if let Ok(ch_idx) = self.resolve_channel(&channel_uuid) {
                         if let Some(ch) = self.mixer.channel_mut(ch_idx) {
                             if let Some(slot) = ch
@@ -578,11 +572,7 @@ impl VardaApp {
                             }
                         }
                     }
-                    log::info!(
-                        "Syphon deck '{}' late-bound to channel {}",
-                        server_name,
-                        channel_uuid
-                    );
+                    log::info!("Syphon deck '{server_name}' late-bound to channel {channel_uuid}");
                 }
                 CommandResult::Err { code, message } => {
                     // A missing channel means the user deleted it after restore —
@@ -590,17 +580,12 @@ impl VardaApp {
                     // rather than retrying forever.
                     if code == ErrorCode::NotFound {
                         log::info!(
-                            "Dropping Syphon late-bind for '{}': channel {} no longer exists",
-                            server_name,
-                            channel_uuid
+                            "Dropping Syphon late-bind for '{server_name}': channel {channel_uuid} no longer exists"
                         );
                         continue;
                     }
                     log::warn!(
-                        "Syphon late-bind for '{}' (channel {}) failed: {}; will retry",
-                        server_name,
-                        channel_uuid,
-                        message
+                        "Syphon late-bind for '{server_name}' (channel {channel_uuid}) failed: {message}; will retry"
                     );
                     // Requeue to retry on the next reconcile.
                     self.external_io.pending_syphon.push(p);

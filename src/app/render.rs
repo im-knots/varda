@@ -410,7 +410,7 @@ impl VardaApp {
             target_fps,
             &self.preview_channels,
         ) {
-            log::error!("Failed to render mixer: {}", e);
+            log::error!("Failed to render mixer: {e}");
         }
 
         self.report_gpu_faults();
@@ -471,7 +471,7 @@ impl VardaApp {
             for surface in &self.output.surface_manager.surfaces {
                 if let OutputSource::Channels(indices) = &surface.source {
                     let mut sorted = indices.clone();
-                    sorted.sort();
+                    sorted.sort_unstable();
                     sorted.dedup();
                     if seen.insert(sorted.clone()) {
                         sub_mix_sources.push(sorted);
@@ -639,7 +639,7 @@ impl VardaApp {
                         uv_scale,
                         uv_offset,
                         warp_mode: surface.effective_warp(),
-                        overlap_zones: Default::default(),
+                        overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
                         hole_uv_contours: surface.hole_uv_contours(),
                     })
                 })
@@ -661,7 +661,7 @@ impl VardaApp {
                 .or_else(|| mixer.channels().get(*ch_idx).map(|ch| &ch.composite_view)),
             OutputSource::Channels(indices) => {
                 let mut sorted = indices.clone();
-                sorted.sort();
+                sorted.sort_unstable();
                 sorted.dedup();
                 mixer.get_sub_mix_view(&sorted)
             }
@@ -696,6 +696,8 @@ impl VardaApp {
     }
 
     /// Render all active headless outputs — readback + deliver frames.
+    // `sinks` bundles `&mut` borrows used mutably here; a shared ref won't do.
+    #[allow(clippy::needless_pass_by_value)]
     fn render_headless_outputs_inner(
         outputs: &mut [crate::renderer::context::UnifiedOutput],
         context: &crate::renderer::context::GpuContext,
@@ -728,7 +730,37 @@ impl VardaApp {
                 &h.texture_view
             };
 
-            if !h.surface_assignments.is_empty() {
+            if h.surface_assignments.is_empty() {
+                // Fallback: simple blit from source
+                let Some(source_view) = Self::resolve_source(mixer, &h.source, domemaster_view)
+                else {
+                    continue;
+                };
+                h.blit_pipeline
+                    .set_rotation(&context.queue, h.rotation.index());
+                let bind_group = h
+                    .blit_pipeline
+                    .create_bind_group(&context.device, source_view);
+                {
+                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Headless Blit Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: render_target,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    h.blit_pipeline.render(&mut rp, &bind_group);
+                }
+            } else {
                 // Surface-routed rendering: render assigned surfaces with warp
                 // Triangulate on the CPU, then prepare draws from the pipeline's
                 // persistent param/vertex pools (no per-frame GPU buffer alloc).
@@ -752,19 +784,7 @@ impl VardaApp {
                         // Combined (multi-contour) surface: a single warp mesh
                         // can't represent disjoint contours, so render every
                         // contour as a bounding-box UV fill (matches the editor).
-                        let (homography, vertices) = if !surface.extra_contours.is_empty() {
-                            (
-                                None,
-                                crate::renderer::blit::PolygonBlitPipeline::triangulate_multi(
-                                    &surface.vertices,
-                                    &surface.extra_contours,
-                                    bb.x,
-                                    bb.y,
-                                    bb.width,
-                                    bb.height,
-                                ),
-                            )
-                        } else {
+                        let (homography, vertices) = if surface.extra_contours.is_empty() {
                             match eff_warp.as_ref() {
                                 Some(crate::renderer::warp::WarpMode::CornerPin { corners }) => {
                                     let src_corners = [
@@ -811,6 +831,18 @@ impl VardaApp {
                                     ),
                                 ),
                             }
+                        } else {
+                            (
+                                None,
+                                crate::renderer::blit::PolygonBlitPipeline::triangulate_multi(
+                                    &surface.vertices,
+                                    &surface.extra_contours,
+                                    bb.x,
+                                    bb.y,
+                                    bb.width,
+                                    bb.height,
+                                ),
+                            )
                         };
                         Some(crate::renderer::blit::PolygonDrawDesc {
                             content_view,
@@ -847,36 +879,6 @@ impl VardaApp {
                         multiview_mask: None,
                     });
                     h.polygon_pipeline.draw(&mut rp, &prepared, &vertex_pool);
-                }
-            } else {
-                // Fallback: simple blit from source
-                let source_view = match Self::resolve_source(mixer, &h.source, domemaster_view) {
-                    Some(view) => view,
-                    None => continue,
-                };
-                h.blit_pipeline
-                    .set_rotation(&context.queue, h.rotation.index());
-                let bind_group = h
-                    .blit_pipeline
-                    .create_bind_group(&context.device, source_view);
-                {
-                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Headless Blit Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: render_target,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    h.blit_pipeline.render(&mut rp, &bind_group);
                 }
             }
 
@@ -927,7 +929,7 @@ impl VardaApp {
                 if let Some(frame_data) = h.readback.try_read(&context.device) {
                     match h.deliver_frame(&frame_data, sinks.ndi_manager) {
                         crate::renderer::context::DeliveryResult::Failed(msg) => {
-                            log::error!("{}", msg);
+                            log::error!("{msg}");
                             h.active = false;
                         }
                         crate::renderer::context::DeliveryResult::SrtNeedsRestart => {
@@ -966,7 +968,7 @@ impl VardaApp {
                                 Ok(new_sub) => {
                                     h.subprocess = Some(new_sub);
                                     h.audio_pcm = passthrough.map(Box::new);
-                                    log::info!("SRT restarted for '{}'", name);
+                                    log::info!("SRT restarted for '{name}'");
                                 }
                                 Err(e) => {
                                     if let Some(pass) = passthrough {
@@ -974,16 +976,12 @@ impl VardaApp {
                                             .audio_manager
                                             .unsubscribe_pcm(pass.source_id, pass.token);
                                     }
-                                    log::error!(
-                                        "Failed to restart SRT listener for '{}': {}",
-                                        name,
-                                        e
-                                    );
+                                    log::error!("Failed to restart SRT listener for '{name}': {e}");
                                     h.active = false;
                                 }
                             }
                         }
-                        _ => {}
+                        crate::renderer::context::DeliveryResult::Ok => {}
                     }
                 }
             }
@@ -991,8 +989,8 @@ impl VardaApp {
     }
 
     /// Open a native file picker on a background thread.
-    /// Uses rfd's synchronous FileDialog which correctly dispatches to the
-    /// main thread on macOS (NSOpenPanel requires main-thread presentation
+    /// Uses rfd's synchronous `FileDialog` which correctly dispatches to the
+    /// main thread on macOS (`NSOpenPanel` requires main-thread presentation
     /// for proper focus/activation). Results are sent via channel.
     pub fn open_file_dialog(
         sender: &std::sync::mpsc::Sender<FileDialogResult>,

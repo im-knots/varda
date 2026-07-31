@@ -1,7 +1,7 @@
 //! Application layer — concrete engine implementation.
 //!
-//! VardaApp owns all engine subsystems (Mixer, Audio, Cameras, MIDI, OSC,
-//! ShaderRegistry, SurfaceManager) and implements the engine traits.
+//! `VardaApp` owns all engine subsystems (Mixer, Audio, Cameras, MIDI, OSC,
+//! `ShaderRegistry`, `SurfaceManager`) and implements the engine traits.
 //!
 //! The main.rs `App` struct owns window/egui state and holds a `VardaApp`.
 
@@ -38,6 +38,8 @@ pub(crate) fn clamp_resolution_to_gpu(width: u32, height: u32, max_dim: u32) -> 
 
 /// Session configuration derived from CLI flags + workspace defaults.
 /// CLI flags override persisted config for the session without modifying files.
+// CLI flag struct: each bool is an independent `--flag`, not a state enum.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, clap::Parser)]
 #[command(name = "varda", version, about = "Live visuals engine")]
 pub struct AppConfig {
@@ -230,9 +232,11 @@ pub(crate) struct MessageBus {
 
 /// Core engine application. Owns all subsystems except window/egui.
 ///
-/// Implements all engine traits (MixerCommands, AudioCommands, etc.)
-/// for direct same-thread access. Also processes EngineCommands from
+/// Implements all engine traits (`MixerCommands`, `AudioCommands`, etc.)
+/// for direct same-thread access. Also processes `EngineCommands` from
 /// cross-thread consumers via mpsc channel.
+// Aggregate root: the flags are unrelated subsystem toggles, not a state enum.
+#[allow(clippy::struct_excessive_bools)]
 pub struct VardaApp {
     // ── Engine core ──────────────────────────────────────────────
     mixer: Mixer,
@@ -280,11 +284,16 @@ pub struct VardaApp {
 }
 
 impl VardaApp {
-    /// Create a new VardaApp with all subsystems initialized.
+    /// Create a new `VardaApp` with all subsystems initialized.
     ///
     /// Requires a fully initialized `GpuContext` — the engine cannot exist
     /// without a GPU. A default two-channel mixer is always created.
     /// `config` provides session settings from CLI flags + workspace defaults.
+    ///
+    /// # Errors
+    /// Returns an error if the default mixer's GPU render targets cannot be
+    /// allocated, or if a subsystem required by `config` (MIDI, OSC, HTTP API)
+    /// fails to start.
     pub fn new(gpu: GpuContext, config: &AppConfig) -> anyhow::Result<Self> {
         log::info!("[STARTUP]   Audio init...");
         let audio_manager = AudioManager::new();
@@ -304,16 +313,16 @@ impl VardaApp {
         let mut registry = ShaderRegistry::new();
         if let Some(bundled) = crate::registry::get_bundled_shader_path() {
             if let Err(e) = registry.add_library_path(&bundled) {
-                log::warn!("Failed to add bundled shaders path: {}", e);
+                log::warn!("Failed to add bundled shaders path: {e}");
             }
         }
         if let Err(e) = registry.add_library_path("shaders") {
-            log::warn!("Failed to add shaders path: {}", e);
+            log::warn!("Failed to add shaders path: {e}");
         }
         let ws_shaders = workspace.shaders_dir();
         if ws_shaders.is_dir() {
             if let Err(e) = registry.add_library_path(&ws_shaders) {
-                log::warn!("Failed to add workspace shaders path: {}", e);
+                log::warn!("Failed to add workspace shaders path: {e}");
             }
         }
         for path in crate::registry::get_default_library_paths() {
@@ -333,17 +342,17 @@ impl VardaApp {
             }
         }
         match registry.scan() {
-            Ok(count) => log::info!("Loaded {} shaders", count),
-            Err(e) => log::error!("Failed to scan shaders: {}", e),
+            Ok(count) => log::info!("Loaded {count} shaders"),
+            Err(e) => log::error!("Failed to scan shaders: {e}"),
         }
         if let Err(e) = registry.start_watching() {
-            log::warn!("Failed to start shader hot-reload: {}", e);
+            log::warn!("Failed to start shader hot-reload: {e}");
         }
 
         // Load OSC config from workspace (or use defaults), then apply CLI overrides
         let mut osc_config = if workspace.has_osc() {
             OscConfig::load(workspace.osc_path()).unwrap_or_else(|e| {
-                log::warn!("Failed to load OSC config: {}, using defaults", e);
+                log::warn!("Failed to load OSC config: {e}, using defaults");
                 OscConfig::default()
             })
         } else {
@@ -388,13 +397,13 @@ impl VardaApp {
             Ok(mut sender) => {
                 for target in &osc_config.feedback_targets {
                     if let Err(e) = sender.add_target(target) {
-                        log::warn!("Failed to add OSC feedback target '{}': {}", target, e);
+                        log::warn!("Failed to add OSC feedback target '{target}': {e}");
                     }
                 }
                 Some(sender)
             }
             Err(e) => {
-                log::warn!("Failed to create OSC feedback sender: {}", e);
+                log::warn!("Failed to create OSC feedback sender: {e}");
                 None
             }
         };
@@ -414,7 +423,7 @@ impl VardaApp {
                 Some(mgr)
             }
             Err(e) => {
-                log::warn!("Failed to initialize MIDI: {}", e);
+                log::warn!("Failed to initialize MIDI: {e}");
                 None
             }
         };
@@ -532,7 +541,7 @@ impl VardaApp {
 
     /// Process all queued cross-thread commands. Called once per frame.
     ///
-    /// Exhaustive match — the compiler enforces that every EngineCommand variant
+    /// Exhaustive match — the compiler enforces that every `EngineCommand` variant
     /// is handled. Adding a new variant requires wiring it here.
     pub fn process_commands(&mut self) {
         while let Ok((cmd, reply_tx)) = self.bus.command_rx.try_recv() {
@@ -597,7 +606,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::InvalidInput,
-                message: format!("Deck '{}' does not support this operation", deck_uuid),
+                message: format!("Deck '{deck_uuid}' does not support this operation"),
             }
         }
     }
@@ -614,7 +623,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Modulation source {} not found", uuid),
+                message: format!("Modulation source {uuid} not found"),
             }
         }
     }
@@ -656,6 +665,10 @@ impl VardaApp {
 
     /// Open a camera, returning resolution on success. Avoids split-borrow issues
     /// by accessing both `camera_manager` and `context` internally.
+    ///
+    /// # Errors
+    /// Returns an error if no camera with `id` is present, if the OS refuses
+    /// access to the device, or if its GPU textures cannot be allocated.
     pub fn open_camera(&mut self, id: crate::camera::CameraId) -> anyhow::Result<(u32, u32)> {
         self.camera_manager.open_camera(id, &self.context.device)
     }
@@ -682,7 +695,10 @@ impl VardaApp {
 
     /// Read-only access to the domemaster renderer output view (if enabled).
     pub fn domemaster_view(&self) -> Option<&wgpu::TextureView> {
-        self.output.domemaster.as_ref().map(|d| d.output_view())
+        self.output
+            .domemaster
+            .as_ref()
+            .map(super::internal::renderer::dome::DomemasterRenderer::output_view)
     }
 
     /// Ensure the domemaster renderer exists and is enabled.
@@ -703,7 +719,7 @@ impl VardaApp {
                     log::info!("Domemaster renderer created and enabled");
                 }
                 Err(e) => {
-                    log::error!("Failed to create domemaster renderer: {}", e);
+                    log::error!("Failed to create domemaster renderer: {e}");
                 }
             }
         }
@@ -730,7 +746,7 @@ impl VardaApp {
         self.registry.count()
     }
 
-    /// Resolve a generator index to a cloned ISFShader.
+    /// Resolve a generator index to a cloned `ISFShader`.
     /// Returns None if the index is out of bounds.
     pub fn resolve_generator(&self, gen_idx: usize) -> Option<crate::isf::ISFShader> {
         self.registry
@@ -755,7 +771,7 @@ impl VardaApp {
         self.session.notifications.error(message);
     }
 
-    /// Close an output window by its winit WindowId. Returns the name if found.
+    /// Close an output window by its winit `WindowId`. Returns the name if found.
     pub fn close_output_window_by_id(
         &mut self,
         window_id: winit::window::WindowId,
@@ -777,7 +793,7 @@ impl VardaApp {
         }
     }
 
-    /// Resize an output window by its winit WindowId.
+    /// Resize an output window by its winit `WindowId`.
     pub fn resize_output_window_by_id(
         &mut self,
         window_id: winit::window::WindowId,
@@ -817,7 +833,7 @@ impl VardaApp {
     /// the same bound and neither can trigger a GPU allocation failure.
     pub fn set_render_resolution(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
-            log::warn!("Ignoring zero render resolution {}×{}", width, height);
+            log::warn!("Ignoring zero render resolution {width}×{height}");
             return;
         }
         let max_dim = self.max_render_dimension();
@@ -839,7 +855,7 @@ impl VardaApp {
         self.mixer.clear_sub_mix_cache();
         self.session
             .notifications
-            .info(format!("📐 Resolution changed to {}×{}", width, height));
+            .info(format!("📐 Resolution changed to {width}×{height}"));
     }
 
     /// Current target FPS (0 = uncapped).
@@ -862,7 +878,7 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    /// Parse AppConfig from a simulated CLI invocation.
+    /// Parse `AppConfig` from a simulated CLI invocation.
     fn parse_args(args: &[&str]) -> AppConfig {
         AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
     }
@@ -1084,8 +1100,7 @@ mod tests {
         // Deck-creating commands report the new deck's UUID (ui-engine-boundary.md WS1).
         assert!(
             matches!(result, crate::engine::CommandResult::OkWithId { .. }),
-            "command should succeed: {:?}",
-            result
+            "command should succeed: {result:?}"
         );
         let after = app.build_engine_state().mixer.channels[0].decks.len();
         assert_eq!(after, before + 1, "should have one more deck");
@@ -1267,8 +1282,7 @@ mod tests {
         let result = reply_rx.blocking_recv().unwrap();
         assert!(
             matches!(result, crate::engine::CommandResult::Ok),
-            "AddLfo failed: {:?}",
-            result
+            "AddLfo failed: {result:?}"
         );
         let state = app.build_engine_state();
         assert!(!state.modulation.sources.is_empty());

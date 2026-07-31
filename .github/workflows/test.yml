@@ -6,6 +6,8 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      - 'shaders/**'
+      - 'kittest.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'
@@ -14,6 +16,23 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # The adapter is pinned by VK_DRIVER_FILES, exported to $GITHUB_ENV by the
+  # install step below because the ICD path is discovered rather than fixed.
+  #
+  # Note WGPU_BACKEND is deliberately *not* set: `GpuContext::new_headless`
+  # builds its instance with `Backends::all()` and never reads it, and the one
+  # thing that did honour it (egui_kittest, via egui-wgpu's `Backends::from_env`)
+  # no longer runs here. Loader-level pinning is what actually constrains this.
+  #
+  # Turn `tests/common/mod.rs`'s no-adapter skip into a hard failure. Without
+  # this the entire GPU suite reports green on a runner with a broken driver.
+  VARDA_REQUIRE_GPU: 1
+  # Exclude the egui golden-image tests. Their reference PNGs are rendered on a
+  # developer's Metal GPU and lavapipe rounds a few pixels differently, so the
+  # comparison is cross-renderer and needs a tolerance wide enough to hide real
+  # regressions. They stay a local-only check — see tests/ui_snapshots.rs. Every
+  # other GPU suite below runs for real on lavapipe.
+  VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
 
 jobs:
   test:
@@ -22,6 +41,7 @@ jobs:
     # references __isoc23_strtol / __isoc23_strtoull / __isoc23_strtoll
     # which only exist in glibc >= 2.38. ubuntu-22.04 (glibc 2.35) fails.
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
@@ -47,18 +67,45 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libfreenect.so \
             || { echo "::error::libfreenect-dev did not provide libfreenect.so"; exit 1; }
 
+      # GitHub runners have no GPU. lavapipe (Mesa's software Vulkan
+      # implementation) provides the headless adapter that the render, engine,
+      # and egui snapshot suites need. Without it they all skip and the job is
+      # green having tested nothing. egui_kittest already prefers a CPU adapter
+      # over a hardware one, so its snapshot renderer picks lavapipe unaided.
+      - name: Install lavapipe (software Vulkan)
+        run: |
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+          # The ICD filename is not stable across Mesa packaging: noble ships
+          # 24.0 as lvp_icd.x86_64.json, noble-updates ships 25.2 as plain
+          # lvp_icd.json. Glob for it and pin whatever is actually installed —
+          # mesa-vulkan-drivers also ships radeon/intel/virtio/nouveau ICDs, and
+          # naming lavapipe explicitly keeps the rasterizer identical across
+          # runner types.
+          icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
+          if [ ! -e "${icds[0]}" ]; then
+            echo "::error::mesa-vulkan-drivers did not provide a lavapipe ICD"
+            ls -la /usr/share/vulkan/icd.d/
+            exit 1
+          fi
+          echo "Using lavapipe ICD: ${icds[0]}"
+          echo "VK_DRIVER_FILES=${icds[0]}" >> "$GITHUB_ENV"
+
+      # Prove the adapter is real before building the suite, and print the
+      # summary so a driver/version change is visible in the log.
+      - name: Verify lavapipe adapter
+        run: |
+          vulkaninfo --summary | tee /tmp/vulkaninfo.txt
+          grep -qi llvmpipe /tmp/vulkaninfo.txt \
+            || { echo "::error::lavapipe did not enumerate as a Vulkan device"; exit 1; }
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Run unit tests
-        run: cargo test --lib
-
-      # GPU-free integration suite: egui/AccessKit interaction tests run entirely
-      # on the CPU (no wgpu device is created without `.snapshot()`), so they work
-      # on GPU-less GitHub runners. The headless-engine and snapshot suites still
-      # require a GPU adapter and are gated separately.
-      - name: Run GPU-free integration tests
-        run: cargo test --test ui_integration
+      # The whole suite, not a curated subset: with an adapter present there is
+      # no GPU-free/GPU-gated split to maintain, and a newly added GPU test is
+      # covered without anyone remembering to list it here.
+      - name: Run test suite
+        run: cargo test --workspace

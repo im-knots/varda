@@ -139,7 +139,7 @@ impl NotificationSystem {
         self.active.retain(|n| !n.is_expired());
     }
 
-    /// Get active notifications (up to max_visible)
+    /// Get active notifications (up to `max_visible`)
     pub fn visible(&self) -> &[Notification] {
         let end = self.active.len().min(self.max_visible);
         &self.active[..end]
@@ -222,7 +222,7 @@ mod tests {
     fn notification_system_max_visible() {
         let mut ns = NotificationSystem::new();
         for i in 0..10 {
-            ns.info(format!("Msg {}", i));
+            ns.info(format!("Msg {i}"));
         }
         assert!(ns.visible().len() <= 5);
     }
@@ -253,7 +253,9 @@ mod tests {
         let n = Notification {
             level: NotificationLevel::Info,
             message: "Test".into(),
-            created_at: Instant::now() - Duration::from_secs(100),
+            created_at: Instant::now()
+                .checked_sub(Duration::from_secs(100))
+                .unwrap(),
             duration: Duration::from_secs(3),
         };
         assert!(n.is_expired());
@@ -277,7 +279,9 @@ mod tests {
         let _expired = Notification {
             level: NotificationLevel::Error,
             message: "Old".into(),
-            created_at: Instant::now() - Duration::from_secs(100),
+            created_at: Instant::now()
+                .checked_sub(Duration::from_secs(100))
+                .unwrap(),
             duration: Duration::from_secs(1),
         };
         ns.update();
@@ -319,7 +323,7 @@ mod tests {
     fn notification_history_capped_at_1000() {
         let mut ns = NotificationSystem::new();
         for i in 0..1100 {
-            ns.info(format!("msg {}", i));
+            ns.info(format!("msg {i}"));
         }
         assert!(
             ns.history.len() <= 1000,
@@ -337,7 +341,7 @@ mod tests {
     fn notification_history_at_boundary() {
         let mut ns = NotificationSystem::new();
         for i in 0..1000 {
-            ns.info(format!("msg {}", i));
+            ns.info(format!("msg {i}"));
         }
         assert_eq!(ns.history.len(), 1000);
         // Adding one more should still cap at 1000

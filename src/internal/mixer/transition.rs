@@ -236,11 +236,7 @@ impl Mixer {
             started: false,
             auto: None,
         });
-        log::info!(
-            "Queued beat-synced crossfade: → {:.2} over {:.1} beats",
-            target,
-            beats
-        );
+        log::info!("Queued beat-synced crossfade: → {target:.2} over {beats:.1} beats");
     }
 
     /// Snap crossfader to a value immediately (cancels any in-progress transitions)
@@ -261,6 +257,11 @@ impl Mixer {
     }
 
     /// Set the active transition shader. Compiles the shader and creates the pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the shader's GLSL fails to compile to SPIR-V or if the
+    /// transition render pipeline cannot be created from the resulting module.
     pub fn set_transition(&mut self, context: &GpuContext, shader: ISFShader) -> Result<()> {
         let name = shader.name();
         let spirv = compile_glsl_to_spirv(&shader.fragment_source, &name)
@@ -274,7 +275,7 @@ impl Mixer {
         let mut params = ShaderParams::from_inputs(inputs);
         params.ensure_buffer(&context.device);
 
-        log::info!("Active transition set: {}", name);
+        log::info!("Active transition set: {name}");
         self.active_transition = Some(TransitionEffect {
             shader,
             pipeline,
@@ -370,12 +371,12 @@ impl Mixer {
                     }
                     let progress = (seq.state.step_elapsed / duration_secs).clamp(0.0, 1.0) as f32;
                     let eased = easing.apply(progress);
-                    let completed = seq.state.step_elapsed + dt as f64 >= duration_secs;
+                    let completed = seq.state.step_elapsed + f64::from(dt) >= duration_secs;
                     // Resolve channel UUIDs against the live list every tick, so
                     // a reorder mid-sequence keeps fading the same channels.
                     let from = channels.iter().position(|c| c.uuid() == from_ch);
                     let to = channels.iter().position(|c| c.uuid() == to_ch);
-                    seq.state.step_elapsed += dt as f64;
+                    seq.state.step_elapsed += f64::from(dt);
                     if completed {
                         seq.state.current_step += 1;
                         seq.state.step_elapsed = 0.0;
@@ -392,7 +393,7 @@ impl Mixer {
                 }
                 StepKind::Wait { duration } => {
                     let duration_secs = duration.to_seconds(bpm);
-                    seq.state.step_elapsed += dt as f64;
+                    seq.state.step_elapsed += f64::from(dt);
                     if seq.state.step_elapsed >= duration_secs {
                         seq.state.current_step += 1;
                         seq.state.step_elapsed = 0.0;
@@ -411,9 +412,7 @@ impl Mixer {
                         // Self-referencing GoTo or out-of-bounds → stop to prevent infinite loop
                         if target == seq.state.current_step {
                             log::warn!(
-                                "Transition sequence {}: GoTo step {} references itself, stopping",
-                                seq_idx,
-                                target
+                                "Transition sequence {seq_idx}: GoTo step {target} references itself, stopping"
                             );
                         }
                         seq.state.playing = false;
@@ -599,7 +598,7 @@ mod tests {
 
     /// Verify the 2-channel crossfade opacity formula produces a linear blend.
     /// First channel is always 1.0 (base layer); crossfader drives the second
-    /// channel's composite opacity.  The composite shader's mix() then yields:
+    /// channel's composite opacity.  The composite shader's `mix()` then yields:
     ///     result = (1 - cf) * A + cf * B
     #[test]
     fn crossfade_opacities_linear() {
@@ -620,7 +619,7 @@ mod tests {
     }
 
     /// Old formula had squared falloff: first channel weight was (1-cf)²
-    /// because ALPHA_BLENDING double-applied the opacity.  Ensure the new
+    /// because `ALPHA_BLENDING` double-applied the opacity.  Ensure the new
     /// formula avoids this.
     #[test]
     fn crossfade_midpoint_symmetric() {

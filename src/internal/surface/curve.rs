@@ -20,8 +20,7 @@ impl PathSegment {
     /// The endpoint this segment terminates at.
     pub fn end(&self) -> [f32; 2] {
         match self {
-            PathSegment::Line { to } => *to,
-            PathSegment::Cubic { to, .. } => *to,
+            PathSegment::Line { to } | PathSegment::Cubic { to, .. } => *to,
         }
     }
 }
@@ -32,6 +31,11 @@ impl SurfacePath {
     /// The `start` point is emitted first, followed by the sampled points of
     /// each segment. The closing point is not duplicated — surfaces close
     /// implicitly at render time.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the output buffer is empty when the closing point is checked —
+    /// unreachable, since `start` is always pushed first.
     pub fn flatten(&self) -> Vec<[f32; 2]> {
         let mut out: Vec<[f32; 2]> = Vec::with_capacity(1 + self.segments.len());
         out.push(self.start);
@@ -125,8 +129,7 @@ impl SurfacePath {
         } else {
             self.segments
                 .get(idx - 1)
-                .map(|s| s.end())
-                .unwrap_or(self.start)
+                .map_or(self.start, crate::engine::value::surface::PathSegment::end)
         }
     }
 
@@ -137,8 +140,7 @@ impl SurfacePath {
         } else {
             self.segments
                 .get(idx - 1)
-                .map(|s| s.end())
-                .unwrap_or(self.start)
+                .map_or(self.start, crate::engine::value::surface::PathSegment::end)
         }
     }
 
@@ -267,6 +269,8 @@ pub fn quad_to_cubic(p0: [f32; 2], ctrl: [f32; 2], p1: [f32; 2]) -> ([f32; 2], [
 
 /// Sample a cubic bezier, emitting `steps` points for t in (0, 1]. The start
 /// point `p0` is not included (callers already hold it).
+// a/b/c/d/t are the standard Bernstein basis names; renaming obscures the math.
+#[allow(clippy::many_single_char_names)]
 pub fn flatten_cubic(
     p0: [f32; 2],
     c1: [f32; 2],
@@ -428,9 +432,10 @@ mod tests {
         p.convert_edge_to_cubic(3); // incoming to anchor 0 (closing edge)
         let d = [0.2, 0.3];
         // Capture pre-move control points.
-        let (c1_before, c2_before) = match (p.segments[0], p.segments[3]) {
-            (PathSegment::Cubic { c1, .. }, PathSegment::Cubic { c2, .. }) => (c1, c2),
-            _ => unreachable!(),
+        let (PathSegment::Cubic { c1: c1_before, .. }, PathSegment::Cubic { c2: c2_before, .. }) =
+            (p.segments[0], p.segments[3])
+        else {
+            unreachable!()
         };
         p.move_anchor(0, [d[0], d[1]]);
         match (p.segments[0], p.segments[3]) {
@@ -454,7 +459,7 @@ mod tests {
                 assert!(approx(c1, [0.5, 0.5]));
                 assert!(approx(c2, [0.6, 0.4]));
             }
-            _ => unreachable!(),
+            PathSegment::Line { .. } => unreachable!(),
         }
     }
 
@@ -509,7 +514,7 @@ mod tests {
         let cubic = flatten_cubic(p0, c1, c2, p1, 8);
         assert_eq!(quad.len(), cubic.len());
         for (q, c) in quad.iter().zip(cubic.iter()) {
-            assert!(approx(*q, *c), "quad {:?} vs cubic {:?}", q, c);
+            assert!(approx(*q, *c), "quad {q:?} vs cubic {c:?}");
         }
     }
 }

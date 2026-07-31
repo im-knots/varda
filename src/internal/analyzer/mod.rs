@@ -201,9 +201,9 @@ impl DeckAnalyzers {
                 analyzer_thread(
                     analyzer,
                     &options,
-                    frame_rx,
-                    thread_latest,
-                    thread_stop,
+                    &frame_rx,
+                    &thread_latest,
+                    &thread_stop,
                     &type_name,
                 );
             })
@@ -251,7 +251,7 @@ impl DeckAnalyzers {
             .map(|inst| inst.latest.load())
     }
 
-    /// Iterate over all active analyzer snapshots: (analyzer_type, snapshot).
+    /// Iterate over all active analyzer snapshots: (`analyzer_type`, snapshot).
     pub(crate) fn all_snapshots(
         &self,
     ) -> impl Iterator<Item = (String, arc_swap::Guard<Arc<AnalyzerSnapshot>>)> + '_ {
@@ -264,8 +264,7 @@ impl DeckAnalyzers {
     pub(crate) fn send_frame(&self, input: &AnalyzerInput) {
         for (name, inst) in &self.instances {
             match inst.frame_tx.try_send(input.clone()) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {}
+                Ok(()) | Err(TrySendError::Full(_)) => {}
                 Err(TrySendError::Disconnected(_)) => {
                     log::warn!("Analyzer '{name}' channel disconnected");
                 }
@@ -375,9 +374,9 @@ impl Drop for DeckAnalyzers {
 fn analyzer_thread(
     mut analyzer: Box<dyn Analyzer>,
     options: &serde_json::Value,
-    frame_rx: Receiver<AnalyzerInput>,
-    latest: Arc<ArcSwap<AnalyzerSnapshot>>,
-    stop: Arc<AtomicBool>,
+    frame_rx: &Receiver<AnalyzerInput>,
+    latest: &ArcSwap<AnalyzerSnapshot>,
+    stop: &AtomicBool,
     type_name: &str,
 ) {
     // Run potentially-expensive initialization off the caller's thread. On

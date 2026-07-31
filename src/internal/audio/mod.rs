@@ -70,11 +70,10 @@ fn fan_out_pcm(subs: &[PcmSubscriber], samples: &[f32]) {
         match sub.sender.try_send(PcmChunk {
             samples: samples.to_vec(),
         }) {
-            Ok(()) => {}
+            Ok(()) | Err(crossbeam_channel::TrySendError::Disconnected(_)) => {}
             Err(crossbeam_channel::TrySendError::Full(_)) => {
                 sub.dropped.fetch_add(1, Ordering::Relaxed);
             }
-            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {}
         }
     }
 }
@@ -200,6 +199,12 @@ impl AudioData {
 ///
 /// Uses `select_nth_unstable_by` (quickselect, O(n)) instead of a full sort
 /// to find the median without allocating a new Vec.
+///
+/// # Panics
+///
+/// Panics if `flux_history` contains a NaN, since the median selection compares
+/// samples with `partial_cmp`. Spectral flux is computed from finite magnitudes,
+/// so this cannot happen for well-formed input.
 pub fn compute_onset_threshold(flux_history: &[f32]) -> f32 {
     if flux_history.is_empty() {
         return ONSET_THRESHOLD_OFFSET;
@@ -215,6 +220,12 @@ pub fn compute_onset_threshold(flux_history: &[f32]) -> f32 {
 ///
 /// Uses `select_nth_unstable_by` (quickselect, O(n)) for the median, then
 /// filters outliers using the original (unsorted) slice to avoid a second allocation.
+///
+/// # Panics
+///
+/// Panics if `beat_intervals` contains a NaN, since the median selection compares
+/// intervals with `partial_cmp`. Intervals are derived from monotonic timestamps,
+/// so this cannot happen for well-formed input.
 pub fn estimate_bpm(beat_intervals: &[f32]) -> Option<f32> {
     if beat_intervals.len() < 4 {
         return None;
@@ -268,14 +279,14 @@ struct ActiveAudioSource {
 pub struct AudioManager {
     /// Detected audio input devices (refreshed on scan).
     devices: Vec<AudioDeviceInfo>,
-    /// Active audio sources keyed by AudioSourceId.
+    /// Active audio sources keyed by `AudioSourceId`.
     active: HashMap<AudioSourceId, ActiveAudioSource>,
     /// Resolved default input id (OS default matched by name, else first),
     /// cached at scan time. Used to resolve `AudioBand { source_id: None }`.
     default_source_id: Option<AudioSourceId>,
     /// Devices explicitly pinned open by a consumer (`open_source`).
     manual_pins: HashSet<AudioSourceId>,
-    /// Devices referenced by AudioBand modulators (last reconciled set).
+    /// Devices referenced by `AudioBand` modulators (last reconciled set).
     mod_refs: HashSet<AudioSourceId>,
 }
 
@@ -324,10 +335,10 @@ impl AudioManager {
             .map(|devs| {
                 devs.enumerate()
                     .map(|(i, d)| {
-                        let name = d
-                            .description()
-                            .map(|desc| desc.name().to_string())
-                            .unwrap_or_else(|_| format!("Audio Input {}", i));
+                        let name = d.description().map_or_else(
+                            |_| format!("Audio Input {i}"),
+                            |desc| desc.name().to_string(),
+                        );
                         AudioDeviceInfo {
                             id: i as AudioSourceId,
                             name,
@@ -365,6 +376,13 @@ impl AudioManager {
     /// holders, and starts capture if it isn't already running. Used by the HTTP
     /// API (`POST /audio/sources/{id}/open`) and `ToggleAudioSource`. Release
     /// with [`close_source`](Self::close_source).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the host cannot enumerate input devices, if no device
+    /// exists at index `id`, if the device has no usable default input config, if
+    /// its sample format is not `f32`/`i16`/`u16`, or if building or starting the
+    /// cpal input stream fails.
     pub fn open_source(&mut self, id: AudioSourceId) -> Result<()> {
         self.manual_pins.insert(id);
         self.ensure_open(id)
@@ -386,9 +404,8 @@ impl AudioManager {
 
         let dev_name = device
             .description()
-            .map(|desc| desc.name().to_string())
-            .unwrap_or_else(|_| format!("Audio {}", id));
-        log::info!("Opening audio source {}: {}", id, dev_name);
+            .map_or_else(|_| format!("Audio {id}"), |desc| desc.name().to_string());
+        log::info!("Opening audio source {id}: {dev_name}");
 
         let config = device
             .default_input_config()
@@ -396,7 +413,7 @@ impl AudioManager {
         let sample_rate = config.sample_rate() as f32;
         let sample_rate_hz = config.sample_rate() as u32;
         let channels = config.channels();
-        log::info!("Audio config for '{}': {:?}", dev_name, config);
+        log::info!("Audio config for '{dev_name}': {config:?}");
 
         let (sender, receiver) = bounded::<AudioData>(16);
         let pcm_subs = Arc::new(ArcSwap::from_pointee(Vec::new()));
@@ -456,7 +473,7 @@ impl AudioManager {
     pub fn subscribe_pcm(&mut self, id: AudioSourceId) -> Option<PcmSubscription> {
         if !self.active.contains_key(&id) {
             if let Err(e) = self.ensure_open(id) {
-                log::warn!("subscribe_pcm: failed to open audio source {}: {}", id, e);
+                log::warn!("subscribe_pcm: failed to open audio source {id}: {e}");
                 return None;
             }
         }
@@ -479,11 +496,7 @@ impl AudioManager {
             next.push(sub.clone());
             next
         });
-        log::info!(
-            "PCM passthrough subscriber {} added to source {}",
-            token,
-            id
-        );
+        log::info!("PCM passthrough subscriber {token} added to source {id}");
         Some(PcmSubscription {
             receiver,
             format,
@@ -504,11 +517,7 @@ impl AudioManager {
                     .cloned()
                     .collect::<Vec<_>>()
             });
-            log::info!(
-                "PCM passthrough subscriber {} removed from source {}",
-                token,
-                id
-            );
+            log::info!("PCM passthrough subscriber {token} removed from source {id}");
         }
         self.close_if_orphaned(id);
     }
@@ -527,8 +536,7 @@ impl AudioManager {
             || self
                 .active
                 .get(&id)
-                .map(|s| !s.pcm_subs.load().is_empty())
-                .unwrap_or(false)
+                .is_some_and(|s| !s.pcm_subs.load().is_empty())
     }
 
     /// Close and stop the `cpal` stream for a source if it has no remaining
@@ -538,11 +546,11 @@ impl AudioManager {
             return;
         }
         if self.active.remove(&id).is_some() {
-            log::info!("Closed audio source {} (no remaining holders)", id);
+            log::info!("Closed audio source {id} (no remaining holders)");
         }
     }
 
-    /// Reconcile the set of devices referenced by AudioBand modulators.
+    /// Reconcile the set of devices referenced by `AudioBand` modulators.
     ///
     /// Declarative per-frame entry point: `needed` is the resolved set of device
     /// ids that modulators currently require (with `None` already resolved to the
@@ -565,18 +573,14 @@ impl AudioManager {
         for &id in needed {
             if self.mod_refs.insert(id) || !self.active.contains_key(&id) {
                 if let Err(e) = self.ensure_open(id) {
-                    log::warn!(
-                        "set_modulation_refs: failed to open audio source {}: {}",
-                        id,
-                        e
-                    );
+                    log::warn!("set_modulation_refs: failed to open audio source {id}: {e}");
                     self.mod_refs.remove(&id);
                 }
             }
         }
     }
 
-    /// Resolve a list of AudioBand device selections into the concrete set of
+    /// Resolve a list of `AudioBand` device selections into the concrete set of
     /// device ids that must be open. `None` selections resolve to `default` (and
     /// are dropped when no default input exists). Pure so it can be unit-tested
     /// without audio hardware.
@@ -596,23 +600,20 @@ impl AudioManager {
         }
     }
 
-    /// Get the latest AudioData for a specific source.
+    /// Get the latest `AudioData` for a specific source.
     pub fn get_data(&self, id: AudioSourceId) -> Option<&AudioData> {
         self.active.get(&id).map(|s| &s.latest)
     }
 
     /// Get the first active source's data (convenience for default/primary audio).
     pub fn get_primary_data(&self) -> &AudioData {
+        static DEFAULT: std::sync::LazyLock<AudioData> =
+            std::sync::LazyLock::new(AudioData::default);
         // Return first active source's data, or a static default
         self.active
             .values()
             .next()
-            .map(|s| &s.latest)
-            .unwrap_or_else(|| {
-                static DEFAULT: std::sync::LazyLock<AudioData> =
-                    std::sync::LazyLock::new(AudioData::default);
-                &DEFAULT
-            })
+            .map_or_else(|| &*DEFAULT, |s| &s.latest)
     }
 
     /// Get IDs of all active (open) sources.
@@ -689,6 +690,8 @@ impl AudioManager {
                 }
 
                 while sample_buffer.len() >= FFT_HOP {
+                    const NOISE_FLOOR: f32 = 1e-4;
+
                     // Extract waveform chunk for GPU (256 samples)
                     let waveform: Vec<f32> = sample_buffer.drain(..FFT_HOP).collect();
                     let level =
@@ -709,7 +712,6 @@ impl AudioManager {
                     fft.process(&mut fft_input);
 
                     // Magnitude scaling with noise floor
-                    const NOISE_FLOOR: f32 = 1e-4;
                     let scale = 2.0 / FFT_SIZE as f32;
                     let fft_magnitudes: Vec<f32> = fft_input[..FFT_SIZE / 2]
                         .iter()
@@ -772,7 +774,7 @@ impl AudioManager {
                     let _ = sender.try_send(data);
                 }
             },
-            |err| log::error!("Audio stream error: {}", err),
+            |err| log::error!("Audio stream error: {err}"),
             None,
         )?;
 
@@ -903,15 +905,13 @@ mod tests {
         let mid = window[FFT_SIZE / 2];
         assert!(
             (mid - 1.0).abs() < 0.01,
-            "Hann window midpoint should be ~1.0, got {}",
-            mid
+            "Hann window midpoint should be ~1.0, got {mid}"
         );
         // Should be symmetric
         for i in 0..FFT_SIZE / 2 {
             assert!(
                 (window[i] - window[FFT_SIZE - 1 - i]).abs() < 1e-6,
-                "Hann window should be symmetric at index {}",
-                i
+                "Hann window should be symmetric at index {i}"
             );
         }
     }
@@ -927,15 +927,13 @@ mod tests {
         // 48000 / 2048 = 23.4375 Hz/bin
         assert!(
             (bw - 23.4375).abs() < 0.01,
-            "Bin width should be ~23.4Hz, got {}",
-            bw
+            "Bin width should be ~23.4Hz, got {bw}"
         );
         // Bass range (20-250Hz) should span ~10 bins
         let bass_bins = (250.0 / bw).ceil() as usize - (20.0 / bw).floor() as usize;
         assert!(
             bass_bins >= 9,
-            "Bass range should span >=9 bins, got {}",
-            bass_bins
+            "Bass range should span >=9 bins, got {bass_bins}"
         );
     }
 
@@ -997,7 +995,7 @@ mod tests {
 
         let avg = stable.iter().sum::<f32>() / stable.len() as f32;
         let bpm = 60.0 / avg;
-        assert!((bpm - 120.0).abs() < 5.0, "BPM should be ~120, got {}", bpm);
+        assert!((bpm - 120.0).abs() < 5.0, "BPM should be ~120, got {bpm}");
     }
 
     #[test]
@@ -1024,8 +1022,7 @@ mod tests {
         let bpm = 60.0 / avg;
         assert!(
             (bpm - 128.0).abs() < 0.1,
-            "BPM should be exactly ~128, got {}",
-            bpm
+            "BPM should be exactly ~128, got {bpm}"
         );
     }
 
@@ -1198,9 +1195,9 @@ mod tests {
 
     #[test]
     fn pcm_fan_out_delivers_to_all_subscribers() {
-        let (sub1, rx1, _) = make_sub(4);
-        let (sub2, rx2, _) = make_sub(4);
-        let subs = vec![sub1, sub2];
+        let (first, rx1, _) = make_sub(4);
+        let (second, rx2, _) = make_sub(4);
+        let subs = vec![first, second];
         let samples = vec![0.1, -0.2, 0.3, -0.4];
 
         fan_out_pcm(&subs, &samples);

@@ -6,7 +6,7 @@ use super::super::{ChannelUIInfo, EffectDrag};
 pub(super) fn format_time(secs: f64) -> String {
     let m = (secs / 60.0).floor() as u32;
     let s = (secs % 60.0).floor() as u32;
-    format!("{:02}:{:02}", m, s)
+    format!("{m:02}:{s:02}")
 }
 
 pub(super) fn render_collapsed_column(ui: &mut egui::Ui, label: &str, open_id: egui::Id) {
@@ -118,10 +118,7 @@ pub(super) fn render_effect_drag_ghost(
     payload: EffectDrag,
     name: &str,
 ) {
-    if egui::DragAndDrop::payload::<EffectDrag>(ui.ctx())
-        .map(|p| *p == payload)
-        .unwrap_or(false)
-    {
+    if egui::DragAndDrop::payload::<EffectDrag>(ui.ctx()).is_some_and(|p| *p == payload) {
         // Store source in temp memory for deferred drop handler
         ui.ctx().memory_mut(|mem| {
             mem.data
@@ -178,7 +175,7 @@ pub(super) fn channel_color(ch_idx: usize) -> egui::Color32 {
     egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
-/// Binary subdivision of the hue wheel. Returns (ring, hue_fraction).
+/// Binary subdivision of the hue wheel. Returns (ring, `hue_fraction`).
 /// Ring 0 → 1 slot (0/1), ring 1 → 1 slot (1/2), ring k≥2 → 2^(k-1) slots
 /// at odd multiples of 1/2^k. Guarantees optimal minimum hue distance.
 pub(crate) fn hue_subdivision(idx: usize) -> (usize, f32) {
@@ -199,6 +196,8 @@ pub(crate) fn hue_subdivision(idx: usize) -> (usize, f32) {
 }
 
 /// Convert HSL (all 0.0–1.0) to RGB (all 0.0–1.0).
+// h/s/l/p/q are the standard symbols in the HSL→RGB formula.
+#[allow(clippy::many_single_char_names)]
 pub(crate) fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
     if s == 0.0 {
         return (l, l, l);

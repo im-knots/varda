@@ -15,7 +15,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -29,13 +29,13 @@ impl VardaApp {
             } else {
                 CommandResult::Err {
                     code: ErrorCode::InvalidInput,
-                    message: format!("Hole index {} out of range", hole_index),
+                    message: format!("Hole index {hole_index} out of range"),
                 }
             }
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -50,18 +50,15 @@ impl VardaApp {
             None => {
                 return CommandResult::Err {
                     code: ErrorCode::NotFound,
-                    message: format!("Surface {} not found", source_uuid),
+                    message: format!("Surface {source_uuid} not found"),
                 }
             }
         };
-        let target_uuid = match self.output.surface_manager.resolve_hole_target(source_uuid) {
-            Some(t) => t,
-            None => {
-                return CommandResult::Err {
-                    code: ErrorCode::InvalidInput,
-                    message: "No surface beneath the selection to cut a hole into".into(),
-                }
-            }
+        let Some(target_uuid) = self.output.surface_manager.resolve_hole_target(source_uuid) else {
+            return CommandResult::Err {
+                code: ErrorCode::InvalidInput,
+                message: "No surface beneath the selection to cut a hole into".into(),
+            };
         };
         if let Some((_, target)) = self.output.surface_manager.find_by_uuid_mut(&target_uuid) {
             target.add_hole(hole);
@@ -100,7 +97,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -111,7 +108,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -124,7 +121,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -138,7 +135,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -152,7 +149,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -172,7 +169,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -187,7 +184,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -202,7 +199,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -214,7 +211,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -253,7 +250,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -268,7 +265,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -289,7 +286,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -309,7 +306,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -328,7 +325,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -348,7 +345,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -376,7 +373,7 @@ impl VardaApp {
         } else {
             CommandResult::Err {
                 code: ErrorCode::NotFound,
-                message: format!("Surface {} not found", uuid),
+                message: format!("Surface {uuid} not found"),
             }
         }
     }
@@ -398,7 +395,7 @@ impl VardaApp {
                 assignments.push(crate::renderer::context::SurfaceAssignment {
                     surface_uuid: surface_uuid.to_string(),
                     enabled: true,
-                    overlap_zones: Default::default(),
+                    overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
                 });
             }
             self.recompute_auto_edge_blend();

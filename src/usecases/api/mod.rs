@@ -3,7 +3,7 @@
 //! Mirrors the UI consumer pattern:
 //! - **Read**: `EngineState` → projection → response DTOs
 //! - **Write**: HTTP request → validated `EngineCommand` → mpsc channel → engine
-//! - **Consumer state**: WS connection tracking, diff cache (owned by ApiRunner)
+//! - **Consumer state**: WS connection tracking, diff cache (owned by `ApiRunner`)
 
 pub mod projection;
 pub mod routes;
@@ -28,6 +28,11 @@ pub struct SharedState {
 
 impl SharedState {
     /// Send a command and wait for the engine to process it (with response).
+    ///
+    /// # Errors
+    ///
+    /// Returns `"Engine channel closed"` if the engine's command receiver has been
+    /// dropped, or `"Engine dropped reply channel"` if the engine never answered.
     pub async fn send_command(&self, cmd: EngineCommand) -> Result<CommandResult, &'static str> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.command_tx

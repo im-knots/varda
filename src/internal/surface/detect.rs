@@ -170,7 +170,7 @@ fn douglas_peucker(points: &[[f32; 2]], tolerance: f32) -> Vec<[f32; 2]> {
     let mut max_idx = 0;
 
     for (i, p) in points.iter().enumerate().skip(1).take(points.len() - 2) {
-        let d = perpendicular_distance(p, &first, &last);
+        let d = perpendicular_distance(*p, first, last);
         if d > max_dist {
             max_dist = d;
             max_idx = i;
@@ -189,7 +189,7 @@ fn douglas_peucker(points: &[[f32; 2]], tolerance: f32) -> Vec<[f32; 2]> {
 }
 
 /// Perpendicular distance from point `p` to the line through `a` and `b`.
-fn perpendicular_distance(p: &[f32; 2], a: &[f32; 2], b: &[f32; 2]) -> f32 {
+fn perpendicular_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     let dx = b[0] - a[0];
     let dy = b[1] - a[1];
     let len_sq = dx * dx + dy * dy;
@@ -224,12 +224,14 @@ fn morphological_close(img: &image::GrayImage, kernel_size: u32) -> image::GrayI
     if kernel_size == 0 {
         return img.clone();
     }
-    let radius = kernel_size as i32;
+    let radius = i32::try_from(kernel_size).unwrap_or(i32::MAX);
     let dilated = morph_dilate(img, radius);
     morph_erode(&dilated, radius)
 }
 
 /// Dilate: max-filter with square kernel of given radius.
+// Image dimensions and pixel coordinates are far below i32::MAX.
+#[allow(clippy::cast_possible_wrap)]
 fn morph_dilate(img: &image::GrayImage, radius: i32) -> image::GrayImage {
     let (w, h) = img.dimensions();
     let mut out = image::GrayImage::new(w, h);
@@ -252,6 +254,8 @@ fn morph_dilate(img: &image::GrayImage, radius: i32) -> image::GrayImage {
 }
 
 /// Erode: min-filter with square kernel of given radius.
+// Image dimensions and pixel coordinates are far below i32::MAX.
+#[allow(clippy::cast_possible_wrap)]
 fn morph_erode(img: &image::GrayImage, radius: i32) -> image::GrayImage {
     let (w, h) = img.dimensions();
     let mut out = image::GrayImage::new(w, h);
@@ -274,6 +278,8 @@ fn morph_erode(img: &image::GrayImage, radius: i32) -> image::GrayImage {
 }
 
 /// Check if a pixel is on the border (has at least one background neighbor or is on image edge).
+// Pixel coordinates are far below i32::MAX.
+#[allow(clippy::cast_possible_wrap)]
 fn is_border_pixel(img: &image::GrayImage, x: u32, y: u32, w: u32, h: u32) -> bool {
     if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
         return true;
@@ -336,7 +342,8 @@ fn follow_borders(binary: &image::GrayImage) -> Vec<Vec<(u32, u32)>> {
 
 /// Trace a single border starting at (sx, sy) using Moore neighbor tracing.
 // Tight tracing loop; args are scalar cursor/state values passed by value for speed.
-#[allow(clippy::too_many_arguments)]
+// Image dimensions and pixel coordinates are far below i32::MAX.
+#[allow(clippy::too_many_arguments, clippy::cast_possible_wrap)]
 fn trace_single_border(
     binary: &image::GrayImage,
     sx: u32,
@@ -443,8 +450,7 @@ fn convex_hull(points: &[[f32; 2]]) -> Vec<[f32; 2]> {
     // Build lower hull
     let mut lower = Vec::new();
     for &p in &sorted {
-        while lower.len() >= 2 && cross(&lower[lower.len() - 2], &lower[lower.len() - 1], &p) <= 0.0
-        {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0 {
             lower.pop();
         }
         lower.push(p);
@@ -453,8 +459,7 @@ fn convex_hull(points: &[[f32; 2]]) -> Vec<[f32; 2]> {
     // Build upper hull
     let mut upper = Vec::new();
     for &p in sorted.iter().rev() {
-        while upper.len() >= 2 && cross(&upper[upper.len() - 2], &upper[upper.len() - 1], &p) <= 0.0
-        {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0 {
             upper.pop();
         }
         upper.push(p);
@@ -468,7 +473,7 @@ fn convex_hull(points: &[[f32; 2]]) -> Vec<[f32; 2]> {
 }
 
 /// 2D cross product of vectors OA and OB where O is origin point.
-fn cross(o: &[f32; 2], a: &[f32; 2], b: &[f32; 2]) -> f32 {
+fn cross(o: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 }
 
@@ -782,7 +787,7 @@ mod tests {
             "Expected at most 2 contours from L-shape, got {}",
             contours.len()
         );
-        let total_points: usize = contours.iter().map(|c| c.len()).sum();
+        let total_points: usize = contours.iter().map(std::vec::Vec::len).sum();
         assert!(
             total_points > 20,
             "L-shape border too short: {total_points} total points"
@@ -841,9 +846,7 @@ mod tests {
         let hull_area = shoelace_area(&hull);
         assert!(
             hull_area > l_area,
-            "Hull area {} should be > L area {}",
-            hull_area,
-            l_area
+            "Hull area {hull_area} should be > L area {l_area}"
         );
     }
 

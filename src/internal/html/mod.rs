@@ -18,7 +18,7 @@ const DEFAULT_WIDTH: u32 = 1920;
 const DEFAULT_HEIGHT: u32 = 1080;
 
 /// Stable opaque identifier for an HTML render instance. Addresses the owning
-/// servo thread's WebViews independently of render-side `Vec` ordering.
+/// servo thread's `WebViews` independently of render-side `Vec` ordering.
 type HtmlId = u64;
 
 /// A finished RGBA frame (`width*height*4`) published from the servo thread.
@@ -36,12 +36,12 @@ type FrameSlot = Arc<Mutex<Option<HtmlFrame>>>;
 /// the owning servo thread (feature `html`). Carries only `Send` data plus
 /// `keyboard_types` values; the winit→here translation lives in the app layer so
 /// winit never reaches this module, preserving the "only `Send` data crosses the
-/// thread boundary" contract. Positions are WebView **device** pixels. See
+/// thread boundary" contract. Positions are `WebView` **device** pixels. See
 /// `/spec/html-source.md` §4.
 #[cfg(feature = "html")]
 #[derive(Debug, Clone)]
 pub enum HtmlInputEvent {
-    /// Pointer moved to a WebView device-pixel position.
+    /// Pointer moved to a `WebView` device-pixel position.
     MouseMove { x: f32, y: f32 },
     /// Mouse button pressed/released. `button`: 0=left, 1=middle, 2=right.
     MouseButton {
@@ -143,12 +143,12 @@ impl HtmlManager {
         device: &wgpu::Device,
     ) -> Option<usize> {
         if self.disabled {
-            log::warn!("HTML manager disabled; cannot render '{}'", url);
+            log::warn!("HTML manager disabled; cannot render '{url}'");
             return None;
         }
 
         if let Some(idx) = self.instances.iter().position(|i| i.url == url) {
-            log::info!("Reusing existing HTML instance {} for '{}'", idx, url);
+            log::info!("Reusing existing HTML instance {idx} for '{url}'");
             return Some(idx);
         }
 
@@ -156,7 +156,7 @@ impl HtmlManager {
         let height = if height == 0 { DEFAULT_HEIGHT } else { height };
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("html-{}", url)),
+            label: Some(&format!("html-{url}")),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -396,7 +396,7 @@ mod tests {
 /// render into the GPU texture, then read the pixels back to verify content.
 /// They are `#[ignore]` because each starts a full Servo engine (heavy, several
 /// seconds). Run explicitly with:
-///   cargo test html_deck_smoke -- --ignored --test-threads=1
+///   cargo test `html_deck_smoke` -- --ignored --test-threads=1
 #[cfg(all(test, feature = "html"))]
 mod smoke_tests {
     use super::*;
@@ -420,7 +420,7 @@ mod smoke_tests {
         let texture = &mgr.instances[idx].texture;
         let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("html-smoke-readback"),
-            size: (ROW_BYTES * H) as u64,
+            size: u64::from(ROW_BYTES * H),
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -596,7 +596,7 @@ done=true;}},120);</script></body></html>";
 
     /// Interactive input correctness: a forwarded mouse click reaches the DOM.
     /// The page paints red and registers a `click` handler that flips it blue;
-    /// after `send_input` delivers MouseMove + button down/up at the center, the
+    /// after `send_input` delivers `MouseMove` + button down/up at the center, the
     /// deck must repaint blue. Proves the `HtmlInputEvent` → `HtmlCommand::Input`
     /// → `WebView::notify_input_event` path drives a real DOM event + repaint.
     #[test]

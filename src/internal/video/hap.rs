@@ -1,5 +1,5 @@
 //! HAP video codec decoder — demuxes with ffmpeg, parses HAP frames,
-//! Snappy-decompresses BCn texture blocks for direct GPU upload.
+//! Snappy-decompresses `BCn` texture blocks for direct GPU upload.
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -64,7 +64,7 @@ fn tex_fmt(t: u8) -> Result<HapTextureFormat> {
         x if x == (FMT_BC7 & 0x0F) => Ok(HapTextureFormat::Bc7),
         x if x == (FMT_YCOCG & 0x0F) => Ok(HapTextureFormat::Bc3YCoCg),
         x if x == (FMT_BC4 & 0x0F) => Ok(HapTextureFormat::Bc4),
-        other => bail!("Unsupported HAP format nibble: 0x{:X}", other),
+        other => bail!("Unsupported HAP format nibble: 0x{other:X}"),
     }
 }
 
@@ -90,7 +90,7 @@ fn decode_section(typ: u8, data: &[u8], out: &mut Vec<u8>) -> Result<HapTextureF
         COMPRESSOR_COMPLEX => {
             decode_chunked(data, out)?;
         }
-        c => bail!("Unknown HAP compressor: 0x{:02X}", c),
+        c => bail!("Unknown HAP compressor: 0x{c:02X}"),
     }
     Ok(fmt)
 }
@@ -135,7 +135,7 @@ fn decode_chunked(data: &[u8], output: &mut Vec<u8>) -> Result<()> {
                 snappy_decompress(chunk, &mut tmp)?;
                 output.extend_from_slice(&tmp);
             }
-            x => bail!("Unknown chunk compressor: 0x{:02X}", x),
+            x => bail!("Unknown chunk compressor: 0x{x:02X}"),
         }
         ao += sz;
     }
@@ -146,16 +146,21 @@ fn decode_chunked(data: &[u8], output: &mut Vec<u8>) -> Result<()> {
 pub enum HapFrame {
     /// Single texture plane (Hap, Hap Alpha, Hap Q, Hap R).
     Single { format: HapTextureFormat },
-    /// Dual texture planes (HAP Q Alpha): color (YCoCg BC3) + alpha (BC4).
+    /// Dual texture planes (HAP Q Alpha): color (`YCoCg` BC3) + alpha (BC4).
     DualPlane {
         color_format: HapTextureFormat,
         alpha_format: HapTextureFormat,
     },
 }
 
-/// Decode a raw HAP packet into decompressed BCn data.
+/// Decode a raw HAP packet into decompressed `BCn` data.
 /// For single-plane: data goes into `out`.
 /// For dual-plane (HAP Q Alpha): color goes into `out`, alpha goes into `alpha_out`.
+///
+/// # Errors
+///
+/// Returns an error if the packet header is malformed, if the section type or
+/// texture format is unknown, or if Snappy/LZ4 decompression fails.
 pub fn decode_hap_frame(
     packet_data: &[u8],
     out: &mut Vec<u8>,
@@ -206,6 +211,11 @@ pub fn decode_hap_frame(
 /// resolution in [`decode_hap_frame`]; used to size the GPU texture and staging
 /// buffers correctly before playback begins (ffmpeg groups all HAP variants
 /// under one codec id, so the format must be read from the frame itself).
+///
+/// # Errors
+///
+/// Returns an error if the packet header is malformed or if no colour-plane
+/// section with a known texture format is present.
 pub fn detect_hap_format(packet_data: &[u8]) -> Result<HapTextureFormat> {
     let h = parse_header(packet_data)?;
     if h.section_type == SECTION_MULTI_IMAGE {
@@ -226,7 +236,7 @@ pub fn detect_hap_format(packet_data: &[u8]) -> Result<HapTextureFormat> {
     }
 }
 
-/// Result of a HapPlayer::next_frame() call.
+/// Result of a `HapPlayer::next_frame()` call.
 pub struct HapFrameResult<'a> {
     /// Color plane data (always present).
     pub color_data: &'a [u8],
@@ -238,7 +248,7 @@ pub struct HapFrameResult<'a> {
     pub alpha_format: Option<HapTextureFormat>,
 }
 
-/// HAP video player — demuxes container with ffmpeg, decodes HAP frames to BCn data.
+/// HAP video player — demuxes container with ffmpeg, decodes HAP frames to `BCn` data.
 ///
 /// # Safety: Send
 /// Same rationale as `VideoPlayer` — exclusive ownership of C-allocated ffmpeg state.
@@ -264,6 +274,11 @@ unsafe impl Send for HapPlayer {}
 
 impl HapPlayer {
     /// Create a new HAP player from a video file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if FFmpeg cannot be initialised, if the file cannot be
+    /// opened, or if it contains no video stream.
     pub fn new<P: AsRef<Path>>(path: P, initial_format: HapTextureFormat) -> Result<Self> {
         ffmpeg::init().context("Failed to initialize FFmpeg")?;
         let ictx = input(&path).context("Failed to open HAP video")?;
@@ -278,22 +293,15 @@ impl HapPlayer {
         let width = decoder.width();
         let height = decoder.height();
         let rate = video_stream.rate();
-        let fps = rate.0 as f64 / rate.1 as f64;
+        let fps = f64::from(rate.0) / f64::from(rate.1);
         let duration = if ictx.duration() > 0 {
-            ictx.duration() as f64 / ffmpeg::ffi::AV_TIME_BASE as f64
+            ictx.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
         } else {
             0.0
         };
         let color_buf = initial_format.frame_byte_size(width, height);
         let alpha_buf = HapTextureFormat::Bc4.frame_byte_size(width, height);
-        log::info!(
-            "HAP video: {}x{} @ {:.2}fps, {:.2}s, {:?}",
-            width,
-            height,
-            fps,
-            duration,
-            initial_format
-        );
+        log::info!("HAP video: {width}x{height} @ {fps:.2}fps, {duration:.2}s, {initial_format:?}");
         Ok(Self {
             ictx,
             video_stream_index,
@@ -307,7 +315,12 @@ impl HapPlayer {
         })
     }
 
-    /// Get the next frame as compressed BCn data.
+    /// Get the next frame as compressed `BCn` data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a HAP packet fails to decode, or if seeking (for
+    /// reverse playback and loop wrap-around) fails.
     pub fn next_frame(&mut self) -> Result<Option<HapFrameResult<'_>>> {
         if !self.playback.playing {
             return Ok(None);
@@ -375,7 +388,6 @@ impl HapPlayer {
                         LoopMode::Loop => {
                             self.playback.position = self.playback.in_point;
                             self.seek(self.playback.position)?;
-                            continue;
                         }
                         LoopMode::PingPong => {
                             // EOS: flip direction and seek to the opposite boundary.
@@ -386,7 +398,7 @@ impl HapPlayer {
                             // Use position to determine which boundary we're near.
                             let out_pt = self.playback.effective_out();
                             let in_pt = self.playback.in_point;
-                            let mid = (in_pt + out_pt) / 2.0;
+                            let mid = f64::midpoint(in_pt, out_pt);
                             if self.playback.position >= mid {
                                 // Near end → reverse
                                 self.playback.reverse = true;
@@ -397,7 +409,6 @@ impl HapPlayer {
                                 self.playback.position = in_pt;
                             }
                             self.seek(self.playback.position)?;
-                            continue;
                         }
                         LoopMode::OneShot => {
                             self.playback.playing = false;
@@ -412,8 +423,13 @@ impl HapPlayer {
         }
     }
 
+    /// Seek the demuxer to `time_secs` and update the playback position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying FFmpeg seek fails.
     pub fn seek(&mut self, time_secs: f64) -> Result<()> {
-        let ts = (time_secs * ffmpeg::ffi::AV_TIME_BASE as f64) as i64;
+        let ts = (time_secs * f64::from(ffmpeg::ffi::AV_TIME_BASE)) as i64;
         self.ictx.seek(ts, ..ts)?;
         self.playback.position = time_secs;
         Ok(())
@@ -548,7 +564,7 @@ mod tests {
                 assert_eq!(format, HapTextureFormat::Bc1);
                 assert_eq!(out, payload);
             }
-            _ => panic!("Expected Single frame"),
+            HapFrame::DualPlane { .. } => panic!("Expected Single frame"),
         }
     }
 
@@ -569,7 +585,7 @@ mod tests {
                 assert_eq!(format, HapTextureFormat::Bc3);
                 assert_eq!(out, original);
             }
-            _ => panic!("Expected Single frame"),
+            HapFrame::DualPlane { .. } => panic!("Expected Single frame"),
         }
     }
 
@@ -614,7 +630,7 @@ mod tests {
                 assert_eq!(format, HapTextureFormat::Bc3YCoCg);
                 assert_eq!(out, payload);
             }
-            _ => panic!("Expected Single frame"),
+            HapFrame::DualPlane { .. } => panic!("Expected Single frame"),
         }
     }
 }

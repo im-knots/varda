@@ -16,7 +16,7 @@ pub struct KeyCombo {
 }
 
 impl KeyCombo {
-    /// Create a KeyCombo from egui key + modifiers.
+    /// Create a `KeyCombo` from egui key + modifiers.
     pub fn from_egui(key: egui::Key, modifiers: &egui::Modifiers) -> Self {
         Self {
             key: egui_key_to_string(key),
@@ -26,7 +26,7 @@ impl KeyCombo {
         }
     }
 
-    /// Convert back to egui::Key (returns None if string doesn't map).
+    /// Convert back to `egui::Key` (returns None if string doesn't map).
     pub fn to_egui_key(&self) -> Option<egui::Key> {
         string_to_egui_key(&self.key)
     }
@@ -37,7 +37,7 @@ impl KeyCombo {
 pub enum KeyTarget {
     /// A discrete application action.
     Action(ActionId),
-    /// A param_path (same addressing as MIDI).
+    /// A `param_path` (same addressing as MIDI).
     ParamPath(String),
 }
 
@@ -63,7 +63,7 @@ pub enum ActionId {
     ToggleKeyboardLearn,
 }
 
-/// Persistent keymap store. Mirrors MidiMappingStore pattern.
+/// Persistent keymap store. Mirrors `MidiMappingStore` pattern.
 #[derive(Debug, Clone)]
 pub struct KeymapStore {
     pub bindings: HashMap<KeyCombo, KeyTarget>,
@@ -243,7 +243,7 @@ impl KeymapStore {
 
     /// Add or replace a binding.
     pub fn set(&mut self, combo: KeyCombo, target: KeyTarget) {
-        log::info!("Keyboard mapped {:?} → {:?}", combo, target);
+        log::info!("Keyboard mapped {combo:?} → {target:?}");
         self.bindings.insert(combo, target);
     }
 
@@ -278,7 +278,7 @@ impl KeymapStore {
     /// Select a learn target (must be in learn mode).
     pub fn select_learn_target(&mut self, target: KeyTarget) {
         if self.learn_mode {
-            log::info!("Keyboard learn target: {:?}", target);
+            log::info!("Keyboard learn target: {target:?}");
             self.learn_target = Some(target);
         }
     }
@@ -388,7 +388,7 @@ impl KeyBinding {
     pub fn validate(&self, prefix: &str) -> Vec<String> {
         let mut errors = Vec::new();
         if self.key.trim().is_empty() {
-            errors.push(format!("{}: key is empty", prefix));
+            errors.push(format!("{prefix}: key is empty"));
         }
         errors
     }
@@ -400,17 +400,23 @@ impl KeymapConfig {
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         for (i, binding) in self.bindings.iter().enumerate() {
-            errors.extend(binding.validate(&format!("bindings[{}]", i)));
+            errors.extend(binding.validate(&format!("bindings[{i}]")));
         }
         errors
     }
 
     /// Load from a JSON file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if its contents are not
+    /// valid keymap JSON. Semantic validation issues are logged as warnings and
+    /// do not fail the load.
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
-            .map_err(|e| anyhow::anyhow!("Failed to read keymap config: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read keymap config: {e}"))?;
         let config: KeymapConfig = serde_json::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse keymap config: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to parse keymap config: {e}"))?;
         let warnings = config.validate();
         for w in &warnings {
             log::warn!("Keymap config {}: {}", path.as_ref().display(), w);
@@ -419,13 +425,18 @@ impl KeymapConfig {
     }
 
     /// Save to a JSON file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config cannot be serialized to JSON or if the
+    /// atomic write to `path` fails (missing directory, permissions, disk full).
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
         let errors = self.validate();
         for e in &errors {
-            log::error!("Keymap config save: {}", e);
+            log::error!("Keymap config save: {e}");
         }
         let content = serde_json::to_string_pretty(self)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize keymap config: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to serialize keymap config: {e}"))?;
         crate::persistence::atomic_write(path.as_ref(), &content)?;
         Ok(())
     }
@@ -433,12 +444,12 @@ impl KeymapConfig {
 
 // ── egui::Key ↔ String conversion ──────────────────────────────────
 
-/// Convert an egui::Key to a stable string name for serialization.
+/// Convert an `egui::Key` to a stable string name for serialization.
 pub fn egui_key_to_string(key: egui::Key) -> String {
-    format!("{:?}", key)
+    format!("{key:?}")
 }
 
-/// Convert a string name back to egui::Key.
+/// Convert a string name back to `egui::Key`.
 pub fn string_to_egui_key(s: &str) -> Option<egui::Key> {
     match s {
         "A" => Some(egui::Key::A),
@@ -530,7 +541,7 @@ pub fn collect_pressed_keys(ctx: &egui::Context) -> Vec<(egui::Key, egui::Modifi
     })
 }
 
-/// Display a KeyCombo as a user-friendly string (e.g. "Cmd+Shift+Z").
+/// Display a `KeyCombo` as a user-friendly string (e.g. "Cmd+Shift+Z").
 impl std::fmt::Display for KeyCombo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.command {
@@ -546,12 +557,12 @@ impl std::fmt::Display for KeyCombo {
     }
 }
 
-/// Display a KeyTarget as a user-friendly string.
+/// Display a `KeyTarget` as a user-friendly string.
 impl std::fmt::Display for KeyTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            KeyTarget::Action(id) => write!(f, "{:?}", id),
-            KeyTarget::ParamPath(path) => write!(f, "{}", path),
+            KeyTarget::Action(id) => write!(f, "{id:?}"),
+            KeyTarget::ParamPath(path) => write!(f, "{path}"),
         }
     }
 }
@@ -790,7 +801,7 @@ mod tests {
     #[test]
     fn test_key_combo_display() {
         let c = combo("Z", true, true, false);
-        assert_eq!(format!("{}", c), "Cmd+Shift+Z");
+        assert_eq!(format!("{c}"), "Cmd+Shift+Z");
     }
 
     #[test]
@@ -805,7 +816,7 @@ mod tests {
         for key in keys {
             let s = egui_key_to_string(key);
             let back = string_to_egui_key(&s);
-            assert_eq!(back, Some(key), "Roundtrip failed for {:?} -> {}", key, s);
+            assert_eq!(back, Some(key), "Roundtrip failed for {key:?} -> {s}");
         }
     }
 
@@ -854,7 +865,7 @@ mod tests {
         let config = KeymapConfig {
             version: 1,
             bindings: vec![KeyBinding {
-                key: "".into(),
+                key: String::new(),
                 command: false,
                 shift: false,
                 alt: false,

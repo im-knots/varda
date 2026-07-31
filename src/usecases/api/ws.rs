@@ -85,12 +85,9 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
     let (mut sink, mut stream) = socket.split();
 
     // Send full state snapshot on connect.
-    let initial = match state.engine_state.read().ok().and_then(|g| g.clone()) {
-        Some(s) => s,
-        None => {
-            let _ = sink.send(Message::Close(None)).await;
-            return;
-        }
+    let Some(initial) = state.engine_state.read().ok().and_then(|g| g.clone()) else {
+        let _ = sink.send(Message::Close(None)).await;
+        return;
     };
 
     let mut last_json = serde_json::to_value(&initial).unwrap_or_default();

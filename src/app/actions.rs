@@ -1,4 +1,4 @@
-//! UI action processing — applies UIActions to VardaApp state.
+//! UI action processing — applies `UIActions` to `VardaApp` state.
 //!
 //! These methods were originally in main.rs but belong in the engine layer
 //! since they mutate engine-owned state (mixer, surfaces, outputs, etc.).
@@ -9,7 +9,7 @@ use crate::usecases::ui;
 
 impl VardaApp {
     /// Apply UI-driven engine state changes: MIDI learn, notifications.
-    /// Selection and layout state is handled by the UI consumer (UIRunner).
+    /// Selection and layout state is handled by the UI consumer (`UIRunner`).
     pub fn apply_ui_actions(&mut self, ui_actions: &ui::UIActions) {
         // MIDI learn
         if ui_actions.session.midi_learn_toggle {
@@ -50,7 +50,7 @@ impl VardaApp {
     }
 
     /// Apply engine mutations: mixer, decks, effects, transitions, channels, cameras.
-    /// Routes through engine trait methods where possible, VardaApp methods otherwise.
+    /// Routes through engine trait methods where possible, `VardaApp` methods otherwise.
     ///
     /// Returns an [`EngineActionsOutcome`] carrying the GUI post-steps the runner
     /// must apply after the drain: the removed channel index (selection fixup),
@@ -120,10 +120,10 @@ impl VardaApp {
                 }
             }
             CommandOutcome::Plain(CommandResult::Err { message, .. }) => {
-                log::error!("Failed to add deck: {}", message);
+                log::error!("Failed to add deck: {message}");
                 self.session
                     .notifications
-                    .error(format!("Failed to add deck: {}", message));
+                    .error(format!("Failed to add deck: {message}"));
             }
             _ => {}
         }

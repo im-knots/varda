@@ -70,7 +70,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                         let item_id = egui::Id::new(("lib_gen", *gen_idx));
                         let resp = ui
                             .dnd_drag_source(item_id, LibraryDrag::Generator(*gen_idx), |ui| {
-                                ui.label(egui::RichText::new(format!("  ◆ {}", name)).size(12.0));
+                                ui.label(egui::RichText::new(format!("  ◆ {name}")).size(12.0));
                             })
                             .response;
                         // Store generator index in temp memory so the deferred drop handler can use it
@@ -104,7 +104,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     for (name, filter_idx) in &data.filters {
                         let item_id = egui::Id::new(("lib_fx", *filter_idx));
                         ui.dnd_drag_source(item_id, LibraryDrag::Effect(*filter_idx), |ui| {
-                            ui.label(egui::RichText::new(format!("  ◇ {}", name)).size(12.0));
+                            ui.label(egui::RichText::new(format!("  ◇ {name}")).size(12.0));
                         });
                         // Store effect filter index in temp memory for deferred drop handler
                         if ui.ctx().is_being_dragged(item_id) {
@@ -172,7 +172,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     for (name, cam_id) in &data.cameras {
                         let item_id = egui::Id::new(("lib_cam", *cam_id));
                         ui.dnd_drag_source(item_id, LibraryDrag::Camera(*cam_id), |ui| {
-                            ui.label(egui::RichText::new(format!("  📹 {}", name)).size(12.0));
+                            ui.label(egui::RichText::new(format!("  📹 {name}")).size(12.0));
                         });
                         if ui.ctx().is_being_dragged(item_id) {
                             ui.ctx().memory_mut(|mem| {
@@ -206,7 +206,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     for (name, sensor_id) in &data.depth_sensors {
                         let item_id = egui::Id::new(("lib_depth", *sensor_id));
                         ui.dnd_drag_source(item_id, LibraryDrag::DepthSensor(*sensor_id), |ui| {
-                            ui.label(egui::RichText::new(format!("  🛰 {}", name)).size(12.0));
+                            ui.label(egui::RichText::new(format!("  🛰 {name}")).size(12.0));
                         });
                         if ui.ctx().is_being_dragged(item_id) {
                             ui.ctx().memory_mut(|mem| {
@@ -229,7 +229,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                     + data.dash_library_configs.len()
                     + data.rtmp_library_configs.len();
                 let stream_header =
-                    egui::RichText::new(format!("📡 Stream Sources ({})", total_streams)).strong();
+                    egui::RichText::new(format!("📡 Stream Sources ({total_streams})")).strong();
                 egui::CollapsingHeader::new(stream_header)
                     .id_salt("lib_streams")
                     .default_open(false)
@@ -264,7 +264,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         LibraryDrag::Ndi(name.clone()),
                                         |ui| {
                                             ui.label(
-                                                egui::RichText::new(format!("  📡 {}", name))
+                                                egui::RichText::new(format!("  📡 {name}"))
                                                     .size(12.0),
                                             );
                                         },
@@ -367,7 +367,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         item_id,
                                         LibraryDrag::Srt(url.clone(), mode),
                                         status_color,
-                                        format!("📺 {}", url),
+                                        format!("📺 {url}"),
                                     ) {
                                         actions.commands.push(
                                             EngineCommand::RemoveStreamLibraryEntry {
@@ -450,7 +450,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         item_id,
                                         LibraryDrag::Hls(url.clone()),
                                         status_color,
-                                        format!("📡 {}", url),
+                                        format!("📡 {url}"),
                                     ) {
                                         actions.commands.push(
                                             EngineCommand::RemoveHlsLibraryEntry {
@@ -528,7 +528,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         item_id,
                                         LibraryDrag::Dash(url.clone()),
                                         status_color,
-                                        format!("📡 {}", url),
+                                        format!("📡 {url}"),
                                     ) {
                                         actions.commands.push(
                                             EngineCommand::RemoveDashLibraryEntry {
@@ -574,7 +574,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         .unwrap_or(crate::stream::RtmpMode::Pull);
                                     let listen_port = 1935 + data.rtmp_library_configs.len();
                                     let auto_listen_url =
-                                        format!("rtmp://0.0.0.0:{}/live/stream", listen_port);
+                                        format!("rtmp://0.0.0.0:{listen_port}/live/stream");
                                     let mut url: String =
                                         ui.data(|d| d.get_temp(url_id)).unwrap_or_else(|| {
                                             if mode == crate::stream::RtmpMode::Listen {
@@ -586,7 +586,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                     // Auto-update URL when mode changes
                                     if mode != prev_mode {
                                         if mode == crate::stream::RtmpMode::Listen {
-                                            url = auto_listen_url.clone();
+                                            url.clone_from(&auto_listen_url);
                                         } else if prev_mode == crate::stream::RtmpMode::Listen {
                                             url = "rtmp://".to_string();
                                         }
@@ -670,7 +670,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                         item_id,
                                         LibraryDrag::Rtmp(url.clone(), mode),
                                         status_color,
-                                        format!("📺 {} ({})", url, mode),
+                                        format!("📺 {url} ({mode})"),
                                     ) {
                                         actions.commands.push(
                                             EngineCommand::RemoveRtmpLibraryEntry {
@@ -747,7 +747,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                 item_id,
                                 LibraryDrag::Html(url.clone()),
                                 status_color,
-                                format!("🌐 {}", url),
+                                format!("🌐 {url}"),
                             ) {
                                 actions
                                     .commands
@@ -791,7 +791,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                         for (i, name) in data.syphon_sources.iter().enumerate() {
                             let item_id = egui::Id::new(("lib_syph", i));
                             ui.dnd_drag_source(item_id, LibraryDrag::Syphon(name.clone()), |ui| {
-                                ui.label(egui::RichText::new(format!("  🔗 {}", name)).size(12.0));
+                                ui.label(egui::RichText::new(format!("  🔗 {name}")).size(12.0));
                             });
                             if ui.ctx().is_being_dragged(item_id) {
                                 ui.ctx().memory_mut(|mem| {
@@ -820,9 +820,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             let item_id = egui::Id::new(("lib_deck_preset", idx));
                             let resp = ui
                                 .dnd_drag_source(item_id, LibraryDrag::DeckPreset(idx), |ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!("  ◈ {}", name)).size(12.0),
-                                    );
+                                    ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
                                 })
                                 .response;
                             if ui.ctx().is_being_dragged(item_id) {
@@ -863,9 +861,7 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                             let item_id = egui::Id::new(("lib_ch_preset", idx));
                             let resp = ui
                                 .dnd_drag_source(item_id, LibraryDrag::ChannelPreset(idx), |ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!("  ◈ {}", name)).size(12.0),
-                                    );
+                                    ui.label(egui::RichText::new(format!("  ◈ {name}")).size(12.0));
                                 })
                                 .response;
                             if ui.ctx().is_being_dragged(item_id) {

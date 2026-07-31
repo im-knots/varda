@@ -1,7 +1,7 @@
 //! Warp pipeline — perspective correction and UV mesh warping for projection mapping.
 //!
 //! Supports two warp modes:
-//! - **CornerPin**: 4-point homography (legacy quad warp, DLT solver)
+//! - **`CornerPin`**: 4-point homography (legacy quad warp, DLT solver)
 //! - **Mesh**: Arbitrary XYUV grid warp (generalization of corner-pin)
 //!
 //! Corner-pin is a strict subset of mesh warp (equivalent to a 2×2 grid).
@@ -107,6 +107,7 @@ impl WarpMesh {
     /// Resample this mesh onto a new `new_cols` × `new_rows` grid, preserving the
     /// current deformation via bilinear interpolation. Used to subdivide (or
     /// coarsen) a warp grid without the image jumping. Dimensions are clamped ≥2.
+    #[must_use]
     pub fn resampled(&self, new_cols: u32, new_rows: u32) -> WarpMesh {
         let new_cols = new_cols.max(2);
         let new_rows = new_rows.max(2);
@@ -144,7 +145,7 @@ impl WarpMode {
         }
     }
 
-    /// Get corner-pin corners if this is a CornerPin variant.
+    /// Get corner-pin corners if this is a `CornerPin` variant.
     pub fn corners(&self) -> Option<&[[f32; 2]; 4]> {
         match self {
             Self::CornerPin { corners } => Some(corners),
@@ -152,7 +153,7 @@ impl WarpMode {
         }
     }
 
-    /// Get mutable corner-pin corners if this is a CornerPin variant.
+    /// Get mutable corner-pin corners if this is a `CornerPin` variant.
     pub fn corners_mut(&mut self) -> Option<&mut [[f32; 2]; 4]> {
         match self {
             Self::CornerPin { corners } => Some(corners),
@@ -289,6 +290,8 @@ fn resample_polyline(pts: &[[f32; 2]], n: u32) -> Vec<[f32; 2]> {
 }
 
 /// Indices of the vertices nearest the bbox corners (TL, TR, BR, BL).
+// minx/miny and maxx/maxy are the idiomatic names for bounding-box extents.
+#[allow(clippy::similar_names)]
 fn detect_quad_corners(verts: &[[f32; 2]]) -> [usize; 4] {
     let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for v in verts {
@@ -330,6 +333,8 @@ fn forward_run(verts: &[[f32; 2]], from: usize, to: usize) -> Vec<[f32; 2]> {
 /// the warp module: the renderer must not depend on `surface/curve.rs`, and the
 /// shared-flattener rule targets outline *polyline* flattening (a distinct
 /// concern), not this per-point warp evaluation.
+// p0/p1/c1/c2/t/u and the a..d Bernstein coefficients are the standard bezier names.
+#[allow(clippy::many_single_char_names)]
 fn cubic_point(p0: [f32; 2], c1: [f32; 2], c2: [f32; 2], p1: [f32; 2], t: f32) -> [f32; 2] {
     let u = 1.0 - t;
     let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
@@ -345,6 +350,8 @@ fn cubic_point(p0: [f32; 2], c1: [f32; 2], c2: [f32; 2], p1: [f32; 2], t: f32) -
 /// the four patch corners. Shared by `coons_mesh` (polyline sides) and
 /// `BezierWarp::tessellate` (cubic sides) — one Coons code path.
 #[allow(clippy::too_many_arguments)]
+// l/r/s/t/d/b are the standard Coons-patch boundary and parameter names.
+#[allow(clippy::many_single_char_names)]
 fn coons_blend(
     l: [f32; 2],
     r: [f32; 2],
@@ -682,8 +689,8 @@ fn solve_homography(src: &[[f32; 2]; 4], dst: &[[f32; 2]; 4]) -> [f32; 9] {
     let mut b = [0.0_f64; 8];
 
     for i in 0..4 {
-        let (sx, sy) = (src[i][0] as f64, src[i][1] as f64);
-        let (dx, dy) = (dst[i][0] as f64, dst[i][1] as f64);
+        let (sx, sy) = (f64::from(src[i][0]), f64::from(src[i][1]));
+        let (dx, dy) = (f64::from(dst[i][0]), f64::from(dst[i][1]));
         let row1 = i * 2;
         let row2 = i * 2 + 1;
 
@@ -764,7 +771,7 @@ fn gauss_solve_8x8(a: &mut [[f64; 8]; 8], b: &mut [f64; 8]) -> [f64; 8] {
 pub enum MeshFormat {
     /// Paul Bourke XYUV CSV: header `mesh_w mesh_h`, then `x y u v intensity` per point.
     XyuvCsv,
-    /// JSON serialization of WarpMesh.
+    /// JSON serialization of `WarpMesh`.
     Json,
 }
 
@@ -791,10 +798,16 @@ impl WarpMesh {
     /// ```
     /// Where x,y are output positions and u,v are source UVs, all in [0..1].
     /// The intensity column is parsed but not stored (used for edge blending).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header line is missing or does not contain two
+    /// dimensions, if either dimension is outside 2..=10000, or if the number
+    /// of parsed point rows does not match `cols * rows`.
     pub fn from_xyuv_csv(input: &str) -> anyhow::Result<Self> {
         let mut lines = input
             .lines()
-            .map(|l| l.trim())
+            .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'));
 
         let header = lines
@@ -805,25 +818,16 @@ impl WarpMesh {
             .filter_map(|s| s.parse().ok())
             .collect();
         if dims.len() < 2 {
-            anyhow::bail!(
-                "XYUV CSV: header must contain mesh_w mesh_h, got: {}",
-                header
-            );
+            anyhow::bail!("XYUV CSV: header must contain mesh_w mesh_h, got: {header}");
         }
         let cols = dims[0];
         let rows = dims[1];
         if cols < 2 || rows < 2 {
-            anyhow::bail!(
-                "XYUV CSV: mesh dimensions must be ≥ 2, got {}×{}",
-                cols,
-                rows
-            );
+            anyhow::bail!("XYUV CSV: mesh dimensions must be ≥ 2, got {cols}×{rows}");
         }
         if cols > 10_000 || rows > 10_000 {
             anyhow::bail!(
-                "XYUV CSV: mesh dimensions too large (max 10000×10000), got {}×{}",
-                cols,
-                rows
+                "XYUV CSV: mesh dimensions too large (max 10000×10000), got {cols}×{rows}"
             );
         }
 
@@ -861,21 +865,29 @@ impl WarpMesh {
 
     /// Export to Paul Bourke XYUV CSV format.
     pub fn to_xyuv_csv(&self) -> String {
+        use std::fmt::Write;
+
         let mut out = String::with_capacity(self.points.len() * 40);
-        out.push_str(&format!("{} {}\n", self.cols, self.rows));
+        let _ = writeln!(out, "{} {}", self.cols, self.rows);
         for pt in &self.points {
-            out.push_str(&format!(
-                "{:.6} {:.6} {:.6} {:.6} 1.000000\n",
+            let _ = writeln!(
+                out,
+                "{:.6} {:.6} {:.6} {:.6} 1.000000",
                 pt.position[0], pt.position[1], pt.uv[0], pt.uv[1],
-            ));
+            );
         }
         out
     }
 
-    /// Load a WarpMesh from a JSON string.
+    /// Load a `WarpMesh` from a JSON string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is not valid mesh JSON, if either
+    /// dimension is < 2, or if the point count does not match `cols * rows`.
     pub fn from_json(input: &str) -> anyhow::Result<Self> {
         let mesh: Self = serde_json::from_str(input)
-            .map_err(|e| anyhow::anyhow!("JSON mesh parse error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("JSON mesh parse error: {e}"))?;
         if mesh.cols < 2 || mesh.rows < 2 {
             anyhow::bail!(
                 "JSON mesh: dimensions must be ≥ 2, got {}×{}",
@@ -894,16 +906,25 @@ impl WarpMesh {
     }
 
     /// Export to JSON string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the mesh cannot be serialized to JSON.
     pub fn to_json(&self) -> anyhow::Result<String> {
         Ok(serde_json::to_string_pretty(self)?)
     }
 
     /// Load from file with auto-detected format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the extension is not a known mesh format, if the
+    /// file cannot be read, or if its contents fail to parse.
     pub fn load_file(path: &std::path::Path) -> anyhow::Result<Self> {
         let format = MeshFormat::from_extension(path)
-            .ok_or_else(|| anyhow::anyhow!("Unknown mesh file extension: {:?}", path))?;
+            .ok_or_else(|| anyhow::anyhow!("Unknown mesh file extension: {}", path.display()))?;
         let content = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("Failed to read mesh file {:?}: {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read mesh file {}: {e}", path.display()))?;
         match format {
             MeshFormat::XyuvCsv => Self::from_xyuv_csv(&content),
             MeshFormat::Json => Self::from_json(&content),
@@ -911,15 +932,20 @@ impl WarpMesh {
     }
 
     /// Save to file with auto-detected format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the extension is not a known mesh format, if JSON
+    /// serialization fails, or if the file cannot be written.
     pub fn save_file(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let format = MeshFormat::from_extension(path)
-            .ok_or_else(|| anyhow::anyhow!("Unknown mesh file extension: {:?}", path))?;
+            .ok_or_else(|| anyhow::anyhow!("Unknown mesh file extension: {}", path.display()))?;
         let content = match format {
             MeshFormat::XyuvCsv => self.to_xyuv_csv(),
             MeshFormat::Json => self.to_json()?,
         };
         std::fs::write(path, content)
-            .map_err(|e| anyhow::anyhow!("Failed to write mesh file {:?}: {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to write mesh file {}: {e}", path.display()))?;
         Ok(())
     }
 }
@@ -1234,15 +1260,12 @@ mod tests {
         let result = WarpMesh::from_xyuv_csv(csv);
         // "NaN" parses as f32::NAN via .parse::<f32>() — filter_map keeps it!
         // But the mesh point count should still match
-        match result {
-            Ok(mesh) => {
-                assert_eq!(mesh.points.len(), 4);
-                // First point has NaN coords — verify they exist
-                assert!(mesh.points[0].position[0].is_nan() || mesh.points[0].position[0] == 0.0);
-            }
-            Err(_) => {
-                // If NaN lines are dropped (vals.len() < 4 after filter_map), count mismatch is OK
-            }
+        if let Ok(mesh) = result {
+            assert_eq!(mesh.points.len(), 4);
+            // First point has NaN coords — verify they exist
+            assert!(mesh.points[0].position[0].is_nan() || mesh.points[0].position[0] == 0.0);
+        } else {
+            // If NaN lines are dropped (vals.len() < 4 after filter_map), count mismatch is OK
         }
     }
 

@@ -1,8 +1,8 @@
 /// Audio analysis hot-path benchmarks.
 ///
 /// Two functions run inside the cpal audio callback (~every 5ms at 48kHz/256):
-///   onset_threshold  — median computation over spectral flux history (8 values)
-///   bpm_estimation   — median + outlier rejection over beat intervals (4-16 values)
+///   `onset_threshold`  — median computation over spectral flux history (8 values)
+///   `bpm_estimation`   — median + outlier rejection over beat intervals (4-16 values)
 ///
 /// Both currently clone + full-sort their input to compute a median.
 /// Benchmarks measure per-invocation cost at realistic window sizes.
@@ -31,7 +31,7 @@ fn bench_onset_threshold(c: &mut Criterion) {
     for n in [4, 8, 16] {
         let flux = make_flux_history(n);
         g.bench_with_input(BenchmarkId::new("clone_sort", n), &flux, |b, flux| {
-            b.iter(|| compute_onset_threshold(flux))
+            b.iter(|| compute_onset_threshold(flux));
         });
     }
     g.finish();

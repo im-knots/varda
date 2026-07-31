@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::net::{SocketAddrV4, UdpSocket};
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 // ── OscConfig ────────────────────────────────────────────────────────
@@ -49,6 +49,11 @@ impl Default for OscConfig {
 
 impl OscConfig {
     /// Load from a JSON file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if its contents are not
+    /// valid OSC-config JSON.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read OSC config: {}", path.as_ref().display()))?;
@@ -58,6 +63,11 @@ impl OscConfig {
     }
 
     /// Save to a JSON file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config cannot be serialized to JSON or if the
+    /// atomic write to `path` fails (missing directory, permissions, disk full).
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize OSC config")?;
@@ -98,16 +108,9 @@ fn extract_float(args: &[OscType]) -> Option<f32> {
 /// Strips the `/varda/` prefix, then routes clock messages specially
 /// and everything else as a generic `Param` message.
 pub fn parse_osc_message(addr: &str, args: &[OscType]) -> OscInput {
-    let path = if let Some(stripped) = addr.strip_prefix(OSC_PREFIX) {
-        stripped
-    } else if let Some(stripped) = addr.strip_prefix("/varda") {
-        // Handle `/varda` without trailing slash (e.g. `/vardacrossfader` should be Unknown)
-        if stripped.is_empty() {
-            return OscInput::Unknown(addr.to_string());
-        }
-        // `/varda` followed by non-`/` → not our namespace
-        return OscInput::Unknown(addr.to_string());
-    } else {
+    // Only the `/varda/` namespace is ours: bare `/varda` and `/varda` followed by
+    // a non-`/` (e.g. `/vardacrossfader`) are both Unknown.
+    let Some(path) = addr.strip_prefix(OSC_PREFIX) else {
         return OscInput::Unknown(addr.to_string());
     };
 
@@ -155,33 +158,41 @@ pub struct OscReceiver {
 
 impl OscReceiver {
     /// Create a new OSC receiver listening on the given port.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `0.0.0.0:{port}` is not a valid socket address, if the
+    /// UDP socket cannot be bound (port already in use, insufficient privileges),
+    /// or if the read timeout cannot be set on it.
     pub fn new(port: u16) -> Result<Self> {
-        let addr =
-            SocketAddrV4::from_str(&format!("0.0.0.0:{}", port)).context("Invalid address")?;
-        let socket = UdpSocket::bind(addr).context(format!("Failed to bind to port {}", port))?;
+        let addr = SocketAddrV4::from_str(&format!("0.0.0.0:{port}")).context("Invalid address")?;
+        let socket = UdpSocket::bind(addr).context(format!("Failed to bind to port {port}"))?;
         socket.set_read_timeout(Some(std::time::Duration::from_millis(100)))?;
 
         let (sender, receiver) = channel();
-        log::info!("OSC receiver listening on port {}", port);
+        log::info!("OSC receiver listening on port {port}");
 
-        let _thread = thread::spawn(move || {
-            Self::receive_loop(socket, sender);
+        let thread = thread::spawn(move || {
+            Self::receive_loop(&socket, &sender);
         });
-        Ok(Self { receiver, _thread })
+        Ok(Self {
+            receiver,
+            _thread: thread,
+        })
     }
 
-    fn receive_loop(socket: UdpSocket, sender: Sender<OscInput>) {
+    fn receive_loop(socket: &UdpSocket, sender: &Sender<OscInput>) {
         let mut buf = [0u8; rosc::decoder::MTU];
         loop {
             match socket.recv_from(&mut buf) {
                 Ok((size, _addr)) => {
                     if let Ok((_, packet)) = rosc::decoder::decode_udp(&buf[..size]) {
-                        Self::handle_packet(packet, &sender);
+                        Self::handle_packet(packet, sender);
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => {
-                    log::error!("OSC receive error: {}", e);
+                    log::error!("OSC receive error: {e}");
                     break;
                 }
             }
@@ -193,7 +204,7 @@ impl OscReceiver {
             OscPacket::Message(msg) => {
                 let input = parse_osc_message(&msg.addr, &msg.args);
                 if let Err(e) = sender.send(input) {
-                    log::warn!("OSC input dropped: {}", e);
+                    log::warn!("OSC input dropped: {e}");
                 }
             }
             OscPacket::Bundle(bundle) => {
@@ -206,17 +217,13 @@ impl OscReceiver {
 
     /// Get the next parsed OSC input (non-blocking).
     pub fn try_recv(&self) -> Option<OscInput> {
-        match self.receiver.try_recv() {
-            Ok(input) => Some(input),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => None,
-        }
+        self.receiver.try_recv().ok()
     }
 }
 
 // ── OscFeedbackSender ──────────────────────────────────────────────
 
-/// Sends OSC feedback to one or more UDP targets (TouchOSC, Lemur, etc.).
+/// Sends OSC feedback to one or more UDP targets (`TouchOSC`, Lemur, etc.).
 /// Echoes parameter changes back so external controllers stay in sync.
 pub struct OscFeedbackSender {
     socket: UdpSocket,
@@ -225,6 +232,10 @@ pub struct OscFeedbackSender {
 
 impl OscFeedbackSender {
     /// Create a feedback sender. Targets are added via [`add_target`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an ephemeral outbound UDP socket cannot be bound.
     pub fn new() -> Result<Self> {
         let socket =
             UdpSocket::bind("0.0.0.0:0").context("Failed to create UDP socket for OSC feedback")?;
@@ -235,12 +246,16 @@ impl OscFeedbackSender {
     }
 
     /// Add a feedback target (ip:port).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `addr` is not a valid `IPv4:port` socket address.
     pub fn add_target(&mut self, addr: &str) -> Result<()> {
         let target =
-            SocketAddrV4::from_str(addr).context(format!("Invalid feedback target: {}", addr))?;
+            SocketAddrV4::from_str(addr).context(format!("Invalid feedback target: {addr}"))?;
         if !self.targets.contains(&target) {
             self.targets.push(target);
-            log::info!("OSC feedback target added: {}", addr);
+            log::info!("OSC feedback target added: {addr}");
         }
         Ok(())
     }
@@ -248,7 +263,7 @@ impl OscFeedbackSender {
     /// Send a parameter change to all feedback targets.
     /// `path` is the param router path (e.g. `deck/abc123/opacity`).
     pub fn send_param(&self, path: &str, value: f32) {
-        let addr = format!("{}{}", OSC_PREFIX, path);
+        let addr = format!("{OSC_PREFIX}{path}");
         let msg = OscMessage {
             addr,
             args: vec![OscType::Float(value)],

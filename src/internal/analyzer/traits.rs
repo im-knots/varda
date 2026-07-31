@@ -13,7 +13,7 @@ use std::time::Instant;
 /// Definition of a scalar output an analyzer can produce.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ScalarOutputDef {
-    /// Output name (e.g. "face_x", "brightness").
+    /// Output name (e.g. "`face_x`", "brightness").
     pub name: String,
     /// Human-readable description.
     pub description: String,
@@ -28,7 +28,7 @@ pub(crate) struct ScalarOutputDef {
 /// Definition of a texture output an analyzer can produce.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TextureOutputDef {
-    /// Output name (e.g. "depth_map", "edge_map").
+    /// Output name (e.g. "`depth_map`", "`edge_map`").
     pub name: String,
     /// Human-readable description.
     pub description: String,

@@ -1,4 +1,4 @@
-//! Surface action processing for VardaApp.
+//! Surface action processing for `VardaApp`.
 
 use super::VardaApp;
 use crate::engine::EngineCommand;
@@ -8,7 +8,7 @@ use crate::renderer::warp::WarpMode;
 
 impl VardaApp {
     /// Generate dome slices: remove old "Dome P*" surfaces, compute warp meshes,
-    /// create new surfaces with pre-computed WarpMesh per projector.
+    /// create new surfaces with pre-computed `WarpMesh` per projector.
     pub(crate) fn generate_dome_slices(&mut self, setup: &crate::renderer::slicer::DomeSetup) {
         // Remove existing dome-generated surfaces (named "Dome P*")
         let dome_uuids: Vec<String> = self

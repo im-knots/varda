@@ -349,12 +349,8 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 let color_a = channel_color(0);
                 let color_b = channel_color(1);
                 ui.label(egui::RichText::new("Crossfader").small());
-                let name_a = data
-                    .channels
-                    .first()
-                    .map(|c| c.name.as_str())
-                    .unwrap_or("A");
-                let name_b = data.channels.get(1).map(|c| c.name.as_str()).unwrap_or("B");
+                let name_a = data.channels.first().map_or("A", |c| c.name.as_str());
+                let name_b = data.channels.get(1).map_or("B", |c| c.name.as_str());
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(name_a).small().color(color_a));
                     let mut crossfader = data.crossfader;
@@ -411,10 +407,10 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
 
                 // Snap buttons
                 ui.horizontal(|ui| {
-                    if ui.small_button(format!("⏮ {}", name_a)).clicked() {
+                    if ui.small_button(format!("⏮ {name_a}")).clicked() {
                         actions.commands.push(EngineCommand::SetCrossfader(0.0));
                     }
-                    if ui.small_button(format!("{} ⏭", name_b)).clicked() {
+                    if ui.small_button(format!("{name_b} ⏭")).clicked() {
                         actions.commands.push(EngineCommand::SetCrossfader(1.0));
                     }
                 });
@@ -425,9 +421,9 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 // Auto-transition
                 let auto_target = if data.crossfader < 0.5 { 1.0 } else { 0.0 };
                 let auto_label = if data.crossfader < 0.5 {
-                    format!("→{}", name_b)
+                    format!("→{name_b}")
                 } else {
-                    format!("→{}", name_a)
+                    format!("→{name_a}")
                 };
 
                 if data.auto_crossfade_active {
@@ -485,7 +481,7 @@ pub(super) fn render_mixer_box(ui: &mut egui::Ui, data: &UIData, actions: &mut U
                 // Transition shader selector
                 let current_label = data.active_transition_name.as_deref().unwrap_or("Opacity");
                 egui::ComboBox::from_id_salt("transition_selector")
-                    .selected_text(egui::RichText::new(format!("🔀 {}", current_label)).small())
+                    .selected_text(egui::RichText::new(format!("🔀 {current_label}")).small())
                     .width(ui.available_width() - 8.0)
                     .show_ui(ui, |ui| {
                         let is_opacity = data.active_transition_name.is_none();
@@ -522,11 +518,10 @@ pub(super) fn render_channel_column(
     let accent = channel_color(ch.ch_idx);
     let ch_idx = ch.ch_idx;
 
-    ui.push_id(format!("ch_{}", ch_idx), |ui| {
+    ui.push_id(format!("ch_{ch_idx}"), |ui| {
         // Detect relevant drags: library sources (not Effect) or deck moves
         let has_source_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
-            .map(|p| !matches!(&*p, LibraryDrag::Effect(_)))
-            .unwrap_or(false);
+            .is_some_and(|p| !matches!(&*p, LibraryDrag::Effect(_)));
         let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
         let has_relevant_drag = has_source_drag || has_deck_drag;
         let is_hovering = has_relevant_drag && ui.rect_contains_pointer(ui.max_rect());
@@ -596,7 +591,7 @@ pub(super) fn render_channel_column(
                             .unwrap_or(0);
                         let mut selected = current;
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            egui::ComboBox::from_id_salt(format!("ch_blend_{}", ch_idx))
+                            egui::ComboBox::from_id_salt(format!("ch_blend_{ch_idx}"))
                                 .selected_text(all_modes[selected].short_name())
                                 .width(50.0)
                                 .show_ui(ui, |ui| {
@@ -621,7 +616,7 @@ pub(super) fn render_channel_column(
 
                 // Deck stack (single column, vertical)
                 egui::ScrollArea::vertical()
-                    .id_salt(format!("ch_scroll_{}", ch_idx))
+                    .id_salt(format!("ch_scroll_{ch_idx}"))
                     .scroll_source(egui::scroll_area::ScrollSource {
                         drag: false,
                         scroll_bar: true,
@@ -652,8 +647,7 @@ pub(super) fn render_channel_column(
                         let is_deck_drag_active =
                             egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
                         let drag_is_same_ch = egui::DragAndDrop::payload::<DeckDrag>(ui.ctx())
-                            .map(|p| ch.decks.iter().any(|d| d.uuid == p.deck_uuid))
-                            .unwrap_or(false);
+                            .is_some_and(|p| ch.decks.iter().any(|d| d.uuid == p.deck_uuid));
 
                         for (i, deck) in ch.decks.iter().enumerate() {
                             // Drop zone BEFORE each deck (for reordering within channel)
@@ -759,7 +753,7 @@ pub(super) fn render_channel_column(
                             if fx_resp.clicked() {
                                 actions.session.select_channel = Some(ch_idx);
                             }
-                            for (_uuid, name, enabled, _) in ch.effects.iter() {
+                            for (_uuid, name, enabled, _) in &ch.effects {
                                 ui.horizontal(|ui| {
                                     let label = if *enabled {
                                         egui::RichText::new(name).small()
@@ -798,8 +792,7 @@ fn render_new_channel_drop_zone(
     side: usize,
 ) {
     let has_library_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
-        .map(|p| !matches!(&*p, LibraryDrag::Effect(_)))
-        .unwrap_or(false);
+        .is_some_and(|p| !matches!(&*p, LibraryDrag::Effect(_)));
     let has_deck_drag = egui::DragAndDrop::has_payload_of_type::<DeckDrag>(ui.ctx());
     let relevant_drag = has_library_drag || has_deck_drag;
     // A deck dropped here needs a channel that does not exist yet, so the move
@@ -918,7 +911,7 @@ pub(super) fn render_deck_thumbnail(
     let slider_width = 18.0;
     let card_width = preview_width + slider_width + 8.0; // preview + slider + padding
 
-    ui.push_id(format!("deck_{}_{}", ch_idx, idx), |ui| {
+    ui.push_id(format!("deck_{ch_idx}_{idx}"), |ui| {
         let border_color = if is_selected {
             accent
         } else {
