@@ -16,13 +16,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Pin the adapter at the Vulkan loader level. mesa-vulkan-drivers ships
-  # several ICDs (radeon/intel/virtio/nouveau alongside lavapipe), so naming
-  # lavapipe keeps the rasterizer identical across runner types. This is the
-  # pin that applies to `GpuContext::new_headless`, which builds its instance
-  # with `Backends::all()` and ignores WGPU_BACKEND.
-  VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-  # egui_kittest *does* honour this (egui-wgpu uses `Backends::from_env()`, and
+  # VK_DRIVER_FILES pins the adapter at the Vulkan loader level, but its value
+  # is the ICD path discovered by the install step below, so it is exported to
+  # $GITHUB_ENV there rather than hardcoded here.
+  #
+  # egui_kittest honours this (egui-wgpu uses `Backends::from_env()`, and
   # defaults to PRIMARY | GL). Restricting it to Vulkan stops the snapshot
   # renderer from picking Mesa's GL/llvmpipe path, which is a different
   # rasterizer and would render the goldens differently.
@@ -72,8 +70,20 @@ jobs:
       - name: Install lavapipe (software Vulkan)
         run: |
           sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
-          test -e "$VK_DRIVER_FILES" \
-            || { echo "::error::mesa-vulkan-drivers did not provide $VK_DRIVER_FILES"; exit 1; }
+          # The ICD filename is not stable across Mesa packaging: noble ships
+          # 24.0 as lvp_icd.x86_64.json, noble-updates ships 25.2 as plain
+          # lvp_icd.json. Glob for it and pin whatever is actually installed —
+          # mesa-vulkan-drivers also ships radeon/intel/virtio/nouveau ICDs, and
+          # naming lavapipe explicitly keeps the rasterizer identical across
+          # runner types.
+          icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
+          if [ ! -e "${icds[0]}" ]; then
+            echo "::error::mesa-vulkan-drivers did not provide a lavapipe ICD"
+            ls -la /usr/share/vulkan/icd.d/
+            exit 1
+          fi
+          echo "Using lavapipe ICD: ${icds[0]}"
+          echo "VK_DRIVER_FILES=${icds[0]}" >> "$GITHUB_ENV"
 
       # Prove the adapter is real before building the suite, and print the
       # summary so a driver/version change is visible in the log.
