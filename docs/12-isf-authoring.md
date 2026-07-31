@@ -4,7 +4,7 @@ Varda shaders are **GLSL 450 (Vulkan)** with an [ISF](https://isf.video)-style J
 
 > **Read this first if you have existing ISF shaders.** Varda uses ISF's *metadata format*, not its *shader language*. A shader downloaded from isf.video, VDMX, or the ISF Editor will **not** load as-is — real ISF is GLSL ES with implicitly injected uniforms, and Varda needs explicit Vulkan declarations. Porting is mechanical and usually takes a few minutes. See [Porting an ISF Shader](#porting-an-isf-shader).
 
-In exchange for not being drop-in ISF, the dialect gets you things ISF can't express: [compute shaders](#compute-shaders) with persistent storage buffers, [analyzer preprocessors](#analyzer-preprocessors-advanced) that inject ML/sensor data as textures, and [phase accumulators](#phase-accumulators) for jump-free speed changes.
+In exchange for not being drop-in ISF, the dialect gets you things ISF can't express: [compute shaders](#compute-shaders) with persistent storage buffers, [analyzer preprocessors](#analyzer-preprocessors) that inject ML/sensor data as textures, and [phase accumulators](#phase-accumulators) for jump-free speed changes.
 
 ## Shader Types
 
@@ -325,7 +325,26 @@ For feedback effects, simulations, and post-processing chains, declare multiple 
 - **Persistent** buffers survive across frames — essential for feedback loops and simulations (Game of Life, reaction-diffusion)
 - The final pass (empty `{}`) renders to the output
 - Access pass buffers as `texture2D` samplers with the target name
-- Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers. Only `$WIDTH`, `$HEIGHT`, `$WIDTH/N` and `$WIDTH*N` with integer `N` are parsed — `$WIDTH/2.0` and arithmetic like `max($WIDTH,$HEIGHT)` are not, and fall back to full resolution.
+- Optional `WIDTH`/`HEIGHT` expressions: `"$WIDTH/2"` for half-resolution buffers. Only `$WIDTH`, `$HEIGHT`, `$WIDTH/N` and `$WIDTH*N` with integer `N` are parsed — `$WIDTH/2.0` and arithmetic like `max($WIDTH,$HEIGHT)` are not, and fall back to full resolution. A bare integer literal (`"WIDTH": "32"`) sets a fixed size, which is how you build a reduction pyramid.
+
+> **`RENDERSIZE` is the size of the pass you are currently rendering**, not the deck's. In a
+> `"WIDTH": "1", "HEIGHT": "1"` pass, `RENDERSIZE` is `(1, 1)`. Anything that needs the deck's
+> dimensions or aspect ratio — a letterbox fit, a screen-space offset — has to be computed in a
+> full-size pass. `eyes_depth.fs` carries its gaze target in sensor space through a 1x1 pass and
+> converts to deck space in the final pass for exactly this reason.
+
+**Every pass buffer is double-buffered**, `PERSISTENT` or not. `PERSISTENT` controls whether the
+contents mean anything across frames, not the buffering strategy — a pass reads the last value
+written to its target and writes to the other texture. This exists because the bind group binds
+*all* pass buffers as sampled textures on every pass, so a single-textured target would be a
+colour attachment and a sampled resource at the same time, which wgpu rejects outright. Budget
+two textures per declared pass when sizing large buffers.
+
+**Reductions.** A fragment shader cannot reduce an image to one value in a single pass, and doing
+it inline in the final pass repeats the whole scan for every output pixel. Use fixed-size passes
+as a pyramid instead: `eyes_depth.fs` tallies the sensor image into a 32x32 buffer, reduces that
+to a 1x1 gaze target, and reads one texel in the final pass — about 110k texture fetches per
+frame, versus billions for the naive version.
 - Optional `FLOAT: true` for 32-bit float buffers (HDR, simulation data)
 
 ### Two behaviours that will surprise you
@@ -585,9 +604,11 @@ Two reference compute shaders ship with Varda, each demonstrating a different id
 
 Read `black_hole_sim.comp` for persistence and binning; read `cosmic_web.comp` for the multi-pass "generate → deposit → render" split and how to keep a sim deterministic and scrub-safe.
 
-## Analyzer Preprocessors (Advanced)
+## Analyzer Preprocessors
 
-Some effects need **structured data about the input frame** that plain GLSL can't compute — face detection bounding boxes, depth maps, segmentation masks, optical flow fields. Varda's analyzer/preprocessor system bridges this gap: CPU-side analysis (often ML-powered via ONNX Runtime) produces data textures that are automatically injected into your shader as additional texture bindings.
+Some effects need **structured data about the input frame** that plain GLSL can't compute — face detection bounding boxes, depth maps, segmentation masks, optical flow fields. A **preprocessor** runs an analyzer and injects its output into your shader as an additional texture binding, which you read with ordinary texture samples.
+
+> This section covers the **authoring mechanics** — declaring preprocessors and reading their textures in GLSL. For the analyzer engine itself (how it runs, the two output paths, the full type catalogue, the depth-sensor performer controls, and the HTTP API), see [Frame Analysis & Preprocessors](14-frame-analysis.md).
 
 This is an advanced feature for shader authors building ML integrations, sensor-driven effects, or rich data processing pipelines.
 
@@ -628,11 +649,55 @@ Preprocessor textures are bound **after** imported textures and **before** user 
 
 ### Available Analyzer Types
 
+The two analyzers you can request as preprocessors today:
+
 | Type | Outputs | Description |
 |------|---------|-------------|
-| `face_detect` | `landmarks` (wireframe overlay), `face_data` (bbox/scores), `dossier_text` (character indices) | ONNX-based face detection with 468-point mesh landmarks |
+| `face_detect` | `landmarks` (wireframe overlay), `face_data` (bbox/scores), `dossier_text` (character indices) | ONNX-based face detection with 478-point mesh landmarks |
+| `depth_sensor` | `depth`, `mask`, `motion`, `rgb` | Live depth camera (Kinect v1). **Required** — see below |
 
-Additional analyzer types (`depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`) are planned.
+Additional analyzer types (`depth_estimate`, `segmentation`, `optical_flow`, `edge_detect`) are planned. See [Frame Analysis & Preprocessors](14-frame-analysis.md#whats-implemented) for the authoritative implemented/planned list and the scalar outputs the same analyzers expose to modulation.
+
+### `depth_sensor` — live depth camera
+
+Unlike the analyzers above, `depth_sensor` reads a physical device rather than your deck's own
+frame, and runs entirely on the GPU — the sensor's pixels never touch host memory. Declare one
+entry per output you want:
+
+```json
+"PREPROCESSORS": [
+  {"NAME": "depth",  "TYPE": "depth_sensor"},
+  {"NAME": "mask",   "TYPE": "depth_sensor"},
+  {"NAME": "motion", "TYPE": "depth_sensor"},
+  {"NAME": "rgb",    "TYPE": "depth_sensor", "OPTIONS": {"device": 0}}
+]
+```
+
+All four are at the sensor's native resolution (640×480 on Kinect v1) and are filterable, so
+sample them with normalized UVs:
+
+| `NAME` | Format | Contents |
+|---|---|---|
+| `depth` | `R16Float` | Distance normalized to `0..1` across the deck's near/far range. **`0.0` means invalid** — out of range, or a hole the sensor could not resolve. Hole-filled and temporally smoothed |
+| `mask` | `R8Unorm` | Feathered silhouette occupancy: `1.0` on a subject, `0.0` on background |
+| `motion` | `RG16Float` | Approximate screen-space velocity of the depth surface, signed, UV units per second. Use this to make things react to *movement* rather than mere presence |
+| `rgb` | colour path | The sensor's colour stream. Only approximately aligned with `depth` — the IR and colour cameras are physically offset |
+
+`OPTIONS: {"device": N}` pins a specific sensor; omit it to take the first one detected.
+
+**This preprocessor is required.** Unlike every other preprocessor, a shader declaring
+`depth_sensor` will **refuse to load** if no depth sensor is attached, with an error toast naming
+the shader. A black fallback texture is a sensible answer for "depth estimation is unavailable";
+it is a useless one for a shader whose entire content is a silhouette. Note the `depth` feature
+is compiled out on Windows and macOS Intel, so these shaders never load there.
+
+Runtime framing — near/far clip, smoothing, hole fill, mask feather, motion gain, and mirror — is
+set per deck in the bottom bar and is MIDI/OSC-mappable at `deck/<uuid>/depth_prepro/<param>`. See
+[Frame Analysis → Depth Sensor](14-frame-analysis.md#depth-sensor-performers) for the full control
+reference and performer framing guidance.
+
+See `shaders/liquid_light_depth.fs` for a worked example: an advected fluid whose flow is driven
+by `mask` gradients and `motion`, rendering performers as flowing dye outlines.
 
 ### Shader Access
 
@@ -659,14 +724,7 @@ void main() {
 - Analyzers start automatically when a shader declaring them is loaded onto a deck
 - Multiple shaders requesting the same analyzer type share a single instance (refcounted)
 - When the last shader using an analyzer is removed, the analyzer stops and frees resources
-- If an analyzer fails to initialize (missing model file, unsupported platform), the shader still loads — preprocessor textures fall back to 1×1 black
-
-### Use Cases
-
-- **ML-powered effects**: face detection overlays, body segmentation masks, depth-aware fog
-- **Sensor integration**: external data sources encoded as textures (hardware sensors, network data)
-- **Rich data processing**: any CPU-side computation too complex for fragment shaders (physics simulations, pathfinding, text layout)
-
+- If an analyzer fails to initialize (missing model file, unsupported platform), the shader still loads — preprocessor textures fall back to 1×1 black. The exception is `depth_sensor`, which is *required*: if the device cannot be acquired the shader does not load at all
 
 ## Hot-Reload
 

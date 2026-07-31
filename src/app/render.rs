@@ -342,6 +342,32 @@ impl VardaApp {
                         }
                     };
                 }
+
+                // Shader decks with a `depth_sensor` preprocessor read the same
+                // shared sensor textures, but convert them via their own GPU
+                // passes rather than reprojecting a point cloud. The manager
+                // lives here, so the views are pushed down once per frame — the
+                // deck layer never reaches up into a device.
+                // See spec/depth-sensor-preprocessor.md.
+                if let Some(state) = &mut slot.deck.depth_prepro {
+                    let id = state.sensor_id;
+                    state.input = match (
+                        self.depth_manager.depth_view(id),
+                        self.depth_manager.rgb_view(id),
+                        self.depth_manager.frame_generation(id),
+                    ) {
+                        (Some(depth), Some(rgb), Some(generation)) => {
+                            Some(crate::deck::DepthPreprocessInput {
+                                depth_view: depth.clone(),
+                                rgb_view: rgb.clone(),
+                                generation,
+                                frame_dt: self.depth_manager.frame_dt(id).unwrap_or(1.0 / 30.0),
+                                connected: self.depth_manager.is_connected(id),
+                            })
+                        }
+                        _ => None,
+                    };
+                }
             }
         }
 
@@ -385,6 +411,52 @@ impl VardaApp {
             &self.preview_channels,
         ) {
             log::error!("Failed to render mixer: {}", e);
+        }
+
+        self.report_gpu_faults();
+    }
+
+    /// Surface quarantined decks to the performer, and drain anything the GPU
+    /// error guard caught that no deck owned.
+    ///
+    /// Toasts are keyed per deck so a shader failing every frame reports once
+    /// rather than burying the notification history.
+    /// See spec/error-handling.md § Shader Errors.
+    fn report_gpu_faults(&mut self) {
+        let quarantined: Vec<(String, String, String)> = self
+            .mixer
+            .channels()
+            .iter()
+            .flat_map(|ch| ch.decks.iter())
+            .filter_map(|slot| {
+                slot.deck.gpu_error().map(|err| {
+                    (
+                        slot.deck.uuid().to_string(),
+                        slot.deck.source_name().to_string(),
+                        err.to_string(),
+                    )
+                })
+            })
+            .collect();
+
+        for (uuid, name, error) in quarantined {
+            self.session.notifications.notify_once(
+                format!("gpu_fault:{uuid}"),
+                crate::notifications::NotificationLevel::Error,
+                format!("'{name}' disabled — GPU error. Deck frozen; the rest of the show is unaffected. {error}"),
+            );
+        }
+
+        // Faults raised outside any deck (channel/master effect chains, output
+        // compositing). Nothing to quarantine, but they must not vanish.
+        for fault in self.context.errors.take_faults() {
+            if fault.context.is_none() {
+                self.session.notifications.notify_once(
+                    format!("gpu_fault_global:{}", fault.message),
+                    crate::notifications::NotificationLevel::Error,
+                    format!("GPU error: {}", fault.message),
+                );
+            }
         }
     }
 

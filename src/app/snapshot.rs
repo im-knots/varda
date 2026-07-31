@@ -75,6 +75,41 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                                 phase: at.phase,
                             });
 
+                    let point_cloud_params = matches!(
+                        slot.deck.external_source_kind(),
+                        Some(crate::deck::ExternalSourceKind::DepthSensor(_))
+                    )
+                    .then(|| {
+                        let p = |name: &str| slot.deck.depth_param(name).unwrap_or_default();
+                        PointCloudParamsSnapshot {
+                            orbit_yaw: p("orbit_yaw"),
+                            orbit_pitch: p("orbit_pitch"),
+                            zoom: p("zoom"),
+                            point_size: p("point_size"),
+                            depth_min: p("depth_min"),
+                            depth_max: p("depth_max"),
+                            seed: p("seed"),
+                            drift: p("drift"),
+                            disruption: p("disruption"),
+                            color_mode: slot.deck.point_cloud_params.color_mode.as_u8(),
+                        }
+                    });
+
+                    let depth_prepro_params =
+                        slot.deck
+                            .depth_prepro
+                            .as_ref()
+                            .map(|s| DepthPreproParamsSnapshot {
+                                sensor_name: s.sensor_name.clone(),
+                                near: normalized_prepro_param(&s.params, "near"),
+                                far: normalized_prepro_param(&s.params, "far"),
+                                smoothing: normalized_prepro_param(&s.params, "smoothing"),
+                                hole_fill: normalized_prepro_param(&s.params, "hole_fill"),
+                                mask_feather: normalized_prepro_param(&s.params, "mask_feather"),
+                                motion_gain: normalized_prepro_param(&s.params, "motion_gain"),
+                                mirror: s.params.mirror,
+                            });
+
                     let effective_opacity = match slot.transition_phase() {
                         DeckTransitionPhase::Transitioning { progress } => {
                             slot.opacity * (1.0 - progress as f32)
@@ -94,6 +129,9 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                             slot.deck.external_source_kind(),
                             Some(crate::deck::ExternalSourceKind::DepthSensor(_))
                         ),
+                        point_cloud_params,
+                        has_depth_prepro: slot.deck.depth_prepro.is_some(),
+                        depth_prepro_params,
                         is_html_interactive: {
                             #[cfg(feature = "html")]
                             {
@@ -225,6 +263,15 @@ fn build_shader_params(
         shader_name: shader_name.to_string(),
         params: params_vec,
     }
+}
+
+/// Normalized (`0..1`) value of a depth-preprocessor param. `name` is one of the
+/// router names in `src/internal/depth/preprocess.rs`; unknown names read as `0`.
+fn normalized_prepro_param(
+    params: &crate::depth::preprocess::DepthPreprocessParams,
+    name: &str,
+) -> f32 {
+    params.normalized_param(name).unwrap_or_default()
 }
 
 fn build_sequence_snapshots(mixer: &crate::mixer::Mixer) -> Vec<SequenceSnapshot> {

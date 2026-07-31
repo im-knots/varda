@@ -189,6 +189,12 @@ pub struct DeckSnapshot {
     pub is_html_interactive: bool,
     /// True when this deck's source is a depth sensor (point-cloud) source.
     pub is_depth_sensor: bool,
+    /// Point-cloud controls (None = not a depth-sensor source).
+    pub point_cloud_params: Option<PointCloudParamsSnapshot>,
+    /// True when this deck has a `depth_sensor` shader preprocessor attached.
+    pub has_depth_prepro: bool,
+    /// Depth-preprocessor controls (None = no preprocessor attached).
+    pub depth_prepro_params: Option<DepthPreproParamsSnapshot>,
     pub opacity: f32,
     pub effective_opacity: f32,
     pub blend_mode: BlendMode,
@@ -212,6 +218,41 @@ pub struct DeckSnapshot {
     /// Smoothed FPS from actual deck render pipeline timing
     pub fps: f32,
     pub running_analyzers: Vec<RunningAnalyzerSnapshot>,
+}
+
+/// Router-exposed `deck/<uuid>/depth/*` values, normalized to `0..1` so a
+/// consumer can render faders without reaching into the engine.
+/// See spec/depth-sensors.md.
+#[derive(Clone, Serialize)]
+pub struct PointCloudParamsSnapshot {
+    pub orbit_yaw: f32,
+    pub orbit_pitch: f32,
+    pub zoom: f32,
+    pub point_size: f32,
+    pub depth_min: f32,
+    pub depth_max: f32,
+    pub seed: f32,
+    pub drift: f32,
+    pub disruption: f32,
+    /// 0 = Rgb, 1 = DepthRamp, 2 = Solid.
+    pub color_mode: u8,
+}
+
+/// Router-exposed `deck/<uuid>/depth_prepro/*` values, normalized to `0..1` so a
+/// consumer can render faders without reaching into the engine.
+/// See spec/depth-sensor-preprocessor.md.
+#[derive(Clone, Serialize)]
+pub struct DepthPreproParamsSnapshot {
+    /// Name of the sensor the preprocessor acquired.
+    pub sensor_name: String,
+    pub near: f32,
+    pub far: f32,
+    pub smoothing: f32,
+    pub hole_fill: f32,
+    pub mask_feather: f32,
+    pub motion_gain: f32,
+    /// Bucketed from the normalized `mirror` fader.
+    pub mirror: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -816,7 +857,30 @@ mod tests {
             name: "Sine Wave".into(),
             is_html: false,
             is_html_interactive: false,
-            is_depth_sensor: false,
+            is_depth_sensor: true,
+            point_cloud_params: Some(PointCloudParamsSnapshot {
+                orbit_yaw: 0.5,
+                orbit_pitch: 0.5,
+                zoom: 0.25,
+                point_size: 0.1,
+                depth_min: 0.05,
+                depth_max: 0.5,
+                seed: 0.0,
+                drift: 0.25,
+                disruption: 0.75,
+                color_mode: 1,
+            }),
+            has_depth_prepro: true,
+            depth_prepro_params: Some(DepthPreproParamsSnapshot {
+                sensor_name: "Kinect".into(),
+                near: 0.0625,
+                far: 0.5,
+                smoothing: 0.5,
+                hole_fill: 0.5,
+                mask_feather: 0.375,
+                motion_gain: 0.4,
+                mirror: true,
+            }),
             opacity: 1.0,
             effective_opacity: 0.5,
             blend_mode: BlendMode::Normal,
@@ -842,5 +906,12 @@ mod tests {
         assert!(!d.solo);
         assert!((d.effective_opacity - 0.5).abs() < 1e-5);
         assert!((d.fps - 59.5).abs() < 1e-5);
+        let prepro = d.depth_prepro_params.expect("preprocessor params present");
+        assert_eq!(prepro.sensor_name, "Kinect");
+        assert!(prepro.mirror);
+        assert!((prepro.far - 0.5).abs() < 1e-5);
+        let pc = d.point_cloud_params.expect("point-cloud params present");
+        assert_eq!(pc.color_mode, 1);
+        assert!((pc.disruption - 0.75).abs() < 1e-5);
     }
 }

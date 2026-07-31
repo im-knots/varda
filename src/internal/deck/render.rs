@@ -2,7 +2,7 @@
 
 use super::{Deck, DeckSource, ExternalSourceKind, PassBuffer, PreprocessorSlot, ScalingMode};
 use crate::analyzer::traits::TextureData;
-use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers};
+use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers, PreprocessorCategory};
 use crate::audio::AudioData;
 use crate::isf::{ISFPass, PhaseInput};
 use crate::modulation::ModulationEngine;
@@ -194,6 +194,16 @@ impl Deck {
         // Deduplicate by analyzer_type and request each
         let mut seen = std::collections::HashSet::new();
         for (analyzer_type, options) in &needed {
+            // GPU-inline preprocessors have no factory and no worker thread —
+            // their passes are driven from the deck render path. Handing one to
+            // `DeckAnalyzers` would log a spurious failure every load.
+            // See /spec/effect-preprocessing.md § Preprocessor Categories.
+            if registry
+                .category_for(analyzer_type)
+                .is_some_and(PreprocessorCategory::is_gpu)
+            {
+                continue;
+            }
             if seen.insert(analyzer_type.clone())
                 && self.analyzers.latest_snapshot(analyzer_type).is_none()
             {
@@ -219,7 +229,67 @@ impl Deck {
     }
 
     /// Render the deck with a custom param prefix for modulation key lookup
+    /// Render this deck, containing any GPU error it raises.
+    ///
+    /// wgpu reports validation errors through a device-wide handler rather than
+    /// a `Result`, and the default handler panics — which on the render thread
+    /// ends the show. A malformed shader is a user-authored input, so it must be
+    /// survivable: the deck is quarantined, keeps displaying its last good
+    /// frame, and everything else carries on rendering.
+    /// See spec/error-handling.md § Shader Errors.
     pub fn render_with_prefix(
+        &mut self,
+        context: &GpuContext,
+        audio_data: &AudioData,
+        modulation: &ModulationEngine,
+        param_prefix: &str,
+        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+        gpu_timing: Option<(&wgpu::QuerySet, u32, u32)>,
+    ) -> Result<()> {
+        if self.gpu_error.is_some() {
+            // Quarantined. The deck's texture still holds its last good frame,
+            // which is the "freeze the last good frame" fallback the spec allows.
+            return Ok(());
+        }
+
+        let before = cmd_buffers.len();
+        let result = {
+            let scope = context.errors.scope(&format!("deck {}", self.uuid));
+            let result = self.render_with_prefix_inner(
+                context,
+                audio_data,
+                modulation,
+                param_prefix,
+                cmd_buffers,
+                gpu_timing,
+            );
+            match scope.faulted() {
+                Some(message) => Err(message),
+                None => Ok(result),
+            }
+        };
+
+        match result {
+            Ok(inner) => inner,
+            Err(message) => {
+                // Drop anything this deck encoded before failing: submitting a
+                // partial frame from a deck we are about to quarantine risks
+                // raising the same error again downstream.
+                cmd_buffers.truncate(before);
+                log::error!(
+                    "Deck '{}' ({}) raised a GPU error and was disabled: {}",
+                    self.uuid,
+                    self.source_name,
+                    message
+                );
+                self.gpu_error = Some(message);
+                Ok(())
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_with_prefix_inner(
         &mut self,
         context: &GpuContext,
         audio_data: &AudioData,
@@ -297,6 +367,10 @@ impl Deck {
         if is_depth {
             self.render_point_cloud(context, source_to_b, time, cmd_buffers);
         }
+
+        // Depth-sensor preprocessor passes run before the shader so its bindings
+        // hold this frame's fields. See spec/depth-sensor-preprocessor.md.
+        self.run_depth_preprocess(context, cmd_buffers);
 
         let generator_target = if source_to_b {
             &self.texture_b_view
@@ -1135,6 +1209,63 @@ impl Deck {
             cmd_buffers,
         );
         self.point_cloud_pipeline = Some(pipeline);
+    }
+
+    /// Run the depth-sensor preprocessor's conversion passes for this frame.
+    ///
+    /// No-op unless a sensor frame has actually arrived since the last run: the
+    /// sensor is ~30 Hz and the deck is typically 60, so gating on the manager's
+    /// upload counter halves this work. Also a no-op while the sensor reports
+    /// disconnected, which freezes the outputs at their last good values rather
+    /// than tearing down a live deck. See spec/depth-sensor-preprocessor.md.
+    fn run_depth_preprocess(
+        &mut self,
+        context: &GpuContext,
+        cmd_buffers: &mut Vec<wgpu::CommandBuffer>,
+    ) {
+        let Some(state) = &mut self.depth_prepro else {
+            return;
+        };
+        let Some(input) = &state.input else {
+            return;
+        };
+
+        if !input.connected {
+            if !state.warned_disconnected {
+                log::warn!(
+                    "Deck '{}': depth sensor {} disconnected — preprocessor outputs frozen",
+                    self.uuid,
+                    state.sensor_id
+                );
+                state.warned_disconnected = true;
+            }
+            return;
+        }
+        if state.warned_disconnected {
+            log::info!(
+                "Deck '{}': depth sensor {} reconnected",
+                self.uuid,
+                state.sensor_id
+            );
+            state.warned_disconnected = false;
+        }
+
+        if state.last_generation == Some(input.generation) {
+            return;
+        }
+        state.last_generation = Some(input.generation);
+
+        state
+            .pipeline
+            .update_uniform(&context.queue, &state.params, input.frame_dt);
+        let rgb = state.wants_rgb.then_some(&input.rgb_view);
+        // Split the borrow: `run` needs `&mut pipeline` while `input` is behind
+        // the same `&mut state`, so clone the cheap view handles first.
+        let depth_view = input.depth_view.clone();
+        let rgb_view = rgb.cloned();
+        state
+            .pipeline
+            .run(&context.device, &depth_view, rgb_view.as_ref(), cmd_buffers);
     }
 
     /// Blit an external source (Camera, NDI, Syphon) with scaling to the generator target.

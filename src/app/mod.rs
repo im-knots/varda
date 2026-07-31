@@ -749,6 +749,12 @@ impl VardaApp {
         self.session.notifications.info(message);
     }
 
+    /// Surface an error to the performer. Used by consumers that handle a
+    /// failure outside the command bus (which toasts errors on their behalf).
+    pub fn notify_error(&mut self, message: impl Into<String>) {
+        self.session.notifications.error(message);
+    }
+
     /// Close an output window by its winit WindowId. Returns the name if found.
     pub fn close_output_window_by_id(
         &mut self,

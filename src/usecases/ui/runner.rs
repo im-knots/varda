@@ -1807,6 +1807,17 @@ impl UIRunner {
                             );
                             continue;
                         };
+                        // Same post-construction wiring the synchronous
+                        // `add_deck` command performs — analyzer startup and
+                        // required-device acquisition. Without it a shader
+                        // dropped from the Library renders against blank
+                        // preprocessor textures with no error shown.
+                        let mut deck = deck;
+                        if let Err(e) = varda.finalize_new_deck(&mut deck) {
+                            log::error!("Failed to add deck: {}", e);
+                            varda.notify_error(format!("Failed to add deck: {e}"));
+                            continue;
+                        }
                         let deck_uuid = deck.uuid().to_string();
                         if let Some(ch) = varda.mixer_mut().channel_mut(ch_idx) {
                             let idx = ch.add_deck(deck);

@@ -15,6 +15,7 @@ pub mod backend;
 #[cfg(feature = "depth")]
 pub mod freenect_backend;
 pub mod point_cloud;
+pub mod preprocess;
 
 #[cfg(feature = "depth")]
 use anyhow::Context;
@@ -26,6 +27,10 @@ use std::sync::{Arc, Mutex};
 
 /// Opaque depth-sensor identifier.
 pub type DepthSensorId = u32;
+
+/// Assumed inter-frame interval before two frames have been observed
+/// (Kinect v1 runs at ~30 Hz).
+const DEFAULT_FRAME_DT: f32 = 1.0 / 30.0;
 
 /// An active depth capture session with its shared GPU textures.
 struct ActiveSensor {
@@ -42,6 +47,14 @@ struct ActiveSensor {
     stop_flag: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Bumped on every GPU upload. Consumers that derive work from the sensor
+    /// image gate on this so a 30 Hz sensor does not drive 60 Hz of GPU passes.
+    generation: u64,
+    /// Wall-clock instant of the previous upload, for real inter-frame `dt`.
+    last_upload: Option<std::time::Instant>,
+    /// Seconds between the last two uploads. Falls back to the Kinect v1 rate
+    /// until two frames have arrived.
+    frame_dt: f32,
 }
 
 /// Manages depth-sensor enumeration, capture sessions, and shared textures.
@@ -130,7 +143,16 @@ impl DepthSensorManager {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: crate::renderer::context::COLOR_PATH_FORMAT,
+            // 8-bit sRGB, matching the bytes the backend actually delivers and
+            // the format `CameraManager` uses for the same kind of source.
+            //
+            // This was `COLOR_PATH_FORMAT` (`Rgba16Float`, 8 bytes/texel) while
+            // `upload_rgb` wrote RGBA8 rows at `width * 4`, so the first colour
+            // frame from a real sensor aborted the process on a wgpu validation
+            // error. The mock backend yields `rgb: None`, so no test reached it.
+            // `Srgb` rather than plain `Unorm` so the hardware decodes to linear
+            // light on sample — see spec/unified-color-pipeline.md.
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -209,6 +231,9 @@ impl DepthSensorManager {
                 stop_flag,
                 connected,
                 thread: Some(thread),
+                generation: 0,
+                last_upload: None,
+                frame_dt: DEFAULT_FRAME_DT,
             },
         );
         Ok((width, height))
@@ -249,6 +274,12 @@ impl DepthSensorManager {
             if let Some(rgb) = &frame.rgb {
                 Self::upload_rgb(active, rgb, queue);
             }
+            let now = std::time::Instant::now();
+            if let Some(prev) = active.last_upload {
+                active.frame_dt = now.duration_since(prev).as_secs_f32().max(1.0e-4);
+            }
+            active.last_upload = Some(now);
+            active.generation = active.generation.wrapping_add(1);
         }
     }
 
@@ -322,6 +353,22 @@ impl DepthSensorManager {
     /// Resolution of an active sensor.
     pub fn resolution(&self, id: DepthSensorId) -> Option<(u32, u32)> {
         self.active.get(&id).map(|a| (a.width, a.height))
+    }
+
+    /// Upload counter for an active sensor, bumped once per new frame.
+    ///
+    /// Consumers that derive GPU work from the sensor image compare this against
+    /// the value they last processed and skip when it is unchanged, so a 30 Hz
+    /// sensor does not drive 60 Hz of redundant passes.
+    pub fn frame_generation(&self, id: DepthSensorId) -> Option<u64> {
+        self.active.get(&id).map(|a| a.generation)
+    }
+
+    /// Measured seconds between the last two frame uploads. Use this rather than
+    /// the render `dt` for rate calculations — they differ whenever the deck runs
+    /// faster than the sensor.
+    pub fn frame_dt(&self, id: DepthSensorId) -> Option<f32> {
+        self.active.get(&id).map(|a| a.frame_dt)
     }
 
     /// Whether a sensor is currently producing frames.
@@ -422,6 +469,41 @@ mod tests {
     }
 
     #[test]
+    fn frame_generation_advances_only_on_a_new_frame() {
+        let Some(gpu) = headless() else { return };
+        let mut mgr = DepthSensorManager::new();
+        mgr.open_mock(0, 32, 24, &gpu.device).expect("open mock");
+        assert_eq!(mgr.frame_generation(0), Some(0));
+        assert!(mgr.frame_dt(0).is_some());
+
+        // The mock capture thread needs a moment to publish its first frame.
+        let mut first = 0;
+        for _ in 0..200 {
+            mgr.update(&gpu.queue);
+            first = mgr.frame_generation(0).expect("active");
+            if first > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(first > 0, "mock backend never produced a frame");
+
+        // A second update with no newly captured frame must not advance the
+        // counter — that is what lets consumers skip redundant GPU work.
+        mgr.update(&gpu.queue);
+        let second = mgr.frame_generation(0).expect("active");
+        assert!(
+            second == first || second == first + 1,
+            "generation jumped {first} -> {second} without new frames"
+        );
+
+        // Unknown sensors report nothing rather than a misleading zero.
+        assert_eq!(mgr.frame_generation(99), None);
+        assert_eq!(mgr.frame_dt(99), None);
+        mgr.release(0);
+    }
+
+    #[test]
     fn refcount_shares_one_session_across_consumers() {
         let Some(gpu) = headless() else { return };
         let mut mgr = DepthSensorManager::new();
@@ -441,10 +523,55 @@ mod tests {
         let Some(gpu) = headless() else { return };
         let mut mgr = DepthSensorManager::new();
         mgr.open_mock(0, 16, 16, &gpu.device).expect("open mock");
-        // Give the capture thread a moment to produce a frame.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        mgr.update(&gpu.queue);
+        // Wait for a real frame rather than a fixed sleep: the upload is the
+        // thing under test, and a `continue` on an empty slot would pass
+        // vacuously. The mock now produces colour, so this exercises the RGB
+        // path too — a wrong row stride aborts the process here.
+        let mut uploaded = false;
+        for _ in 0..200 {
+            mgr.update(&gpu.queue);
+            if mgr.frame_generation(0) == Some(0) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                continue;
+            }
+            uploaded = true;
+            break;
+        }
+        assert!(uploaded, "mock backend never produced a frame to upload");
         gpu.queue.submit(std::iter::empty());
+        mgr.release(0);
+    }
+
+    #[test]
+    fn shared_texture_formats_match_the_bytes_the_backend_delivers() {
+        // Guard for the class of bug that took down a live session: the colour
+        // texture was `Rgba16Float` (8 bytes/texel) while `upload_rgb` wrote
+        // RGBA8 rows at `width * 4`, which wgpu rejects as a short row. Depth is
+        // `u16`, colour is RGBA8 — assert both against the frame layout rather
+        // than trusting the two sites to stay in agreement.
+        let Some(gpu) = headless() else { return };
+        let mut mgr = DepthSensorManager::new();
+        mgr.open_mock(0, 16, 16, &gpu.device).expect("open mock");
+        let active = mgr.active.get(&0).expect("session open");
+
+        let depth_bpt = active
+            .depth_texture
+            .format()
+            .block_copy_size(None)
+            .expect("uncompressed");
+        assert_eq!(depth_bpt, 2, "depth frames are Vec<u16>");
+
+        let rgb_bpt = active
+            .rgb_texture
+            .format()
+            .block_copy_size(None)
+            .expect("uncompressed");
+        assert_eq!(rgb_bpt, 4, "colour frames are RGBA8");
+        assert!(
+            active.rgb_texture.format().is_srgb(),
+            "sensor colour is sRGB-encoded and must decode to linear light on \
+             sample — see spec/unified-color-pipeline.md"
+        );
         mgr.release(0);
     }
 }

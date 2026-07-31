@@ -44,6 +44,9 @@ pub struct GpuContext {
     /// `texture_format`, which is the surface/presentation format.
     pub compositing_format: wgpu::TextureFormat,
     pub timestamp_supported: bool,
+    /// Catches GPU errors that would otherwise abort the process, and attributes
+    /// them to whatever was being drawn. See spec/error-handling.md.
+    pub errors: super::gpu_guard::GpuErrorGuard,
 }
 
 /// Window surface for presentation — surface, swapchain config, and size.
@@ -171,6 +174,11 @@ impl GpuContext {
 
         surface.configure(&device, &surface_config);
 
+        // Installed before anything renders: wgpu's default handler panics, and
+        // a panic on the render thread ends the performance.
+        let errors = super::gpu_guard::GpuErrorGuard::new();
+        errors.install(&device);
+
         let gpu = GpuContext {
             instance,
             adapter,
@@ -179,6 +187,7 @@ impl GpuContext {
             texture_format: surface_format,
             compositing_format: COLOR_PATH_FORMAT,
             timestamp_supported,
+            errors,
         };
         let win_surface = WindowSurface {
             surface,
@@ -265,6 +274,9 @@ impl GpuContext {
         }))
         .context("Failed to create headless device")?;
 
+        let errors = super::gpu_guard::GpuErrorGuard::new();
+        errors.install(&device);
+
         Ok(GpuContext {
             instance,
             adapter,
@@ -273,6 +285,7 @@ impl GpuContext {
             texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
             compositing_format: COLOR_PATH_FORMAT,
             timestamp_supported,
+            errors,
         })
     }
 

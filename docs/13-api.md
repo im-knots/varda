@@ -191,7 +191,7 @@ curl -X DELETE http://localhost:8080/api/mixer/lut
 
 ### Create a macro and bind a target
 
-A macro drives many parameters from one control. Create it, add a target, then drive it live (or map `macro/<uuid>/value` to MIDI/OSC). See [Macro Controls](15-macro-controls.md).
+A macro drives many parameters from one control. Create it, add a target, then drive it live (or map `macro/<uuid>/value` to MIDI/OSC). See [Control Surfaces & Macros](06-control-surfaces.md#macros).
 
 ```sh
 # Create a knob macro (returns its uuid)
@@ -384,10 +384,12 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 
 ### Analyzers
 
+Frame analysis (brightness, face detection, depth sensor). See [Frame Analysis & Preprocessors](14-frame-analysis.md#analyzer-http-api) for request bodies and workflow.
+
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/decks/{deck_uuid}/analyzers` |  |
-| `DELETE` | `/api/decks/{deck_uuid}/analyzers/{analyzer_type}` |  |
+| `POST` | `/api/decks/{deck_uuid}/analyzers` | Attach an analyzer to a deck (reference-counted). Body: `{"analyzer_type", "options"}`. |
+| `DELETE` | `/api/decks/{deck_uuid}/analyzers/{analyzer_type}` | Release an analyzer; it stops when the last consumer detaches. |
 | `GET` | `/api/library/analyzers` | Analyzer types a deck can attach, with their names and parameter descriptors. |
 
 ### Audio
@@ -761,4 +763,4 @@ a trusted LAN. Do not expose the port to untrusted networks.
 
 ---
 
-[← Prev: ISF Shader Authoring](12-isf-authoring.md) · [Home](README.md)
+[← Prev: ISF Shader Authoring](12-isf-authoring.md) · [Home](README.md) · [Next: Frame Analysis & Preprocessors →](14-frame-analysis.md)

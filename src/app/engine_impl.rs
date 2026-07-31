@@ -3,6 +3,7 @@
 use super::resolve::EffectChain;
 use super::VardaApp;
 use crate::deck::{Deck, Effect};
+use crate::depth::preprocess::{AcquiredSensor, DepthPreprocessParams};
 use crate::engine::traits::*;
 use crate::engine::types::*;
 use crate::modulation::ModulationSource;
@@ -17,6 +18,89 @@ fn sanitize_unit(value: f32, fallback: f32) -> f32 {
         value.clamp(0.0, 1.0)
     } else {
         fallback
+    }
+}
+
+impl VardaApp {
+    /// Post-construction wiring every new shader deck needs before it joins a
+    /// channel: start its CPU analyzers and acquire any device its
+    /// `PREPROCESSORS` block requires.
+    ///
+    /// **Every** path that builds a deck must call this. There are two — the
+    /// synchronous `add_deck` command and the UI's background loader
+    /// (`spawn_deck_loads`, completed in `usecases/ui/runner.rs`) — and they
+    /// silently diverged: a shader dropped from the Library skipped analyzer
+    /// startup and device acquisition entirely, so a `depth_sensor` shader
+    /// rendered against blank 1x1 textures with no error.
+    ///
+    /// Returns `Err` when a required preprocessor cannot be satisfied; the
+    /// caller must discard the deck and surface the message.
+    pub(crate) fn finalize_new_deck(&mut self, deck: &mut Deck) -> Result<()> {
+        deck.ensure_preprocessor_analyzers(&self.analyzer_registry);
+        let Some(metadata) = deck.shader().map(|s| s.metadata.clone()) else {
+            return Ok(());
+        };
+        let name = deck.source_name().to_string();
+        if let Some(sensor) = self.acquire_depth_preprocessor(&metadata, &name)? {
+            deck.attach_depth_preprocessor(
+                sensor.id,
+                sensor.name,
+                sensor.pipeline,
+                DepthPreprocessParams::default(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Acquire the depth sensor a shader's `PREPROCESSORS` block requires.
+    ///
+    /// `Ok(None)` when the shader declares no `depth_sensor` preprocessor; `Err`
+    /// when it does but no sensor is available. `depth_sensor` is a *required*
+    /// preprocessor, so callers must propagate the error and abandon the load
+    /// rather than degrade to a deck with nothing to draw.
+    /// See spec/depth-sensor-preprocessor.md § Device Acquisition.
+    fn acquire_depth_preprocessor(
+        &mut self,
+        metadata: &crate::isf::ISFMetadata,
+        shader_name: &str,
+    ) -> Result<Option<AcquiredSensor>> {
+        self.check_required_preprocessors(metadata, shader_name)?;
+        crate::depth::preprocess::acquire_for_shader(
+            &mut self.depth_manager,
+            &self.context.device,
+            metadata,
+            shader_name,
+        )
+    }
+
+    /// Reject a shader that declares a required preprocessor the engine cannot
+    /// service. Requiredness is a registry property, so this stays correct as
+    /// device-backed types are added.
+    ///
+    /// Unknown and optional types are *not* rejected — they degrade to default
+    /// outputs, per /spec/effect-preprocessing.md Decision #2.
+    fn check_required_preprocessors(
+        &self,
+        metadata: &crate::isf::ISFMetadata,
+        shader_name: &str,
+    ) -> Result<()> {
+        for pp in &metadata.preprocessors {
+            let ty = pp.preprocessor_type.as_str();
+            let Some(category) = self.analyzer_registry.category_for(ty) else {
+                log::warn!(
+                    "Shader '{shader_name}' declares unknown preprocessor '{ty}'; \
+                     its outputs will be blank"
+                );
+                continue;
+            };
+            if category.is_required() && ty != crate::depth::preprocess::PREPROCESSOR_TYPE {
+                anyhow::bail!(
+                    "Shader '{shader_name}' requires preprocessor '{ty}', which this build \
+                     cannot provide."
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -63,7 +147,9 @@ impl MixerCommands for VardaApp {
                 self.render_height,
             )?
         };
-        deck.ensure_preprocessor_analyzers(&self.analyzer_registry);
+        // Shared with the UI's background loader — see `finalize_new_deck`.
+        // On failure the deck is dropped and the error surfaces as a toast.
+        self.finalize_new_deck(&mut deck)?;
         let uuid = deck.uuid().to_string();
         let ch = self
             .mixer
@@ -224,6 +310,13 @@ impl MixerCommands for VardaApp {
             if let Some(slot) = ch.decks.get(deck_idx) {
                 if let Some(cam_id) = slot.deck.camera_id() {
                     self.camera_manager.release_camera(cam_id);
+                }
+                // Depth sensors were missing from this teardown, so the capture
+                // thread and USB handle outlived the last deck that used them.
+                // Covers both point-cloud sources and shader preprocessors.
+                // See spec/depth-sensors.md § Known defect.
+                for sensor_id in slot.deck.held_depth_sensors() {
+                    self.depth_manager.release(sensor_id);
                 }
                 if let Some(idx) = slot.deck.srt_receiver_idx() {
                     self.external_io.stream_manager.stop_receive(idx);
@@ -386,20 +479,56 @@ impl MixerCommands for VardaApp {
                 channel_idx,
                 deck_idx,
             } => {
-                let effect = Effect::new(&self.context, (*shader).clone())?;
+                // Clone off the registry borrow so the device manager can be
+                // borrowed mutably for acquisition.
+                let shader = (*shader).clone();
+                let metadata = shader.metadata.clone();
+                drop(filters);
+                // Acquire before mutating the deck so a missing sensor leaves the
+                // effect chain untouched rather than half-added.
+                let already_attached = self
+                    .mixer
+                    .channels()
+                    .get(channel_idx)
+                    .and_then(|c| c.decks.get(deck_idx))
+                    .is_some_and(|s| s.deck.depth_prepro.is_some());
+                let acquired = if already_attached {
+                    // The deck's source shader already holds a session; reuse it
+                    // rather than opening the device a second time.
+                    None
+                } else {
+                    self.acquire_depth_preprocessor(&metadata, shader_name)?
+                };
+
+                let effect = Effect::new(&self.context, shader)?;
                 let uuid = effect.uuid.clone();
                 let ch = self
                     .mixer
                     .channel_mut(channel_idx)
                     .context("Invalid channel")?;
-                ch.decks[deck_idx].deck.add_effect(effect);
-                ch.decks[deck_idx]
-                    .deck
-                    .ensure_preprocessor_analyzers(&self.analyzer_registry);
+                let deck = &mut ch.decks[deck_idx].deck;
+                deck.add_effect(effect);
+                deck.ensure_preprocessor_analyzers(&self.analyzer_registry);
+                if let Some(sensor) = acquired {
+                    deck.attach_depth_preprocessor(
+                        sensor.id,
+                        sensor.name,
+                        sensor.pipeline,
+                        DepthPreprocessParams::default(),
+                    );
+                } else if already_attached {
+                    deck.rebind_depth_preprocessor_slots();
+                }
                 log::info!("Added effect {} to deck chain ({})", shader_name, uuid);
                 Ok(uuid)
             }
             EffectChain::Channel { channel_idx } => {
+                if crate::depth::preprocess::requested_device(&shader.metadata).is_some() {
+                    anyhow::bail!(
+                        "Effect '{shader_name}' requires a depth sensor, which is only \
+                         available on deck effect chains — not channel or master chains."
+                    );
+                }
                 let effect = Effect::new_with_format(
                     &self.context,
                     (*shader).clone(),
@@ -415,6 +544,12 @@ impl MixerCommands for VardaApp {
                 Ok(uuid)
             }
             EffectChain::Master => {
+                if crate::depth::preprocess::requested_device(&shader.metadata).is_some() {
+                    anyhow::bail!(
+                        "Effect '{shader_name}' requires a depth sensor, which is only \
+                         available on deck effect chains — not channel or master chains."
+                    );
+                }
                 let effect = Effect::new_with_format(
                     &self.context,
                     (*shader).clone(),
@@ -432,6 +567,25 @@ impl MixerCommands for VardaApp {
         let location = self.resolve_effect(effect_uuid)?;
         let (chain, idx) = self.mixer.effect_chain_at_mut(location);
         chain.remove(idx);
+        // If that effect was the deck's only depth-sensor consumer, stop holding
+        // the device — otherwise a capture thread and three GPU passes stay alive
+        // for nothing. Two-step because the deck borrow must end before the
+        // manager is touched.
+        if let crate::mixer::EffectLocation::Deck {
+            channel_idx: ch,
+            deck_idx: dk,
+            ..
+        } = location
+        {
+            let released = self
+                .mixer
+                .channel_mut(ch)
+                .and_then(|c| c.decks.get_mut(dk))
+                .and_then(|s| s.deck.detach_depth_preprocessor_if_unused());
+            if let Some(sensor_id) = released {
+                self.depth_manager.release(sensor_id);
+            }
+        }
         // The effect's modulation assignments die with it — otherwise they point
         // at a UUID that no longer resolves.
         self.mixer
@@ -1396,6 +1550,118 @@ mod tests {
 
     fn channel_uuid(app: &super::super::VardaApp, idx: usize) -> String {
         app.mixer_snapshot().channels[idx].uuid.clone()
+    }
+
+    // ── Depth-sensor preprocessor ────────────────────────────────────────────
+    //
+    // These need no hardware: without a Kinect attached (and on builds with the
+    // `depth` feature compiled out) the manager enumerates nothing, which is
+    // exactly the failure path being asserted. The release regression uses the
+    // mock backend.
+
+    #[test]
+    fn depth_sensor_shader_fails_to_load_without_a_sensor() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        if !app.depth_manager.devices().is_empty() {
+            // A real sensor is attached; this test asserts the absent case.
+            return;
+        }
+        let ch0 = channel_uuid(&app, 0);
+        let err = app
+            .add_deck(&ch0, "liquid_light_depth")
+            .expect_err("must not load without a depth sensor");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("depth sensor") && msg.contains("none detected"),
+            "unhelpful message: {msg}"
+        );
+        // The load aborted, so no deck was left behind.
+        assert_eq!(app.mixer_snapshot().channels[0].decks.len(), 0);
+    }
+
+    #[test]
+    fn background_constructed_decks_are_finalized_too() {
+        // Regression: the UI's background loader builds the `Deck` off-thread
+        // and adds it straight to a channel, bypassing `add_deck`. A
+        // `depth_sensor` shader dropped from the Library therefore skipped
+        // acquisition entirely and rendered blank preprocessor textures with no
+        // error. Both paths now share `finalize_new_deck`; this asserts it
+        // rejects the same case `add_deck` does.
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        if !app.depth_manager.devices().is_empty() {
+            return;
+        }
+        let shader = app
+            .registry
+            .generators()
+            .iter()
+            .find(|s| s.name() == "liquid_light_depth")
+            .map(|s| (*s).clone())
+            .expect("showcase shader is registered");
+        let mut deck = Deck::new(&app.context, shader, 64, 64).expect("deck builds");
+        let err = app
+            .finalize_new_deck(&mut deck)
+            .expect_err("must reject without a depth sensor");
+        assert!(err.to_string().contains("none detected"), "{err}");
+        assert!(deck.depth_prepro.is_none());
+    }
+
+    #[test]
+    fn optional_preprocessor_shaders_still_load() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        let ch0 = channel_uuid(&app, 0);
+        // A plain generator with no PREPROCESSORS block must be unaffected by
+        // the new required-preprocessor pre-flight.
+        assert!(app.add_deck(&ch0, "liquid_light").is_ok());
+    }
+
+    #[test]
+    fn removing_a_depth_deck_releases_the_sensor() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        // Two decks sharing one mock sensor: the session must survive the first
+        // removal and be torn down by the second.
+        app.depth_manager
+            .open_mock(0, 32, 24, &app.context.device)
+            .expect("open mock");
+        app.depth_manager
+            .open_mock(0, 32, 24, &app.context.device)
+            .expect("share mock");
+        assert_eq!(app.depth_manager.ref_count(0), 2);
+
+        let ch0 = channel_uuid(&app, 0);
+        let mut uuids = Vec::new();
+        for _ in 0..2 {
+            let deck =
+                Deck::new_from_depth_sensor(&app.context, 0, "Mock Depth (#0)", 32, 24, 64, 64)
+                    .expect("build depth deck");
+            uuids.push(deck.uuid().to_string());
+            let ch_idx = app.resolve_channel(&ch0).expect("channel");
+            app.mixer
+                .channel_mut(ch_idx)
+                .expect("channel")
+                .add_deck(deck);
+        }
+
+        app.remove_deck(&uuids[0]).expect("remove first");
+        assert_eq!(
+            app.depth_manager.ref_count(0),
+            1,
+            "one consumer left, session must stay open"
+        );
+
+        app.remove_deck(&uuids[1]).expect("remove second");
+        assert!(
+            !app.depth_manager.is_active(0),
+            "last consumer removed — the capture session must be torn down"
+        );
     }
 
     #[test]

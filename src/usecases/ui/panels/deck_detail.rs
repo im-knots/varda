@@ -1,6 +1,9 @@
 //! Bottom panel and deck detail.
 
-use super::super::{widgets, DeckUIInfo, EffectDrag, LibraryDrag, SurfaceUI, UIActions, UIData};
+use super::super::{
+    widgets, DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, PointCloudUI, SurfaceUI,
+    UIActions, UIData,
+};
 use super::effects::{render_channel_effect_detail, render_master_effect_detail};
 use super::sequence::{render_sequence_step_editor, render_timeline_strip};
 use super::utils::{
@@ -52,32 +55,31 @@ fn learn_overlay(
 fn render_depth_controls(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
+    pc: &PointCloudUI,
     data: &UIData,
     actions: &mut UIActions,
 ) {
     ui.separator();
     ui.label(egui::RichText::new("🛰 Point Cloud").strong().size(12.0));
 
-    // (label, param name, default normalized value)
+    // (label, param name, current normalized value)
     let sliders: [(&str, &str, f32); 9] = [
-        ("Yaw", "orbit_yaw", 0.5),
-        ("Pitch", "orbit_pitch", 0.5),
-        ("Zoom", "zoom", 0.18),
-        ("Points", "point_size", 0.05),
-        ("Near", "depth_min", 0.05),
-        ("Far", "depth_max", 0.5),
-        ("Seed", "seed", 0.0),
-        ("Drift", "drift", 0.0),
-        ("Disruption", "disruption", 0.0),
+        ("Yaw", "orbit_yaw", pc.orbit_yaw),
+        ("Pitch", "orbit_pitch", pc.orbit_pitch),
+        ("Zoom", "zoom", pc.zoom),
+        ("Points", "point_size", pc.point_size),
+        ("Near", "depth_min", pc.depth_min),
+        ("Far", "depth_max", pc.depth_max),
+        ("Seed", "seed", pc.seed),
+        ("Drift", "drift", pc.drift),
+        ("Disruption", "disruption", pc.disruption),
     ];
-    for (label, name, default) in sliders {
-        let id = ui.id().with(("depth_ctrl", &deck.uuid, name));
-        let mut v: f32 = ui.ctx().memory(|m| m.data.get_temp(id)).unwrap_or(default);
+    for (label, name, current) in sliders {
+        let mut v = current;
         ui.horizontal(|ui| {
             ui.label(label);
             let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
             if resp.changed() {
-                ui.ctx().memory_mut(|m| m.data.insert_temp(id, v));
                 actions.commands.push(EngineCommand::SetParam {
                     path: format!("deck/{}/depth/{}", deck.uuid, name),
                     value: ParamValue::Float(v),
@@ -97,11 +99,10 @@ fn render_depth_controls(
     ui.horizontal(|ui| {
         ui.label("Color:");
         let modes = ["RGB", "Depth", "Solid"];
-        let id = ui.id().with(("depth_color", &deck.uuid));
-        let mut idx: usize = ui.ctx().memory(|m| m.data.get_temp(id)).unwrap_or(1);
+        let mut idx = usize::from(pc.color_mode).min(2);
         let before = idx;
         egui::ComboBox::from_id_salt("depth_color_combo")
-            .selected_text(modes[idx.min(2)])
+            .selected_text(modes[idx])
             .width(70.0)
             .show_ui(ui, |ui| {
                 for (i, m) in modes.iter().enumerate() {
@@ -109,7 +110,6 @@ fn render_depth_controls(
                 }
             });
         if idx != before {
-            ui.ctx().memory_mut(|m| m.data.insert_temp(id, idx));
             // Map bucket index to a normalized value that lands in that bucket.
             let norm = (idx as f32 + 0.5) / 3.0;
             actions.commands.push(EngineCommand::SetParam {
@@ -117,6 +117,74 @@ fn render_depth_controls(
                 value: ParamValue::Float(norm),
             });
         }
+    });
+}
+
+/// Render depth-preprocessor controls for a deck whose shader declared a
+/// `depth_sensor` PREPROCESSOR. Values are sent normalized (0.0–1.0) through the
+/// generic `deck/<uuid>/depth_prepro/<name>` param path, matching the router in
+/// src/internal/param_router.rs. See spec/depth-sensor-preprocessor.md.
+fn render_depth_prepro_controls(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    prepro: &DepthPreproUI,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    ui.separator();
+    ui.label(
+        egui::RichText::new(format!("🛰 Depth Sensor — {}", prepro.sensor_name))
+            .strong()
+            .size(12.0),
+    );
+
+    // (label, param name, current normalized value)
+    let sliders: [(&str, &str, f32); 6] = [
+        ("Near", "near", prepro.near),
+        ("Far", "far", prepro.far),
+        ("Smoothing", "smoothing", prepro.smoothing),
+        ("Hole Fill", "hole_fill", prepro.hole_fill),
+        ("Mask Feather", "mask_feather", prepro.mask_feather),
+        ("Motion Gain", "motion_gain", prepro.motion_gain),
+    ];
+    for (label, name, current) in sliders {
+        let mut v = current;
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+            if resp.changed() {
+                actions.commands.push(EngineCommand::SetParam {
+                    path: format!("deck/{}/depth_prepro/{}", deck.uuid, name),
+                    value: ParamValue::Float(v),
+                });
+            }
+            learn_overlay(
+                ui,
+                resp.rect,
+                format!("deck/{}/depth_prepro/{}", deck.uuid, name),
+                data,
+                actions,
+            );
+        });
+    }
+
+    // Mirror is a fader-bucketed bool on the router; send the bucket centre.
+    ui.horizontal(|ui| {
+        let mut mirror = prepro.mirror;
+        let resp = ui.checkbox(&mut mirror, "Mirror");
+        if resp.changed() {
+            actions.commands.push(EngineCommand::SetParam {
+                path: format!("deck/{}/depth_prepro/mirror", deck.uuid),
+                value: ParamValue::Float(f32::from(u8::from(mirror))),
+            });
+        }
+        learn_overlay(
+            ui,
+            resp.rect,
+            format!("deck/{}/depth_prepro/mirror", deck.uuid),
+            data,
+            actions,
+        );
     });
 }
 
@@ -1318,8 +1386,15 @@ pub(super) fn render_selected_deck_detail(
                                 }
 
                                 // Depth-sensor point-cloud controls
-                                if deck.is_depth_sensor {
-                                    render_depth_controls(ui, deck, data, actions);
+                                if let Some(pc) = &deck.point_cloud {
+                                    render_depth_controls(ui, deck, pc, data, actions);
+                                }
+
+                                // Depth-sensor shader preprocessor controls
+                                if let Some(prepro) = &deck.depth_prepro {
+                                    render_depth_prepro_controls(
+                                        ui, deck, prepro, data, actions,
+                                    );
                                 }
 
                                 // Render FPS

@@ -5,6 +5,9 @@ spec/
 vision/
 notes/
 .varda/
+.devin/
+.devinignore
+AGENTS.md
 .DS_Store
 
 # UI snapshot test diffs/new images (reference .png files are tracked)

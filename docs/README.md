@@ -50,18 +50,18 @@ Here you will find everything you need to start throwing those pixels.
   - [Routing](05-modulation.md#routing) — the 〰 assign button, live ghost indicator, stacking
   - [Modulator-on-Modulator](05-modulation.md#modulator-on-modulator) — recursive chaining up to 4 levels
   - [Audio System](05-modulation.md#audio-system) — FFT analysis, beat detection, ISF audio uniforms
-- **6. [Control Surfaces](06-control-surfaces.md)**
+- **6. [Control Surfaces & Macros](06-control-surfaces.md)**
   - [MIDI](06-control-surfaces.md#midi) — learn mode, APC Mini, multi-device
   - [OSC](06-control-surfaces.md#osc) — input/output, bidirectional feedback
   - [Keyboard Shortcuts](06-control-surfaces.md#keyboard-shortcuts) — learn mode, default bindings, param toggle
   - [Clock Synchronization](06-control-surfaces.md#clock-synchronization) — MIDI/OSC/audio/manual BPM, priority resolution
   - [Parameter Paths](06-control-surfaces.md#parameter-paths)
-- **7. [Macro Controls](15-macro-controls.md)** — one knob/fader/button drives many parameters
-  - [Creating a Macro](15-macro-controls.md#creating-a-macro) — knob, fader, button cards
-  - [Binding Targets](15-macro-controls.md#binding-targets) — per-target range, curve, invert
-  - [Buttons](15-macro-controls.md#buttons) — momentary, toggle, trigger actions
-  - [Mapping to MIDI / OSC / Keyboard](15-macro-controls.md#mapping-a-macro-to-midi--osc--keyboard)
-  - [HTTP API](15-macro-controls.md#http-api)
+  - [Macros](06-control-surfaces.md#macros) — one knob/fader/button drives many parameters
+    - [Creating a Macro](06-control-surfaces.md#creating-a-macro) — knob, fader, button cards
+    - [Binding Targets](06-control-surfaces.md#binding-targets) — per-target range, curve, invert
+    - [Buttons](06-control-surfaces.md#buttons) — momentary, toggle, trigger actions
+    - [Mapping to MIDI / OSC / Keyboard](06-control-surfaces.md#mapping-a-macro-to-midi--osc--keyboard)
+    - [Macro HTTP API](06-control-surfaces.md#macro-http-api)
 
 ### Part III — Output & Display
 
@@ -107,6 +107,12 @@ Here you will find everything you need to start throwing those pixels.
   - [WebSocket](13-api.md#websocket)
   - [Common Patterns](13-api.md#common-patterns)
   - [Route Groups](13-api.md#route-groups)
+- **14. [Frame Analysis & Preprocessors](14-frame-analysis.md)** — one analyzer engine, two paths
+  - [What's Implemented](14-frame-analysis.md#whats-implemented) — brightness, face_detect, depth_sensor; planned types
+  - [Analysis as Modulation](14-frame-analysis.md#analysis-as-modulation-performers) — brightness/face scalars drive any parameter
+  - [Depth Sensor](14-frame-analysis.md#depth-sensor-performers) — near/far framing, per-deck controls
+  - [Preprocessors](14-frame-analysis.md#preprocessors-concept) — structured data as shader textures
+  - [Analyzer HTTP API](14-frame-analysis.md#analyzer-http-api)
 
 ---
 

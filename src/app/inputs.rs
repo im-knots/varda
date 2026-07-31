@@ -23,6 +23,17 @@ impl VardaApp {
                     self.session
                         .notifications
                         .info(format!("Shader reloaded: {}", name));
+                    // Lift any GPU quarantine: the author just changed the
+                    // source, so whatever failed may be fixed. Without this a
+                    // single bad save blacks the deck out until restart.
+                    for ch in self.mixer.channels_mut() {
+                        for slot in &mut ch.decks {
+                            slot.deck.clear_gpu_error();
+                        }
+                    }
+                    self.session
+                        .notifications
+                        .clear_once_key_prefix("gpu_fault:");
                 }
                 crate::registry::ShaderEvent::Removed(path) => {
                     let name = path
