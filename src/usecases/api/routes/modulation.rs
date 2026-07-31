@@ -696,9 +696,9 @@ pub async fn remove_mod_on_mod(
 pub struct AddAnalyzerModSourceBody {
     /// UUID of the deck running the analyzer.
     pub deck_id: String,
-    /// Analyzer type (e.g. "face_detect", "brightness").
+    /// Analyzer type (e.g. "`face_detect`", "brightness").
     pub analyzer_type: String,
-    /// Scalar output name from the analyzer (e.g. "face_x", "brightness").
+    /// Scalar output name from the analyzer (e.g. "`face_x`", "brightness").
     pub output_name: String,
 }
 

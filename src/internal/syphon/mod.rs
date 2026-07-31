@@ -1,12 +1,12 @@
 //! Syphon — macOS inter-app GPU texture sharing.
 //!
 //! varda is the *client*: it discovers Syphon servers and receives their frames
-//! via IOSurface. The receive is a CPU readback — `[SyphonMetalClient newFrameImage]`
+//! via `IOSurface`. The receive is a CPU readback — `[SyphonMetalClient newFrameImage]`
 //! returns an IOSurface-backed `MTLTexture`, we `getBytes` it into a buffer, and
 //! `update()` uploads that to the wgpu texture. This needs no wgpu↔Metal device
 //! bridge and reuses varda's existing texture plumbing; on Apple-silicon unified
 //! memory the readback is a cheap same-memory copy. A zero-copy path (wrap the
-//! IOSurface `MTLTexture` directly as a `wgpu::Texture`) is a possible follow-on.
+//! `IOSurface` `MTLTexture` directly as a `wgpu::Texture`) is a possible follow-on.
 //!
 //! macOS only. Syphon.framework is loaded at runtime via `dlopen` (see
 //! `framework_loaded`), not linked — a Mac without Syphon installed still builds
@@ -275,7 +275,7 @@ impl SyphonManager {
         self.metal_device.as_ref()
     }
 
-    /// Scan for available Syphon servers via SyphonServerDirectory.
+    /// Scan for available Syphon servers via `SyphonServerDirectory`.
     pub fn discover(&mut self) {
         if !self.available {
             return;
@@ -328,7 +328,7 @@ impl SyphonManager {
             .find(|(n, _)| n == server_name)
             .map(|(_, d)| d.clone());
         let Some(desc) = desc else {
-            log::warn!("Syphon: no discovered server named '{}'", server_name);
+            log::warn!("Syphon: no discovered server named '{server_name}'");
             return None;
         };
 
@@ -364,16 +364,16 @@ impl SyphonManager {
         let name_log = server_name.to_string();
 
         let thread = std::thread::Builder::new()
-            .name(format!("syphon-recv-{}", server_name))
+            .name(format!("syphon-recv-{server_name}"))
             .spawn(move || {
-                let client: Retained<SyphonMetalClient> =
-                    match unsafe { Retained::from_raw(client_ptr as *mut SyphonMetalClient) } {
-                        Some(c) => c,
-                        None => {
-                            log::error!("Syphon '{}': null client on receive thread", name_log);
-                            return;
-                        }
-                    };
+                let client: Retained<SyphonMetalClient> = if let Some(c) =
+                    unsafe { Retained::from_raw(client_ptr as *mut SyphonMetalClient) }
+                {
+                    c
+                } else {
+                    log::error!("Syphon '{name_log}': null client on receive thread");
+                    return;
+                };
                 syphon_receive_loop(
                     &client,
                     &frame_clone,
@@ -384,7 +384,7 @@ impl SyphonManager {
                 unsafe {
                     let _: () = msg_send![&client, stop];
                 }
-                log::info!("Syphon '{}': receive thread stopping", name_log);
+                log::info!("Syphon '{name_log}': receive thread stopping");
             })
             .ok();
 
@@ -399,7 +399,7 @@ impl SyphonManager {
             height,
         });
         self.textures.push((texture, view));
-        log::info!("Syphon client connected to '{}'", server_name);
+        log::info!("Syphon client connected to '{server_name}'");
         Some(idx)
     }
 
@@ -468,8 +468,7 @@ impl SyphonManager {
     pub fn is_connected(&self, idx: usize) -> bool {
         self.receivers
             .get(idx)
-            .map(|r| r.connected.load(Ordering::SeqCst))
-            .unwrap_or(false)
+            .is_some_and(|r| r.connected.load(Ordering::SeqCst))
     }
 
     /// Publish a composited frame to a Syphon server, GPU-side (zero-copy).
@@ -485,6 +484,11 @@ impl SyphonManager {
     /// completes (`on_submitted_work_done` → `write_done`), so Syphon always
     /// reads a fully-rendered texture; the ring depth covers Syphon's in-flight
     /// read before a slot is reused.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the cached wgpu Metal device is absent immediately after
+    /// this call populated it, which cannot happen.
     pub fn publish_frame_gpu(
         &mut self,
         device: &wgpu::Device,
@@ -503,12 +507,11 @@ impl SyphonManager {
         if self.wgpu_metal_device.is_none() {
             let dev =
                 unsafe { device.as_hal::<wgpu::hal::api::Metal>() }.map(|d| d.raw_device().clone());
-            match dev {
-                Some(d) => self.wgpu_metal_device = Some(d),
-                None => {
-                    log::error!("Syphon publish: device.as_hal::<Metal> returned None");
-                    return;
-                }
+            if let Some(d) = dev {
+                self.wgpu_metal_device = Some(d);
+            } else {
+                log::error!("Syphon publish: device.as_hal::<Metal> returned None");
+                return;
             }
         }
         let mtl_dev = self.wgpu_metal_device.as_ref().unwrap().clone();
@@ -550,17 +553,16 @@ impl SyphonManager {
                 msg_send![alloc, initWithName: &*name, device: &*mtl_dev, options: nil_opts]
             };
             let Some(server) = server else {
-                log::error!("Syphon publish: failed to create server '{}'", server_name);
+                log::error!("Syphon publish: failed to create server '{server_name}'");
                 return;
             };
             let mut slots = Vec::with_capacity(PUBLISH_RING);
             for _ in 0..PUBLISH_RING {
-                match Self::make_publish_slot(&mtl_dev, device, width, height) {
-                    Some(s) => slots.push(s),
-                    None => {
-                        log::error!("Syphon publish: failed to create publish texture");
-                        return;
-                    }
+                if let Some(s) = Self::make_publish_slot(&mtl_dev, device, width, height) {
+                    slots.push(s);
+                } else {
+                    log::error!("Syphon publish: failed to create publish texture");
+                    return;
                 }
             }
             self.servers.insert(
@@ -573,7 +575,7 @@ impl SyphonManager {
                     sched: PublishScheduler::new(PUBLISH_RING),
                 },
             );
-            log::info!("Syphon server publishing as '{}'", server_name);
+            log::info!("Syphon server publishing as '{server_name}'");
         }
 
         let pipeline = self.convert_pipeline.as_ref().unwrap();
@@ -592,8 +594,8 @@ impl SyphonManager {
                 let image_region = NSRect {
                     origin: NSPoint { x: 0.0, y: 0.0 },
                     size: NSSize {
-                        width: width as f64,
-                        height: height as f64,
+                        width: f64::from(width),
+                        height: f64::from(height),
                     },
                 };
                 unsafe {
@@ -748,7 +750,7 @@ fn syphon_receive_loop(
             nil_count = nil_count.saturating_add(1);
             if nil_count == DISCONNECT_AFTER {
                 connected.store(false, Ordering::SeqCst);
-                log::debug!("Syphon '{}': no frames (~2s), marked disconnected", name);
+                log::debug!("Syphon '{name}': no frames (~2s), marked disconnected");
             }
             std::thread::sleep(POLL_INTERVAL);
             continue;
@@ -775,7 +777,7 @@ fn syphon_receive_loop(
         };
         unsafe {
             tex.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                std::ptr::NonNull::new(buf.as_mut_ptr() as *mut std::ffi::c_void).unwrap(),
+                std::ptr::NonNull::new(buf.as_mut_ptr().cast::<std::ffi::c_void>()).unwrap(),
                 (w * 4) as usize,
                 region,
                 0,
@@ -824,7 +826,7 @@ fn framework_loaded() -> bool {
     lib.is_some()
 }
 
-/// Read an NSString value out of a server-description dictionary.
+/// Read an `NSString` value out of a server-description dictionary.
 fn nsstring_value(dict: &NSDictionary<NSString, AnyObject>, key: &NSString) -> Option<String> {
     unsafe {
         let val: *mut AnyObject = msg_send![dict, objectForKey: key];
@@ -844,7 +846,7 @@ fn make_texture(
     height: u32,
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(&format!("Syphon Client: {}", server_name)),
+        label: Some(&format!("Syphon Client: {server_name}")),
         size: wgpu::Extent3d {
             width,
             height,

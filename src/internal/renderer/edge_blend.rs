@@ -19,13 +19,13 @@ pub const MAX_OVERLAP_ZONES: usize = 4;
 /// Defines a rectangle where this surface overlaps with a surface on another output.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct OverlapZone {
-    /// Overlap rectangle in surface UV: [u_min, v_min, u_max, v_max].
+    /// Overlap rectangle in surface UV: [`u_min`, `v_min`, `u_max`, `v_max`].
     pub uv_rect: [f32; 4],
     /// Smoothstep gamma exponent for the blend ramp.
     pub gamma: f32,
-    /// Horizontal ramp direction: +1.0 = fade toward u_max, -1.0 = fade toward u_min, 0.0 = none.
+    /// Horizontal ramp direction: +1.0 = fade toward `u_max`, -1.0 = fade toward `u_min`, 0.0 = none.
     pub ramp_x: f32,
-    /// Vertical ramp direction: +1.0 = fade toward v_max, -1.0 = fade toward v_min, 0.0 = none.
+    /// Vertical ramp direction: +1.0 = fade toward `v_max`, -1.0 = fade toward `v_min`, 0.0 = none.
     pub ramp_y: f32,
 }
 
@@ -75,7 +75,7 @@ pub struct AutoBlendResult {
 /// Used as input to `compute_auto_edge_blend`.
 #[derive(Debug, Clone)]
 pub struct MappedRegion {
-    /// Stringified OutputSource key (e.g. "Master", "Channel(0)").
+    /// Stringified `OutputSource` key (e.g. "Master", "Channel(0)").
     pub source_key: String,
     /// Axis-aligned bounding box [x, y, width, height] in normalized canvas coords.
     pub bbox: [f32; 4],
@@ -105,9 +105,13 @@ pub struct OutputSurfaceInfo {
 
 /// Compute precise polygon intersection and return its AABB.
 /// Falls back to AABB intersection when polygon data is unavailable or degenerate.
+// x/y/w/h and a/b/p/r are the idiomatic names for this 2D bounding-box math.
+#[allow(clippy::many_single_char_names)]
 fn polygon_intersect_aabb(a: &MappedRegion, b: &MappedRegion) -> Option<[f32; 4]> {
     use crate::surface::{verts_to_geo, verts_to_geo_with_holes};
     use geo::BooleanOps;
+    use geo::BoundingRect;
+    use geo::Coord;
 
     // Build geo polygons including extra contours; holes become interior rings
     // on the primary polygon.
@@ -133,9 +137,7 @@ fn polygon_intersect_aabb(a: &MappedRegion, b: &MappedRegion) -> Option<[f32; 4]
         if inter.0.is_empty() {
             return None;
         }
-        use geo::BoundingRect;
         if let Some(rect) = inter.bounding_rect() {
-            use geo::Coord;
             let min: Coord<f64> = rect.min();
             let max: Coord<f64> = rect.max();
             let x = min.x as f32;
@@ -173,7 +175,7 @@ fn aabb_intersect(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
 }
 
 /// Compute ramp direction for surface A's overlap zone toward surface B.
-/// Returns (ramp_x, ramp_y) based on relative center positions.
+/// Returns (`ramp_x`, `ramp_y`) based on relative center positions.
 fn compute_ramp_direction(bbox_a: &[f32; 4], bbox_b: &[f32; 4]) -> (f32, f32) {
     let center_a = [bbox_a[0] + bbox_a[2] * 0.5, bbox_a[1] + bbox_a[3] * 0.5];
     let center_b = [bbox_b[0] + bbox_b[2] * 0.5, bbox_b[1] + bbox_b[3] * 0.5];
@@ -313,6 +315,14 @@ pub struct EdgeBlendPipeline {
 }
 
 impl EdgeBlendPipeline {
+    /// Create the edge-blend pipeline for the given target format.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Edge Blend BGL"),
@@ -374,7 +384,7 @@ impl EdgeBlendPipeline {
                 module: &vertex_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &fragment_shader,
@@ -384,7 +394,7 @@ impl EdgeBlendPipeline {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,

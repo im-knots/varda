@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 // re-exported here so `crate::renderer::tonemap::TonemapMode` still resolves.
 pub use super::config::TonemapMode;
 
-/// GPU uniform for tonemap shader — 16 bytes, matches TonemapParams in tonemap.wgsl.
+/// GPU uniform for tonemap shader — 16 bytes, matches `TonemapParams` in tonemap.wgsl.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TonemapParams {
@@ -25,6 +25,14 @@ pub struct TonemapPipeline {
 }
 
 impl TonemapPipeline {
+    /// Create the tonemap pipeline for the given target format.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Tonemap Bind Group Layout"),
@@ -89,7 +97,7 @@ impl TonemapPipeline {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -99,7 +107,7 @@ impl TonemapPipeline {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -154,6 +162,11 @@ impl TonemapPipeline {
     }
 
     /// Create a bind group for a specific source texture view.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size_of::<TonemapParams>()` is zero, which cannot happen for
+    /// a non-empty `#[repr(C)]` struct.
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,
@@ -184,7 +197,7 @@ impl TonemapPipeline {
         })
     }
 
-    /// Run the tonemap pass: reads from source_view, writes to target_view.
+    /// Run the tonemap pass: reads from `source_view`, writes to `target_view`.
     pub fn render(
         &self,
         device: &wgpu::Device,

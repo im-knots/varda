@@ -19,6 +19,8 @@ use varda::usecases::ui::{UIActions, UIData};
 /// `egui` may request repaints, causing `run()` to invoke the closure multiple
 /// times. A click is processed in one pass but the next pass overwrites the
 /// `UIActions`. We accumulate by merging interesting fields across passes.
+// A flat tally of independent UI actions observed across egui passes.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 struct AccActions {
     // Simple booleans
@@ -57,6 +59,8 @@ struct AccActions {
     sequence_create: bool,
 
     // Combo box actions
+    // Outer None = no SetTransition seen; inner None = transition cleared.
+    #[allow(clippy::option_option)]
     set_transition: Option<Option<String>>,
 
     // Collapsing header item actions
@@ -127,10 +131,12 @@ impl AccActions {
 
         // Collapsing header items
         if a.session.open_image_dialog_for_channel.is_some() {
-            self.open_image_dialog_for_channel = a.session.open_image_dialog_for_channel.clone();
+            self.open_image_dialog_for_channel
+                .clone_from(&a.session.open_image_dialog_for_channel);
         }
         if a.session.open_video_dialog_for_channel.is_some() {
-            self.open_video_dialog_for_channel = a.session.open_video_dialog_for_channel.clone();
+            self.open_video_dialog_for_channel
+                .clone_from(&a.session.open_video_dialog_for_channel);
         }
     }
 }
@@ -235,7 +241,7 @@ fn url_row(ui: &mut egui::Ui, url: &str) {
                 ui.dnd_drag_source(egui::Id::new("probe_dnd"), 0u32, |ui| {
                     ui.label(egui::RichText::new("●"));
                     ui.add(
-                        egui::Label::new(egui::RichText::new(format!("📡 {}", url)).size(12.0))
+                        egui::Label::new(egui::RichText::new(format!("📡 {url}")).size(12.0))
                             .truncate(),
                     )
                     .on_hover_text(url);
@@ -251,7 +257,7 @@ fn naive_url_row_inflates_panel() {
     // panel far past its default width, reproducing the reported bug.
     let naive = probe_panel_width(|ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("📡 {}", LONG_URL)).size(12.0));
+            ui.label(egui::RichText::new(format!("📡 {LONG_URL}")).size(12.0));
             let _ = ui.small_button("✕");
         });
     });

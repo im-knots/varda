@@ -203,7 +203,7 @@ impl Macro {
                 self.button = Some(ButtonSpec::default());
             }
             MacroKind::Knob | MacroKind::Fader => self.button = None,
-            _ => {}
+            MacroKind::Button => {}
         }
     }
 
@@ -272,7 +272,7 @@ impl Macro {
     /// The modulation target key for this macro's value (`macro_<uuid>:value`),
     /// matching the `{prefix}:{name}` convention used by the modulation engine.
     pub fn value_mod_key(uuid: &str) -> String {
-        format!("macro_{}:value", uuid)
+        format!("macro_{uuid}:value")
     }
 
     /// Compute the fan-out for `clamp(base + offset, 0, 1)` **without** mutating

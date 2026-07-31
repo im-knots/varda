@@ -10,6 +10,34 @@ license = "MIT"
 name = "varda"
 path = "src/lib.rs"
 
+# `clippy::pedantic` is a warn-by-default gate for every target (lib, bin, tests,
+# benches, examples). CI runs `cargo clippy --all-targets -- -D warnings`, so these
+# warnings are hard errors on a PR. Every entry in the allow-list below carries a
+# rationale, and adding one requires the same. All but `too_many_lines` are lints
+# whose advice is wrong for this codebase rather than work being deferred. See
+# CONTRIBUTING.md § Lints.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# Pixel, sample, and vertex math converts between integer extents and float
+# coordinates constantly (`width as f32`, `f64 as f32` for shader uniforms).
+# The conversions are intentional and the lossless alternatives either do not
+# exist or push `try_from` error handling into the render hot path.
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+
+# Fires on essentially every `&self` snapshot/query accessor in the engine trait
+# impls — 478 attributes that catch no bugs, since ignoring an infallible getter
+# is already dead code the compiler flags elsewhere.
+must_use_candidate = "allow"
+
+# The only deferred entry: ~130 functions exceed 100 lines, and splitting them is a
+# real refactor rather than a lint fix. Tracked in spec/roadmap.md § DEBT: Function
+# Decomposition; lower the threshold as offenders are cleared instead of flipping
+# this off at the end.
+too_many_lines = "allow"
+
 [dependencies]
 # Graphics
 wgpu = "29.0"

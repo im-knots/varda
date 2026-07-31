@@ -1,6 +1,6 @@
-//! UIRunner — windowed delivery layer for the Varda engine.
+//! `UIRunner` — windowed delivery layer for the Varda engine.
 //!
-//! Owns the window, egui state, blit pipeline, texture registrations, and WindowSurface.
+//! Owns the window, egui state, blit pipeline, texture registrations, and `WindowSurface`.
 //! The engine (`VardaApp`) is owned here and driven each frame.
 //! For headless operation (HTTP API, CLI), this module is simply not used.
 
@@ -63,7 +63,7 @@ fn spawn_detect_thread(
                         if !matches!(e, crate::surface::import::ImportError::NoContours) {
                             consecutive_errors += 1;
                             if consecutive_errors == 1 || consecutive_errors.is_multiple_of(60) {
-                                log::warn!("Detection error (count={}): {}", consecutive_errors, e);
+                                log::warn!("Detection error (count={consecutive_errors}): {e}");
                             }
                         }
                         Vec::new()
@@ -99,7 +99,7 @@ fn register_deck_preview_texture(
     deck_preview_textures: &mut std::collections::HashMap<String, egui::TextureId>,
 ) {
     let Some((ch_idx, deck_idx)) = mixer.find_deck_by_uuid(deck_uuid) else {
-        log::warn!("No deck {} to register a preview texture for", deck_uuid);
+        log::warn!("No deck {deck_uuid} to register a preview texture for");
         return;
     };
     if let Some(slot) = mixer
@@ -476,6 +476,12 @@ impl UIRunner {
     }
 
     /// Run the UI event loop. Blocks until the window is closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the winit event loop cannot be created (no display
+    /// server, or one already exists on this thread), or if the event loop
+    /// itself terminates with an error.
     pub fn run(mut self) -> anyhow::Result<()> {
         // Install Ctrl-C handler for graceful shutdown (especially useful in headless)
         let flag = self.shutdown_flag.clone();
@@ -487,7 +493,7 @@ impl UIRunner {
         let event_loop = EventLoop::new()?;
         event_loop
             .run_app(&mut self)
-            .map_err(|e| anyhow::anyhow!("Event loop error: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("Event loop error: {e:?}"))?;
         Ok(())
     }
 }
@@ -508,7 +514,7 @@ impl ApplicationHandler for UIRunner {
             let gpu = match GpuContext::new_headless() {
                 Ok(gpu) => gpu,
                 Err(e) => {
-                    log::error!("Failed to create headless GPU context: {}", e);
+                    log::error!("Failed to create headless GPU context: {e}");
                     event_loop.exit();
                     return;
                 }
@@ -543,7 +549,7 @@ impl ApplicationHandler for UIRunner {
                     Box::leak(Box::new(w))
                 }
                 Err(e) => {
-                    log::error!("Failed to create window: {}", e);
+                    log::error!("Failed to create window: {e}");
                     event_loop.exit();
                     return;
                 }
@@ -563,7 +569,7 @@ impl ApplicationHandler for UIRunner {
                 match GpuContext::create_surface_for_window(window_static) {
                     Ok(triple) => triple,
                     Err(e) => {
-                        log::error!("Failed to create surface: {}", e);
+                        log::error!("Failed to create surface: {e}");
                         event_loop.exit();
                         return;
                     }
@@ -631,7 +637,7 @@ impl ApplicationHandler for UIRunner {
             match event {
                 WindowEvent::CloseRequested => {
                     if let Some(name) = varda.close_output_window_by_id(window_id) {
-                        log::info!("Output window '{}' closed", name);
+                        log::info!("Output window '{name}' closed");
                     }
                 }
                 WindowEvent::Resized(new_size) => {
@@ -654,7 +660,7 @@ impl ApplicationHandler for UIRunner {
                         self.finish_init(gpu, Some(win_surface), startup_t0, event_loop);
                     }
                     Err(e) => {
-                        log::error!("Failed to create render context: {}", e);
+                        log::error!("Failed to create render context: {e}");
                         event_loop.exit();
                         return;
                     }
@@ -670,8 +676,7 @@ impl ApplicationHandler for UIRunner {
         let target_fps = self
             .varda
             .as_ref()
-            .map(|v| v.target_fps())
-            .unwrap_or(self.config.target_fps);
+            .map_or(self.config.target_fps, crate::app::VardaApp::target_fps);
 
         if self.config.headless {
             // Headless: adaptive sleep-based pacing
@@ -754,7 +759,7 @@ impl UIRunner {
                 if let Ok(img) = image::load_from_memory(ICON_BYTES) {
                     let rgba = img.into_rgba8();
                     let icon_data = egui::IconData {
-                        rgba: rgba.as_raw().to_vec(),
+                        rgba: rgba.as_raw().clone(),
                         width: rgba.width(),
                         height: rgba.height(),
                     };
@@ -774,7 +779,7 @@ impl UIRunner {
         let mut varda = match VardaApp::new(gpu, &self.config) {
             Ok(v) => v,
             Err(e) => {
-                log::error!("Failed to initialize engine: {}", e);
+                log::error!("Failed to initialize engine: {e}");
                 event_loop.exit();
                 return;
             }
@@ -827,7 +832,7 @@ impl UIRunner {
             self.cadence_anchor = None;
             return;
         }
-        let budget = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
+        let budget = std::time::Duration::from_secs_f64(1.0 / f64::from(target_fps));
         let now = std::time::Instant::now();
         self.cadence_anchor = Some(match self.cadence_anchor {
             Some(anchor) => {
@@ -869,7 +874,7 @@ impl UIRunner {
                     self.dome_preview_texture = Some(tid);
                     self.dome_preview_renderer = Some(renderer);
                 }
-                Err(e) => log::error!("Failed to create dome preview renderer: {}", e),
+                Err(e) => log::error!("Failed to create dome preview renderer: {e}"),
             }
         }
     }
@@ -911,17 +916,15 @@ impl UIRunner {
                 OutputSource::Channel(idx) => mixer
                     .channels()
                     .get(*idx)
-                    .map(|c| &c.composite_view)
-                    .unwrap_or_else(|| mixer.composite_view()),
+                    .map_or_else(|| mixer.composite_view(), |c| &c.composite_view),
                 OutputSource::Deck(ch, dk) => mixer
                     .channels()
                     .get(*ch)
                     .and_then(|c| c.decks.get(*dk))
-                    .map(|s| &s.deck.texture_view)
-                    .unwrap_or_else(|| mixer.composite_view()),
+                    .map_or_else(|| mixer.composite_view(), |s| &s.deck.texture_view),
                 OutputSource::Channels(indices) => {
                     let mut sorted = indices.clone();
-                    sorted.sort();
+                    sorted.sort_unstable();
                     sorted.dedup();
                     mixer
                         .get_sub_mix_view(&sorted)
@@ -947,7 +950,7 @@ impl UIRunner {
         let mixer = varda.mixer_ref();
         let mut out: Vec<(PreviewSlot, &wgpu::TextureView, u32, u32)> = Vec::new();
         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-            for slot in ch.decks.iter() {
+            for slot in &ch.decks {
                 out.push((
                     PreviewSlot::Deck(slot.deck.uuid().to_string()),
                     &slot.deck.texture_view,
@@ -1163,7 +1166,7 @@ impl UIRunner {
         }
     }
 
-    /// Main render loop — delegates all logic to VardaApp.
+    /// Main render loop — delegates all logic to `VardaApp`.
     fn render(&mut self, event_loop: &ActiveEventLoop) {
         // 1. Frame timing + notifications + inputs
         {
@@ -1237,8 +1240,8 @@ impl UIRunner {
         // 3c. Camera detection mode — open/release camera as needed
         {
             let detect_camera_id = match &self.layout.camera_detect_mode {
-                ui::CameraDetectMode::Live { camera_id, .. } => Some(*camera_id),
-                ui::CameraDetectMode::Preview { camera_id, .. } => Some(*camera_id),
+                ui::CameraDetectMode::Live { camera_id, .. }
+                | ui::CameraDetectMode::Preview { camera_id, .. } => Some(*camera_id),
                 ui::CameraDetectMode::Off => None,
             };
 
@@ -1269,14 +1272,10 @@ impl UIRunner {
                                 }
                             }
                             self.camera_detect_camera_id = Some(cam_id);
-                            log::info!("Camera detection: opened camera {}", cam_id);
+                            log::info!("Camera detection: opened camera {cam_id}");
                         }
                         Err(e) => {
-                            log::error!(
-                                "Camera detection: failed to open camera {}: {}",
-                                cam_id,
-                                e
-                            );
+                            log::error!("Camera detection: failed to open camera {cam_id}: {e}");
                             self.layout.camera_detect_mode = ui::CameraDetectMode::Off;
                         }
                     }
@@ -1361,7 +1360,9 @@ impl UIRunner {
             }
         }
 
-        ui_data.camera_detect_contours = self.camera_detect_contours.clone();
+        ui_data
+            .camera_detect_contours
+            .clone_from(&self.camera_detect_contours);
 
         // 5. Run egui frame
         let t_egui = std::time::Instant::now();
@@ -1508,7 +1509,9 @@ impl UIRunner {
                             ref mut selected, ..
                         } = self.layout.camera_detect_mode
                         {
-                            selected.iter_mut().for_each(|s| *s = val);
+                            for s in &mut *selected {
+                                *s = val;
+                            }
                         }
                     }
                     ui::CameraDetectAction::Accept => {
@@ -1634,7 +1637,7 @@ impl UIRunner {
                         let context = varda.gpu_context();
                         let mixer = varda.mixer_ref();
                         for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-                            for slot in ch.decks.iter() {
+                            for slot in &ch.decks {
                                 let tex_id = egui_renderer.register_native_texture(
                                     &context.device,
                                     &slot.deck.texture_view,
@@ -1683,7 +1686,7 @@ impl UIRunner {
                 let context = varda.gpu_context();
                 let mixer = varda.mixer_ref();
                 for (ch_idx, ch) in mixer.channels().iter().enumerate() {
-                    for slot in ch.decks.iter() {
+                    for slot in &ch.decks {
                         if let Some(&tex_id) = self.deck_preview_textures.get(slot.deck.uuid()) {
                             egui_renderer.update_egui_texture_from_wgpu_texture(
                                 &context.device,
@@ -1814,7 +1817,7 @@ impl UIRunner {
                         // preprocessor textures with no error shown.
                         let mut deck = deck;
                         if let Err(e) = varda.finalize_new_deck(&mut deck) {
-                            log::error!("Failed to add deck: {}", e);
+                            log::error!("Failed to add deck: {e}");
                             varda.notify_error(format!("Failed to add deck: {e}"));
                             continue;
                         }
@@ -1838,7 +1841,7 @@ impl UIRunner {
                         );
                     }
                     Err(e) => {
-                        log::error!("Background deck load failed for '{}': {}", result.name, e)
+                        log::error!("Background deck load failed for '{}': {}", result.name, e);
                     }
                 }
             }
@@ -1917,7 +1920,7 @@ impl UIRunner {
             window,
             full_output.shapes,
             full_output.pixels_per_point,
-            full_output.textures_delta,
+            &full_output.textures_delta,
         );
         let submit_us = t_submit.elapsed().as_micros();
 
@@ -1925,8 +1928,7 @@ impl UIRunner {
         let target_fps = self
             .varda
             .as_ref()
-            .map(|v| v.target_fps())
-            .unwrap_or(self.config.target_fps);
+            .map_or(self.config.target_fps, crate::app::VardaApp::target_fps);
         self.advance_cadence_anchor(target_fps);
 
         // Frame loop timing (log every 120 frames)
@@ -1952,7 +1954,7 @@ impl UIRunner {
         window: &Window,
         shapes: Vec<egui::epaint::ClippedShape>,
         pixels_per_point: f32,
-        textures_delta: egui::TexturesDelta,
+        textures_delta: &egui::TexturesDelta,
     ) {
         let Some(varda) = &self.varda else { return };
         let context = varda.gpu_context();
@@ -1987,16 +1989,13 @@ impl UIRunner {
                     wgpu::CurrentSurfaceTexture::Success(o)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(o) => o,
                     other => {
-                        log::error!(
-                            "Failed to get surface texture after reconfigure: {:?}",
-                            other
-                        );
+                        log::error!("Failed to get surface texture after reconfigure: {other:?}");
                         return;
                     }
                 }
             }
             other => {
-                log::debug!("UI surface unavailable: {:?}", other);
+                log::debug!("UI surface unavailable: {other:?}");
                 return;
             }
         };

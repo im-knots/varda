@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'tests/**'
+      - 'benches/**'
+      - 'examples/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'
@@ -53,5 +56,9 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Run clippy
+      # `clippy::pedantic` is enabled as warn-by-default in Cargo.toml's
+      # `[lints.clippy]` (with a documented allow-list), so `-D warnings` gates
+      # pedantic here too. Keeping the lint config in Cargo.toml rather than in
+      # this flag means a local `cargo clippy` reproduces CI exactly.
+      - name: Run clippy (pedantic)
         run: cargo clippy --all-targets -- -D warnings

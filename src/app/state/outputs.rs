@@ -56,7 +56,7 @@ impl VardaApp {
     /// Create a new headless output with the given target.
     pub fn cmd_create_headless_output(&mut self, target: OutputTarget) -> CommandResult {
         let idx = self.output.outputs.len() + 1;
-        let name = format!("Output {}", idx);
+        let name = format!("Output {idx}");
         let headless = HeadlessOutput::new(
             &self.context.device,
             name.clone(),
@@ -65,7 +65,7 @@ impl VardaApp {
             self.render_width,
             self.render_height,
         );
-        log::info!("Created headless output '{}'", name);
+        log::info!("Created headless output '{name}'");
         self.output.outputs.push(UnifiedOutput::Headless(headless));
         CommandResult::Ok
     }
@@ -560,31 +560,26 @@ pub(crate) fn resolve_output_audio(
         .map(|d| d.id);
     let Some(source_id) = source_id else {
         notifications.warn(format!(
-            "Audio device '{}' not found for output '{}'; recording/streaming video-only",
-            device_name, output_name
+            "Audio device '{device_name}' not found for output '{output_name}'; recording/streaming video-only"
         ));
         return (None, None);
     };
-    match audio_manager.subscribe_pcm(source_id) {
-        Some(sub) => {
-            let input = crate::renderer::AudioInput {
-                rx: sub.receiver,
-                sample_rate: sub.format.sample_rate,
-                channels: sub.format.channels,
-            };
-            let passthrough = AudioPassthrough {
-                source_id,
-                token: sub.token,
-                dropped: sub.dropped,
-            };
-            (Some(input), Some(passthrough))
-        }
-        None => {
-            notifications.warn(format!(
-                "Failed to open audio device '{}' for output '{}'; video-only",
-                device_name, output_name
-            ));
-            (None, None)
-        }
+    if let Some(sub) = audio_manager.subscribe_pcm(source_id) {
+        let input = crate::renderer::AudioInput {
+            rx: sub.receiver,
+            sample_rate: sub.format.sample_rate,
+            channels: sub.format.channels,
+        };
+        let passthrough = AudioPassthrough {
+            source_id,
+            token: sub.token,
+            dropped: sub.dropped,
+        };
+        (Some(input), Some(passthrough))
+    } else {
+        notifications.warn(format!(
+            "Failed to open audio device '{device_name}' for output '{output_name}'; video-only"
+        ));
+        (None, None)
     }
 }

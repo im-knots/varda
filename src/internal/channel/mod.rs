@@ -133,6 +133,7 @@ impl DurationUnit {
     }
 
     /// Cycle to the next unit: s → m → h → b → s
+    #[must_use]
     pub fn next(&self) -> Self {
         match self {
             DurationUnit::Seconds => DurationUnit::Minutes,
@@ -193,7 +194,7 @@ impl DurationSpec {
         }
     }
 
-    /// Create a DurationSpec from a value and unit.
+    /// Create a `DurationSpec` from a value and unit.
     pub fn from_value_unit(value: f64, unit: DurationUnit) -> Self {
         match unit {
             DurationUnit::Seconds => DurationSpec::Seconds(value),
@@ -291,7 +292,7 @@ impl std::fmt::Display for DeckRenderFps {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Auto => write!(f, "Auto"),
-            Self::Fixed(fps) => write!(f, "{}", fps),
+            Self::Fixed(fps) => write!(f, "{fps}"),
         }
     }
 }
@@ -340,6 +341,11 @@ impl DeckSlot {
 
     /// Set the transition shader for this deck's auto-transition.
     /// Compiles the shader and stores the pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the shader's GLSL fails to compile to SPIR-V or if the
+    /// transition render pipeline cannot be created from the resulting module.
     pub fn set_transition_shader(&mut self, context: &GpuContext, shader: ISFShader) -> Result<()> {
         let spirv = crate::isf::compile_glsl_to_spirv(&shader.fragment_source, &shader.name())
             .context("Failed to compile transition shader to SPIR-V")?;
@@ -379,8 +385,7 @@ impl DeckSlot {
         self.auto_transition
             .as_ref()
             .filter(|at| at.enabled)
-            .map(|at| at.phase)
-            .unwrap_or(DeckTransitionPhase::Inactive)
+            .map_or(DeckTransitionPhase::Inactive, |at| at.phase)
     }
 }
 
@@ -439,6 +444,10 @@ impl Channel {
         self.uuid = uuid;
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the composite-blit or alpha-blend blit pipelines cannot
+    /// be created on the given GPU device.
     pub fn new(name: String, context: &GpuContext, width: u32, height: u32) -> Result<Self> {
         let composite_texture = context.create_compositing_texture(width, height);
         let composite_view = composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -515,27 +524,32 @@ impl Channel {
     /// Call this every frame even for off-screen channels so video players
     /// stay in sync and don't show stale/black frames when faded back in.
     pub fn tick_video_frames(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        for slot in self.decks.iter_mut() {
+        for slot in &mut self.decks {
             if let Err(e) = slot.deck.update_video_frame(encoder) {
-                log::warn!("Video frame update failed: {}", e);
+                log::warn!("Video frame update failed: {e}");
             }
         }
     }
 
-    /// Request re-mapping of staging buffers after queue.submit().
+    /// Request re-mapping of staging buffers after `queue.submit()`.
     pub fn request_video_remap(&mut self) {
-        for slot in self.decks.iter_mut() {
+        for slot in &mut self.decks {
             slot.deck.request_video_remap();
         }
     }
 
     /// Render all decks in this channel and composite them, then apply channel effects
-    /// `channel_idx` is used for modulation key addressing (e.g., "ch0_deck0:paramname")
+    /// `channel_idx` is used for modulation key addressing (e.g., "`ch0_deck0:paramname`")
     /// `dt` is the frame delta in seconds (for auto-transition tick).
     /// `target_fps` is the global target FPS for adaptive skip budget calculation.
     /// `total_active_decks` is the total active deck count across all channels (from last frame).
     /// `gpu_load_ratio` scales CPU-measured render costs to estimate true GPU execution time.
     /// A ratio of 1.0 means CPU and GPU costs match; >1.0 means GPU-bound (GPU takes longer).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any deck fails to render its frame (shader/pipeline or
+    /// source-decode failure), propagated from `Deck::render_with_prefix`.
     // Hot-path render entry; args are distinct per-frame inputs and bundling them into a
     // struct would add indirection without a shared invariant.
     #[allow(clippy::too_many_arguments)]
@@ -544,7 +558,7 @@ impl Channel {
         context: &GpuContext,
         audio_data: &crate::audio::AudioData,
         modulation: &ModulationEngine,
-        _channel_idx: usize,
+        channel_idx: usize,
         time: f32,
         dt: f32,
         target_fps: u32,
@@ -554,11 +568,18 @@ impl Channel {
         mut timing: Option<&mut GpuTimingFrame>,
         query_set: Option<&wgpu::QuerySet>,
     ) -> Result<()> {
+        struct DeckCompositeInfo {
+            deck_idx: usize,
+            blend_mode: BlendMode,
+            opacity: f32,
+            transition_progress: Option<f64>, // Some = transitioning with shader
+        }
+
         let render_start = std::time::Instant::now();
 
         // Tick auto-transition state before rendering
-        let bpm = audio_data.bpm.map(|b| b as f64);
-        self.tick_auto_transitions(dt as f64, bpm);
+        let bpm = audio_data.bpm.map(f64::from);
+        self.tick_auto_transitions(f64::from(dt), bpm);
 
         // Sort decks by z-index
         let mut deck_indices: Vec<usize> = (0..self.decks.len()).collect();
@@ -590,7 +611,7 @@ impl Channel {
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
         let mut active_count: u32 = 0;
         let mut per_deck_timings: Vec<(String, u128, bool)> = Vec::new(); // (name, us, skipped)
-        for (_deck_idx, slot) in self.decks.iter_mut().enumerate() {
+        for (deck_idx, slot) in self.decks.iter_mut().enumerate() {
             if !slot.mute && (!any_solo || slot.solo) && slot.opacity > 0.0 {
                 active_count += 1;
                 slot.skip_counter += 1;
@@ -620,7 +641,7 @@ impl Channel {
                             true // under budget or no data yet
                         }
                     }
-                    _ => true, // Fixed(0) or uncapped target = always render
+                    DeckRenderFps::Fixed(_) => true, // Fixed(0) or uncapped target = always render
                 };
 
                 if should_render {
@@ -636,7 +657,7 @@ impl Channel {
                     // Allocate GPU timing queries for this deck
                     let gpu_timing = match (&mut timing, query_set) {
                         (Some(t), Some(qs)) => {
-                            t.allocate(_channel_idx, _deck_idx).map(|(b, e)| (qs, b, e))
+                            t.allocate(channel_idx, deck_idx).map(|(b, e)| (qs, b, e))
                         }
                         _ => None,
                     };
@@ -686,13 +707,6 @@ impl Channel {
         let deck_submit_us = t_deck_submit.elapsed().as_micros();
 
         // Collect render info for visible decks, including transition phase
-        struct DeckCompositeInfo {
-            deck_idx: usize,
-            blend_mode: BlendMode,
-            opacity: f32,
-            transition_progress: Option<f64>, // Some = transitioning with shader
-        }
-
         let deck_composite_info: Vec<DeckCompositeInfo> = deck_indices
             .iter()
             .filter_map(|&idx| {
@@ -1090,7 +1104,7 @@ impl Channel {
             let mut read_from_composite = true;
             let mut fx_cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
 
-            for (_eff_idx, effect) in self.effects.iter_mut().enumerate() {
+            for (eff_idx, effect) in self.effects.iter_mut().enumerate() {
                 if !effect.enabled {
                     continue;
                 }
@@ -1109,7 +1123,7 @@ impl Channel {
                     Some(modulation),
                     &mut fx_cmd_buffers,
                 ) {
-                    log::warn!("Effect {} failed, skipping: {}", _eff_idx, e);
+                    log::warn!("Effect {eff_idx} failed, skipping: {e}");
                     continue;
                 }
                 effects_count += 1;
@@ -1155,9 +1169,9 @@ impl Channel {
                 .iter()
                 .map(|(name, us, skipped)| {
                     if *skipped {
-                        format!("{}=SKIP", name)
+                        format!("{name}=SKIP")
                     } else {
-                        format!("{}={}us", name, us)
+                        format!("{name}={us}us")
                     }
                 })
                 .collect::<Vec<_>>()
@@ -1928,8 +1942,7 @@ mod tests {
         let deck_fps = ch.decks[0].deck.fps();
         assert!(
             deck_fps > 0.0,
-            "Deck FPS should be positive after rendering, got {}",
-            deck_fps
+            "Deck FPS should be positive after rendering, got {deck_fps}"
         );
     }
 
@@ -1964,8 +1977,7 @@ mod tests {
         assert!(fps >= 0.0);
         assert!(
             fps < 100_000.0,
-            "FPS should not be absurdly high, got {}",
-            fps
+            "FPS should not be absurdly high, got {fps}"
         );
     }
 

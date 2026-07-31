@@ -42,7 +42,7 @@ fn wire_id(result: anyhow::Result<String>) -> CommandResult {
 }
 
 /// Wire result for a resolution failure handled inline.
-fn not_found(err: UnknownEntity) -> CommandResult {
+fn not_found(err: &UnknownEntity) -> CommandResult {
     CommandResult::Err {
         code: ErrorCode::NotFound,
         message: err.to_string(),
@@ -144,13 +144,18 @@ impl VardaApp {
     /// runner to make one snapshot decision over the GUI's command stream,
     /// sharing the single compiler-checked [`command_is_undoable`] predicate
     /// with the bus consumers.
+    // Method form is the engine-facing API used by `usecases/ui/runner.rs`.
+    #[allow(clippy::unused_self)]
     pub(crate) fn batch_has_undoable(&self, cmds: &[EngineCommand]) -> bool {
         cmds.iter().any(command_is_undoable)
     }
 
     /// Execute a single command and return the result.
     pub(crate) fn execute_command(&mut self, cmd: EngineCommand) -> CommandResult {
-        use crate::engine::traits::*;
+        use crate::engine::traits::{
+            AnalyzerCommands, AudioCommands, DetectCommands, MacroCommands, MixerCommands,
+            ModulationCommands, OutputCommands, SurfaceCommands,
+        };
         use crate::modulation::ModulationSource;
         match cmd {
             // ── Mixer ────────────────────────────────────────
@@ -237,7 +242,7 @@ impl VardaApp {
                     self.mixer.channels_mut()[ch].decks[dk].render_fps = render_fps;
                     CommandResult::Ok
                 }
-                Err(e) => not_found(e),
+                Err(e) => not_found(&e),
             },
             EngineCommand::SetDeckScalingMode { deck_uuid, mode } => {
                 wire(self.set_deck_scaling_mode(&deck_uuid, mode))
@@ -270,7 +275,7 @@ impl VardaApp {
             } => wire(self.move_effect(target, from_idx, to_idx)),
             EngineCommand::SetTransition { shader_name } => {
                 match self.set_transition(shader_name.as_deref()) {
-                    Ok(_) => CommandResult::Ok,
+                    Ok(()) => CommandResult::Ok,
                     Err(e) => CommandResult::Err {
                         code: ErrorCode::InvalidInput,
                         message: e.to_string(),
@@ -289,7 +294,7 @@ impl VardaApp {
             // ── Audio ────────────────────────────────────────
             EngineCommand::OpenAudioSource { source_id } => {
                 match self.open_audio_source(source_id) {
-                    Ok(_) => CommandResult::Ok,
+                    Ok(()) => CommandResult::Ok,
                     Err(e) => CommandResult::Err {
                         code: ErrorCode::InvalidInput,
                         message: e.to_string(),
@@ -368,7 +373,7 @@ impl VardaApp {
                 target,
             } => match self.resolve_output(&output_uuid) {
                 Ok(idx) => self.cmd_set_output_target(idx, target),
-                Err(e) => not_found(e),
+                Err(e) => not_found(&e),
             },
 
             // ── Surfaces ────────────────────────────────────
@@ -540,7 +545,7 @@ impl VardaApp {
                         }
                     }
                     Err(e) => {
-                        log::error!("Surface import failed: {}", e);
+                        log::error!("Surface import failed: {e}");
                         CommandResult::Err {
                             code: ErrorCode::InvalidInput,
                             message: e.to_string(),
@@ -629,7 +634,7 @@ impl VardaApp {
             } => {
                 let (ch_idx, deck_idx) = match self.resolve_deck(&deck_uuid) {
                     Ok(loc) => loc,
-                    Err(e) => return not_found(e),
+                    Err(e) => return not_found(&e),
                 };
                 let shader = shader_name.as_ref().and_then(|name| {
                     self.registry
@@ -641,7 +646,8 @@ impl VardaApp {
                 let slot = &mut self.mixer.channels_mut()[ch_idx].decks[deck_idx];
                 slot.auto_transition
                     .get_or_insert_with(crate::channel::DeckAutoTransition::new)
-                    .transition_shader_name = shader_name.clone();
+                    .transition_shader_name
+                    .clone_from(&shader_name);
                 match shader {
                     Some(shader) => {
                         let _ = slot.set_transition_shader(&self.context, shader);
@@ -679,30 +685,30 @@ impl VardaApp {
             EngineCommand::AddNdiDeck {
                 channel_uuid,
                 source_name,
-            } => self.cmd_add_ndi_deck(&channel_uuid, source_name),
+            } => self.cmd_add_ndi_deck(&channel_uuid, &source_name),
             EngineCommand::AddSyphonDeck {
                 channel_uuid,
                 server_name,
-            } => self.cmd_add_syphon_deck(&channel_uuid, server_name),
+            } => self.cmd_add_syphon_deck(&channel_uuid, &server_name),
             EngineCommand::AddSrtDeck {
                 channel_uuid,
                 url,
                 mode,
-            } => self.cmd_add_srt_deck(&channel_uuid, url, mode),
+            } => self.cmd_add_srt_deck(&channel_uuid, &url, mode),
             EngineCommand::AddHlsDeck { channel_uuid, url } => {
-                self.cmd_add_hls_deck(&channel_uuid, url)
+                self.cmd_add_hls_deck(&channel_uuid, &url)
             }
             EngineCommand::AddDashDeck { channel_uuid, url } => {
-                self.cmd_add_dash_deck(&channel_uuid, url)
+                self.cmd_add_dash_deck(&channel_uuid, &url)
             }
             EngineCommand::AddRtmpDeck {
                 channel_uuid,
                 url,
                 mode,
-            } => self.cmd_add_rtmp_deck(&channel_uuid, url, mode),
+            } => self.cmd_add_rtmp_deck(&channel_uuid, &url, mode),
             EngineCommand::ReloadHtmlDeck { deck_uuid } => self.cmd_reload_html_deck(&deck_uuid),
             EngineCommand::AddHtmlDeck { channel_uuid, url } => {
-                self.cmd_add_html_deck(&channel_uuid, url)
+                self.cmd_add_html_deck(&channel_uuid, &url)
             }
             EngineCommand::OpenHtmlInteractive { deck_uuid } => {
                 #[cfg(feature = "html")]
@@ -763,7 +769,7 @@ impl VardaApp {
                 sequence_uuid,
                 step_idx,
                 easing,
-            } => self.cmd_set_step_easing(&sequence_uuid, step_idx, easing),
+            } => self.cmd_set_step_easing(&sequence_uuid, step_idx, &easing),
             EngineCommand::SetStepTransitionShader {
                 sequence_uuid,
                 step_idx,
@@ -814,23 +820,23 @@ impl VardaApp {
                 self.cmd_add_stream_library_entry(url, mode)
             }
             EngineCommand::RemoveStreamLibraryEntry { url } => {
-                self.cmd_remove_stream_library_entry(url)
+                self.cmd_remove_stream_library_entry(&url)
             }
             EngineCommand::AddHlsLibraryEntry { url } => self.cmd_add_hls_library_entry(url),
-            EngineCommand::RemoveHlsLibraryEntry { url } => self.cmd_remove_hls_library_entry(url),
+            EngineCommand::RemoveHlsLibraryEntry { url } => self.cmd_remove_hls_library_entry(&url),
             EngineCommand::AddDashLibraryEntry { url } => self.cmd_add_dash_library_entry(url),
             EngineCommand::RemoveDashLibraryEntry { url } => {
-                self.cmd_remove_dash_library_entry(url)
+                self.cmd_remove_dash_library_entry(&url)
             }
             EngineCommand::AddRtmpLibraryEntry { url, mode } => {
                 self.cmd_add_rtmp_library_entry(url, mode)
             }
             EngineCommand::RemoveRtmpLibraryEntry { url } => {
-                self.cmd_remove_rtmp_library_entry(url)
+                self.cmd_remove_rtmp_library_entry(&url)
             }
             EngineCommand::AddHtmlLibraryEntry { url } => self.cmd_add_html_library_entry(url),
             EngineCommand::RemoveHtmlLibraryEntry { url } => {
-                self.cmd_remove_html_library_entry(url)
+                self.cmd_remove_html_library_entry(&url)
             }
 
             // ── Output Management ─────────────────────────────────
@@ -1246,7 +1252,7 @@ impl VardaApp {
                 analyzer_type,
                 options,
             } => match self.request_analyzer(&deck_id, &analyzer_type, &options) {
-                Ok(_) => CommandResult::Ok,
+                Ok(()) => CommandResult::Ok,
                 Err(e) => CommandResult::Err {
                     code: ErrorCode::InvalidInput,
                     message: e.to_string(),
@@ -1348,10 +1354,10 @@ impl VardaApp {
             EngineCommand::ToggleAudioSource { source_id, enabled } => {
                 if enabled {
                     if let Err(e) = self.audio_manager.open_source(source_id) {
-                        log::warn!("Failed to open audio source {}: {}", source_id, e);
+                        log::warn!("Failed to open audio source {source_id}: {e}");
                         return CommandResult::Err {
                             code: ErrorCode::InternalError,
-                            message: format!("Failed to open audio source: {}", e),
+                            message: format!("Failed to open audio source: {e}"),
                         };
                     }
                 } else {
@@ -1763,7 +1769,7 @@ mod tests {
 
     #[test]
     fn not_found_always_maps_to_not_found_with_display_message() {
-        match not_found(unknown()) {
+        match not_found(&unknown()) {
             CommandResult::Err { code, message } => {
                 assert_eq!(code, ErrorCode::NotFound);
                 assert_eq!(message, "No deck with UUID 'abc123'");

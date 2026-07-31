@@ -25,7 +25,7 @@ impl ParamValue {
                 let val = input
                     .default
                     .as_ref()
-                    .and_then(|v| v.as_f64())
+                    .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0) as f32;
                 ParamValue::Float(val)
             }
@@ -33,42 +33,44 @@ impl ParamValue {
                 let val = input
                     .default
                     .as_ref()
-                    .and_then(|v| v.as_bool())
+                    .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
                 ParamValue::Bool(val)
             }
             "long" => {
-                let val = input.default.as_ref().and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let val = input
+                    .default
+                    .as_ref()
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0) as i32;
                 ParamValue::Long(val)
             }
             "color" => {
-                let arr = input
-                    .default
-                    .as_ref()
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
+                let arr = input.default.as_ref().and_then(|v| v.as_array()).map_or(
+                    [1.0, 1.0, 1.0, 1.0],
+                    |arr| {
                         let mut color = [1.0f32; 4];
                         for (i, val) in arr.iter().take(4).enumerate() {
                             color[i] = val.as_f64().unwrap_or(1.0) as f32;
                         }
                         color
-                    })
-                    .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                    },
+                );
                 ParamValue::Color(arr)
             }
             "point2D" => {
-                let arr = input
-                    .default
-                    .as_ref()
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        let mut point = [0.0f32; 2];
-                        for (i, val) in arr.iter().take(2).enumerate() {
-                            point[i] = val.as_f64().unwrap_or(0.0) as f32;
-                        }
-                        point
-                    })
-                    .unwrap_or([0.0, 0.0]);
+                let arr =
+                    input
+                        .default
+                        .as_ref()
+                        .and_then(|v| v.as_array())
+                        .map_or([0.0, 0.0], |arr| {
+                            let mut point = [0.0f32; 2];
+                            for (i, val) in arr.iter().take(2).enumerate() {
+                                point[i] = val.as_f64().unwrap_or(0.0) as f32;
+                            }
+                            point
+                        });
                 ParamValue::Point2D(arr)
             }
             _ => ParamValue::Float(0.0), // Default fallback
@@ -89,9 +91,8 @@ impl ParamValue {
     /// Size in bytes (aligned to 4 bytes for GPU)
     pub fn byte_size(&self) -> usize {
         match self {
-            ParamValue::Float(_) => 4,
-            ParamValue::Bool(_) => 4, // Stored as u32
-            ParamValue::Long(_) => 4,
+            // Bool is stored as u32
+            ParamValue::Float(_) | ParamValue::Bool(_) | ParamValue::Long(_) => 4,
             ParamValue::Color(_) => 16,
             ParamValue::Point2D(_) => 8,
         }
@@ -102,7 +103,7 @@ impl ParamValue {
         match self {
             ParamValue::Float(v) => buffer.extend_from_slice(&v.to_le_bytes()),
             ParamValue::Bool(v) => {
-                buffer.extend_from_slice(&(if *v { 1u32 } else { 0u32 }).to_le_bytes())
+                buffer.extend_from_slice(&u32::from(*v).to_le_bytes());
             }
             ParamValue::Long(v) => buffer.extend_from_slice(&v.to_le_bytes()),
             ParamValue::Color(v) => {
@@ -306,6 +307,11 @@ impl ShaderParams {
     }
 
     /// Create or get GPU buffer
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the buffer slot is still empty after this call populated
+    /// it, which cannot happen.
     pub fn ensure_buffer(&mut self, device: &wgpu::Device) -> &wgpu::Buffer {
         if self.buffer.is_none() {
             let data = self.build_buffer_data().to_vec();
@@ -431,13 +437,11 @@ impl ShaderParams {
                 if offset == 0.0 {
                     return *value;
                 }
-                let (min_val, max_val) = definition
-                    .map(|d| {
-                        let min = d.min.unwrap_or(0.0);
-                        let max = d.max.unwrap_or(1.0);
-                        (min, max)
-                    })
-                    .unwrap_or((0.0, 1.0));
+                let (min_val, max_val) = definition.map_or((0.0, 1.0), |d| {
+                    let min = d.min.unwrap_or(0.0);
+                    let max = d.max.unwrap_or(1.0);
+                    (min, max)
+                });
                 let range = max_val - min_val;
                 let modulated = (base + offset * range).clamp(min_val, max_val);
                 ParamValue::Float(modulated)
@@ -569,7 +573,7 @@ mod tests {
         let input = make_float_input("brightness", 0.75, 0.0, 1.0);
         match ParamValue::from_isf_input(&input) {
             ParamValue::Float(v) => assert!((v - 0.75).abs() < 1e-5),
-            other => panic!("Expected Float, got {:?}", other),
+            other => panic!("Expected Float, got {other:?}"),
         }
     }
 
@@ -578,7 +582,7 @@ mod tests {
         let input = make_bool_input("enabled", true);
         match ParamValue::from_isf_input(&input) {
             ParamValue::Bool(v) => assert!(v),
-            other => panic!("Expected Bool, got {:?}", other),
+            other => panic!("Expected Bool, got {other:?}"),
         }
     }
 
@@ -592,7 +596,7 @@ mod tests {
                 assert!((c[2] - 0.0).abs() < 1e-5);
                 assert!((c[3] - 1.0).abs() < 1e-5);
             }
-            other => panic!("Expected Color, got {:?}", other),
+            other => panic!("Expected Color, got {other:?}"),
         }
     }
 
@@ -601,7 +605,7 @@ mod tests {
         let input = make_long_input("mode", 2);
         match ParamValue::from_isf_input(&input) {
             ParamValue::Long(v) => assert_eq!(v, 2),
-            other => panic!("Expected Long, got {:?}", other),
+            other => panic!("Expected Long, got {other:?}"),
         }
     }
 
@@ -613,7 +617,7 @@ mod tests {
                 assert!((p[0] - 0.5).abs() < 1e-5);
                 assert!((p[1] - 0.5).abs() < 1e-5);
             }
-            other => panic!("Expected Point2D, got {:?}", other),
+            other => panic!("Expected Point2D, got {other:?}"),
         }
     }
 

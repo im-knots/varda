@@ -26,7 +26,7 @@ pub const COLOR_PATH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Fl
 ///
 /// Owns the GPU resources needed for rendering (mixer, deck, channel, effects).
 /// Does NOT own any window surface — that's a presentation concern owned by
-/// the UI consumer (WindowSurface) or output windows (OutputWindow).
+/// the UI consumer (`WindowSurface`) or output windows (`OutputWindow`).
 ///
 /// Can be created with a window hint (for adapter compatibility) or headless.
 ///
@@ -64,6 +64,11 @@ impl GpuContext {
     ///
     /// The adapter is selected for compatibility with the window's surface.
     /// Returns both the GPU context (for the engine) and the window surface (for the UI).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the surface cannot be created for the window, if no
+    /// suitable adapter is found, or if device creation fails.
     pub async fn new_for_window(window: &'static Window) -> Result<(Self, WindowSurface)> {
         let (instance, surface, size) = Self::create_surface_for_window(window)?;
         Self::new_with_surface(instance, surface, size).await
@@ -73,6 +78,11 @@ impl GpuContext {
     /// On macOS, `create_surface` accesses `NSView`/`CAMetalLayer` which must
     /// happen on the main thread.  The returned objects are `Send` and can be
     /// passed to a background thread for adapter/device creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `wgpu` cannot create a surface for the window
+    /// (unsupported window handle or no compatible backend).
     pub fn create_surface_for_window(
         window: &'static Window,
     ) -> Result<(
@@ -85,8 +95,8 @@ impl GpuContext {
             backends: wgpu::Backends::all(),
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
-            display: Default::default(),
-            memory_budget_thresholds: Default::default(),
+            display: None,
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
         });
         let surface = instance
             .create_surface(window)
@@ -97,6 +107,11 @@ impl GpuContext {
     /// Complete GPU initialization given a pre-created instance and surface.
     /// Safe to call from a background thread — all Metal dispatch work is
     /// resolved through the pre-created surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no adapter compatible with the surface is found, or
+    /// if the device request fails (e.g. the requested limits are unsupported).
     pub async fn new_with_surface(
         instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
@@ -124,9 +139,9 @@ impl GpuContext {
                     max_texture_dimension_2d: 16384,
                     ..wgpu::Limits::default()
                 },
-                memory_hints: Default::default(),
-                experimental_features: Default::default(),
-                trace: Default::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                trace: wgpu::Trace::default(),
             })
             .await
             .context("Failed to create device")?;
@@ -136,7 +151,7 @@ impl GpuContext {
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(wgpu::TextureFormat::is_srgb)
             .unwrap_or(surface_caps.formats[0]);
 
         // Prefer Immediate to avoid macOS ProMotion throttling the render loop.
@@ -237,16 +252,21 @@ impl GpuContext {
     /// Create a headless GPU context (no window surface).
     ///
     /// Requests the same optional features as the windowed path (notably
-    /// `TEXTURE_COMPRESSION_BC`) so HAP video uses the GPU-native BCn path in
+    /// `TEXTURE_COMPRESSION_BC`) so HAP video uses the GPU-native `BCn` path in
     /// headless installations. Falls back to software adapter if no hardware
     /// GPU is available. Used for headless mode and tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no GPU adapter is available at all, or if the
+    /// headless device request fails.
     pub fn new_headless() -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
-            display: Default::default(),
-            memory_budget_thresholds: Default::default(),
+            display: None,
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
         });
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -268,9 +288,9 @@ impl GpuContext {
                 max_texture_dimension_2d: 16384,
                 ..wgpu::Limits::default()
             },
-            memory_hints: Default::default(),
-            experimental_features: Default::default(),
-            trace: Default::default(),
+            memory_hints: wgpu::MemoryHints::default(),
+            experimental_features: wgpu::ExperimentalFeatures::default(),
+            trace: wgpu::Trace::default(),
         }))
         .context("Failed to create headless device")?;
 
@@ -310,7 +330,7 @@ impl GpuContext {
         })
     }
 
-    /// Create a texture for compositing in linear-light space (Rgba16Float).
+    /// Create a texture for compositing in linear-light space (`Rgba16Float`).
     /// Used for channel composites, mixer composites, effect ping-pong, and sub-mixes.
     pub fn create_compositing_texture(&self, width: u32, height: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
@@ -374,11 +394,11 @@ pub struct SurfaceRenderInfo<'a> {
     pub extra_contours: &'a [Vec<[f32; 2]>],
     /// Bounding box: [x, y, width, height] in [0..1]
     pub bounding_box: [f32; 4],
-    /// UV scale for content sampling (Fill=[1,1], Mapped=[bb_w, bb_h])
+    /// UV scale for content sampling (Fill=[1,1], Mapped=[`bb_w`, `bb_h`])
     pub uv_scale: [f32; 2],
-    /// UV offset for content sampling (Fill=[0,0], Mapped=[bb_x, bb_y])
+    /// UV offset for content sampling (Fill=[0,0], Mapped=[`bb_x`, `bb_y`])
     pub uv_offset: [f32; 2],
-    /// Warp mode: CornerPin or Mesh. None = no warp (render at polygon's native position).
+    /// Warp mode: `CornerPin` or Mesh. None = no warp (render at polygon's native position).
     pub warp_mode: Option<super::warp::WarpMode>,
     /// Per-surface overlap zones (Auto mode). Default = no zones.
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
@@ -404,7 +424,7 @@ pub struct SurfaceAssignment {
 /// An output window that displays content on a separate display/projector.
 ///
 /// Each output window has its own OS window and wgpu surface, but shares
-/// the device and queue from the GpuContext.
+/// the device and queue from the `GpuContext`.
 pub struct OutputWindow {
     pub uuid: String,
     pub name: String,
@@ -432,7 +452,7 @@ pub struct OutputWindow {
     pub surface_texture_view: wgpu::TextureView,
     /// Post-blend result texture. UI preview reads from this.
     /// When edge blend is off, surfaces render directly here.
-    /// When edge blend is on, edge blend shader writes here from surface_texture.
+    /// When edge blend is on, edge blend shader writes here from `surface_texture`.
     pub preview_texture: wgpu::Texture,
     pub preview_texture_view: wgpu::TextureView,
     /// Per-output rotation applied at the final blit stage.
@@ -441,6 +461,11 @@ pub struct OutputWindow {
 
 impl OutputWindow {
     /// Create a new output window with its own surface, sharing the given device/queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output surface cannot be created for the window,
+    /// or if any of the blit/polygon/edge-blend pipelines fail to build.
     pub fn new(context: &GpuContext, window: &'static Window, name: String) -> Result<Self> {
         let size = window.inner_size();
 
@@ -454,7 +479,7 @@ impl OutputWindow {
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(wgpu::TextureFormat::is_srgb)
             .unwrap_or(surface_caps.formats[0]);
 
         // Output windows use Immediate mode for lowest latency to projectors/displays.
@@ -598,7 +623,7 @@ impl OutputWindow {
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
                 warp_mode: None,
-                overlap_zones: Default::default(),
+                overlap_zones: super::edge_blend::SurfaceOverlapZones::default(),
                 hole_uv_contours: Vec::new(),
             }],
         );
@@ -606,7 +631,7 @@ impl OutputWindow {
 
     /// Render multiple surfaces composited at their canvas positions.
     /// Each surface is rendered as a textured polygon using fan triangulation.
-    /// Warp is applied per the WarpMode: CornerPin uses homography in the vertex shader,
+    /// Warp is applied per the `WarpMode`: `CornerPin` uses homography in the vertex shader,
     /// Mesh mode bakes warp into triangle vertices directly.
     pub fn render_surfaces(&self, context: &GpuContext, surfaces: &[SurfaceRenderInfo<'_>]) {
         let output = match self.surface.get_current_texture() {
@@ -676,19 +701,7 @@ impl OutputWindow {
                 // represent disjoint contours, so render every contour as a
                 // bounding-box UV fill. Matches the stage editor and fixes only
                 // the primary contour rendering (see combine_surfaces).
-                let (homography, vertices) = if !surf.extra_contours.is_empty() {
-                    (
-                        None,
-                        PolygonBlitPipeline::triangulate_multi(
-                            surf.vertices,
-                            surf.extra_contours,
-                            bb[0],
-                            bb[1],
-                            bb[2],
-                            bb[3],
-                        ),
-                    )
-                } else {
+                let (homography, vertices) = if surf.extra_contours.is_empty() {
                     // Dispatch warp mode: CornerPin → homography, Mesh → vertex-baked, None → identity
                     match &surf.warp_mode {
                         Some(super::warp::WarpMode::CornerPin { corners }) => {
@@ -727,6 +740,18 @@ impl OutputWindow {
                             (None, verts)
                         }
                     }
+                } else {
+                    (
+                        None,
+                        PolygonBlitPipeline::triangulate_multi(
+                            surf.vertices,
+                            surf.extra_contours,
+                            bb[0],
+                            bb[1],
+                            bb[2],
+                            bb[3],
+                        ),
+                    )
                 };
 
                 super::blit::PolygonDrawDesc {
@@ -811,7 +836,7 @@ impl OutputWindow {
     }
 
     /// Set the display target for this output window.
-    /// `monitor` should be the MonitorHandle for Display targets.
+    /// `monitor` should be the `MonitorHandle` for Display targets.
     pub fn set_target(
         &mut self,
         target: OutputTarget,
@@ -840,7 +865,7 @@ impl OutputWindow {
         // Reclaim the leaked Box<Window> so it gets dropped, which closes the OS window.
         // Safety: the pointer was created by Box::leak in create_pending_outputs,
         // and we are the sole owner (no other references exist after removal from the vec).
-        let window_ptr = self.window as *const Window as *mut Window;
+        let window_ptr = std::ptr::from_ref::<Window>(self.window).cast_mut();
         // Drop surface first (it references the window)
         drop(self.surface);
         // Now reclaim and drop the window
@@ -872,6 +897,8 @@ const CALIBRATION_COLORS: [[u8; 3]; 8] = [
 /// - **Gradient bars** (lower ~30% of interior): grayscale, R, G, B, stepped gray
 ///
 /// Each surface gets a distinct accent color border for identification.
+// gx/gy, grid_h/grad_h and at_tl/at_tr/at_bl/at_br are the clearest names for this 2D geometry.
+#[allow(clippy::similar_names)]
 pub fn generate_calibration_card(width: u32, height: u32, color_index: usize) -> Vec<u8> {
     let [cr, cg, cb] = CALIBRATION_COLORS[color_index % CALIBRATION_COLORS.len()];
     let mut pixels = vec![0u8; (width * height * 4) as usize];
@@ -1020,7 +1047,7 @@ pub fn create_calibration_textures(
         .map(|i| {
             let pixels = generate_calibration_card(card_w, card_h, i);
             let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("Calibration Card {}", i)),
+                label: Some(&format!("Calibration Card {i}")),
                 size: wgpu::Extent3d {
                     width: card_w,
                     height: card_h,
@@ -1078,8 +1105,8 @@ pub struct AudioPassthrough {
 /// A headless output renders content to a GPU texture, reads it back to CPU,
 /// and sends it to an external target (NDI, Syphon, recording, SRT).
 ///
-/// Unlike OutputWindow, this has no OS window or surface — it renders
-/// offscreen via ReadbackBuffer.
+/// Unlike `OutputWindow`, this has no OS window or surface — it renders
+/// offscreen via `ReadbackBuffer`.
 pub struct HeadlessOutput {
     /// Stable UUID (8-char hex)
     pub uuid: String,
@@ -1091,7 +1118,7 @@ pub struct HeadlessOutput {
     pub readback: super::ReadbackBuffer,
     /// Where to send the readback frames (unified target)
     pub target: OutputTarget,
-    /// Offscreen render texture (COPY_SRC for readback)
+    /// Offscreen render texture (`COPY_SRC` for readback)
     pub texture: wgpu::Texture,
     /// View into the offscreen render texture
     pub texture_view: wgpu::TextureView,
@@ -1201,6 +1228,12 @@ impl HeadlessOutput {
     }
 
     /// Create a new headless output with the given resolution and target.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the blit, polygon or edge-blend pipeline cannot be built for
+    /// the headless `Rgba8UnormSrgb` format — a device-level failure that
+    /// leaves the output unusable.
     pub fn new(
         device: &wgpu::Device,
         name: String,

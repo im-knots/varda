@@ -12,6 +12,8 @@ const UNIT_SQUARE: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.
 
 /// Apply a packed forward homography (12 floats, row-major with per-row padding)
 /// to a 2D point in homogeneous space.
+// h/p/x/y/w are the standard symbols for homogeneous-coordinate math.
+#[allow(clippy::many_single_char_names)]
 fn apply(h: &[f32; 12], p: [f32; 2]) -> [f32; 2] {
     let (x, y) = (p[0], p[1]);
     let w = h[8] * x + h[9] * y + h[10];

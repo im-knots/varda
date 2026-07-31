@@ -2,7 +2,7 @@
 //!
 //! Renders one splat per depth texel into the deck target texture, deprojecting
 //! via intrinsics and orbiting a virtual camera. Colour comes from the RGB
-//! stream, a depth ramp, or a solid tint. See point_cloud.wgsl and
+//! stream, a depth ramp, or a solid tint. See `point_cloud.wgsl` and
 //! spec/depth-sensors.md.
 
 use super::backend::DepthIntrinsics;
@@ -202,7 +202,7 @@ impl PointCloudPipeline {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -212,7 +212,7 @@ impl PointCloudPipeline {
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
@@ -280,7 +280,7 @@ impl PointCloudPipeline {
     }
 
     /// Render the point cloud into `target`. Clears to black first.
-    /// `point_count` = src_w * src_h (one splat per depth texel).
+    /// `point_count` = `src_w` * `src_h` (one splat per depth texel).
     pub fn render(
         &self,
         device: &wgpu::Device,

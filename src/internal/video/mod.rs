@@ -1,9 +1,9 @@
 //! Video playback support for Varda
 //!
 //! Two codec paths:
-//! - **HAP path**: GPU-native BCn compressed textures — near-zero CPU decode cost.
+//! - **HAP path**: GPU-native `BCn` compressed textures — near-zero CPU decode cost.
 //!   Supports Hap (BC1), Hap Alpha (BC3), Hap R (BC7).
-//! - **ffmpeg path**: CPU decode for H.264, ProRes, VP9, etc. — fallback for all other codecs.
+//! - **ffmpeg path**: CPU decode for H.264, `ProRes`, VP9, etc. — fallback for all other codecs.
 
 pub mod hap;
 
@@ -54,9 +54,9 @@ pub struct PlaybackState {
     /// Video frame rate.
     pub frame_rate: f64,
     /// Set to true for one frame when playback reaches the out-point/EOF.
-    /// Used by auto-transition ClipEnd trigger. Cleared each frame before advance.
+    /// Used by auto-transition `ClipEnd` trigger. Cleared each frame before advance.
     pub reached_end: bool,
-    /// Last wall-clock time advance_frame was called (for real-time delta).
+    /// Last wall-clock time `advance_frame` was called (for real-time delta).
     last_advance: std::time::Instant,
     /// Fractional frame accumulator — tracks sub-frame position for pacing.
     frame_accumulator: f64,
@@ -81,7 +81,7 @@ impl PlaybackState {
         }
     }
 
-    /// Effective out-point (uses duration if out_point is 0).
+    /// Effective out-point (uses duration if `out_point` is 0).
     pub fn effective_out(&self) -> f64 {
         if self.out_point > 0.0 {
             self.out_point
@@ -115,7 +115,7 @@ impl PlaybackState {
         let frame_time = 1.0 / self.frame_rate;
         self.frame_accumulator += dt * self.speed.abs();
         let frames_to_decode = (self.frame_accumulator / frame_time).floor() as u32;
-        self.frame_accumulator -= frames_to_decode as f64 * frame_time;
+        self.frame_accumulator -= f64::from(frames_to_decode) * frame_time;
 
         let in_pt = self.in_point;
         let out_pt = self.effective_out();
@@ -173,7 +173,7 @@ pub enum HapTextureFormat {
     Bc1,
     /// BC3 / DXT5 — RGBA with interpolated alpha (Hap Alpha)
     Bc3,
-    /// BC3 / DXT5 storing Scaled YCoCg color (Hap Q) — needs shader conversion to RGB
+    /// BC3 / DXT5 storing Scaled `YCoCg` color (Hap Q) — needs shader conversion to RGB
     Bc3YCoCg,
     /// BC4 / RGTC1 — single-channel alpha (Hap Alpha-Only, or alpha plane of Hap Q Alpha)
     Bc4,
@@ -213,11 +213,11 @@ impl HapTextureFormat {
     }
 }
 
-/// A decoded video frame — either CPU-decoded RGBA or GPU-compressed BCn.
+/// A decoded video frame — either CPU-decoded RGBA or GPU-compressed `BCn`.
 pub enum VideoFrame<'a> {
     /// Standard RGBA pixel data (from ffmpeg CPU decode).
     Rgba(&'a [u8]),
-    /// GPU-compressed BCn texture data (from HAP decode).
+    /// GPU-compressed `BCn` texture data (from HAP decode).
     Compressed {
         data: &'a [u8],
         format: HapTextureFormat,
@@ -248,6 +248,9 @@ pub struct DecodedFrame {
 }
 
 /// Read-only snapshot of playback state for the main thread.
+// Mirrors PlaybackState's independent flags one-for-one; collapsing them into an
+// enum would misrepresent the state they snapshot.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct PlaybackSnapshot {
     pub playing: bool,
@@ -266,7 +269,7 @@ pub struct PlaybackSnapshot {
 }
 
 impl PlaybackSnapshot {
-    /// Create a snapshot from a PlaybackState. The `pingpong_cache_truncated`
+    /// Create a snapshot from a `PlaybackState`. The `pingpong_cache_truncated`
     /// flag defaults to false here and is set by the ffmpeg decode thread.
     pub fn from_state(ps: &PlaybackState) -> Self {
         Self {
@@ -295,7 +298,7 @@ pub struct VideoDecodeHandle {
     /// [`Self::recycle`] and reused by the decode thread (avoids a fresh ~4 MB
     /// allocation per frame — issue #42).
     frame_pool: Arc<Mutex<Vec<Vec<u8>>>>,
-    _thread: Option<std::thread::JoinHandle<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
     pub width: u32,
     pub height: u32,
     /// Whether this is a dual-plane HAP source (for render pass alpha detection).
@@ -303,7 +306,11 @@ pub struct VideoDecodeHandle {
 }
 
 impl VideoDecodeHandle {
-    /// Spawn a background decode thread for a standard (ffmpeg) VideoPlayer.
+    /// Spawn a background decode thread for a standard (ffmpeg) `VideoPlayer`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS refuses to spawn the decode thread.
     pub fn spawn_video(player: VideoPlayer) -> Self {
         let width = player.width();
         let height = player.height();
@@ -325,7 +332,7 @@ impl VideoDecodeHandle {
         let thread = std::thread::Builder::new()
             .name("video-decode".into())
             .spawn(move || {
-                video_decode_thread(player, cmd_rx, fd, ss, sf, fp, fps);
+                video_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps);
             })
             .expect("failed to spawn video decode thread");
 
@@ -335,7 +342,7 @@ impl VideoDecodeHandle {
             snapshot,
             stop_flag,
             frame_pool,
-            _thread: Some(thread),
+            thread: Some(thread),
             width,
             height,
             is_dual_plane: false,
@@ -343,6 +350,10 @@ impl VideoDecodeHandle {
     }
 
     /// Spawn a background decode thread for a HAP video player.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS refuses to spawn the decode thread.
     pub fn spawn_hap(player: hap::HapPlayer) -> Self {
         let width = player.width();
         let height = player.height();
@@ -365,7 +376,7 @@ impl VideoDecodeHandle {
         let thread = std::thread::Builder::new()
             .name("hap-decode".into())
             .spawn(move || {
-                hap_decode_thread(player, cmd_rx, fd, ss, sf, fp, fps);
+                hap_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps);
             })
             .expect("failed to spawn hap decode thread");
 
@@ -375,7 +386,7 @@ impl VideoDecodeHandle {
             snapshot,
             stop_flag,
             frame_pool,
-            _thread: Some(thread),
+            thread: Some(thread),
             width,
             height,
             is_dual_plane,
@@ -405,10 +416,8 @@ impl VideoDecodeHandle {
 
     /// Get the current playback snapshot (read-only copy).
     pub fn playback_snapshot(&self) -> PlaybackSnapshot {
-        self.snapshot
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or_else(|_| PlaybackSnapshot {
+        self.snapshot.lock().map_or_else(
+            |_| PlaybackSnapshot {
                 playing: false,
                 position: 0.0,
                 duration: 0.0,
@@ -420,7 +429,9 @@ impl VideoDecodeHandle {
                 reached_end: false,
                 frame_rate: 30.0,
                 pingpong_cache_truncated: false,
-            })
+            },
+            |s| s.clone(),
+        )
     }
 }
 
@@ -429,29 +440,27 @@ impl Drop for VideoDecodeHandle {
         self.stop_flag.store(true, Ordering::Release);
         // Send Stop to unblock recv_timeout
         let _ = self.cmd_tx.send(VideoCommand::Stop);
-        if let Some(thread) = self._thread.take() {
+        if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
 }
 
-/// Apply a command to a PlaybackState.
-fn apply_command(ps: &mut PlaybackState, cmd: VideoCommand) {
+/// Apply a command to a `PlaybackState`.
+fn apply_command(ps: &mut PlaybackState, cmd: &VideoCommand) {
     match cmd {
         VideoCommand::Play => ps.playing = true,
         VideoCommand::Pause => ps.playing = false,
-        VideoCommand::Seek(_) => {
-            // Seek is handled specially by the thread loop (calls seek_and_reset / seek)
-        }
-        VideoCommand::SetSpeed(s) => ps.speed = s,
-        VideoCommand::SetLoopMode(m) => ps.loop_mode = m,
-        VideoCommand::SetInPoint(s) => ps.in_point = s,
-        VideoCommand::SetOutPoint(s) => ps.out_point = s,
+        // Seek is handled specially by the thread loop (calls seek_and_reset / seek)
+        VideoCommand::Seek(_) | VideoCommand::Stop => {}
+        VideoCommand::SetSpeed(s) => ps.speed = *s,
+        VideoCommand::SetLoopMode(m) => ps.loop_mode = *m,
+        VideoCommand::SetInPoint(s) => ps.in_point = *s,
+        VideoCommand::SetOutPoint(s) => ps.out_point = *s,
         VideoCommand::ClearInOutPoints => {
             ps.in_point = 0.0;
             ps.out_point = 0.0;
         }
-        VideoCommand::Stop => {}
     }
 }
 
@@ -462,7 +471,7 @@ fn apply_command(ps: &mut PlaybackState, cmd: VideoCommand) {
 const FRAME_POOL_CAP: usize = 4;
 
 /// Take a reusable buffer from the pool, or a fresh empty one if it is empty.
-fn pool_take(pool: &Arc<Mutex<Vec<Vec<u8>>>>) -> Vec<u8> {
+fn pool_take(pool: &Mutex<Vec<Vec<u8>>>) -> Vec<u8> {
     pool.lock()
         .ok()
         .and_then(|mut p| p.pop())
@@ -470,7 +479,7 @@ fn pool_take(pool: &Arc<Mutex<Vec<Vec<u8>>>>) -> Vec<u8> {
 }
 
 /// Return a buffer to the pool for reuse, dropping it if the pool is at capacity.
-fn pool_return(pool: &Arc<Mutex<Vec<Vec<u8>>>>, buf: Vec<u8>) {
+fn pool_return(pool: &Mutex<Vec<Vec<u8>>>, buf: Vec<u8>) {
     if let Ok(mut p) = pool.lock() {
         if p.len() < FRAME_POOL_CAP {
             p.push(buf);
@@ -480,11 +489,11 @@ fn pool_return(pool: &Arc<Mutex<Vec<Vec<u8>>>>, buf: Vec<u8>) {
 
 fn video_decode_thread(
     mut player: VideoPlayer,
-    cmd_rx: mpsc::Receiver<VideoCommand>,
-    frame_data: Arc<Mutex<Option<DecodedFrame>>>,
-    snapshot: Arc<Mutex<PlaybackSnapshot>>,
-    stop_flag: Arc<AtomicBool>,
-    frame_pool: Arc<Mutex<Vec<Vec<u8>>>>,
+    cmd_rx: &mpsc::Receiver<VideoCommand>,
+    frame_data: &Mutex<Option<DecodedFrame>>,
+    snapshot: &Mutex<PlaybackSnapshot>,
+    stop_flag: &AtomicBool,
+    frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
 ) {
     let interval = std::time::Duration::from_secs_f64((1.0 / fps).max(0.001));
@@ -499,20 +508,20 @@ fn video_decode_thread(
             if let VideoCommand::Seek(t) = &cmd {
                 had_seek = Some(*t);
             }
-            apply_command(&mut player.playback, cmd);
+            apply_command(&mut player.playback, &cmd);
         }
 
         // Process seek if any
         if let Some(t) = had_seek {
             if let Err(e) = player.seek_and_reset(t) {
-                log::warn!("Video seek error: {}", e);
+                log::warn!("Video seek error: {e}");
             }
         }
 
         // Decode next frame
         match player.next_frame() {
             Ok(Some(data)) => {
-                let mut buf = pool_take(&frame_pool);
+                let mut buf = pool_take(frame_pool);
                 buf.clear();
                 buf.extend_from_slice(data);
                 let frame = DecodedFrame {
@@ -526,9 +535,9 @@ fn video_decode_thread(
                     // it falls behind — exactly the #42 scenario) instead of
                     // dropping its buffer.
                     if let Some(old) = slot.take() {
-                        pool_return(&frame_pool, old.color_data);
+                        pool_return(frame_pool, old.color_data);
                         if let Some(alpha) = old.alpha_data {
-                            pool_return(&frame_pool, alpha);
+                            pool_return(frame_pool, alpha);
                         }
                     }
                     *slot = Some(frame);
@@ -536,7 +545,7 @@ fn video_decode_thread(
             }
             Ok(None) => {}
             Err(e) => {
-                log::warn!("Video decode error: {}", e);
+                log::warn!("Video decode error: {e}");
             }
         }
 
@@ -555,10 +564,10 @@ fn video_decode_thread(
                 }
                 if let VideoCommand::Seek(t) = &cmd {
                     if let Err(e) = player.seek_and_reset(*t) {
-                        log::warn!("Video seek error: {}", e);
+                        log::warn!("Video seek error: {e}");
                     }
                 } else {
-                    apply_command(&mut player.playback, cmd);
+                    apply_command(&mut player.playback, &cmd);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -570,11 +579,11 @@ fn video_decode_thread(
 /// Background decode loop for HAP video.
 fn hap_decode_thread(
     mut player: hap::HapPlayer,
-    cmd_rx: mpsc::Receiver<VideoCommand>,
-    frame_data: Arc<Mutex<Option<DecodedFrame>>>,
-    snapshot: Arc<Mutex<PlaybackSnapshot>>,
-    stop_flag: Arc<AtomicBool>,
-    frame_pool: Arc<Mutex<Vec<Vec<u8>>>>,
+    cmd_rx: &mpsc::Receiver<VideoCommand>,
+    frame_data: &Mutex<Option<DecodedFrame>>,
+    snapshot: &Mutex<PlaybackSnapshot>,
+    stop_flag: &AtomicBool,
+    frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
 ) {
     let interval = std::time::Duration::from_secs_f64((1.0 / fps).max(0.001));
@@ -589,24 +598,24 @@ fn hap_decode_thread(
             if let VideoCommand::Seek(t) = &cmd {
                 had_seek = Some(*t);
             }
-            apply_command(&mut player.playback, cmd);
+            apply_command(&mut player.playback, &cmd);
         }
 
         // Process seek if any
         if let Some(t) = had_seek {
             if let Err(e) = player.seek(t) {
-                log::warn!("HAP seek error: {}", e);
+                log::warn!("HAP seek error: {e}");
             }
         }
 
         // Decode next frame
         match player.next_frame() {
             Ok(Some(result)) => {
-                let mut color = pool_take(&frame_pool);
+                let mut color = pool_take(frame_pool);
                 color.clear();
                 color.extend_from_slice(result.color_data);
                 let alpha = result.alpha_data.map(|d| {
-                    let mut a = pool_take(&frame_pool);
+                    let mut a = pool_take(frame_pool);
                     a.clear();
                     a.extend_from_slice(d);
                     a
@@ -619,9 +628,9 @@ fn hap_decode_thread(
                 };
                 if let Ok(mut slot) = frame_data.lock() {
                     if let Some(old) = slot.take() {
-                        pool_return(&frame_pool, old.color_data);
+                        pool_return(frame_pool, old.color_data);
                         if let Some(alpha) = old.alpha_data {
-                            pool_return(&frame_pool, alpha);
+                            pool_return(frame_pool, alpha);
                         }
                     }
                     *slot = Some(frame);
@@ -629,7 +638,7 @@ fn hap_decode_thread(
             }
             Ok(None) => {}
             Err(e) => {
-                log::warn!("HAP decode error: {}", e);
+                log::warn!("HAP decode error: {e}");
             }
         }
 
@@ -646,10 +655,10 @@ fn hap_decode_thread(
                 }
                 if let VideoCommand::Seek(t) = &cmd {
                     if let Err(e) = player.seek(*t) {
-                        log::warn!("HAP seek error: {}", e);
+                        log::warn!("HAP seek error: {e}");
                     }
                 } else {
-                    apply_command(&mut player.playback, cmd);
+                    apply_command(&mut player.playback, &cmd);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -660,6 +669,11 @@ fn hap_decode_thread(
 
 /// Detect whether a video file uses a HAP codec.
 /// Returns the HAP texture format if it is HAP, or None for standard codecs.
+///
+/// # Errors
+///
+/// Returns an error if FFmpeg cannot be initialised, if the file cannot be
+/// opened, or if it contains no video stream.
 pub fn detect_hap_codec<P: AsRef<Path>>(path: P) -> Result<Option<HapTextureFormat>> {
     ffmpeg::init().context("Failed to initialize FFmpeg")?;
     let mut ictx = input(&path).context("Failed to open video file for codec detection")?;
@@ -729,7 +743,7 @@ pub struct VideoPlayer {
     /// Frame cache for reverse playback (ping-pong).
     /// Filled during forward play, drained in reverse order.
     frame_cache: Vec<Vec<u8>>,
-    /// Current read index into frame_cache during reverse playback.
+    /// Current read index into `frame_cache` during reverse playback.
     cache_read_idx: usize,
     /// Whether we're actively caching frames (disabled when memory cap hit this pass).
     caching_enabled: bool,
@@ -752,6 +766,12 @@ unsafe impl Send for VideoPlayer {}
 
 impl VideoPlayer {
     /// Create a new video player from a file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if FFmpeg cannot be initialised, if the file cannot be
+    /// opened, if it contains no video stream, or if a decoder or scaler cannot
+    /// be created for it.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         ffmpeg::init().context("Failed to initialize FFmpeg")?;
         let ictx = input(&path).context("Failed to open video file")?;
@@ -766,9 +786,9 @@ impl VideoPlayer {
         let width = decoder.width();
         let height = decoder.height();
         let rate = video_stream.rate();
-        let fps = rate.0 as f64 / rate.1 as f64;
+        let fps = f64::from(rate.0) / f64::from(rate.1);
         let duration = if ictx.duration() > 0 {
-            ictx.duration() as f64 / ffmpeg::ffi::AV_TIME_BASE as f64
+            ictx.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)
         } else {
             0.0
         };
@@ -785,12 +805,7 @@ impl VideoPlayer {
         let frame_data = vec![0u8; frame_byte_size];
         let max_cached_frames = MAX_CACHE_BYTES / frame_byte_size.max(1);
         log::info!(
-            "Loaded video: {}x{} @ {:.2} fps, duration: {:.2}s (ping-pong cache: {} frames)",
-            width,
-            height,
-            fps,
-            duration,
-            max_cached_frames
+            "Loaded video: {width}x{height} @ {fps:.2} fps, duration: {duration:.2}s (ping-pong cache: {max_cached_frames} frames)"
         );
         Ok(Self {
             ictx,
@@ -816,6 +831,11 @@ impl VideoPlayer {
     /// Uses wall-clock time pacing: only decodes new frames when enough real
     /// time has elapsed (respecting speed multiplier). At speed < 1.0, frames
     /// are held longer; at speed > 1.0, frames are skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if seeking, packet demuxing, decoding, or colour-space
+    /// conversion fails.
     pub fn next_frame(&mut self) -> Result<Option<&[u8]>> {
         if !self.playback.playing {
             return Ok(None);
@@ -833,15 +853,14 @@ impl VideoPlayer {
         // Detect ping-pong boundary flips from advance_frame:
         if !was_reverse && self.playback.reverse {
             // Forward→reverse flip (hit out-point). Serve from cache.
-            if !self.frame_cache.is_empty() {
-                self.cache_read_idx = self.frame_cache.len() - 1;
-            } else {
+            if self.frame_cache.is_empty() {
                 // No cache available (overflow or very short video).
                 // Hold the current frame at the boundary and stay in reverse —
                 // advance_frame will walk the position backward and eventually
                 // hit in_point, triggering the reverse→forward flip below.
                 return Ok(Some(&self.frame_data));
             }
+            self.cache_read_idx = self.frame_cache.len() - 1;
         } else if was_reverse && !self.playback.reverse {
             // Reverse→forward flip (hit in-point). Clear cache, seek to in-point.
             // Reset overflow so the new forward pass gets a fresh caching budget.
@@ -945,7 +964,6 @@ impl VideoPlayer {
                         LoopMode::Loop => {
                             self.playback.position = self.playback.in_point;
                             self.seek(self.playback.position)?;
-                            continue;
                         }
                         LoopMode::PingPong => {
                             self.playback.reverse = true;
@@ -975,7 +993,7 @@ impl VideoPlayer {
 
     /// Seek to a specific time in seconds (internal — does not clear cache).
     fn seek(&mut self, time_secs: f64) -> Result<()> {
-        let timestamp = (time_secs * ffmpeg::ffi::AV_TIME_BASE as f64) as i64;
+        let timestamp = (time_secs * f64::from(ffmpeg::ffi::AV_TIME_BASE)) as i64;
         self.ictx.seek(timestamp, ..timestamp)?;
         self.decoder.flush();
         self.playback.position = time_secs;
@@ -984,6 +1002,10 @@ impl VideoPlayer {
 
     /// Seek to a specific time and reset the frame cache.
     /// Use this for user-initiated seeks (scrub bar, etc.).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying FFmpeg seek fails.
     pub fn seek_and_reset(&mut self, time_secs: f64) -> Result<()> {
         self.frame_cache.clear();
         self.cache_read_idx = 0;
@@ -1034,7 +1056,7 @@ impl VideoPlayer {
 mod tests {
     use super::*;
 
-    /// Regression: the birds HAP fixture is Hap1/BC1, not Bc7. detect_hap_codec
+    /// Regression: the birds HAP fixture is Hap1/BC1, not Bc7. `detect_hap_codec`
     /// must report the real format so the deck sizes its texture/staging
     /// correctly (a wrong format overran the staging copy and panicked).
     /// Skips when the local-only fixture is absent (tests/media/ is gitignored).

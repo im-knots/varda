@@ -5,9 +5,9 @@
 /// linear scan with string comparison, so its cost grows with scene size. These
 /// benchmarks answer whether that scan needs a UUID→index map behind it.
 ///
-///   resolve_channel — scan over channels.
-///   resolve_deck    — nested scan over channels × decks.
-///   resolve_effect  — scan over every chain: master, then each channel's chain,
+///   `resolve_channel` — scan over channels.
+///   `resolve_deck`    — nested scan over channels × decks.
+///   `resolve_effect`  — scan over every chain: master, then each channel's chain,
 ///                     then each deck's chain. The widest scan of the three.
 ///
 /// Each group measures the **worst case**: the target is the last entity the
@@ -129,12 +129,11 @@ fn preflight_slo(ctx: &GpuContext) {
     }
     let per_call = t0.elapsed().as_nanos() / samples;
 
-    if per_call > RESOLVE_BUDGET_NS {
-        panic!(
-            "SLO violation: worst-case effect resolution across 32 channels × 8 decks \
-             = {per_call}ns, exceeds {RESOLVE_BUDGET_NS}ns. Resolution needs an index."
-        );
-    }
+    assert!(
+        per_call <= RESOLVE_BUDGET_NS,
+        "SLO violation: worst-case effect resolution across 32 channels × 8 decks \
+         = {per_call}ns, exceeds {RESOLVE_BUDGET_NS}ns. Resolution needs an index."
+    );
     eprintln!(
         "preflight: worst-case effect resolution (32ch × 8 decks, 289 effects) \
          = {per_call}ns (budget {RESOLVE_BUDGET_NS}ns)"
@@ -178,10 +177,10 @@ fn bench_resolve_deck(c: &mut Criterion) {
         let target = last_deck_uuid(&mixer);
         let label = format!("{n_channels}ch_x_{decks}decks");
         group.bench_with_input(BenchmarkId::new("hit", &label), &label, |b, _| {
-            b.iter(|| std::hint::black_box(mixer.find_deck_by_uuid(&target)))
+            b.iter(|| std::hint::black_box(mixer.find_deck_by_uuid(&target)));
         });
         group.bench_with_input(BenchmarkId::new("miss", &label), &label, |b, _| {
-            b.iter(|| std::hint::black_box(mixer.find_deck_by_uuid("deadbeef")))
+            b.iter(|| std::hint::black_box(mixer.find_deck_by_uuid("deadbeef")));
         });
     }
     group.finish();
@@ -199,10 +198,10 @@ fn bench_resolve_effect(c: &mut Criterion) {
         let target = last_effect_uuid(&mixer);
         let label = format!("{n_channels}ch_x_{decks}decks");
         group.bench_with_input(BenchmarkId::new("hit", &label), &label, |b, _| {
-            b.iter(|| std::hint::black_box(mixer.find_effect_by_uuid(&target)))
+            b.iter(|| std::hint::black_box(mixer.find_effect_by_uuid(&target)));
         });
         group.bench_with_input(BenchmarkId::new("miss", &label), &label, |b, _| {
-            b.iter(|| std::hint::black_box(mixer.find_effect_by_uuid("deadbeef")))
+            b.iter(|| std::hint::black_box(mixer.find_effect_by_uuid("deadbeef")));
         });
     }
     group.finish();

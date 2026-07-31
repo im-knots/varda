@@ -32,7 +32,7 @@ use winit::dpi::PhysicalSize;
 
 use super::{FrameSlot, HtmlFrame, HtmlId, HtmlInputEvent};
 
-/// Cadence when at least one WebView is loading/animating/has a new frame.
+/// Cadence when at least one `WebView` is loading/animating/has a new frame.
 const ACTIVE_PARK: Duration = Duration::from_millis(8);
 /// Idle cadence (safety net); the waker unparks the thread on Servo events.
 const IDLE_PARK: Duration = Duration::from_millis(100);
@@ -98,7 +98,7 @@ impl ServoEngine {
         let (sender, receiver) = mpsc::channel();
         let thread = thread::Builder::new()
             .name("html-servo".into())
-            .spawn(move || run_servo_thread(receiver))
+            .spawn(move || run_servo_thread(&receiver))
             .ok();
         Self { sender, thread }
     }
@@ -127,7 +127,7 @@ impl ServoEngine {
         self.unpark();
     }
 
-    /// Forward an interactive-mode input event to the WebView `id`.
+    /// Forward an interactive-mode input event to the `WebView` `id`.
     pub fn send_input(&self, id: HtmlId, event: HtmlInputEvent) {
         let _ = self.sender.send(HtmlCommand::Input { id, event });
         self.unpark();
@@ -156,7 +156,7 @@ impl Drop for ServoEngine {
     }
 }
 
-/// One offscreen WebView owned by the servo thread, rendering into its own
+/// One offscreen `WebView` owned by the servo thread, rendering into its own
 /// software-GL surface and publishing finished frames into a shared [`FrameSlot`].
 struct Entry {
     webview: WebView,
@@ -168,7 +168,7 @@ struct Entry {
 }
 
 impl Entry {
-    /// Paint the WebView and read back the latest frame as RGBA bytes. Returns
+    /// Paint the `WebView` and read back the latest frame as RGBA bytes. Returns
     /// `None` until a correctly-sized frame is available.
     fn paint_and_read(&self) -> Option<HtmlFrame> {
         if let Err(e) = self.rendering_context.make_current() {
@@ -191,7 +191,7 @@ impl Entry {
     }
 }
 
-/// Construct a WebView + software surface for `url` on the servo thread.
+/// Construct a `WebView` + software surface for `url` on the servo thread.
 fn create_entry(
     servo: &Servo,
     url: &str,
@@ -233,13 +233,13 @@ fn create_entry(
     })
 }
 
-/// A WebView point in device pixels.
+/// A `WebView` point in device pixels.
 fn device_point(x: f32, y: f32) -> WebViewPoint {
     WebViewPoint::Device(DevicePoint::new(x, y))
 }
 
 /// Translate a `Send` [`HtmlInputEvent`] into the corresponding Servo input and
-/// apply it to `entry`'s WebView, flagging it for a fresh paint. The WebView is
+/// apply it to `entry`'s `WebView`, flagging it for a fresh paint. The `WebView` is
 /// only ever touched here, on its owning thread.
 fn apply_input(entry: &Entry, event: HtmlInputEvent) {
     let wv = &entry.webview;
@@ -260,8 +260,11 @@ fn apply_input(entry: &Entry, event: HtmlInputEvent) {
             } else {
                 MouseButtonAction::Up
             };
-            let event =
-                MouseButtonEvent::new(action, MouseButton::from(button as u64), device_point(x, y));
+            let event = MouseButtonEvent::new(
+                action,
+                MouseButton::from(u64::from(button)),
+                device_point(x, y),
+            );
             let _ = wv.notify_input_event(InputEvent::MouseButton(event));
         }
         HtmlInputEvent::Wheel { x, y, dx, dy } => {
@@ -295,9 +298,9 @@ fn apply_input(entry: &Entry, event: HtmlInputEvent) {
     entry.ready.set(true);
 }
 
-/// The owning servo thread: builds Servo, applies commands, and pumps WebViews,
+/// The owning servo thread: builds Servo, applies commands, and pumps `WebViews`,
 /// publishing the latest frame for each into its shared slot (latest-wins).
-fn run_servo_thread(rx: Receiver<HtmlCommand>) {
+fn run_servo_thread(rx: &Receiver<HtmlCommand>) {
     let waker = UnparkWaker(thread::current());
     // Clear the Servo viewport to fully transparent instead of the default opaque
     // white, so pages with a transparent html/body yield alpha=0 pixels in
@@ -354,9 +357,8 @@ fn run_servo_thread(rx: Receiver<HtmlCommand>) {
                 Ok(HtmlCommand::Stop { id }) => {
                     entries.remove(&id);
                 }
-                Ok(HtmlCommand::Shutdown) => break 'main,
+                Ok(HtmlCommand::Shutdown) | Err(TryRecvError::Disconnected) => break 'main,
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break 'main,
             }
         }
 
@@ -394,7 +396,7 @@ fn run_servo_thread(rx: Receiver<HtmlCommand>) {
 /// shared frame slot from the test (render-thread) side.
 ///
 /// `#[ignore]` (starts a real Servo engine, several seconds). Run with:
-///   cargo test --features html servo_renders_on_background_thread -- --ignored --test-threads=1
+///   cargo test --features html `servo_renders_on_background_thread` -- --ignored --test-threads=1
 #[cfg(test)]
 mod offthread_spike {
     use super::*;

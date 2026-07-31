@@ -1,4 +1,4 @@
-//! UIData builder — derives the UI consumer's view-model from `EngineState`.
+//! `UIData` builder — derives the UI consumer's view-model from `EngineState`.
 //!
 //! Lives here (not `app/snapshot.rs`) because it is presentation mapping:
 //! it names egui's `TextureId` and constructs `usecases::ui::UIData` itself.
@@ -6,12 +6,14 @@
 //! remains the one legitimate cross-layer read — it returns a plain,
 //! framework-free `EngineState` that this function then maps from.
 
-use super::*;
+use super::{EffectInfo, ParamUIInfo, ShaderParamsUI};
 use crate::app::VardaApp;
-use crate::engine::types::*;
+use crate::engine::types::{
+    EffectSnapshot, ModulationSourceSnapshot, SequenceStepKindSnapshot, ShaderParamsSnapshot,
+};
 
-/// Build a UIData snapshot from VardaApp state + UI layout state + egui texture IDs.
-/// Constructs EngineState first, then derives UIData from it.
+/// Build a `UIData` snapshot from `VardaApp` state + UI layout state + egui texture IDs.
+/// Constructs `EngineState` first, then derives `UIData` from it.
 pub(crate) fn build_ui_data(
     app: &VardaApp,
     layout: &crate::usecases::ui::UILayoutState,
@@ -20,7 +22,13 @@ pub(crate) fn build_ui_data(
     output_preview_textures: &std::collections::HashMap<usize, egui::TextureId>,
     main_output_texture: Option<egui::TextureId>,
 ) -> crate::usecases::ui::UIData {
-    use crate::usecases::ui::*;
+    use crate::usecases::ui::{
+        AudioDeviceUI, AudioPassthroughUI, AudioUIData, AutoTransitionUI, ChannelUIInfo,
+        DeckUIInfo, DepthPreproUI, MidiDeviceUI, MidiMappingUI, ModAssignmentUI, ModSourceUI,
+        ModSourceUIEntry, MonitorInfo, NotificationUI, OutputUI, PointCloudUI, SequenceStepKindUI,
+        SequenceStepUI, SequenceUIData, SrtLibraryEntry, SurfaceAssignmentUI, SurfaceUI, UIData,
+        VideoPlaybackUI,
+    };
 
     // Build the domain-neutral engine state first
     let engine = app.build_engine_state();
@@ -271,9 +279,7 @@ pub(crate) fn build_ui_data(
                             let surface_name = app
                                 .output
                                 .surface_manager
-                                .find_by_uuid(&a.surface_uuid)
-                                .map(|(_, s)| s.name.clone())
-                                .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
+                                .find_by_uuid(&a.surface_uuid).map_or_else(|| format!("Surface {}", a.surface_uuid), |(_, s)| s.name.clone());
                             SurfaceAssignmentUI {
                                 surface_uuid: a.surface_uuid.clone(),
                                 surface_name,
@@ -301,9 +307,7 @@ pub(crate) fn build_ui_data(
                             surface_name: app
                                 .output
                                 .surface_manager
-                                .find_by_uuid(&a.surface_uuid)
-                                .map(|(_, s)| s.name.clone())
-                                .unwrap_or_else(|| format!("Surface {}", a.surface_uuid)),
+                                .find_by_uuid(&a.surface_uuid).map_or_else(|| format!("Surface {}", a.surface_uuid), |(_, s)| s.name.clone()),
                             enabled: a.enabled,
                             overlap_zones: a.overlap_zones.clone(),
                         })
@@ -328,12 +332,12 @@ pub(crate) fn build_ui_data(
                         frames_written: h
                             .subprocess
                             .as_ref()
-                            .and_then(|s| s.audio_frames_written())
+                            .and_then(crate::internal::renderer::subprocess::FfmpegSubprocess::audio_frames_written)
                             .unwrap_or(0),
                         frames_dropped: p.dropped.load(std::sync::atomic::Ordering::Relaxed),
                     })
                 }
-                _ => None,
+                crate::renderer::context::UnifiedOutput::Window(_) => None,
             };
             OutputUI {
                 uuid: o.uuid().to_string(),
@@ -511,7 +515,7 @@ pub(crate) fn build_ui_data(
             .keymap
             .learn_target
             .as_ref()
-            .map(|t| format!("{}", t)),
+            .map(|t| format!("{t}")),
         keymap_bindings: app.input.keymap.bindings.clone(),
         transition_names: engine.mixer.transition_names,
         active_transition_name: engine.mixer.active_transition_name,
@@ -725,11 +729,13 @@ fn list_available_luts(workspace: &crate::persistence::Workspace) -> Vec<String>
         return vec![];
     };
     let mut files: Vec<String> = entries
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            let lower = name.to_ascii_lowercase();
-            if lower.ends_with(".cube") || lower.ends_with(".3dl") {
+            let is_lut = std::path::Path::new(&name).extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("cube") || ext.eq_ignore_ascii_case("3dl")
+            });
+            if is_lut {
                 Some(name)
             } else {
                 None

@@ -1,6 +1,6 @@
-//! API end-to-end tests — real VardaApp wired to axum router via SharedState.
+//! API end-to-end tests — real `VardaApp` wired to axum router via `SharedState`.
 //!
-//! Each test creates a headless VardaApp, wires its command channel into an axum
+//! Each test creates a headless `VardaApp`, wires its command channel into an axum
 //! router, spawns a background thread to process commands, then exercises the
 //! HTTP API and verifies state mutations.
 
@@ -18,12 +18,12 @@ fn parse_args(args: &[&str]) -> AppConfig {
     AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
 }
 
-/// Create a headless VardaApp and wire its command channel to an axum router.
+/// Create a headless `VardaApp` and wire its command channel to an axum router.
 ///
 /// Commands are processed eagerly via a background tokio task that drains the
 /// channel and auto-replies `CommandResult::Ok`. The engine state snapshot is
 /// published once at setup; tests that need to verify state mutations after API
-/// calls should re-read from the shared engine_state arc.
+/// calls should re-read from the shared `engine_state` arc.
 fn setup() -> Option<axum::Router> {
     let gpu = varda::renderer::context::GpuContext::new_headless().ok()?;
     let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);

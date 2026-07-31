@@ -36,7 +36,7 @@ pub(super) fn render_master_effect_detail(
                                 ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                                     let max_h = (ui.available_height() - 8.0).max(100.0);
                                     egui::ScrollArea::vertical()
-                                        .id_salt(format!("master_fx_scroll_{}", eff_idx))
+                                        .id_salt(format!("master_fx_scroll_{eff_idx}"))
                                         .max_height(max_h)
                                         .scroll_source(egui::scroll_area::ScrollSource {
                                             drag: false,
@@ -65,7 +65,7 @@ pub(super) fn render_master_effect_detail(
                                                 let eff_idx_copy = eff_idx;
                                                 let eff_uuid_param = eff_uuid.clone();
                                                 let midi_prefix =
-                                                    format!("master/effect/{}", eff_uuid);
+                                                    format!("master/effect/{eff_uuid}");
                                                 widgets::render_effect_params(
                                                     ui,
                                                     &eff_params.params,
@@ -80,8 +80,7 @@ pub(super) fn render_master_effect_detail(
                                                     Some(&|name: &str, source_uuid: &str| {
                                                         EngineCommand::AssignModulation {
                                                             target: format!(
-                                                                "fx_{}:{}",
-                                                                eff_uuid_master, name
+                                                                "fx_{eff_uuid_master}:{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
                                                             amount: 0.5,
@@ -90,21 +89,20 @@ pub(super) fn render_master_effect_detail(
                                                     Some(&|name: &str| {
                                                         EngineCommand::ClearModulation {
                                                             target: format!(
-                                                                "fx_{}:{}",
-                                                                eff_uuid_master_remove, name
+                                                                "fx_{eff_uuid_master_remove}:{name}"
                                                             ),
                                                         }
                                                     }),
                                                     &mut actions.commands,
                                                     &mut actions.session.gesture_active,
-                                                    &format!("master_fx_{}", eff_idx_copy),
+                                                    &format!("master_fx_{eff_idx_copy}"),
                                                     Some(&midi_prefix),
                                                     data.midi_learn_active,
                                                     &mut actions.session.midi_learn_select,
                                                     data.midi_learn_target.as_deref(),
                                                     &data.modulation_assignments,
                                                     &data.modulation_current_values,
-                                                    &format!("fx_{}", eff_uuid),
+                                                    &format!("fx_{eff_uuid}"),
                                                     data.keyboard_learn_active,
                                                     &mut actions.session.keyboard_learn_select,
                                                     data.keyboard_learn_target.as_deref(),
@@ -157,8 +155,7 @@ pub(super) fn render_master_effect_detail(
 
                     // Remaining space: always present drop target
                     let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
-                        .map(|p| matches!(&*p, LibraryDrag::Effect(_)))
-                        .unwrap_or(false);
+                        .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)));
                     let remaining_w = ui.available_width().max(80.0);
                     let remaining_h = ui.available_height().max(40.0);
                     let stroke = if has_fx_drag {
@@ -295,7 +292,7 @@ pub(super) fn render_channel_effect_detail(
                                 ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                                     let max_h = (ui.available_height() - 8.0).max(100.0);
                                     egui::ScrollArea::vertical()
-                                        .id_salt(format!("ch_fx_scroll_{}_{}", ch_idx, eff_idx))
+                                        .id_salt(format!("ch_fx_scroll_{ch_idx}_{eff_idx}"))
                                         .max_height(max_h)
                                         .scroll_source(egui::scroll_area::ScrollSource {
                                             drag: false,
@@ -329,7 +326,7 @@ pub(super) fn render_channel_effect_detail(
                                                 let ch_uuid = ch.uuid.clone();
                                                 let eff_uuid_param = eff_uuid.clone();
                                                 let midi_prefix =
-                                                    format!("ch/{}/effect/{}", ch_uuid, eff_uuid);
+                                                    format!("ch/{ch_uuid}/effect/{eff_uuid}");
                                                 widgets::render_effect_params(
                                                     ui,
                                                     &eff_params.params,
@@ -344,8 +341,7 @@ pub(super) fn render_channel_effect_detail(
                                                     Some(&|name: &str, source_uuid: &str| {
                                                         EngineCommand::AssignModulation {
                                                             target: format!(
-                                                                "fx_{}:{}",
-                                                                eff_uuid_ch_assign, name
+                                                                "fx_{eff_uuid_ch_assign}:{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
                                                             amount: 0.5,
@@ -354,21 +350,20 @@ pub(super) fn render_channel_effect_detail(
                                                     Some(&|name: &str| {
                                                         EngineCommand::ClearModulation {
                                                             target: format!(
-                                                                "fx_{}:{}",
-                                                                eff_uuid_ch_remove, name
+                                                                "fx_{eff_uuid_ch_remove}:{name}"
                                                             ),
                                                         }
                                                     }),
                                                     &mut actions.commands,
                                                     &mut actions.session.gesture_active,
-                                                    &format!("ch_fx_{}_{}", ch_copy, eff_idx_copy),
+                                                    &format!("ch_fx_{ch_copy}_{eff_idx_copy}"),
                                                     Some(&midi_prefix),
                                                     data.midi_learn_active,
                                                     &mut actions.session.midi_learn_select,
                                                     data.midi_learn_target.as_deref(),
                                                     &data.modulation_assignments,
                                                     &data.modulation_current_values,
-                                                    &format!("fx_{}", eff_uuid),
+                                                    &format!("fx_{eff_uuid}"),
                                                     data.keyboard_learn_active,
                                                     &mut actions.session.keyboard_learn_select,
                                                     data.keyboard_learn_target.as_deref(),
@@ -421,8 +416,7 @@ pub(super) fn render_channel_effect_detail(
 
                     // Remaining space: always present drop target
                     let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
-                        .map(|p| matches!(&*p, LibraryDrag::Effect(_)))
-                        .unwrap_or(false);
+                        .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)));
                     let remaining_w = ui.available_width().max(80.0);
                     let remaining_h = ui.available_height().max(40.0);
                     let stroke = if has_fx_drag {

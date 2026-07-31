@@ -71,8 +71,7 @@ impl DeviceAutoMapState {
             .controls
             .iter()
             .find(|c| c.name == control_name)
-            .map(|c| c.range)
-            .unwrap_or([0, 0])
+            .map_or([0, 0], |c| c.range)
     }
 
     fn is_grid_note(&self, note: u8) -> bool {
@@ -95,7 +94,7 @@ impl DeviceAutoMapState {
 
 // ── Public grid mapping utility ─────────────────────────────────────
 
-/// Convert a grid note number to (channel_index, deck_index) given page offset and column count.
+/// Convert a grid note number to (`channel_index`, `deck_index`) given page offset and column count.
 /// APC Mini grid: note = row*8 + col, row 0 is bottom (note 0-7), row 7 is top (note 56-63).
 /// We map top row = deck 0, bottom row = deck 7 (top-down).
 pub fn grid_note_to_channel_deck(note: u8, page_offset: usize, columns: u8) -> (usize, usize) {
@@ -162,9 +161,8 @@ impl AutoMapEngine {
 
     /// Check if a MIDI key falls within any auto-mapped control range for this device.
     pub fn handles_key(&self, device_id: DeviceId, key: &MidiKey) -> bool {
-        let state = match self.devices.get(&device_id) {
-            Some(s) => s,
-            None => return false,
+        let Some(state) = self.devices.get(&device_id) else {
+            return false;
         };
         match key {
             MidiKey::Note(_, _, note) => {
@@ -206,7 +204,7 @@ impl AutoMapEngine {
                 if let Some(page_range) = state.page_range {
                     let page_idx = (note - page_range[0]) as usize;
                     state.page_offset = page_idx;
-                    log::debug!("Auto-map: page offset changed to {}", page_idx);
+                    log::debug!("Auto-map: page offset changed to {page_idx}");
                 }
                 return;
             }
@@ -241,15 +239,9 @@ impl AutoMapEngine {
 
             // Hysteresis filter: reject suspicious jumps (dirty fader protection)
             if let Some(&last) = state.last_cc_values.get(&cc) {
-                let delta = (value as i16 - last as i16).unsigned_abs() as u8;
+                let delta = (i16::from(value) - i16::from(last)).unsigned_abs() as u8;
                 if delta > MAX_CC_JUMP {
-                    log::debug!(
-                        "Auto-map: rejected CC {} spike {} → {} (Δ{})",
-                        cc,
-                        last,
-                        value,
-                        delta
-                    );
+                    log::debug!("Auto-map: rejected CC {cc} spike {last} → {value} (Δ{delta})");
                     return;
                 }
             }
@@ -257,7 +249,7 @@ impl AutoMapEngine {
 
             let fader_idx = (cc - state.fader_range[0]) as usize;
             let fader_count = (state.fader_range[1] - state.fader_range[0] + 1) as usize;
-            let normalized = value as f32 / 127.0;
+            let normalized = f32::from(value) / 127.0;
 
             // Last fader → crossfader (if configured)
             if fader_idx == fader_count - 1
@@ -335,9 +327,8 @@ impl AutoMapEngine {
         ch_idx: usize,
         dk_idx: usize,
     ) -> String {
-        let channel = match mixer.channel(ch_idx) {
-            Some(ch) => ch,
-            None => return config.led_rules.empty.clone(),
+        let Some(channel) = mixer.channel(ch_idx) else {
+            return config.led_rules.empty.clone();
         };
 
         if dk_idx >= channel.deck_count() {
@@ -541,7 +532,7 @@ mod tests {
         state.last_cc_values.insert(48, 120);
         // A jump to 0 (delta=120) should be rejected
         let last = *state.last_cc_values.get(&48).unwrap();
-        let delta = (0i16 - last as i16).unsigned_abs() as u8;
+        let delta = (0i16 - i16::from(last)).unsigned_abs() as u8;
         assert!(delta > MAX_CC_JUMP);
         // The value should NOT be updated
         assert_eq!(*state.last_cc_values.get(&48).unwrap(), 120);
@@ -557,12 +548,10 @@ mod tests {
         // Simulate a smooth fader sweep: 0 → 5 → 10 → 15
         for value in (0u8..=60).step_by(5) {
             if let Some(&last) = state.last_cc_values.get(&48) {
-                let delta = (value as i16 - last as i16).unsigned_abs() as u8;
+                let delta = (i16::from(value) - i16::from(last)).unsigned_abs() as u8;
                 assert!(
                     delta <= MAX_CC_JUMP,
-                    "Normal step {} → {} should be accepted",
-                    last,
-                    value
+                    "Normal step {last} → {value} should be accepted"
                 );
             }
             state.last_cc_values.insert(48, value);
@@ -579,10 +568,10 @@ mod tests {
         let state = engine.devices.get_mut(&1).unwrap();
         state.last_cc_values.insert(48, 64);
         // Exactly at threshold: delta = 32 → should be accepted
-        let delta = (96u8 as i16 - 64i16).unsigned_abs() as u8;
+        let delta = (i16::from(96u8) - 64i16).unsigned_abs() as u8;
         assert_eq!(delta, MAX_CC_JUMP);
         // One step beyond: delta = 33 → should be rejected
-        let delta = (97u8 as i16 - 64i16).unsigned_abs() as u8;
+        let delta = (i16::from(97u8) - 64i16).unsigned_abs() as u8;
         assert!(delta > MAX_CC_JUMP);
     }
 }

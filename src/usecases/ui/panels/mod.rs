@@ -238,12 +238,12 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // BPM from unified clock (MIDI > OSC > Audio > --)
                     let bpm_text = if let Some(bpm) = data.clock_bpm {
-                        format!("{:.0} BPM", bpm)
+                        format!("{bpm:.0} BPM")
                     } else {
                         "-- BPM".to_string()
                     };
                     if let Some(dev) = &data.clock_device_name {
-                        ui.label(egui::RichText::new(format!("({})", dev)).weak().small());
+                        ui.label(egui::RichText::new(format!("({dev})")).weak().small());
                     }
                     // Clickable BPM label → opens clock source popover
                     let bpm_response = ui
@@ -271,7 +271,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     let fps_response = ui
                         .add(
                             egui::Label::new(
-                                egui::RichText::new(format!("{:.0} FPS", fps))
+                                egui::RichText::new(format!("{fps:.0} FPS"))
                                     .color(fps_color)
                                     .monospace(),
                             )
@@ -298,7 +298,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                     let gpu_response = ui
                         .add(
                             egui::Label::new(
-                                egui::RichText::new(format!("🖥 {:.0}%", gpu_load_pct))
+                                egui::RichText::new(format!("🖥 {gpu_load_pct:.0}%"))
                                     .color(gpu_color)
                                     .monospace(),
                             )
@@ -343,7 +343,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                         egui::Color32::from_rgb(220, 60, 60)
                     };
                     ui.label(
-                        egui::RichText::new(format!("RAM {:.1}/{:.0}G", ram_gb, ram_total_gb))
+                        egui::RichText::new(format!("RAM {ram_gb:.1}/{ram_total_gb:.0}G"))
                             .color(ram_color)
                             .monospace()
                             .small(),
@@ -467,7 +467,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
                                 .push(EngineCommand::ToggleParam { path: path.clone() });
                         }
                         // Stage-context actions are handled in stage.rs
-                        _ => {}
+                        KeyTarget::Action(_) => {}
                     }
                 }
             }
@@ -478,7 +478,7 @@ pub fn render_ui(ui: &mut egui::Ui, data: &UIData) -> UIActions {
 }
 
 /// Deferred library drag-and-drop handler.
-/// Each frame while a LibraryDrag payload is active, find which drop target the pointer is over.
+/// Each frame while a `LibraryDrag` payload is active, find which drop target the pointer is over.
 /// When the payload disappears (mouse released), apply the drop action.
 /// Resolve a filter registry index (as stashed by the library drag source) to
 /// its shader name, so the panel can push a canonical `AddEffect` command.
@@ -564,9 +564,9 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
             });
         }
     } else {
-        let had_payload: bool =
+        let drag_just_ended: bool =
             ctx.memory(|mem| mem.data.get_temp(had_payload_id).unwrap_or(false));
-        if had_payload {
+        if drag_just_ended {
             let hover_ch: Option<usize> =
                 ctx.memory(|mem| mem.data.get_temp(hover_ch_id).unwrap_or(None));
             let hover_fx: Option<(String, String)> =
@@ -613,11 +613,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 let gen_key = egui::Id::new("__lib_dnd_gen_idx");
                 let gen_idx: Option<usize> = ctx.memory(|mem| mem.data.get_temp(gen_key));
                 if let Some(gen_idx) = gen_idx {
-                    log::info!(
-                        "Library drop (deferred): generator {} -> ch {}",
-                        gen_idx,
-                        channel_uuid
-                    );
+                    log::info!("Library drop (deferred): generator {gen_idx} -> ch {channel_uuid}");
                     actions.session.shader_to_add = Some((channel_uuid.clone(), gen_idx));
                 }
 
@@ -625,11 +621,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 let cam_id: Option<crate::camera::CameraId> =
                     ctx.memory(|mem| mem.data.get_temp(cam_key));
                 if let Some(cam_id) = cam_id {
-                    log::info!(
-                        "Library drop (deferred): camera {} -> ch {}",
-                        cam_id,
-                        channel_uuid
-                    );
+                    log::info!("Library drop (deferred): camera {cam_id} -> ch {channel_uuid}");
                     actions.commands.push(EngineCommand::AddCameraDeck {
                         channel_uuid: channel_uuid.clone(),
                         camera_id: cam_id,
@@ -641,9 +633,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     ctx.memory(|mem| mem.data.get_temp(depth_key));
                 if let Some(depth_id) = depth_id {
                     log::info!(
-                        "Library drop (deferred): depth sensor {} -> ch {}",
-                        depth_id,
-                        channel_uuid
+                        "Library drop (deferred): depth sensor {depth_id} -> ch {channel_uuid}"
                     );
                     actions.commands.push(EngineCommand::AddDepthSensorDeck {
                         channel_uuid: channel_uuid.clone(),
@@ -654,11 +644,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
                 let ndi_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(ndi_key));
                 if let Some(ndi_name) = ndi_name {
-                    log::info!(
-                        "Library drop (deferred): NDI '{}' -> ch {}",
-                        ndi_name,
-                        channel_uuid
-                    );
+                    log::info!("Library drop (deferred): NDI '{ndi_name}' -> ch {channel_uuid}");
                     actions.commands.push(EngineCommand::AddNdiDeck {
                         channel_uuid: channel_uuid.clone(),
                         source_name: ndi_name,
@@ -669,9 +655,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                 let syph_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(syph_key));
                 if let Some(syph_name) = syph_name {
                     log::info!(
-                        "Library drop (deferred): Syphon '{}' -> ch {}",
-                        syph_name,
-                        channel_uuid
+                        "Library drop (deferred): Syphon '{syph_name}' -> ch {channel_uuid}"
                     );
                     actions.commands.push(EngineCommand::AddSyphonDeck {
                         channel_uuid: channel_uuid.clone(),
@@ -684,10 +668,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     ctx.memory(|mem| mem.data.get_temp(srt_key));
                 if let Some((url, mode)) = srt_config {
                     log::info!(
-                        "Library drop (deferred): SRT '{}' ({:?}) -> ch {}",
-                        url,
-                        mode,
-                        channel_uuid
+                        "Library drop (deferred): SRT '{url}' ({mode:?}) -> ch {channel_uuid}"
                     );
                     actions.commands.push(EngineCommand::AddSrtDeck {
                         channel_uuid: channel_uuid.clone(),
@@ -698,11 +679,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
 
                 let hls_key = egui::Id::new("__lib_dnd_hls_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(hls_key)) {
-                    log::info!(
-                        "Library drop (deferred): HLS '{}' -> ch {}",
-                        url,
-                        channel_uuid
-                    );
+                    log::info!("Library drop (deferred): HLS '{url}' -> ch {channel_uuid}");
                     actions.commands.push(EngineCommand::AddHlsDeck {
                         channel_uuid: channel_uuid.clone(),
                         url,
@@ -711,11 +688,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
 
                 let dash_key = egui::Id::new("__lib_dnd_dash_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(dash_key)) {
-                    log::info!(
-                        "Library drop (deferred): DASH '{}' -> ch {}",
-                        url,
-                        channel_uuid
-                    );
+                    log::info!("Library drop (deferred): DASH '{url}' -> ch {channel_uuid}");
                     actions.commands.push(EngineCommand::AddDashDeck {
                         channel_uuid: channel_uuid.clone(),
                         url,
@@ -728,10 +701,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                         .get_temp::<(String, crate::stream::RtmpMode)>(rtmp_key)
                 }) {
                     log::info!(
-                        "Library drop (deferred): RTMP '{}' ({}) -> ch {}",
-                        url,
-                        mode,
-                        channel_uuid
+                        "Library drop (deferred): RTMP '{url}' ({mode}) -> ch {channel_uuid}"
                     );
                     actions.commands.push(EngineCommand::AddRtmpDeck {
                         channel_uuid: channel_uuid.clone(),
@@ -742,11 +712,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
 
                 let html_key = egui::Id::new("__lib_dnd_html_url");
                 if let Some(url) = ctx.memory(|mem| mem.data.get_temp::<String>(html_key)) {
-                    log::info!(
-                        "Library drop (deferred): HTML '{}' -> ch {}",
-                        url,
-                        channel_uuid
-                    );
+                    log::info!("Library drop (deferred): HTML '{url}' -> ch {channel_uuid}");
                     actions.commands.push(EngineCommand::AddHtmlDeck {
                         channel_uuid: channel_uuid.clone(),
                         url,
@@ -760,9 +726,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     deck_preset_idx.and_then(|idx| data.deck_presets.get(idx))
                 {
                     log::info!(
-                        "Library drop (deferred): deck preset '{}' -> ch {}",
-                        preset_name,
-                        channel_uuid
+                        "Library drop (deferred): deck preset '{preset_name}' -> ch {channel_uuid}"
                     );
                     actions.commands.push(EngineCommand::LoadDeckPreset {
                         channel_uuid: channel_uuid.clone(),
@@ -798,11 +762,7 @@ fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIAction
                     if let (Some(target), Some(shader_name)) =
                         (target, resolve_filter_name(data, filter_idx))
                     {
-                        log::info!(
-                            "Library drop (deferred): effect {} -> {:?}",
-                            filter_idx,
-                            target
-                        );
+                        log::info!("Library drop (deferred): effect {filter_idx} -> {target:?}");
                         actions.commands.push(EngineCommand::AddEffect {
                             target,
                             shader_name,
@@ -919,7 +879,7 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
             if let (Some((chain_key, target_pos)), Some(src_drag)) = (hover_dz, src) {
                 match src_drag {
                     EffectDrag::Deck(src_deck, src_eff) => {
-                        let expected_key = format!("deck_{}", src_deck);
+                        let expected_key = format!("deck_{src_deck}");
                         if chain_key == expected_key {
                             let to = if src_eff < target_pos {
                                 target_pos - 1
@@ -928,10 +888,7 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                             };
                             if to != src_eff {
                                 log::info!(
-                                    "Effect reorder (deferred): deck {} effect {} -> {}",
-                                    src_deck,
-                                    src_eff,
-                                    to
+                                    "Effect reorder (deferred): deck {src_deck} effect {src_eff} -> {to}"
                                 );
                                 actions.commands.push(EngineCommand::MoveEffect {
                                     target: EffectTarget::Deck(src_deck),
@@ -942,7 +899,7 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                         }
                     }
                     EffectDrag::Channel(src_ch, src_eff) => {
-                        let expected_key = format!("ch_{}", src_ch);
+                        let expected_key = format!("ch_{src_ch}");
                         if chain_key == expected_key {
                             let to = if src_eff < target_pos {
                                 target_pos - 1
@@ -951,10 +908,7 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                             };
                             if to != src_eff {
                                 log::info!(
-                                    "Effect reorder (deferred): ch {} effect {} -> {}",
-                                    src_ch,
-                                    src_eff,
-                                    to
+                                    "Effect reorder (deferred): ch {src_ch} effect {src_eff} -> {to}"
                                 );
                                 actions.commands.push(EngineCommand::MoveEffect {
                                     target: EffectTarget::Channel(src_ch),
@@ -973,9 +927,7 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
                             };
                             if to != src_eff {
                                 log::info!(
-                                    "Effect reorder (deferred): master effect {} -> {}",
-                                    src_eff,
-                                    to
+                                    "Effect reorder (deferred): master effect {src_eff} -> {to}"
                                 );
                                 actions.commands.push(EngineCommand::MoveEffect {
                                     target: EffectTarget::Master,
@@ -997,9 +949,9 @@ fn handle_effect_dnd(ctx: &egui::Context, data: &UIData, actions: &mut UIActions
     }
 }
 
-/// Deferred DnD handler for reordering steps within a sequence.
-/// Follows the same pattern as effect DnD: source is stored in egui memory
-/// during drag (since DragAndDrop::payload() is None after mouse release).
+/// Deferred `DnD` handler for reordering steps within a sequence.
+/// Follows the same pattern as effect `DnD`: source is stored in egui memory
+/// during drag (since `DragAndDrop::payload()` is None after mouse release).
 fn handle_sequence_step_dnd(ctx: &egui::Context, _data: &UIData, actions: &mut UIActions) {
     use super::SequenceStepDrag;
     let had_id = egui::Id::new("__seq_step_dnd_had");
@@ -1101,23 +1053,21 @@ fn handle_midi_learn_popup(ctx: &egui::Context, data: &UIData, actions: &mut UIA
                 });
             });
 
-        if !popup_fresh {
-            if ctx.input(|i| i.pointer.primary_clicked()) {
-                let popup_rect = area_resp.response.rect;
-                let click_pos = ctx.input(|i| i.pointer.interact_pos());
-                if let Some(click) = click_pos {
-                    if !popup_rect.contains(click) {
-                        ctx.memory_mut(|mem| {
-                            mem.data.remove::<egui::Pos2>(popup_id);
-                            mem.data.remove::<bool>(popup_fresh_id);
-                        });
-                    }
-                }
-            }
-        } else {
+        if popup_fresh {
             ctx.memory_mut(|mem| {
                 mem.data.insert_temp(popup_fresh_id, false);
             });
+        } else if ctx.input(|i| i.pointer.primary_clicked()) {
+            let popup_rect = area_resp.response.rect;
+            let click_pos = ctx.input(|i| i.pointer.interact_pos());
+            if let Some(click) = click_pos {
+                if !popup_rect.contains(click) {
+                    ctx.memory_mut(|mem| {
+                        mem.data.remove::<egui::Pos2>(popup_id);
+                        mem.data.remove::<bool>(popup_fresh_id);
+                    });
+                }
+            }
         }
     }
 }
@@ -1193,8 +1143,7 @@ fn render_fps_popover(ui: &mut egui::Ui, data: &UIData) {
         ui.add_space(4.0);
         ui.separator();
         ui.label(format!(
-            "{} active decks · {:.1}ms total render",
-            total_active, total_ms
+            "{total_active} active decks · {total_ms:.1}ms total render"
         ));
     }
 }
@@ -1240,7 +1189,7 @@ fn render_gpu_popover(ui: &mut egui::Ui, data: &UIData) {
             egui::Color32::from_rgb(220, 60, 60)
         };
         ui.label(
-            egui::RichText::new(format!("{:.0}%", util))
+            egui::RichText::new(format!("{util:.0}%"))
                 .color(util_color)
                 .monospace(),
         );
@@ -1266,7 +1215,7 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     // Detected MIDI devices
     for src in &data.clock_detected_midi {
         let is_selected = data.clock_preference_force_device_id == Some(src.device_id);
-        let bpm_str = src.bpm.map_or("--".to_string(), |b| format!("{:.0}", b));
+        let bpm_str = src.bpm.map_or("--".to_string(), |b| format!("{b:.0}"));
         let label = format!("🟣 {}  {} BPM", src.device_name, bpm_str);
         if ui.radio(is_selected, label).clicked() && !is_selected {
             actions.commands.push(EngineCommand::SetClockPreference {
@@ -1282,8 +1231,8 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
         let is_osc = data.clock_preference == "ForceOsc";
         let bpm_str = data
             .clock_osc_bpm
-            .map_or("--".to_string(), |b| format!("{:.0}", b));
-        let label = format!("🔵 OSC  {} BPM", bpm_str);
+            .map_or("--".to_string(), |b| format!("{b:.0}"));
+        let label = format!("🔵 OSC  {bpm_str} BPM");
         if ui.radio(is_osc, label).clicked() && !is_osc {
             actions.commands.push(EngineCommand::SetClockPreference {
                 preference: crate::clock::ClockPreference::ForceOsc,
@@ -1295,8 +1244,8 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
     let is_audio = data.clock_preference == "ForceAudio";
     let audio_bpm_str = data
         .clock_audio_bpm
-        .map_or("--".to_string(), |b| format!("{:.0}", b));
-    let label = format!("🟢 Audio only  {} BPM", audio_bpm_str);
+        .map_or("--".to_string(), |b| format!("{b:.0}"));
+    let label = format!("🟢 Audio only  {audio_bpm_str} BPM");
     if ui.radio(is_audio, label).clicked() && !is_audio {
         actions.commands.push(EngineCommand::SetClockPreference {
             preference: crate::clock::ClockPreference::ForceAudio,
@@ -1346,7 +1295,7 @@ fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAction
             "Currently: Audio ({})",
             if is_auto { "auto" } else { "forced" }
         ),
-        "Manual" => format!("Currently: Manual ({:.0} BPM)", manual_bpm),
+        "Manual" => format!("Currently: Manual ({manual_bpm:.0} BPM)"),
         _ => "Currently: No clock".to_string(),
     };
     ui.label(egui::RichText::new(status).weak().small());
@@ -1371,7 +1320,7 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
 
     for &(label, w, h) in presets {
         let is_current = current_w == w && current_h == h;
-        let text = format!("{} ({}×{})", label, w, h);
+        let text = format!("{label} ({w}×{h})");
         if ui.radio(is_current, text).clicked() && !is_current {
             actions.commands.push(EngineCommand::SetRenderResolution {
                 width: w,
@@ -1384,10 +1333,14 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
     ui.label(egui::RichText::new("Custom").strong().small());
 
     // Custom W×H input — use persistent state via egui memory
-    let custom_w_id = ui.id().with("custom_res_w");
-    let custom_h_id = ui.id().with("custom_res_h");
-    let mut custom_w: u32 = ui.data(|d| d.get_temp(custom_w_id)).unwrap_or(current_w);
-    let mut custom_h: u32 = ui.data(|d| d.get_temp(custom_h_id)).unwrap_or(current_h);
+    let custom_width_id = ui.id().with("custom_res_w");
+    let custom_height_id = ui.id().with("custom_res_h");
+    let mut custom_w: u32 = ui
+        .data(|d| d.get_temp(custom_width_id))
+        .unwrap_or(current_w);
+    let mut custom_h: u32 = ui
+        .data(|d| d.get_temp(custom_height_id))
+        .unwrap_or(current_h);
 
     // No artificial cap: the upper bound is the GPU's max texture dimension,
     // matching what the engine/API accept (spec/resolution-and-scaling.md).
@@ -1408,8 +1361,8 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
     });
 
     ui.data_mut(|d| {
-        d.insert_temp(custom_w_id, custom_w);
-        d.insert_temp(custom_h_id, custom_h);
+        d.insert_temp(custom_width_id, custom_w);
+        d.insert_temp(custom_height_id, custom_h);
     });
 
     let is_custom_different = custom_w != current_w || custom_h != current_h;
@@ -1428,7 +1381,7 @@ fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
 
     ui.separator();
     ui.label(
-        egui::RichText::new(format!("Current: {}×{}", current_w, current_h))
+        egui::RichText::new(format!("Current: {current_w}×{current_h}"))
             .weak()
             .small(),
     );
@@ -1461,7 +1414,7 @@ fn render_target_fps_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
         egui::RichText::new(if current == 0 {
             "Current: Uncapped".to_string()
         } else {
-            format!("Current: {} FPS", current)
+            format!("Current: {current} FPS")
         })
         .weak()
         .small(),
@@ -1565,7 +1518,7 @@ fn render_tonemap_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActi
 mod tests {
     use super::*;
 
-    /// Smoke test: render_ui doesn't panic with the test fixture.
+    /// Smoke test: `render_ui` doesn't panic with the test fixture.
     #[test]
     fn render_ui_smoke_default_fixture() {
         let data = UIData::test_fixture();
@@ -1576,7 +1529,7 @@ mod tests {
         let _ = harness;
     }
 
-    /// Smoke test: render_ui with empty channels doesn't panic.
+    /// Smoke test: `render_ui` with empty channels doesn't panic.
     #[test]
     fn render_ui_smoke_empty_channels() {
         let mut data = UIData::test_fixture();
@@ -1590,7 +1543,7 @@ mod tests {
         let _ = harness;
     }
 
-    /// Smoke test: render_ui with library panel closed doesn't panic.
+    /// Smoke test: `render_ui` with library panel closed doesn't panic.
     #[test]
     fn render_ui_smoke_library_closed() {
         let mut data = UIData::test_fixture();
@@ -1601,7 +1554,7 @@ mod tests {
         let _ = harness;
     }
 
-    /// Smoke test: render_ui with stage editor open doesn't panic.
+    /// Smoke test: `render_ui` with stage editor open doesn't panic.
     #[test]
     fn render_ui_smoke_stage_editor_open() {
         let mut data = UIData::test_fixture();
@@ -1612,7 +1565,7 @@ mod tests {
         let _ = harness;
     }
 
-    /// Smoke test: render_ui with master selected doesn't panic.
+    /// Smoke test: `render_ui` with master selected doesn't panic.
     #[test]
     fn render_ui_smoke_master_selected() {
         let mut data = UIData::test_fixture();
@@ -1624,7 +1577,7 @@ mod tests {
         let _ = harness;
     }
 
-    /// Smoke test: render_ui with channel selected doesn't panic.
+    /// Smoke test: `render_ui` with channel selected doesn't panic.
     #[test]
     fn render_ui_smoke_channel_selected() {
         let mut data = UIData::test_fixture();
@@ -1636,7 +1589,7 @@ mod tests {
         let _ = harness;
     }
 
-    /// Smoke test: render_ui with MIDI learn active doesn't panic.
+    /// Smoke test: `render_ui` with MIDI learn active doesn't panic.
     #[test]
     fn render_ui_smoke_midi_learn() {
         let mut data = UIData::test_fixture();

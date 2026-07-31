@@ -69,8 +69,7 @@ fn deck_opacity(app: &VardaApp, deck_uuid: &str) -> f32 {
         .iter()
         .flat_map(|ch| ch.decks.iter())
         .find(|d| d.uuid == deck_uuid)
-        .map(|d| d.opacity)
-        .unwrap_or_else(|| panic!("deck {deck_uuid} not found"))
+        .map_or_else(|| panic!("deck {deck_uuid} not found"), |d| d.opacity)
 }
 
 // ── The race this migration exists to close ────────────────────────

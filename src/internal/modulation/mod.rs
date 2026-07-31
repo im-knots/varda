@@ -551,7 +551,7 @@ mod tests {
         let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
         engine.assign_mod_on_mod(&lfo0, "frequency", &lfo1, 0.5);
         engine.update(1.0, &empty_audio(), &empty_analyzers());
-        assert!(engine.current_values().len() == 2);
+        assert_eq!(engine.current_values().len(), 2);
     }
 
     #[test]
@@ -560,9 +560,9 @@ mod tests {
         let lfo0 = engine.add_source(ModulationSource::sine_lfo(1.0));
         let lfo1 = engine.add_source(ModulationSource::sine_lfo(2.0));
         engine.assign_mod_on_mod(&lfo0, "frequency", &lfo1, 0.5);
-        assert!(engine.has_modulation(&format!("mod:{}:frequency", lfo0)));
+        assert!(engine.has_modulation(&format!("mod:{lfo0}:frequency")));
         engine.clear_mod_on_mod(&lfo0, "frequency");
-        assert!(!engine.has_modulation(&format!("mod:{}:frequency", lfo0)));
+        assert!(!engine.has_modulation(&format!("mod:{lfo0}:frequency")));
     }
 
     #[test]
@@ -590,7 +590,7 @@ mod tests {
             engine.update(i as f32 * 0.01, &empty_audio(), &empty_analyzers());
         }
         let val = engine.current_value_for(&uuid);
-        assert!(val < 0.1, "ADSR should be near zero after release: {}", val);
+        assert!(val < 0.1, "ADSR should be near zero after release: {val}");
     }
 
     #[test]
@@ -867,9 +867,9 @@ mod tests {
     fn index_consistency_after_removal() {
         let mut engine = ModulationEngine::new();
         let a = engine.add_source(ModulationSource::sine_lfo(1.0));
-        let _b = engine.add_source(ModulationSource::sine_lfo(2.0));
+        let b = engine.add_source(ModulationSource::sine_lfo(2.0));
         let c = engine.add_source(ModulationSource::sine_lfo(3.0));
-        engine.remove_source(&_b);
+        engine.remove_source(&b);
         // UUIDs a and c should still resolve correctly
         assert!(engine.find_source_by_uuid(&a).is_some());
         assert!(engine.find_source_by_uuid(&c).is_some());

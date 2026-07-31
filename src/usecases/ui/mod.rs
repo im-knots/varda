@@ -25,17 +25,19 @@ pub use crate::app::{DEFAULT_RENDER_HEIGHT, DEFAULT_RENDER_WIDTH};
 /// These fields are presentation concerns that don't belong in the engine.
 /// Each UI consumer (egui, CLI, HTTP API) maintains its own instance.
 /// Persisted in `stage.json` via the `StagePrefs` struct.
+// Independent panel/toggle flags; grouping them into enums would not model reality.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
 pub struct UILayoutState {
-    /// Currently selected deck for detail view in bottom bar (ch_idx, deck_idx)
+    /// Currently selected deck for detail view in bottom bar (`ch_idx`, `deck_idx`)
     pub selected_deck: Option<(usize, usize)>,
-    /// Currently selected channel for detail view in bottom bar (ch_idx)
+    /// Currently selected channel for detail view in bottom bar (`ch_idx`)
     pub selected_channel: Option<usize>,
     /// Whether the master output is selected for detail view in bottom bar
     pub selected_master: bool,
-    /// Currently selected sequence for detail view in bottom bar (seq_idx)
+    /// Currently selected sequence for detail view in bottom bar (`seq_idx`)
     pub selected_sequence: Option<usize>,
-    /// Currently selected step within the selected sequence (seq_idx, step_idx)
+    /// Currently selected step within the selected sequence (`seq_idx`, `step_idx`)
     pub selected_sequence_step: Option<(usize, usize)>,
     /// Currently selected macro (by UUID) for detail view in bottom bar
     pub selected_macro: Option<String>,
@@ -115,7 +117,7 @@ pub enum CameraDetectAction {
 }
 
 impl UILayoutState {
-    /// Apply selection actions from UIActions.
+    /// Apply selection actions from `UIActions`.
     pub fn apply_selections(&mut self, ui_actions: &UIActions) {
         let session = &ui_actions.session;
         if let Some(sel) = session.select_deck {
@@ -199,10 +201,10 @@ impl UILayoutState {
                 DomeAction::SetTruncation(deg) => self.dome_geometry.truncation_degrees = *deg,
                 DomeAction::SetTilt(deg) => self.dome_geometry.tilt_degrees = *deg,
                 DomeAction::SetContentAzimuth(deg) => {
-                    self.dome_geometry.content_azimuth_degrees = *deg
+                    self.dome_geometry.content_azimuth_degrees = *deg;
                 }
                 DomeAction::SetContentElevation(deg) => {
-                    self.dome_geometry.content_elevation_degrees = *deg
+                    self.dome_geometry.content_elevation_degrees = *deg;
                 }
                 DomeAction::SetContentRoll(deg) => self.dome_geometry.content_roll_degrees = *deg,
                 DomeAction::RotateCamera { .. }
@@ -367,6 +369,8 @@ pub struct VideoPlaybackUI {
 }
 
 /// Auto-transition state snapshot for UI display
+// Mirrors independent engine-side flags one-for-one; collapsing them would obscure the mapping.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct AutoTransitionUI {
     pub enabled: bool,
@@ -392,7 +396,7 @@ pub struct PointCloudUI {
     pub seed: f32,
     pub drift: f32,
     pub disruption: f32,
-    /// 0 = Rgb, 1 = DepthRamp, 2 = Solid.
+    /// 0 = Rgb, 1 = `DepthRamp`, 2 = Solid.
     pub color_mode: u8,
 }
 
@@ -411,6 +415,8 @@ pub struct DepthPreproUI {
 }
 
 /// Deck info for UI display
+// Flat projection of independent deck flags (solo/mute/transparent/source kind).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct DeckUIInfo {
     pub deck_idx: usize,
@@ -489,7 +495,7 @@ pub struct AudioUIData {
     pub sample_rate: f32,
 }
 
-/// Notification snapshot for UI rendering (avoids borrowing NotificationSystem during egui)
+/// Notification snapshot for UI rendering (avoids borrowing `NotificationSystem` during egui)
 #[derive(Clone)]
 pub struct NotificationUI {
     pub level: crate::notifications::NotificationLevel,
@@ -546,6 +552,8 @@ pub struct HtmlLibraryEntry {
 }
 
 /// All collected data needed to render the UI
+// Aggregate view model; its bools are unrelated engine states, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct UIData {
     pub generators: Vec<(String, usize)>,
     pub filters: Vec<(String, usize)>,
@@ -555,7 +563,7 @@ pub struct UIData {
     pub modulation_sources: Vec<ModSourceUIEntry>,
     /// Current computed values for each modulation source by UUID
     pub modulation_current_values: std::collections::HashMap<String, f32>,
-    /// Modulation assignments: param_key -> list of (source_id, amount)
+    /// Modulation assignments: `param_key` -> list of (`source_id`, amount)
     pub modulation_assignments: std::collections::HashMap<String, Vec<ModAssignmentUI>>,
     /// User-defined macro controls (one control → many parameter targets).
     pub macros: Vec<crate::macros::Macro>,
@@ -564,7 +572,7 @@ pub struct UIData {
     /// and removal, so the map needs no reindex pass — see
     /// [`/spec/api-addressing.md`].
     pub deck_preview_textures: std::collections::HashMap<String, egui::TextureId>,
-    /// Channel preview textures keyed by ch_idx
+    /// Channel preview textures keyed by `ch_idx`
     pub channel_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
     /// Output preview textures keyed by output index
     pub output_preview_textures: std::collections::HashMap<usize, egui::TextureId>,
@@ -597,15 +605,15 @@ pub struct UIData {
     pub transition_names: Vec<String>,
     /// Currently active transition name, if any
     pub active_transition_name: Option<String>,
-    /// Currently selected deck for detail view in bottom bar (ch_idx, deck_idx)
+    /// Currently selected deck for detail view in bottom bar (`ch_idx`, `deck_idx`)
     pub selected_deck: Option<(usize, usize)>,
-    /// Currently selected channel for detail view in bottom bar (ch_idx)
+    /// Currently selected channel for detail view in bottom bar (`ch_idx`)
     pub selected_channel: Option<usize>,
     /// Whether the master output is selected for detail view in bottom bar
     pub selected_master: bool,
-    /// Currently selected sequence for detail view in bottom bar (seq_idx)
+    /// Currently selected sequence for detail view in bottom bar (`seq_idx`)
     pub selected_sequence: Option<usize>,
-    /// Currently selected step within the selected sequence (seq_idx, step_idx)
+    /// Currently selected step within the selected sequence (`seq_idx`, `step_idx`)
     pub selected_sequence_step: Option<(usize, usize)>,
     /// Currently selected macro (by UUID) for detail view in bottom bar
     pub selected_macro: Option<String>,
@@ -674,7 +682,7 @@ pub struct UIData {
     pub channel_count: usize,
     /// Pipeline-derived FPS: average of per-channel FPSes (from deck render timing)
     pub fps: f32,
-    /// Per-channel render stats: (channel_name, avg_deck_fps, active_deck_count, render_time_ms)
+    /// Per-channel render stats: (`channel_name`, `avg_deck_fps`, `active_deck_count`, `render_time_ms`)
     pub channel_render_stats: Vec<ChannelRenderStats>,
     /// GPU device name (e.g. "Apple M1 Pro")
     pub gpu_device_name: String,
@@ -684,7 +692,7 @@ pub struct UIData {
     pub gpu_driver: String,
     /// GPU driver version/info
     pub gpu_driver_info: String,
-    /// GPU device type (e.g. "DiscreteGpu", "IntegratedGpu")
+    /// GPU device type (e.g. "`DiscreteGpu`", "`IntegratedGpu`")
     pub gpu_device_type: String,
     /// GPU utilization % (0–100), from GPU timestamp data
     pub gpu_utilization: f32,
@@ -712,9 +720,9 @@ pub struct UIData {
     pub clock_audio_bpm: Option<f32>,
     /// Current clock preference label
     pub clock_preference: String,
-    /// Device ID if preference is ForceMidi
+    /// Device ID if preference is `ForceMidi`
     pub clock_preference_force_device_id: Option<crate::midi::DeviceId>,
-    /// Manual BPM value (if preference is ForceManual)
+    /// Manual BPM value (if preference is `ForceManual`)
     pub clock_manual_bpm: Option<f32>,
     /// Current master render width
     pub render_width: u32,
@@ -731,9 +739,9 @@ pub struct UIData {
     pub can_redo: bool,
     /// Number of decks currently loading in background threads
     pub pending_deck_loads: usize,
-    /// Loaded deck preset names (from PresetLibrary)
+    /// Loaded deck preset names (from `PresetLibrary`)
     pub deck_presets: Vec<String>,
-    /// Loaded channel preset names (from PresetLibrary)
+    /// Loaded channel preset names (from `PresetLibrary`)
     pub channel_presets: Vec<String>,
 }
 
@@ -925,8 +933,10 @@ pub struct SurfaceUI {
 ///
 /// See /spec/ui-engine-boundary.md WS4 / Decision #11 — the deliberate split of
 /// "what I tell the engine" (`UIActions::commands`) from "my local view state".
+// Per-frame request flags that are independently set and cleared; an enum cannot express them.
+#[allow(clippy::struct_excessive_bools)]
 pub struct UISession {
-    /// (channel_uuid, generator_registry_idx) — add a shader as a new deck to a
+    /// (`channel_uuid`, `generator_registry_idx`) — add a shader as a new deck to a
     /// channel. Resolved off-frame via `spawn_deck_loads` (not a command), so the
     /// channel is held by UUID: a channel index captured at click time can name a
     /// different channel by the time the shader finishes compiling. See
@@ -947,19 +957,19 @@ pub struct UISession {
     pub midi_learn_select: Option<String>,
     /// Keyboard learn: toggle learn mode on/off
     pub keyboard_learn_toggle: bool,
-    /// Keyboard learn: select a target (Action or ParamPath)
+    /// Keyboard learn: select a target (Action or `ParamPath`)
     pub keyboard_learn_select: Option<crate::keymap::KeyTarget>,
     /// Keyboard learn: bind a key combo to current target
     pub keyboard_learn_bind: Option<crate::keymap::KeyCombo>,
-    /// Select a deck for detail view in bottom bar (ch_idx, deck_idx)
+    /// Select a deck for detail view in bottom bar (`ch_idx`, `deck_idx`)
     pub select_deck: Option<(usize, usize)>,
-    /// Select a channel for detail view in bottom bar (ch_idx)
+    /// Select a channel for detail view in bottom bar (`ch_idx`)
     pub select_channel: Option<usize>,
     /// Select master output for detail view in bottom bar
     pub select_master: bool,
-    /// Select a sequence for detail view in bottom bar (seq_idx)
+    /// Select a sequence for detail view in bottom bar (`seq_idx`)
     pub select_sequence: Option<usize>,
-    /// Select a step within a sequence for editing in bottom bar (seq_idx, step_idx)
+    /// Select a step within a sequence for editing in bottom bar (`seq_idx`, `step_idx`)
     pub select_sequence_step: Option<(usize, usize)>,
     /// Select a macro (by UUID) for detail view in bottom bar
     pub select_macro: Option<String>,
@@ -1114,9 +1124,9 @@ pub enum LibraryDrag {
     Generator(usize),
     /// Effect/filter shader from library (registry index)
     Effect(usize),
-    /// Camera device from library (CameraId)
+    /// Camera device from library (`CameraId`)
     Camera(crate::camera::CameraId),
-    /// Depth sensor from library (DepthSensorId)
+    /// Depth sensor from library (`DepthSensorId`)
     DepthSensor(crate::depth::DepthSensorId),
     /// NDI network source (source name)
     Ndi(String),
@@ -1132,9 +1142,9 @@ pub enum LibraryDrag {
     Rtmp(String, crate::stream::RtmpMode),
     /// HTML content source (url)
     Html(String),
-    /// Deck preset from library (index into preset_library.deck_presets)
+    /// Deck preset from library (index into `preset_library.deck_presets`)
     DeckPreset(usize),
-    /// Channel preset from library (index into preset_library.channel_presets)
+    /// Channel preset from library (index into `preset_library.channel_presets`)
     ChannelPreset(usize),
 }
 
@@ -1151,11 +1161,11 @@ pub struct DeckDrag {
 /// applied after release, by which point an index could name another entity.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectDrag {
-    /// Deck effect: (deck_uuid, effect_idx)
+    /// Deck effect: (`deck_uuid`, `effect_idx`)
     Deck(String, usize),
-    /// Channel effect: (channel_uuid, effect_idx)
+    /// Channel effect: (`channel_uuid`, `effect_idx`)
     Channel(String, usize),
-    /// Master effect: (effect_idx)
+    /// Master effect: (`effect_idx`)
     Master(usize),
 }
 
@@ -1166,7 +1176,7 @@ pub struct SequenceStepDrag {
     pub step_idx: usize,
 }
 
-/// Helper to extract params from ShaderParams for UI display
+/// Helper to extract params from `ShaderParams` for UI display
 pub fn collect_params(params: &ShaderParams) -> Vec<ParamUIInfo> {
     params
         .param_order
@@ -1195,7 +1205,7 @@ impl UIData {
     pub fn test_fixture() -> Self {
         use crate::modulation::LFOWaveform;
 
-        let deck_a0 = DeckUIInfo {
+        let alpha_lower = DeckUIInfo {
             deck_idx: 0,
             uuid: "a0000001".to_string(),
             name: "test_generator_a".to_string(),
@@ -1244,7 +1254,7 @@ impl UIData {
             gpu_render_cost_us: 0.0,
         };
 
-        let deck_a1 = DeckUIInfo {
+        let alpha_upper = DeckUIInfo {
             deck_idx: 1,
             uuid: "a0000002".to_string(),
             name: "test_generator_b".to_string(),
@@ -1279,7 +1289,7 @@ impl UIData {
             name: "Ch A".to_string(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
-            decks: vec![deck_a0, deck_a1],
+            decks: vec![alpha_lower, alpha_upper],
             effects: vec![(
                 "cfx00001".to_string(),
                 "ch_effect".to_string(),
@@ -1291,7 +1301,7 @@ impl UIData {
             )],
         };
 
-        let deck_b0 = DeckUIInfo {
+        let beta_lower = DeckUIInfo {
             deck_idx: 0,
             uuid: "b0000001".to_string(),
             name: "test_generator_c".to_string(),
@@ -1320,7 +1330,7 @@ impl UIData {
             gpu_render_cost_us: 0.0,
         };
 
-        let deck_b1 = DeckUIInfo {
+        let beta_upper = DeckUIInfo {
             deck_idx: 1,
             uuid: "b0000002".to_string(),
             name: "test_generator_d".to_string(),
@@ -1355,7 +1365,7 @@ impl UIData {
             name: "Ch B".to_string(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
-            decks: vec![deck_b0, deck_b1],
+            decks: vec![beta_lower, beta_upper],
             effects: vec![],
         };
 

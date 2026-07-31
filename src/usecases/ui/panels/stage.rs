@@ -13,14 +13,14 @@ use crate::surface::{
 };
 
 /// Drag state for edge dragging:
-/// (surface_uuid, contour_idx, edge_start_idx, original_v0, original_v1, grab_point_on_edge)
+/// (`surface_uuid`, `contour_idx`, `edge_start_idx`, `original_v0`, `original_v1`, `grab_point_on_edge`)
 type DraggingEdge = (String, usize, usize, [f32; 2], [f32; 2], [f32; 2]);
 
-/// Hit-test result for a vertex: (surface_uuid, contour_idx, vertex_idx)
+/// Hit-test result for a vertex: (`surface_uuid`, `contour_idx`, `vertex_idx`)
 type HitVertex = (String, usize, usize);
-/// Hit-test result for an edge: (surface_uuid, contour_idx, edge_start_idx, projected_point)
+/// Hit-test result for an edge: (`surface_uuid`, `contour_idx`, `edge_start_idx`, `projected_point`)
 type HitEdge = (String, usize, usize, [f32; 2]);
-/// Hit-test result for a surface body: (surface_uuid, nx, ny)
+/// Hit-test result for a surface body: (`surface_uuid`, nx, ny)
 type HitSurface = (String, f32, f32);
 /// Combined hit-test result: (vertex, edge, surface)
 type HitTestResult = (Option<HitVertex>, Option<HitEdge>, Option<HitSurface>);
@@ -82,6 +82,8 @@ fn selection_bounds(
 
 /// The gizmo's eight scale handles as `(handle, pivot, scales_x, scales_y)` in
 /// normalized coords for the given box. The pivot is always the opposite handle.
+// x/y/w/h and l/t/r/b are the idiomatic names for this box geometry.
+#[allow(clippy::many_single_char_names)]
 fn gizmo_scale_handles(x: f32, y: f32, w: f32, h: f32) -> [([f32; 2], [f32; 2], bool, bool); 8] {
     let (l, t, r, b) = (x, y, x + w, y + h);
     let (mx, my) = (x + w * 0.5, y + h * 0.5);
@@ -174,6 +176,8 @@ enum StageEditorMode {
     Dome3D,
 }
 
+// dx_px/dy_px style x/y pairs are the clearest names for this canvas geometry.
+#[allow(clippy::similar_names)]
 pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     // Open/Close Editor button
     ui.horizontal(|ui| {
@@ -328,7 +332,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
             painter.text(
                 egui::pos2(v0.x + 4.0, v0.y + 4.0),
                 egui::Align2::LEFT_TOP,
-                format!("{}{}", mapping_label, type_label),
+                format!("{mapping_label}{type_label}"),
                 egui::FontId::proportional(9.0),
                 egui::Color32::WHITE,
             );
@@ -535,7 +539,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Source:").weak().size(10.0));
                     let current_label = format!("{}", surface.source);
-                    let response = ui.button(format!("{} ▼", current_label));
+                    let response = ui.button(format!("{current_label} ▼"));
                     let popup_id = response.id.with("surf_src_popup");
                     if response.clicked() {
                         #[allow(deprecated)]
@@ -579,7 +583,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
                                     } else {
                                         new_indices.retain(|&idx| idx != ch.ch_idx);
                                     }
-                                    new_indices.sort();
+                                    new_indices.sort_unstable();
                                     let new_source = match new_indices.len() {
                                         0 => OutputSource::Master,
                                         1 => OutputSource::Channel(new_indices[0]),
@@ -597,7 +601,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Mapping:").weak().size(10.0));
-                    egui::ComboBox::from_id_salt(format!("surf_map_{}", i))
+                    egui::ComboBox::from_id_salt(format!("surf_map_{i}"))
                         .selected_text(format!("{}", surface.content_mapping))
                         .width(80.0)
                         .show_ui(ui, |ui| {
@@ -636,7 +640,7 @@ pub(super) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Type:").weak().size(10.0));
-                    egui::ComboBox::from_id_salt(format!("surf_type_{}", i))
+                    egui::ComboBox::from_id_salt(format!("surf_type_{i}"))
                         .selected_text(format!("{}", surface.output_type))
                         .width(100.0)
                         .show_ui(ui, |ui| {
@@ -779,20 +783,22 @@ struct StageEditorState {
     selection_rect_start: Option<[f32; 2]>,
     /// Drag state for radius handle on circle surfaces
     dragging_radius: Option<String>, // surface_uuid
-    /// Drag state for edge dragging: (surface_uuid, contour_idx, edge_start_idx,
-    /// original_v0, original_v1, grab_point_on_edge)
+    /// Drag state for edge dragging: (`surface_uuid`, `contour_idx`, `edge_start_idx`,
+    /// `original_v0`, `original_v1`, `grab_point_on_edge`)
     dragging_edge: Option<DraggingEdge>,
     /// Drag state for the transform gizmo's scale handles.
     dragging_scale: Option<ScaleDrag>,
     /// Drag state for the transform gizmo's rotation knob.
     dragging_rotate: Option<RotateDrag>,
-    /// Drag state for a curve anchor: (surface_uuid, anchor_idx)
+    /// Drag state for a curve anchor: (`surface_uuid`, `anchor_idx`)
     dragging_anchor: Option<(String, usize)>,
-    /// Drag state for a cubic control handle: (surface_uuid, segment_idx, handle)
+    /// Drag state for a cubic control handle: (`surface_uuid`, `segment_idx`, handle)
     dragging_handle: Option<(String, usize, CubicHandle)>,
 }
 
 /// Full-screen stage editor — replaces the deck view
+// cx_px/cy_px, raw_sx/raw_sy and friends are the clearest names for this canvas geometry.
+#[allow(clippy::similar_names)]
 pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let state_id = ui.id().with("stage_editor_state");
     let mut state = ui.memory(|mem| {
@@ -1179,12 +1185,12 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             ];
             let mut current_preset = data.dome_preset;
             egui::ComboBox::from_id_salt("dome_preset")
-                .selected_text(format!("{}", current_preset))
+                .selected_text(format!("{current_preset}"))
                 .width(100.0)
                 .show_ui(ui, |ui| {
                     for preset in &presets {
                         if ui
-                            .selectable_value(&mut current_preset, *preset, format!("{}", preset))
+                            .selectable_value(&mut current_preset, *preset, format!("{preset}"))
                             .clicked()
                         {
                             actions
@@ -1500,7 +1506,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
             // Radius ring — compute the pixel radius at angle=0
             let radius_px_x = hint.radius * canvas_width;
             let radius_px_y = hint.radius * hint.aspect_ratio * canvas_height;
-            let avg_radius_px = (radius_px_x + radius_px_y) / 2.0;
+            let avg_radius_px = f32::midpoint(radius_px_x, radius_px_y);
             // Center dot (white)
             painter.circle_filled(center_pos, 4.0, egui::Color32::WHITE);
             // Radius ring (yellow, dashed look via stroke)
@@ -2215,7 +2221,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                 );
                             }
                         }
-                    } else if let Some((ref _uuid, lx, ly)) = state.moving_surface {
+                    } else if let Some((ref moving_uuid, lx, ly)) = state.moving_surface {
                         let dx = nx - lx;
                         let dy = ny - ly;
                         // Move ALL selected surfaces by the same delta
@@ -2228,7 +2234,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                                 });
                             }
                         }
-                        state.moving_surface = Some((_uuid.clone(), nx, ny));
+                        state.moving_surface = Some((moving_uuid.clone(), nx, ny));
                     } else if let Some(start) = state.selection_rect_start {
                         // Draw marquee selection rectangle
                         let x0 = canvas_rect.left() + start[0] * canvas_width;
@@ -2262,7 +2268,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         let sel_min_y = start[1].min(ny);
                         let sel_max_y = start[1].max(ny);
 
-                        for surface in data.surfaces.iter() {
+                        for surface in &data.surfaces {
                             // Compute bounding box of surface vertices
                             let (mut bb_min_x, mut bb_min_y) = (f32::MAX, f32::MAX);
                             let (mut bb_max_x, mut bb_max_y) = (f32::MIN, f32::MIN);
@@ -2320,7 +2326,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         if (x1 - x0) > 0.01 && (y1 - y0) > 0.01 {
                             let idx = data.surfaces.len() + 1;
                             actions.commands.push(EngineCommand::AddPolygonSurface {
-                                name: format!("Surface {}", idx),
+                                name: format!("Surface {idx}"),
                                 vertices: vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
                                 source: OutputSource::Master,
                             });
@@ -2356,7 +2362,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                             // Close polygon
                             let idx = data.surfaces.len() + 1;
                             actions.commands.push(EngineCommand::AddPolygonSurface {
-                                name: format!("Surface {}", idx),
+                                name: format!("Surface {idx}"),
                                 vertices: state.polygon_verts.clone(),
                                 source: OutputSource::Master,
                             });
@@ -2374,7 +2380,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 if state.polygon_verts.len() >= 3 {
                     let idx = data.surfaces.len() + 1;
                     actions.commands.push(EngineCommand::AddPolygonSurface {
-                        name: format!("Surface {}", idx),
+                        name: format!("Surface {idx}"),
                         vertices: state.polygon_verts.clone(),
                         source: OutputSource::Master,
                     });
@@ -2408,7 +2414,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                         let aspect_ratio = canvas_width / canvas_height;
                         let idx = data.surfaces.len() + 1;
                         actions.commands.push(EngineCommand::AddCircleSurface {
-                            name: format!("Surface {}", idx),
+                            name: format!("Surface {idx}"),
                             center,
                             radius,
                             sides,
@@ -2590,7 +2596,7 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                 match target {
                     KeyTarget::Action(ActionId::ToolSelect) => state.tool = DrawingTool::Select,
                     KeyTarget::Action(ActionId::ToolRectangle) => {
-                        state.tool = DrawingTool::Rectangle
+                        state.tool = DrawingTool::Rectangle;
                     }
                     KeyTarget::Action(ActionId::ToolPolygon) => state.tool = DrawingTool::Polygon,
                     KeyTarget::Action(ActionId::ToolCircle) => state.tool = DrawingTool::Circle,
@@ -2669,7 +2675,7 @@ const SLICE_COLORS: [egui::Color32; 8] = [
     egui::Color32::from_rgb(232, 67, 147), // Pink
 ];
 
-/// Render the 3D dome canvas (Dome3D mode).
+/// Render the 3D dome canvas (`Dome3D` mode).
 fn render_dome_canvas(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     let available_width = ui.available_width();
     let available_height = ui.available_height().max(200.0);
@@ -2791,7 +2797,7 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
         match new_params.detection_method {
             DetectionMethod::Canny => {
                 ui.label("Canny Lo:");
-                let mut canny_low = new_params.canny_low as f32;
+                let mut canny_low = f32::from(new_params.canny_low);
                 if ui
                     .add(
                         egui::DragValue::new(&mut canny_low)
@@ -2805,7 +2811,7 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                 }
 
                 ui.label("Hi:");
-                let mut canny_high = new_params.canny_high as f32;
+                let mut canny_high = f32::from(new_params.canny_high);
                 if ui
                     .add(
                         egui::DragValue::new(&mut canny_high)
@@ -2820,7 +2826,7 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
             }
             DetectionMethod::Threshold => {
                 ui.label("Thresh:");
-                let mut thresh = new_params.threshold as f32;
+                let mut thresh = f32::from(new_params.threshold);
                 if ui
                     .add(
                         egui::DragValue::new(&mut thresh)
@@ -2931,8 +2937,7 @@ fn render_camera_detect_live(ui: &mut egui::Ui, data: &UIData, actions: &mut UIA
                 .cameras
                 .iter()
                 .find(|(_, id)| *id == *camera_id)
-                .map(|(n, _)| n.as_str())
-                .unwrap_or("Unknown");
+                .map_or("Unknown", |(n, _)| n.as_str());
             egui::ComboBox::from_id_salt("cam_detect_picker")
                 .selected_text(current_name)
                 .width(120.0)
@@ -3071,7 +3076,7 @@ fn render_camera_detect_preview(ui: &mut egui::Ui, data: &UIData, actions: &mut 
         ui.separator();
 
         if ui
-            .button(format!("✓ Accept ({}/{})", selected_count, total))
+            .button(format!("✓ Accept ({selected_count}/{total})"))
             .on_hover_text("Create surfaces from selected contours")
             .clicked()
         {

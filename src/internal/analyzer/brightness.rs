@@ -28,7 +28,7 @@ impl BrightnessAnalyzer {
 }
 
 impl Analyzer for BrightnessAnalyzer {
-    fn analyzer_type(&self) -> &str {
+    fn analyzer_type(&self) -> &'static str {
         "brightness"
     }
 
@@ -76,7 +76,10 @@ impl Analyzer for BrightnessAnalyzer {
     }
 
     fn init(&mut self, options: &serde_json::Value) -> anyhow::Result<()> {
-        if let Some(stride) = options.get("sample_stride").and_then(|v| v.as_u64()) {
+        if let Some(stride) = options
+            .get("sample_stride")
+            .and_then(serde_json::Value::as_u64)
+        {
             let stride = stride.max(1) as usize;
             log::info!("BrightnessAnalyzer: sample_stride set to {stride}");
             self.sample_stride = stride;
@@ -98,11 +101,11 @@ impl Analyzer for BrightnessAnalyzer {
         let mut i = 0;
         while i < pixels {
             let off = i * 4;
-            let r = input.frame[off] as f64 / 255.0;
-            let g = input.frame[off + 1] as f64 / 255.0;
-            let b = input.frame[off + 2] as f64 / 255.0;
+            let r = f64::from(input.frame[off]) / 255.0;
+            let g = f64::from(input.frame[off + 1]) / 255.0;
+            let b = f64::from(input.frame[off + 2]) / 255.0;
 
-            let lum = LUM_R as f64 * r + LUM_G as f64 * g + LUM_B as f64 * b;
+            let lum = f64::from(LUM_R) * r + f64::from(LUM_G) * g + f64::from(LUM_B) * b;
 
             sum_r += r;
             sum_g += g;

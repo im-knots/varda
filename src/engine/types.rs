@@ -52,8 +52,10 @@ pub enum EffectTarget {
 
 /// Per-frame engine state snapshot — plain data, no GPU types, no lifetimes.
 ///
-/// Produced by VardaApp each frame. Distributed to consumers via watch channel.
-/// UIData is derived from this for the egui UI consumer.
+/// Produced by `VardaApp` each frame. Distributed to consumers via watch channel.
+/// `UIData` is derived from this for the egui UI consumer.
+// Serialized DTO: the flags mirror independent engine toggles, not a state enum.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Serialize)]
 pub struct EngineState {
     pub mixer: MixerSnapshot,
@@ -127,11 +129,11 @@ pub struct ClockSnapshot {
     pub osc_bpm: Option<f32>,
     /// Current audio BPM (always available as fallback).
     pub audio_bpm: Option<f32>,
-    /// Current preference label: "Auto", "ForceMidi(<name>)", "ForceOsc", "ForceAudio", "ForceManual".
+    /// Current preference label: "Auto", "`ForceMidi`(<name>)", "`ForceOsc`", "`ForceAudio`", "`ForceManual`".
     pub preference_label: String,
-    /// Device ID if preference is ForceMidi.
+    /// Device ID if preference is `ForceMidi`.
     pub preference_force_device_id: Option<crate::midi::DeviceId>,
-    /// Manual BPM value (if preference is ForceManual).
+    /// Manual BPM value (if preference is `ForceManual`).
     pub manual_bpm: Option<f32>,
 }
 
@@ -178,6 +180,8 @@ pub struct ChannelSnapshot {
     pub active_deck_count: u32,
 }
 
+// Serialized DTO: the flags mirror independent deck toggles, not a state enum.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Serialize)]
 pub struct DeckSnapshot {
     pub idx: usize,
@@ -234,7 +238,7 @@ pub struct PointCloudParamsSnapshot {
     pub seed: f32,
     pub drift: f32,
     pub disruption: f32,
-    /// 0 = Rgb, 1 = DepthRamp, 2 = Solid.
+    /// 0 = Rgb, 1 = `DepthRamp`, 2 = Solid.
     pub color_mode: u8,
 }
 
@@ -290,6 +294,8 @@ pub struct VideoPlaybackSnapshot {
     pub frame_rate: f64,
 }
 
+// Serialized DTO: each flag pairs with its own value field (beats vs seconds).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Serialize)]
 pub struct AutoTransitionSnapshot {
     pub enabled: bool,
@@ -647,8 +653,8 @@ mod tests {
             },
             modulation: ModulationSnapshot {
                 sources: vec![],
-                current_values: Default::default(),
-                assignments: Default::default(),
+                current_values: std::collections::HashMap::default(),
+                assignments: std::collections::HashMap::default(),
             },
             outputs: OutputSnapshot {
                 windows: vec![],
@@ -728,8 +734,8 @@ mod tests {
             },
             modulation: ModulationSnapshot {
                 sources: vec![],
-                current_values: Default::default(),
-                assignments: Default::default(),
+                current_values: std::collections::HashMap::default(),
+                assignments: std::collections::HashMap::default(),
             },
             outputs: OutputSnapshot {
                 windows: vec![],
@@ -788,7 +794,7 @@ mod tests {
     #[test]
     fn engine_command_debug() {
         let cmd = crate::engine::EngineCommand::SetCrossfader(0.5);
-        assert!(format!("{:?}", cmd).contains("SetCrossfader"));
+        assert!(format!("{cmd:?}").contains("SetCrossfader"));
     }
 
     #[test]

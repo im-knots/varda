@@ -8,7 +8,7 @@ use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
 /// Maximum number of per-draw parameter slots in the ring buffer.
-/// Supports batching up to 16 composites in a single queue.submit().
+/// Supports batching up to 16 composites in a single `queue.submit()`.
 const MAX_DRAW_SLOTS: u64 = 16;
 
 /// Uniform buffer for blit parameters - 32 bytes (8 x f32)
@@ -43,11 +43,22 @@ pub struct BlitPipeline {
 
 impl BlitPipeline {
     /// Create a new blit pipeline with REPLACE blend (for final screen output)
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`Self::with_blend`].
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         Self::with_blend(device, target_format, wgpu::BlendState::REPLACE)
     }
 
     /// Create a blit pipeline with a specific blend state
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn with_blend(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
@@ -129,7 +140,7 @@ impl BlitPipeline {
                 module: &vertex_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &fragment_shader,
@@ -139,7 +150,7 @@ impl BlitPipeline {
                     blend: Some(blend_state),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -173,7 +184,7 @@ impl BlitPipeline {
         });
 
         // Pre-allocate ring buffer for batched per-draw params.
-        let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let param_size = std::mem::size_of::<BlitParams>() as u64;
         let ring_stride = param_size.div_ceil(align) * align;
         let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -193,7 +204,12 @@ impl BlitPipeline {
         })
     }
 
-    /// Create a bind group for a texture view using the static params_buffer.
+    /// Create a bind group for a texture view using the static `params_buffer`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size_of::<BlitParams>()` is zero, which cannot happen for a
+    /// non-empty `#[repr(C)]` struct.
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,
@@ -346,7 +362,7 @@ impl BlitPipeline {
                 rotation: 0,
                 uv_scale,
                 uv_offset,
-                premultiplied: premultiplied as u32,
+                premultiplied: u32::from(premultiplied),
                 srgb_encode: 0,
             }]),
         );
@@ -354,6 +370,11 @@ impl BlitPipeline {
 
     /// Create a bind group for a specific ring buffer slot.
     /// The slot offset is baked into the bind group — no dynamic offset overhead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size_of::<BlitParams>()` is zero, which cannot happen for a
+    /// non-empty `#[repr(C)]` struct.
     pub fn create_ring_bind_group(
         &self,
         device: &wgpu::Device,
@@ -402,7 +423,7 @@ impl BlitPipeline {
 // === Composite blend pipeline ===
 
 /// Uniform buffer for composite blend parameters - 32 bytes (8 x f32).
-/// Must match CompositeParams in composite.wgsl.
+/// Must match `CompositeParams` in composite.wgsl.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CompositeParams {
@@ -418,7 +439,7 @@ struct CompositeParams {
 
 /// Shader-based composite pipeline that reads both source and destination textures
 /// and computes the blend per-pixel. Supports all blend modes via a uniform integer.
-/// Replaces the fixed-function BlitPipeline HashMap for compositing.
+/// Replaces the fixed-function `BlitPipeline` `HashMap` for compositing.
 pub struct CompositeBlitPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -432,6 +453,13 @@ pub struct CompositeBlitPipeline {
 
 impl CompositeBlitPipeline {
     /// Create a new composite blend pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Composite Bind Group Layout"),
@@ -517,7 +545,7 @@ impl CompositeBlitPipeline {
                 module: &vertex_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &fragment_shader,
@@ -527,7 +555,7 @@ impl CompositeBlitPipeline {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -560,7 +588,7 @@ impl CompositeBlitPipeline {
         });
 
         // Pre-allocate ring buffer for batched per-draw params.
-        let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let param_size = std::mem::size_of::<CompositeParams>() as u64;
         let ring_stride = param_size.div_ceil(align) * align;
         let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -604,6 +632,11 @@ impl CompositeBlitPipeline {
     }
 
     /// Create a bind group for compositing source onto destination.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size_of::<CompositeParams>()` is zero, which cannot happen
+    /// for a non-empty `#[repr(C)]` struct.
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,
@@ -671,7 +704,7 @@ impl CompositeBlitPipeline {
                 blend_mode,
                 uv_scale,
                 uv_offset,
-                premultiplied: premultiplied as u32,
+                premultiplied: u32::from(premultiplied),
                 _pad: 0.0,
             }]),
         );
@@ -679,6 +712,11 @@ impl CompositeBlitPipeline {
 
     /// Create a bind group for a specific ring buffer slot.
     /// The slot offset is baked into the bind group — no dynamic offset overhead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size_of::<CompositeParams>()` is zero, which cannot happen
+    /// for a non-empty `#[repr(C)]` struct.
     pub fn create_ring_bind_group(
         &self,
         device: &wgpu::Device,
@@ -733,7 +771,7 @@ impl CompositeBlitPipeline {
 
 /// Extended params for polygon pipeline — includes homography matrix for warp
 /// and per-surface overlap zone blending parameters.
-/// Must match the PolygonParams struct in polygon.wgsl.
+/// Must match the `PolygonParams` struct in polygon.wgsl.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct PolygonParams {
@@ -996,6 +1034,14 @@ pub struct PolygonBlitPipeline {
 }
 
 impl PolygonBlitPipeline {
+    /// Create the polygon warp/blit pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Result<Self> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Polygon Blit Bind Group Layout"),
@@ -1059,7 +1105,7 @@ impl PolygonBlitPipeline {
                 module: &shader_module,
                 entry_point: Some("vs_main"),
                 buffers: &[PolygonVertex::LAYOUT],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader_module,
@@ -1069,7 +1115,7 @@ impl PolygonBlitPipeline {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -1098,7 +1144,7 @@ impl PolygonBlitPipeline {
         // Pre-allocate triple-buffered persistent pools (grow on demand). Each
         // frame in flight gets its own ring + vertex pool so consecutive frames
         // never write the buffer the GPU is still reading.
-        let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let param_size = std::mem::size_of::<PolygonParams>() as u64;
         let ring_stride = param_size.div_ceil(align) * align;
         let initial_slots = MAX_DRAW_SLOTS as usize;
@@ -1150,10 +1196,7 @@ impl PolygonBlitPipeline {
                 continue;
             }
             let hash = hash_uv_contours(&d.mask_uv_contours);
-            let fresh = cache
-                .get(d.mask_uuid)
-                .map(|m| m.hash == hash)
-                .unwrap_or(false);
+            let fresh = cache.get(d.mask_uuid).is_some_and(|m| m.hash == hash);
             if fresh {
                 continue;
             }
@@ -1222,6 +1265,12 @@ impl PolygonBlitPipeline {
     /// Returns the prepared surfaces plus a handle to the vertex pool to bind;
     /// the caller holds the handle across the render pass and passes it to
     /// [`Self::draw`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the 1×1 default coverage mask is missing after
+    /// `ensure_default_mask`, or if `size_of::<PolygonParams>()` is zero —
+    /// neither is reachable.
     pub fn prepare(
         &self,
         device: &wgpu::Device,
@@ -1294,8 +1343,7 @@ impl PolygonBlitPipeline {
             } else {
                 mask_cache
                     .get(d.mask_uuid)
-                    .map(|m| &m.view)
-                    .unwrap_or(default_view)
+                    .map_or(default_view, |m| &m.view)
             };
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Polygon Blit Bind Group (ring)"),
@@ -1364,7 +1412,7 @@ impl PolygonBlitPipeline {
     ///
     /// Handles concave polygons correctly (fan triangulation only works for
     /// convex). UVs map the bounding box to [0..1] (for Fill mode, the shader's
-    /// uv_scale/uv_offset handle the rest). Returns an empty vec for degenerate
+    /// `uv_scale/uv_offset` handle the rest). Returns an empty vec for degenerate
     /// input (< 3 vertices). The vertices are written into the pipeline's shared
     /// pool by [`Self::prepare`] — no GPU buffer is allocated here.
     pub fn triangulate_verts(
@@ -1777,7 +1825,7 @@ mod tests {
     }
 
     /// Each prepare must advance to the next pool set and wrap after
-    /// POLYGON_FRAMES_IN_FLIGHT frames, so consecutive frames never reuse the
+    /// `POLYGON_FRAMES_IN_FLIGHT` frames, so consecutive frames never reuse the
     /// buffer the GPU may still be reading (the cross-frame WAR hazard).
     #[test]
     fn prepare_rotates_frame_pools() {

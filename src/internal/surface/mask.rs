@@ -17,6 +17,8 @@ pub const MASK_SUPERSAMPLE: u32 = 2;
 /// contours (even-odd rule, so nested holes carve back). Each output texel
 /// averages `MASK_SUPERSAMPLE²` subsamples for a clean edge. With no contours
 /// the whole mask is content (`255`), which the caller treats as a no-op.
+// Scanline rasteriser: a/b/n/i/k/t/y are the idiomatic names for this math.
+#[allow(clippy::many_single_char_names)]
 pub fn bake_hole_mask(uv_contours: &[Vec<[f32; 2]>], res: u32) -> Vec<u8> {
     let res = res.max(1) as usize;
     if uv_contours.is_empty() {
@@ -74,7 +76,7 @@ pub fn bake_hole_mask(uv_contours: &[Vec<[f32; 2]>], res: u32) -> Vec<u8> {
     hole_count
         .iter()
         .map(|&c| {
-            let hole_frac = c as f32 / sub_per_texel;
+            let hole_frac = f32::from(c) / sub_per_texel;
             (255.0 * (1.0 - hole_frac)).round().clamp(0.0, 255.0) as u8
         })
         .collect()

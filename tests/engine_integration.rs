@@ -1,4 +1,4 @@
-//! Engine integration tests — multi-step command workflows through real headless VardaApp.
+//! Engine integration tests — multi-step command workflows through real headless `VardaApp`.
 
 use varda::app::{AppConfig, VardaApp};
 use varda::engine::{
@@ -1676,7 +1676,7 @@ fn bezier_warp_convert_and_edit() {
     assert_eq!((b.anchor_cols, b.anchor_rows), (3, 3));
 }
 
-/// Setting subdivisions on a non-existent surface surfaces NotFound rather than
+/// Setting subdivisions on a non-existent surface surfaces `NotFound` rather than
 /// silently succeeding.
 #[test]
 fn mesh_warp_subdivisions_bad_index_errs() {
@@ -1856,7 +1856,7 @@ fn punch_surface_hole_workflow() {
 /// `MixerCommands::add_effect` resolves its *target* before doing anything.
 /// An unresolvable Deck/Channel target is a precondition failure: the wire
 /// result is `NotFound` and no effect is created anywhere. The existing
-/// NotFound sweep only covers `Toggle`/`RemoveEffect` (which resolve the effect
+/// `NotFound` sweep only covers `Toggle`/`RemoveEffect` (which resolve the effect
 /// uuid); `AddEffect` resolves the target chain, a separate code path.
 #[test]
 fn add_effect_on_unknown_target_is_not_found_and_creates_nothing() {

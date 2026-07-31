@@ -112,6 +112,16 @@ fn ok_or_state(applied: bool, path: &str, reason: &'static str) -> Result<(), Pa
 /// Apply a normalized value (0.0–1.0) to the parameter at the given path.
 /// Returns `Ok(())` if the path resolved and the mutation was applied, or a
 /// [`ParamRouteError`] describing why it did not.
+///
+/// # Errors
+///
+/// Returns [`ParamRouteError::UnknownPath`] if `path` matches no route,
+/// [`ParamRouteError::UnknownEntity`] if a UUID or index in the path does not
+/// resolve to a live channel/deck/effect/macro,
+/// [`ParamRouteError::IndexOutOfRange`] if an index exceeds its container,
+/// [`ParamRouteError::UnknownParam`] if the named sub-parameter does not exist,
+/// and [`ParamRouteError::WrongState`] if the route resolved but the entity is
+/// in a state that cannot accept the mutation.
 pub fn apply_param_by_path(
     mixer: &mut Mixer,
     path: &str,
@@ -176,7 +186,8 @@ pub fn apply_param_by_path(
             } else {
                 300.0
             };
-            at.play_duration.set_value(0.5 + value as f64 * (max - 0.5));
+            at.play_duration
+                .set_value(0.5 + f64::from(value) * (max - 0.5));
             Ok(())
         }
         ["deck", uuid, "at", "trans_duration"] => {
@@ -197,7 +208,7 @@ pub fn apply_param_by_path(
                 30.0
             };
             at.transition_duration
-                .set_value(0.1 + value as f64 * (max - 0.1));
+                .set_value(0.1 + f64::from(value) * (max - 0.1));
             Ok(())
         }
         ["deck", uuid, "video", "play"] => {
@@ -432,6 +443,11 @@ pub fn apply_param_by_path(
 ///
 /// This is the entry point for the engine `set_param` trait; MIDI/OSC continue
 /// to use the normalized-f32 [`apply_param_by_path`].
+///
+/// # Errors
+///
+/// Same failure modes as [`apply_param_by_path`]: an unknown path, a UUID/index
+/// that no longer resolves, or a resolved route that the mixer refused.
 pub fn apply_typed_param_by_path(
     mixer: &mut Mixer,
     path: &str,
@@ -650,12 +666,12 @@ fn bucket_index(value: f32, n: usize) -> usize {
 
 /// Map a normalized value to a video playback speed multiplier (0.1×–4.0×).
 fn scale_speed(value: f32) -> f64 {
-    (0.1 + clamp_norm(value) * 3.9) as f64
+    f64::from(0.1 + clamp_norm(value) * 3.9)
 }
 
 /// Scale a normalized value to an absolute time in seconds against a clip duration.
 fn scale_to_duration(value: f32, duration: f64) -> f64 {
-    clamp_norm(value) as f64 * duration.max(0.0)
+    f64::from(clamp_norm(value)) * duration.max(0.0)
 }
 
 /// Map a normalized value to a `LoopMode` via fader bucketing.

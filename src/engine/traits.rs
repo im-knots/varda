@@ -6,7 +6,12 @@
 //! Traits MUST NOT expose wgpu, egui, or internal implementation types.
 //! Parameters use primitives, strings, and engine-defined value types.
 
-use super::types::*;
+use super::types::{
+    AnalyzerTypeInfo, AudioBandPreset, AudioSnapshot, AudioSourceId, BlendMode, CameraId,
+    ContentMapping, CrossfadeEasing, DepthSensorId, EffectTarget, LFOWaveform, MixerSnapshot,
+    ModulationSnapshot, OutputSnapshot, OutputSource, ParamValue, ScalingMode, SurfaceOutputType,
+    SurfaceSnapshot,
+};
 use anyhow::Result;
 
 // ── Mixer ───────────────────────────────────────────────────────────
@@ -19,37 +24,110 @@ pub trait MixerCommands {
     /// Deck-creating commands take the parent channel's UUID (there is no deck
     /// UUID yet) and return the new deck's stable UUID so callers can report it
     /// (`CommandResult::OkWithId`) and register a preview texture.
+    ///
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, if no generator
+    /// shader called `shader_name` is registered, if the GPU pipeline for the
+    /// shader cannot be built, or if a required preprocessor the shader
+    /// declares (e.g. `depth_sensor`) cannot be acquired.
     fn add_deck(&mut self, channel_uuid: &str, shader_name: &str) -> Result<String>;
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, or if the image at
+    /// `path` cannot be read, decoded, or uploaded to the GPU.
     fn add_image_deck(&mut self, channel_uuid: &str, path: &std::path::Path) -> Result<String>;
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, or if the video at
+    /// `path` cannot be opened or decoded.
     fn add_video_deck(&mut self, channel_uuid: &str, path: &std::path::Path) -> Result<String>;
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, or if the deck's
+    /// GPU resources cannot be allocated.
     fn add_solid_color_deck(&mut self, channel_uuid: &str, color: [f32; 4]) -> Result<String>;
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, if the camera
+    /// cannot be opened, or if the deck's GPU resources cannot be allocated.
     fn add_camera_deck(&mut self, channel_uuid: &str, camera_id: CameraId) -> Result<String>;
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, if the depth sensor
+    /// cannot be opened, or if the deck's GPU resources cannot be allocated.
     fn add_depth_sensor_deck(
         &mut self,
         channel_uuid: &str,
         depth_sensor_id: DepthSensorId,
     ) -> Result<String>;
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck.
     fn remove_deck(&mut self, deck_uuid: &str) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck or `dst_channel_uuid`
+    /// names no channel.
     fn move_deck(&mut self, deck_uuid: &str, dst_channel_uuid: &str) -> Result<()>;
     /// Reposition a deck within `channel_uuid`. The indices are ordinals.
+    ///
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, or if either
+    /// ordinal is out of range for that channel's deck count.
     fn reorder_deck(&mut self, channel_uuid: &str, from_idx: usize, to_idx: usize) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck.
     fn set_deck_opacity(&mut self, deck_uuid: &str, opacity: f32) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck.
     fn set_deck_blend_mode(&mut self, deck_uuid: &str, mode: BlendMode) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck.
     fn set_deck_solo(&mut self, deck_uuid: &str, solo: bool) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck.
     fn set_deck_mute(&mut self, deck_uuid: &str, mute: bool) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck.
     fn set_deck_scaling_mode(&mut self, deck_uuid: &str, mode: ScalingMode) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck.
     fn set_deck_transparent(&mut self, deck_uuid: &str, transparent: bool) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel.
     fn set_channel_opacity(&mut self, channel_uuid: &str, opacity: f32) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel.
     fn set_channel_blend_mode(&mut self, channel_uuid: &str, mode: BlendMode) -> Result<()>;
     /// Returns the new channel's UUID.
+    ///
+    /// # Errors
+    /// Returns an error if the channel's GPU render targets cannot be
+    /// allocated.
     fn add_channel(&mut self) -> Result<String>;
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, or if removing it
+    /// would drop below the two-channel minimum the crossfader requires.
     fn remove_channel(&mut self, channel_uuid: &str) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `target` names no deck or channel, if no filter
+    /// shader called `shader_name` is registered, if the effect's GPU pipeline
+    /// cannot be built, if the shader needs a depth sensor that cannot be
+    /// acquired, or if a depth-sensor effect is targeted at a channel or master
+    /// chain (only deck chains can host one).
     fn add_effect(&mut self, target: EffectTarget, shader_name: &str) -> Result<String>;
+    /// # Errors
+    /// Returns an error if `effect_uuid` names no effect.
     fn remove_effect(&mut self, effect_uuid: &str) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `effect_uuid` names no effect.
     fn toggle_effect(&mut self, effect_uuid: &str) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `target` names no deck or channel, or if either
+    /// ordinal is out of range for that chain's effect count.
     fn move_effect(&mut self, target: EffectTarget, from_idx: usize, to_idx: usize) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `shader_name` names no registered transition shader,
+    /// or if its GPU pipeline cannot be built. `None` clears the transition and
+    /// never fails.
     fn set_transition(&mut self, shader_name: Option<&str>) -> Result<()>;
     fn set_tonemap_mode(&mut self, mode: crate::engine::value::render::TonemapMode);
+    /// # Errors
+    /// Returns an error if `filename` does not exist under the workspace's
+    /// `luts/` directory or cannot be parsed as a supported LUT file.
     fn load_lut(&mut self, filename: &str) -> Result<()>;
     fn unload_lut(&mut self);
     fn set_param(&mut self, path: &str, value: ParamValue);
@@ -64,6 +142,10 @@ pub trait MixerQueries {
 
 /// Commands for controlling audio input.
 pub trait AudioCommands {
+    /// # Errors
+    /// Returns an error if the device or loopback source cannot be opened —
+    /// it has disappeared since the last scan, is already in exclusive use, or
+    /// exposes no supported input stream configuration.
     fn open_audio_source(&mut self, source_id: AudioSourceId) -> Result<()>;
     fn close_audio_source(&mut self, source_id: AudioSourceId);
     fn scan_audio_devices(&mut self);
@@ -139,7 +221,12 @@ pub trait MacroQueries {
 /// Commands for controlling outputs and surfaces.
 pub trait OutputCommands {
     fn request_create_output(&mut self);
+    /// # Errors
+    /// Returns an error if `output_uuid` names no output.
     fn close_output(&mut self, output_uuid: &str) -> Result<()>;
+    /// # Errors
+    /// Returns an error if `output_uuid` names no output, or if no monitor
+    /// called `monitor_name` is present in the cached monitor list.
     fn set_output_display(&mut self, output_uuid: &str, monitor_name: &str) -> Result<()>;
 }
 
@@ -180,6 +267,11 @@ pub trait SurfaceCommands {
 /// Commands for surface auto-detection and import.
 pub trait DetectCommands {
     /// Detect contours from raster image bytes.
+    ///
+    /// # Errors
+    /// Returns [`ImportError`](crate::engine::value::detect::ImportError) if
+    /// the bytes are not a decodable image, or if contour tracing produces no
+    /// usable geometry at the given `params`.
     fn detect_from_image(
         &self,
         image_data: &[u8],
@@ -189,6 +281,10 @@ pub trait DetectCommands {
         crate::engine::value::detect::ImportError,
     >;
     /// Detect contours from SVG data.
+    ///
+    /// # Errors
+    /// Returns [`ImportError`](crate::engine::value::detect::ImportError) if
+    /// the bytes are not well-formed SVG or contain no convertible paths.
     fn detect_from_svg(
         &self,
         svg_data: &[u8],
@@ -197,6 +293,10 @@ pub trait DetectCommands {
         crate::engine::value::detect::ImportError,
     >;
     /// Detect contours from DXF data.
+    ///
+    /// # Errors
+    /// Returns [`ImportError`](crate::engine::value::detect::ImportError) if
+    /// the bytes are not parseable DXF or contain no convertible entities.
     fn detect_from_dxf(
         &self,
         dxf_data: &[u8],
@@ -205,6 +305,11 @@ pub trait DetectCommands {
         crate::engine::value::detect::ImportError,
     >;
     /// Detect contours from a camera snapshot (RGBA frame data).
+    ///
+    /// # Errors
+    /// Returns [`ImportError`](crate::engine::value::detect::ImportError) if
+    /// the camera cannot be opened, if no frame arrives within the capture
+    /// budget, or if contour tracing fails on the captured frame.
     fn detect_from_camera(
         &mut self,
         camera_id: CameraId,
@@ -239,6 +344,10 @@ pub trait AnalyzerQueries {
 /// Commands for managing analyzer lifecycle on decks.
 pub trait AnalyzerCommands {
     /// Request an analyzer on a deck. If already running, increments refcount.
+    ///
+    /// # Errors
+    /// Returns an error if `deck_id` names no deck, or if `analyzer_type` is
+    /// not in the analyzer registry or rejects `options` and so cannot start.
     fn request_analyzer(
         &mut self,
         deck_id: &str,

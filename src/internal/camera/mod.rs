@@ -53,7 +53,7 @@ struct ActiveCamera {
 pub struct CameraManager {
     /// Detected camera devices (refreshed periodically).
     devices: Vec<CameraDeviceInfo>,
-    /// Active camera sessions keyed by CameraId.
+    /// Active camera sessions keyed by `CameraId`.
     active: HashMap<CameraId, ActiveCamera>,
     /// Whether nokhwa has been initialized.
     initialized: bool,
@@ -102,7 +102,7 @@ impl CameraManager {
                     .enumerate()
                     .map(|(i, info)| CameraDeviceInfo {
                         id: i as CameraId,
-                        name: info.human_name().to_string(),
+                        name: info.human_name().clone(),
                         index: info.index().clone(),
                     })
                     .collect();
@@ -112,7 +112,7 @@ impl CameraManager {
                 }
             }
             Err(e) => {
-                log::warn!("Camera enumeration failed: {}", e);
+                log::warn!("Camera enumeration failed: {e}");
                 self.devices.clear();
             }
         }
@@ -125,6 +125,12 @@ impl CameraManager {
 
     /// Open a camera and start capturing on a dedicated thread.
     /// Returns the camera's resolution. If already open, just increments the ref count.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no enumerated device matches `id`, if the underlying
+    /// capture backend fails to open the device or start its stream, or if the
+    /// dedicated capture thread cannot be spawned.
     pub fn open_camera(&mut self, id: CameraId, device: &wgpu::Device) -> Result<(u32, u32)> {
         if let Some(active) = self.active.get_mut(&id) {
             active.ref_count += 1;
@@ -146,7 +152,7 @@ impl CameraManager {
 
         camera
             .open_stream()
-            .map_err(|e| anyhow::anyhow!("Failed to start camera stream: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to start camera stream: {e}"))?;
 
         let res = camera.resolution();
         let width = res.width_x;
@@ -189,19 +195,19 @@ impl CameraManager {
         let cam_h = height;
 
         let thread = std::thread::Builder::new()
-            .name(format!("camera-{}", cam_id))
+            .name(format!("camera-{cam_id}"))
             .spawn(move || {
                 Self::capture_loop(
                     camera,
                     cam_id,
                     cam_w,
                     cam_h,
-                    frame_data_tx,
-                    stop_clone,
-                    connected_clone,
+                    &frame_data_tx,
+                    &stop_clone,
+                    &connected_clone,
                 );
             })
-            .map_err(|e| anyhow::anyhow!("Failed to spawn camera thread: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to spawn camera thread: {e}"))?;
 
         self.active.insert(
             id,
@@ -227,39 +233,35 @@ impl CameraManager {
         cam_id: CameraId,
         w: u32,
         h: u32,
-        frame_data: Arc<Mutex<Option<Vec<u8>>>>,
-        stop: Arc<AtomicBool>,
-        connected: Arc<AtomicBool>,
+        frame_data: &Mutex<Option<Vec<u8>>>,
+        stop: &AtomicBool,
+        connected: &AtomicBool,
     ) {
+        const MAX_BACKOFF_US: u64 = 500_000; // 500ms cap
+        const ERROR_THRESHOLD: u64 = 100;
+
         let expected_rgba = (w * h * 4) as usize;
         // Pre-allocated decode buffer — never freed, reused every frame
         let mut rgba_buf = vec![0u8; expected_rgba];
         let mut frame_count: u64 = 0;
         let mut consecutive_errors: u64 = 0;
         let mut backoff_us: u64 = 500; // 500µs initial backoff
-        const MAX_BACKOFF_US: u64 = 500_000; // 500ms cap
-        const ERROR_THRESHOLD: u64 = 100;
         let start = std::time::Instant::now();
 
-        log::info!("Camera {} capture thread started ({}x{})", cam_id, w, h);
+        log::info!("Camera {cam_id} capture thread started ({w}x{h})");
 
         while !stop.load(Ordering::Relaxed) {
-            let buf = match camera.frame() {
-                Ok(b) => b,
-                Err(_) => {
-                    consecutive_errors += 1;
-                    if consecutive_errors == ERROR_THRESHOLD {
-                        log::warn!(
-                            "Camera {}: {} consecutive frame errors — marking disconnected",
-                            cam_id,
-                            ERROR_THRESHOLD
-                        );
-                        connected.store(false, Ordering::SeqCst);
-                    }
-                    std::thread::sleep(std::time::Duration::from_micros(backoff_us));
-                    backoff_us = (backoff_us * 2).min(MAX_BACKOFF_US);
-                    continue;
+            let Ok(buf) = camera.frame() else {
+                consecutive_errors += 1;
+                if consecutive_errors == ERROR_THRESHOLD {
+                    log::warn!(
+                        "Camera {cam_id}: {ERROR_THRESHOLD} consecutive frame errors — marking disconnected"
+                    );
+                    connected.store(false, Ordering::SeqCst);
                 }
+                std::thread::sleep(std::time::Duration::from_micros(backoff_us));
+                backoff_us = (backoff_us * 2).min(MAX_BACKOFF_US);
+                continue;
             };
 
             let raw = buf.buffer();
@@ -341,21 +343,14 @@ impl CameraManager {
                     let elapsed = start.elapsed().as_secs_f64();
                     let fps = frame_count as f64 / elapsed;
                     log::debug!(
-                        "Camera {}: {:.1} fps ({} frames in {:.1}s, fmt={:?})",
-                        cam_id,
-                        fps,
-                        frame_count,
-                        elapsed,
-                        fmt
+                        "Camera {cam_id}: {fps:.1} fps ({frame_count} frames in {elapsed:.1}s, fmt={fmt:?})"
                     );
                 }
             } else {
                 consecutive_errors += 1;
                 if consecutive_errors == ERROR_THRESHOLD {
                     log::warn!(
-                        "Camera {}: {} consecutive decode errors — marking disconnected",
-                        cam_id,
-                        ERROR_THRESHOLD
+                        "Camera {cam_id}: {ERROR_THRESHOLD} consecutive decode errors — marking disconnected"
                     );
                     connected.store(false, Ordering::SeqCst);
                 }
@@ -365,17 +360,17 @@ impl CameraManager {
         }
 
         let _ = camera.stop_stream();
-        log::info!("Camera {} capture thread stopped", cam_id);
+        log::info!("Camera {cam_id} capture thread stopped");
     }
 
-    /// Release a camera reference. Stops capture thread when ref_count hits 0.
+    /// Release a camera reference. Stops capture thread when `ref_count` hits 0.
     pub fn release_camera(&mut self, id: CameraId) {
         if let Some(active) = self.active.get_mut(&id) {
             active.ref_count = active.ref_count.saturating_sub(1);
             if active.ref_count == 0 {
-                log::info!("Closing camera {} (no more references)", id);
+                log::info!("Closing camera {id} (no more references)");
                 let Some(mut removed) = self.active.remove(&id) else {
-                    log::warn!("Camera {} not found in active map during release", id);
+                    log::warn!("Camera {id} not found in active map during release");
                     return;
                 };
                 removed.stop_flag.store(true, Ordering::Relaxed);
@@ -401,8 +396,7 @@ impl CameraManager {
     pub fn is_connected(&self, id: CameraId) -> bool {
         self.active
             .get(&id)
-            .map(|a| a.connected.load(Ordering::SeqCst))
-            .unwrap_or(false)
+            .is_some_and(|a| a.connected.load(Ordering::SeqCst))
     }
 
     /// Upload latest camera frames to GPU. Non-blocking — just grabs whatever
@@ -426,7 +420,7 @@ impl CameraManager {
         queue: &wgpu::Queue,
         needed_ids: &std::collections::HashSet<CameraId>,
     ) {
-        for (id, active) in self.active.iter_mut() {
+        for (id, active) in &mut self.active {
             if needed_ids.contains(id) {
                 Self::upload_frame(active, queue);
             }
@@ -490,7 +484,7 @@ impl CameraManager {
     /// Returns all active camera IDs as a sorted vec.
     pub fn active_ids(&self) -> Vec<CameraId> {
         let mut ids: Vec<CameraId> = self.active.keys().copied().collect();
-        ids.sort();
+        ids.sort_unstable();
         ids
     }
 }

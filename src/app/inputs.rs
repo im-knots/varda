@@ -22,7 +22,7 @@ impl VardaApp {
                         .unwrap_or("unknown");
                     self.session
                         .notifications
-                        .info(format!("Shader reloaded: {}", name));
+                        .info(format!("Shader reloaded: {name}"));
                     // Lift any GPU quarantine: the author just changed the
                     // source, so whatever failed may be fixed. Without this a
                     // single bad save blacks the deck out until restart.
@@ -42,7 +42,7 @@ impl VardaApp {
                         .unwrap_or("unknown");
                     self.session
                         .notifications
-                        .warn(format!("Shader removed: {}", name));
+                        .warn(format!("Shader removed: {name}"));
                 }
                 crate::registry::ShaderEvent::Error(path, err) => {
                     let name = path
@@ -51,7 +51,7 @@ impl VardaApp {
                         .unwrap_or("unknown");
                     self.session
                         .notifications
-                        .error(format!("Shader error in {}: {}", name, err));
+                        .error(format!("Shader error in {name}: {err}"));
                 }
             }
         }
@@ -105,7 +105,7 @@ impl VardaApp {
                                 "action/redo" => self.midi_pending_redo = true,
                                 "action/save" => self.midi_pending_save = true,
                                 _ => {
-                                    log::debug!("Unknown OSC action: {}", path);
+                                    log::debug!("Unknown OSC action: {path}");
                                 }
                             }
                         } else {
@@ -126,7 +126,7 @@ impl VardaApp {
                         self.input.clock_manager.process_osc_beat(phase);
                     }
                     crate::osc::OscInput::Unknown(addr) => {
-                        log::debug!("Unknown OSC address: {}", addr);
+                        log::debug!("Unknown OSC address: {addr}");
                     }
                 }
             }
@@ -140,8 +140,7 @@ impl VardaApp {
                     crate::midi::MidiMessage::ClockTick { device_id } => {
                         let dev_name = midi
                             .device(*device_id)
-                            .map(|d| d.name.as_str())
-                            .unwrap_or("Unknown");
+                            .map_or("Unknown", |d| d.name.as_str());
                         self.input
                             .clock_manager
                             .process_midi_tick(*device_id, dev_name);
@@ -162,9 +161,8 @@ impl VardaApp {
                     _ => {}
                 }
 
-                let key = match msg.mapping_key() {
-                    Some(k) => k,
-                    None => continue,
+                let Some(key) = msg.mapping_key() else {
+                    continue;
                 };
 
                 // Auto-map: intercept keys owned by auto-mapping before normal lookup
@@ -237,15 +235,15 @@ impl VardaApp {
                     if path == "clock/bpm" {
                         // Map normalized 0.0–1.0 → 20–300 BPM range
                         let bpm = 20.0 + value * 280.0;
-                        if !matches!(
+                        if matches!(
                             self.input.clock_manager.preference(),
                             crate::clock::ClockPreference::ForceManual { .. }
                         ) {
+                            self.input.clock_manager.set_manual_bpm(bpm);
+                        } else {
                             self.input
                                 .clock_manager
                                 .set_preference(crate::clock::ClockPreference::ForceManual { bpm });
-                        } else {
-                            self.input.clock_manager.set_manual_bpm(bpm);
                         }
                     } else if path.starts_with("action/") && value > 0.5 {
                         // Global actions — trigger on note-on / CC > 50%
@@ -254,7 +252,7 @@ impl VardaApp {
                             "action/redo" => self.midi_pending_redo = true,
                             "action/save" => self.midi_pending_save = true,
                             _ => {
-                                log::debug!("Unknown action path: {}", path);
+                                log::debug!("Unknown action path: {path}");
                             }
                         }
                     } else {
@@ -268,7 +266,7 @@ impl VardaApp {
                         }
                     }
                 } else if !self.input.midi_mappings.learn_mode {
-                    log::debug!("Unmapped MIDI: {} value={:.2}", key, value);
+                    log::debug!("Unmapped MIDI: {key} value={value:.2}");
                 }
             }
         }

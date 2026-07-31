@@ -8,7 +8,7 @@
 //! The bug that motivated the render half: every pass buffer is bound as a
 //! sampled texture on every pass, and non-persistent pass buffers used a single
 //! texture for both reading and writing. Any shader declaring one therefore
-//! bound it as COLOR_TARGET and RESOURCE simultaneously and killed the app on
+//! bound it as `COLOR_TARGET` and RESOURCE simultaneously and killed the app on
 //! its first frame. No shipped shader had a non-persistent pass, so nothing
 //! caught it until one was written — and a build-only check never would have.
 //!

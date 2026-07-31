@@ -1,4 +1,4 @@
-//! Effect (ISF filter) implementation and PassBuffer for multi-pass effects.
+//! Effect (ISF filter) implementation and `PassBuffer` for multi-pass effects.
 
 use super::source::load_imported_textures;
 use super::{Deck, Effect, PassBuffer};
@@ -14,11 +14,21 @@ impl Effect {
     /// Targets `compositing_format`, the same as channel and master effects, so
     /// an effect behaves identically at any of the three tiers. See
     /// spec/unified-color-pipeline.md.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ISF fragment source fails to compile to SPIR-V,
+    /// or if the render pipeline cannot be created for the target format.
     pub fn new(context: &GpuContext, shader: ISFShader) -> Result<Self> {
         Self::new_with_format(context, shader, context.compositing_format)
     }
 
     /// Create a new effect with a specific target format
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ISF fragment source fails to compile to SPIR-V,
+    /// or if the render pipeline cannot be created for `target_format`.
     pub fn new_with_format(
         context: &GpuContext,
         shader: ISFShader,
@@ -90,8 +100,8 @@ impl Effect {
                 None => continue,
             };
 
-            let pass_width = Deck::parse_size_expression(&pass.width, width);
-            let pass_height = Deck::parse_size_expression(&pass.height, height);
+            let pass_width = Deck::parse_size_expression(pass.width.as_deref(), width);
+            let pass_height = Deck::parse_size_expression(pass.height.as_deref(), height);
             let is_persistent = pass.persistent.unwrap_or(false);
 
             // Pass buffers follow the effect's own target format so a deck,
@@ -99,7 +109,7 @@ impl Effect {
             let format = target_format;
 
             let tex_a = context.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("Effect Pass Buffer A: {}", target_name)),
+                label: Some(&format!("Effect Pass Buffer A: {target_name}")),
                 size: wgpu::Extent3d {
                     width: pass_width,
                     height: pass_height,
@@ -121,7 +131,7 @@ impl Effect {
             // RESOURCE in its own pass and wgpu rejects it.
             let (tex_b, view_b) = {
                 let tex = context.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("Effect Pass Buffer B: {}", target_name)),
+                    label: Some(&format!("Effect Pass Buffer B: {target_name}")),
                     size: wgpu::Extent3d {
                         width: pass_width,
                         height: pass_height,
@@ -160,7 +170,7 @@ impl Effect {
         let phase_inputs_config = shader.metadata.phase_inputs.clone();
 
         let uuid = crate::deck::generate_short_uuid();
-        let param_prefix = format!("fx_{}", uuid);
+        let param_prefix = format!("fx_{uuid}");
 
         Ok(Self {
             uuid,
@@ -181,6 +191,11 @@ impl Effect {
 
     /// Apply this effect to an input texture, outputting to target texture
     /// Optionally applies modulation to effect parameters using the given prefix
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`Effect::apply_with_modulation`], which is
+    /// currently infallible.
     pub fn apply(
         &mut self,
         context: &GpuContext,
@@ -200,6 +215,17 @@ impl Effect {
     }
 
     /// Apply this effect with modulation support
+    ///
+    /// # Errors
+    ///
+    /// Never fails today — recording the render passes is infallible. The
+    /// `Result` is kept so callers stay source-compatible if a fallible step
+    /// (pipeline recreation, pass-buffer reallocation) is added later.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the user parameter buffer is absent immediately after
+    /// `ensure_buffer` created it.
     pub fn apply_with_modulation(
         &mut self,
         context: &GpuContext,
@@ -253,7 +279,7 @@ impl Effect {
 
                 for _iter in 0..iterations {
                     let mut pass_uniforms = *uniforms;
-                    pass_uniforms.pass_index = pass_idx as i32;
+                    pass_uniforms.pass_index = i32::try_from(pass_idx).unwrap_or(i32::MAX);
                     self.pipeline
                         .update_uniforms(&context.queue, &pass_uniforms);
 
@@ -261,7 +287,7 @@ impl Effect {
                         .passes
                         .iter()
                         .filter_map(|p| p.target.as_ref().and_then(|t| self.pass_buffers.get(t)))
-                        .map(|pb| pb.read_view())
+                        .map(super::PassBuffer::read_view)
                         .collect();
 
                     let bind_group = self.pipeline.create_bind_group(
@@ -276,20 +302,19 @@ impl Effect {
                     let target_view = self
                         .pass_buffers
                         .get(&target_name)
-                        .map(|pb| pb.write_view())
-                        .unwrap_or(output_view);
+                        .map_or(output_view, super::PassBuffer::write_view);
 
                     let mut encoder =
                         context
                             .device
                             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some(&format!("Effect Pass {} Encoder", pass_idx)),
+                                label: Some(&format!("Effect Pass {pass_idx} Encoder")),
                             });
 
                     {
                         let mut render_pass =
                             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some(&format!("Effect Pass {} Render", pass_idx)),
+                                label: Some(&format!("Effect Pass {pass_idx} Render")),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                     view: target_view,
                                     resolve_target: None,
@@ -323,7 +348,7 @@ impl Effect {
 
             // Final pass: render to output_view using pass buffer results + input
             let mut final_uniforms = *uniforms;
-            final_uniforms.pass_index = self.passes.len() as i32;
+            final_uniforms.pass_index = i32::try_from(self.passes.len()).unwrap_or(i32::MAX);
             self.pipeline
                 .update_uniforms(&context.queue, &final_uniforms);
 
@@ -331,7 +356,7 @@ impl Effect {
                 .passes
                 .iter()
                 .filter_map(|p| p.target.as_ref().and_then(|t| self.pass_buffers.get(t)))
-                .map(|pb| pb.read_view())
+                .map(super::PassBuffer::read_view)
                 .collect();
 
             let bind_group = self.pipeline.create_bind_group(

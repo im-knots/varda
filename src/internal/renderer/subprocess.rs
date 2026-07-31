@@ -1,4 +1,4 @@
-//! FfmpegSubprocess — shared ffmpeg lifecycle for recording and SRT streaming.
+//! `FfmpegSubprocess` — shared ffmpeg lifecycle for recording and SRT streaming.
 //!
 //! Spawns an ffmpeg process with a background writer thread that feeds frames
 //! via a bounded channel. The render thread never blocks on pipe writes — if
@@ -22,22 +22,19 @@ fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, low_laten
         "hls" if low_latency => (
             "https://cdn.jsdelivr.net/npm/hls.js@latest",
             format!(
-                r#"if(Hls.isSupported()){{var h=new Hls({{lowLatencyMode:true,liveSyncDurationCount:2,liveMaxLatencyDurationCount:4,maxBufferLength:4,backBufferLength:0}});h.loadSource('{}');h.attachMedia(v);}}else if(v.canPlayType('application/vnd.apple.mpegurl')){{v.src='{}';}}"#,
-                manifest_filename, manifest_filename,
+                r"if(Hls.isSupported()){{var h=new Hls({{lowLatencyMode:true,liveSyncDurationCount:2,liveMaxLatencyDurationCount:4,maxBufferLength:4,backBufferLength:0}});h.loadSource('{manifest_filename}');h.attachMedia(v);}}else if(v.canPlayType('application/vnd.apple.mpegurl')){{v.src='{manifest_filename}';}}",
             ),
         ),
         "hls" => (
             "https://cdn.jsdelivr.net/npm/hls.js@latest",
             format!(
-                r#"if(Hls.isSupported()){{var h=new Hls();h.loadSource('{}');h.attachMedia(v);}}else if(v.canPlayType('application/vnd.apple.mpegurl')){{v.src='{}';}}"#,
-                manifest_filename, manifest_filename,
+                r"if(Hls.isSupported()){{var h=new Hls();h.loadSource('{manifest_filename}');h.attachMedia(v);}}else if(v.canPlayType('application/vnd.apple.mpegurl')){{v.src='{manifest_filename}';}}",
             ),
         ),
         _ => (
             "https://cdn.jsdelivr.net/npm/dashjs@latest/dist/dash.all.min.js",
             format!(
-                r#"var p=dashjs.MediaPlayer().create();p.updateSettings({{streaming:{{delay:{{liveDelay:2}},buffer:{{fastSwitchEnabled:true}}}}}});p.initialize(v,'{}',true);v.play().catch(function(){{}});"#,
-                manifest_filename,
+                r"var p=dashjs.MediaPlayer().create();p.updateSettings({{streaming:{{delay:{{liveDelay:2}},buffer:{{fastSwitchEnabled:true}}}}}});p.initialize(v,'{manifest_filename}',true);v.play().catch(function(){{}});",
             ),
         ),
     };
@@ -53,13 +50,10 @@ fn write_stream_player(dir: &str, kind: &str, manifest_filename: &str, low_laten
 <script src="{lib_url}"></script></head>
 <body><video id="v" autoplay muted controls></video>
 <script>var v=document.getElementById('v');{lib_setup}</script></body></html>"#,
-        title = title,
-        lib_url = lib_url,
-        lib_setup = lib_setup,
     );
-    let path = format!("{}/player.html", dir);
+    let path = format!("{dir}/player.html");
     if let Err(e) = std::fs::write(&path, html) {
-        log::warn!("Failed to write stream player to '{}': {}", path, e);
+        log::warn!("Failed to write stream player to '{path}': {e}");
     }
 }
 
@@ -78,20 +72,20 @@ pub struct FfmpegSubprocess {
     frames_written: Arc<AtomicU64>,
     /// Writer thread error flag (set when write fails during normal operation)
     write_failed: Arc<AtomicBool>,
-    /// Set by stop() before killing ffmpeg — tells the writer thread that a
+    /// Set by `stop()` before killing ffmpeg — tells the writer thread that a
     /// broken pipe is expected and should not be logged as ERROR.
     shutting_down: Arc<AtomicBool>,
     /// Human-readable label (path or URL)
     label: String,
     /// Start time (for duration display)
     start_time: std::time::Instant,
-    /// Whether stop() has already been called (prevent double-wait)
+    /// Whether `stop()` has already been called (prevent double-wait)
     stopped: bool,
     /// Optional audio passthrough side-channel (None = video-only).
     audio: Option<AudioPipe>,
-    /// When true, stop() closes stdin and waits for ffmpeg to exit naturally
+    /// When true, `stop()` closes stdin and waits for ffmpeg to exit naturally
     /// (so it can finalize the container — e.g. write the MP4 moov atom).
-    /// When false, stop() kills ffmpeg immediately (safe for streams, required
+    /// When false, `stop()` kills ffmpeg immediately (safe for streams, required
     /// when the writer thread may be blocked on a full network pipe).
     graceful_shutdown: bool,
 }
@@ -200,12 +194,12 @@ fn prepare_audio(
 /// no new crate, per the audio-passthrough transport decision).
 fn create_audio_endpoint() -> anyhow::Result<(TcpListener, String)> {
     let listener = TcpListener::bind("127.0.0.1:0")
-        .map_err(|e| anyhow::anyhow!("Failed to bind audio TCP listener: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to bind audio TCP listener: {e}"))?;
     let port = listener
         .local_addr()
-        .map_err(|e| anyhow::anyhow!("Failed to read audio listener address: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Failed to read audio listener address: {e}"))?
         .port();
-    Ok((listener, format!("tcp://127.0.0.1:{}", port)))
+    Ok((listener, format!("tcp://127.0.0.1:{port}")))
 }
 
 /// Start the audio writer thread for a prepared passthrough, if any. Called
@@ -246,9 +240,9 @@ impl AudioPipe {
         // never connects (e.g. it died at startup) instead of a wedged thread.
         listener
             .set_nonblocking(true)
-            .map_err(|e| anyhow::anyhow!("Failed to set audio listener non-blocking: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to set audio listener non-blocking: {e}"))?;
         let writer_thread = std::thread::Builder::new()
-            .name(format!("ffmpeg-audio-{}", label))
+            .name(format!("ffmpeg-audio-{label}"))
             .spawn(move || {
                 let mut stream = loop {
                     match listener.accept() {
@@ -261,7 +255,7 @@ impl AudioPipe {
                         }
                         Err(e) => {
                             if !sd.load(Ordering::SeqCst) {
-                                log::error!("audio TCP accept failed for '{}': {}", label, e);
+                                log::error!("audio TCP accept failed for '{label}': {e}");
                             }
                             return;
                         }
@@ -269,7 +263,7 @@ impl AudioPipe {
                 };
                 // Blocking writes once connected; disable Nagle to minimize latency.
                 if let Err(e) = stream.set_nonblocking(false) {
-                    log::error!("audio TCP set-blocking failed for '{}': {}", label, e);
+                    log::error!("audio TCP set-blocking failed for '{label}': {e}");
                     return;
                 }
                 let _ = stream.set_nodelay(true);
@@ -280,12 +274,10 @@ impl AudioPipe {
                             if let Err(e) = stream.write_all(bytes) {
                                 if sd.load(Ordering::SeqCst) {
                                     log::debug!(
-                                        "audio pipe closed during shutdown for '{}': {}",
-                                        label,
-                                        e
+                                        "audio pipe closed during shutdown for '{label}': {e}"
                                     );
                                 } else {
-                                    log::error!("audio pipe write error for '{}': {}", label, e);
+                                    log::error!("audio pipe write error for '{label}': {e}");
                                 }
                                 return;
                             }
@@ -304,7 +296,7 @@ impl AudioPipe {
                     }
                 }
             })
-            .map_err(|e| anyhow::anyhow!("Failed to spawn audio writer thread: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to spawn audio writer thread: {e}"))?;
 
         Ok(Self {
             shutting_down,
@@ -345,18 +337,14 @@ impl FfmpegSubprocess {
         label: String,
     ) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new()
-            .name(format!("ffmpeg-writer-{}", label))
+            .name(format!("ffmpeg-writer-{label}"))
             .spawn(move || {
                 for frame in rx {
                     if let Err(e) = stdin.write_all(&frame) {
                         if shutting_down.load(Ordering::SeqCst) {
-                            log::debug!(
-                                "ffmpeg pipe closed during shutdown for '{}': {}",
-                                label,
-                                e
-                            );
+                            log::debug!("ffmpeg pipe closed during shutdown for '{label}': {e}");
                         } else {
-                            log::error!("ffmpeg write error for '{}': {}", label, e);
+                            log::error!("ffmpeg write error for '{label}': {e}");
                             write_failed.store(true, Ordering::SeqCst);
                         }
                         return;
@@ -370,6 +358,16 @@ impl FfmpegSubprocess {
     }
 
     /// Spawn an ffmpeg recording subprocess.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the audio passthrough endpoint cannot be prepared or
+    /// started, or if the `ffmpeg` binary cannot be spawned (not installed).
+    ///
+    /// # Panics
+    ///
+    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
+    /// be spawned — both indicate the process/thread limits are exhausted.
     pub fn spawn_recording(
         path: &str,
         codec: &RecordingCodec,
@@ -428,7 +426,7 @@ impl FfmpegSubprocess {
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
             .args(["-pix_fmt", "rgba"])
-            .args(["-s", &format!("{}x{}", width, height)])
+            .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in);
@@ -447,16 +445,9 @@ impl FfmpegSubprocess {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg: {}. Is ffmpeg installed?", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to spawn ffmpeg: {e}. Is ffmpeg installed?"))?;
 
-        log::info!(
-            "Recording started: {} ({}, {}x{} @ {}fps)",
-            path,
-            codec,
-            width,
-            height,
-            fps
-        );
+        log::info!("Recording started: {path} ({codec}, {width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -490,6 +481,16 @@ impl FfmpegSubprocess {
 
     /// Spawn an ffmpeg SRT streaming subprocess in listener (server) mode.
     /// Starts an SRT server on the specified port and broadcasts frames to connected clients.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the audio passthrough endpoint cannot be prepared or
+    /// started, or if the `ffmpeg` binary cannot be spawned (not installed).
+    ///
+    /// # Panics
+    ///
+    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
+    /// be spawned — both indicate the process/thread limits are exhausted.
     pub fn spawn_srt(
         url: &str,
         codec: &super::context::SrtCodec,
@@ -509,9 +510,9 @@ impl FfmpegSubprocess {
         let srt_url = if url.contains("mode=") {
             url.to_string()
         } else if url.contains('?') {
-            format!("{}&mode=listener", url)
+            format!("{url}&mode=listener")
         } else {
-            format!("{}?mode=listener", url)
+            format!("{url}?mode=listener")
         };
 
         let encoder = match codec {
@@ -523,7 +524,7 @@ impl FfmpegSubprocess {
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
             .args(["-pix_fmt", "rgba"])
-            .args(["-s", &format!("{}x{}", width, height)])
+            .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in)
@@ -539,19 +540,10 @@ impl FfmpegSubprocess {
             .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to spawn ffmpeg for SRT: {}. Is ffmpeg installed?",
-                e
-            )
+            anyhow::anyhow!("Failed to spawn ffmpeg for SRT: {e}. Is ffmpeg installed?")
         })?;
 
-        log::info!(
-            "SRT server started: {} ({}x{} @ {}fps)",
-            srt_url,
-            width,
-            height,
-            fps
-        );
+        log::info!("SRT server started: {srt_url} ({width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -585,6 +577,17 @@ impl FfmpegSubprocess {
 
     /// Spawn an ffmpeg HLS output subprocess.
     /// Writes HLS segments to `.varda/streams/<name>/` with `-hls_list_size 0` for VOD archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the audio passthrough endpoint cannot be prepared or
+    /// started, if the stream output directory cannot be created, or if the
+    /// `ffmpeg` binary cannot be spawned (not installed).
+    ///
+    /// # Panics
+    ///
+    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
+    /// be spawned — both indicate the process/thread limits are exhausted.
     pub fn spawn_hls(
         name: &str,
         codec: &super::context::StreamingCodec,
@@ -601,10 +604,10 @@ impl FfmpegSubprocess {
             Some(p) => (&p.in_args, &p.out_args),
             None => (&empty, &empty),
         };
-        let dir = format!(".varda/streams/{}", name);
+        let dir = format!(".varda/streams/{name}");
         std::fs::create_dir_all(&dir)
-            .map_err(|e| anyhow::anyhow!("Failed to create HLS output dir '{}': {}", dir, e))?;
-        let playlist = format!("{}/index.m3u8", dir);
+            .map_err(|e| anyhow::anyhow!("Failed to create HLS output dir '{dir}': {e}"))?;
+        let playlist = format!("{dir}/index.m3u8");
         write_stream_player(&dir, "hls", "index.m3u8", low_latency);
 
         let (encoder, extra): (&str, Vec<&str>) = match codec {
@@ -620,7 +623,7 @@ impl FfmpegSubprocess {
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
             .args(["-pix_fmt", "rgba"])
-            .args(["-s", &format!("{}x{}", width, height)])
+            .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in)
@@ -636,12 +639,12 @@ impl FfmpegSubprocess {
                 .args(["-hls_flags", "independent_segments+delete_segments"])
                 .args(["-hls_segment_type", "fmp4"])
                 .args(["-hls_fmp4_init_filename", "init.mp4"])
-                .args(["-hls_segment_filename", &format!("{}/seg_%05d.m4s", dir)]);
+                .args(["-hls_segment_filename", &format!("{dir}/seg_%05d.m4s")]);
         } else {
             cmd.args(["-hls_time", "2"])
                 .args(["-hls_list_size", "30"])
                 .args(["-hls_flags", "delete_segments"])
-                .args(["-hls_segment_filename", &format!("{}/seg_%05d.ts", dir)]);
+                .args(["-hls_segment_filename", &format!("{dir}/seg_%05d.ts")]);
         }
 
         cmd.arg(&playlist)
@@ -650,21 +653,11 @@ impl FfmpegSubprocess {
             .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to spawn ffmpeg for HLS: {}. Is ffmpeg installed?",
-                e
-            )
+            anyhow::anyhow!("Failed to spawn ffmpeg for HLS: {e}. Is ffmpeg installed?")
         })?;
 
         let mode = if low_latency { "LL-HLS" } else { "HLS" };
-        log::info!(
-            "{} output started: {} ({}x{} @ {}fps)",
-            mode,
-            playlist,
-            width,
-            height,
-            fps
-        );
+        log::info!("{mode} output started: {playlist} ({width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -697,6 +690,16 @@ impl FfmpegSubprocess {
     }
 
     /// Spawn an ffmpeg RTMP output subprocess.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the audio passthrough endpoint cannot be prepared or
+    /// started, or if the `ffmpeg` binary cannot be spawned (not installed).
+    ///
+    /// # Panics
+    ///
+    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
+    /// be spawned — both indicate the process/thread limits are exhausted.
     pub fn spawn_rtmp(
         url: &str,
         codec: &super::context::StreamingCodec,
@@ -730,16 +733,16 @@ impl FfmpegSubprocess {
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
             .args(["-pix_fmt", "rgba"])
-            .args(["-s", &format!("{}x{}", width, height)])
+            .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in)
             .args(["-c:v", encoder])
             .args(&extra)
             .args(["-pix_fmt", "yuv420p"])
-            .args(["-b:v", &format!("{}k", maxrate)])
-            .args(["-maxrate", &format!("{}k", maxrate)])
-            .args(["-bufsize", &format!("{}k", bufsize)])
+            .args(["-b:v", &format!("{maxrate}k")])
+            .args(["-maxrate", &format!("{maxrate}k")])
+            .args(["-bufsize", &format!("{bufsize}k")])
             .args(["-g", &gop.to_string()])
             .args(a_out)
             .args(["-f", "flv"])
@@ -749,20 +752,10 @@ impl FfmpegSubprocess {
             .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to spawn ffmpeg for RTMP: {}. Is ffmpeg installed?",
-                e
-            )
+            anyhow::anyhow!("Failed to spawn ffmpeg for RTMP: {e}. Is ffmpeg installed?")
         })?;
 
-        log::info!(
-            "RTMP output started: {} ({}x{} @ {}fps, {}kbps)",
-            url,
-            width,
-            height,
-            fps,
-            maxrate
-        );
+        log::info!("RTMP output started: {url} ({width}x{height} @ {fps}fps, {maxrate}kbps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -797,6 +790,17 @@ impl FfmpegSubprocess {
 
     /// Spawn an ffmpeg DASH output subprocess.
     /// Writes DASH segments to `.varda/streams/<name>/` with `-window_size 0` for VOD archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the audio passthrough endpoint cannot be prepared or
+    /// started, if the stream output directory cannot be created, or if the
+    /// `ffmpeg` binary cannot be spawned (not installed).
+    ///
+    /// # Panics
+    ///
+    /// Panics if ffmpeg's stdin was not piped, or if the writer thread cannot
+    /// be spawned — both indicate the process/thread limits are exhausted.
     pub fn spawn_dash(
         name: &str,
         codec: &super::context::StreamingCodec,
@@ -812,10 +816,10 @@ impl FfmpegSubprocess {
             Some(p) => (&p.in_args, &p.out_args),
             None => (&empty, &empty),
         };
-        let dir = format!(".varda/streams/{}", name);
+        let dir = format!(".varda/streams/{name}");
         std::fs::create_dir_all(&dir)
-            .map_err(|e| anyhow::anyhow!("Failed to create DASH output dir '{}': {}", dir, e))?;
-        let manifest = format!("{}/manifest.mpd", dir);
+            .map_err(|e| anyhow::anyhow!("Failed to create DASH output dir '{dir}': {e}"))?;
+        let manifest = format!("{dir}/manifest.mpd");
         write_stream_player(&dir, "dash", "manifest.mpd", false);
 
         let (encoder, extra): (&str, Vec<&str>) = match codec {
@@ -831,7 +835,7 @@ impl FfmpegSubprocess {
         cmd.arg("-y")
             .args(["-f", "rawvideo"])
             .args(["-pix_fmt", "rgba"])
-            .args(["-s", &format!("{}x{}", width, height)])
+            .args(["-s", &format!("{width}x{height}")])
             .args(["-r", &fps.to_string()])
             .args(["-i", "-"])
             .args(a_in)
@@ -849,19 +853,10 @@ impl FfmpegSubprocess {
             .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to spawn ffmpeg for DASH: {}. Is ffmpeg installed?",
-                e
-            )
+            anyhow::anyhow!("Failed to spawn ffmpeg for DASH: {e}. Is ffmpeg installed?")
         })?;
 
-        log::info!(
-            "DASH output started: {} ({}x{} @ {}fps)",
-            manifest,
-            width,
-            height,
-            fps
-        );
+        log::info!("DASH output started: {manifest} ({width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
         let frames_written = Arc::new(AtomicU64::new(0));
@@ -916,11 +911,8 @@ impl FfmpegSubprocess {
         }
         if let Some(ref tx) = self.frame_tx {
             match tx.try_send(rgba.to_vec()) {
-                Ok(()) => true,
-                Err(mpsc::TrySendError::Full(_)) => {
-                    // Frame dropped — ffmpeg can't keep up, but that's OK
-                    true
-                }
+                // Full means the frame was dropped — ffmpeg can't keep up, but that's OK
+                Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
                 Err(mpsc::TrySendError::Disconnected(_)) => {
                     // Writer thread exited (write error)
                     self.drain_stderr();
@@ -954,9 +946,9 @@ impl FfmpegSubprocess {
                     || lower.contains("invalid")
                     || lower.contains("fatal")
                 {
-                    log::error!("ffmpeg [{}]: {}", label, line);
+                    log::error!("ffmpeg [{label}]: {line}");
                 } else {
-                    log::debug!("ffmpeg [{}]: {}", label, line);
+                    log::debug!("ffmpeg [{label}]: {line}");
                 }
             }
         }
@@ -967,6 +959,11 @@ impl FfmpegSubprocess {
     /// on a detached background thread so the caller (UI / main thread) returns
     /// immediately. For streams, kills ffmpeg inline (fast).
     /// Idempotent — safe to call multiple times.
+    ///
+    /// # Panics
+    ///
+    /// On the recording path, panics if the placeholder child process or the
+    /// background finalize thread cannot be spawned.
     pub fn stop(&mut self) {
         if self.stopped {
             return;
@@ -1001,8 +998,11 @@ impl FfmpegSubprocess {
             let stderr = child.stderr.take();
 
             std::thread::Builder::new()
-                .name(format!("ffmpeg-finalize-{}", label))
+                .name(format!("ffmpeg-finalize-{label}"))
                 .spawn(move || {
+                    const FINALIZE_TIMEOUT: std::time::Duration =
+                        std::time::Duration::from_secs(30);
+
                     // 3a. Tear down the audio writer/socket so ffmpeg sees EOF on
                     //     both inputs.
                     if let Some(ref mut a) = audio {
@@ -1016,8 +1016,6 @@ impl FfmpegSubprocess {
                     }
 
                     // 4. Wait for ffmpeg to finalize the container (moov atom).
-                    const FINALIZE_TIMEOUT: std::time::Duration =
-                        std::time::Duration::from_secs(30);
                     let deadline = std::time::Instant::now() + FINALIZE_TIMEOUT;
                     loop {
                         match child.try_wait() {
@@ -1036,7 +1034,7 @@ impl FfmpegSubprocess {
                                 std::thread::sleep(std::time::Duration::from_millis(50));
                             }
                             Err(e) => {
-                                log::error!("Failed to wait for ffmpeg '{}': {}", label, e);
+                                log::error!("Failed to wait for ffmpeg '{label}': {e}");
                                 break;
                             }
                         }
@@ -1104,7 +1102,7 @@ impl FfmpegSubprocess {
     /// Number of audio PCM chunks written to the socket so far, or `None` for a
     /// video-only output (no audio passthrough).
     pub fn audio_frames_written(&self) -> Option<u64> {
-        self.audio.as_ref().map(|a| a.frames_written())
+        self.audio.as_ref().map(AudioPipe::frames_written)
     }
 
     /// The label (path or URL) for this subprocess.
@@ -1137,9 +1135,9 @@ mod tests {
         let srt_url = if url.contains("mode=") {
             url.to_string()
         } else if url.contains('?') {
-            format!("{}&mode=listener", url)
+            format!("{url}&mode=listener")
         } else {
-            format!("{}?mode=listener", url)
+            format!("{url}?mode=listener")
         };
         assert_eq!(srt_url, "srt://127.0.0.1:9001?mode=listener");
     }
@@ -1150,9 +1148,9 @@ mod tests {
         let srt_url = if url.contains("mode=") {
             url.to_string()
         } else if url.contains('?') {
-            format!("{}&mode=listener", url)
+            format!("{url}&mode=listener")
         } else {
-            format!("{}?mode=listener", url)
+            format!("{url}?mode=listener")
         };
         assert_eq!(srt_url, "srt://127.0.0.1:9001?mode=caller");
     }
@@ -1163,9 +1161,9 @@ mod tests {
         let srt_url = if url.contains("mode=") {
             url.to_string()
         } else if url.contains('?') {
-            format!("{}&mode=listener", url)
+            format!("{url}&mode=listener")
         } else {
-            format!("{}?mode=listener", url)
+            format!("{url}?mode=listener")
         };
         assert_eq!(srt_url, "srt://127.0.0.1:9001?latency=0&mode=listener");
     }
@@ -1174,6 +1172,8 @@ mod tests {
 
     #[test]
     fn recording_codec_display() {
+        use crate::renderer::context::SrtCodec;
+
         assert_eq!(format!("{}", RecordingCodec::H264), "H.264");
         assert_eq!(format!("{}", RecordingCodec::H265), "H.265 (HEVC)");
         assert_eq!(format!("{}", RecordingCodec::AV1), "AV1");
@@ -1184,7 +1184,6 @@ mod tests {
         assert_eq!(format!("{}", RecordingCodec::HapQ), "HAP Q");
 
         // SrtCodec display
-        use crate::renderer::context::SrtCodec;
         assert_eq!(format!("{}", SrtCodec::H264), "H.264");
         assert_eq!(format!("{}", SrtCodec::H265), "H.265 (HEVC)");
     }
@@ -1385,7 +1384,7 @@ mod tests {
             .expect("audio prepared");
         // The second input is the loopback TCP URL of the bound listener.
         let port = p.listener.local_addr().expect("listener addr").port();
-        let expected = format!("tcp://127.0.0.1:{}", port);
+        let expected = format!("tcp://127.0.0.1:{port}");
         assert!(
             p.in_args.contains(&expected),
             "audio input should be the bound loopback TCP URL"

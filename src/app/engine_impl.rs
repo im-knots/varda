@@ -1,11 +1,22 @@
-//! Engine trait implementations for VardaApp.
+//! Engine trait implementations for `VardaApp`.
 
 use super::resolve::EffectChain;
 use super::VardaApp;
 use crate::deck::{Deck, Effect};
 use crate::depth::preprocess::{AcquiredSensor, DepthPreprocessParams};
-use crate::engine::traits::*;
-use crate::engine::types::*;
+use crate::engine::traits::{
+    AnalyzerCommands, AnalyzerQueries, AudioCommands, AudioQueries, DetectCommands, MacroCommands,
+    MacroQueries, MixerCommands, MixerQueries, ModulationCommands, ModulationQueries,
+    OutputCommands, OutputQueries, SurfaceCommands, SurfaceQueries,
+};
+use crate::engine::types::{
+    AnalyzerScalarInfo, AnalyzerTypeInfo, AudioBandPreset, AudioDeviceSnapshot,
+    AudioPassthroughSnapshot, AudioSnapshot, AudioSourceId, BlendMode, CameraId, ContentMapping,
+    CrossfadeEasing, EffectTarget, LFOWaveform, MixerSnapshot, ModulationAssignmentSnapshot,
+    ModulationSnapshot, ModulationSourceSnapshot, ModulationSourceSnapshotEntry, MonitorSnapshot,
+    OutputSnapshot, OutputSource, OutputWindowSnapshot, ParamValue, ScalingMode,
+    SurfaceAssignmentSnapshot, SurfaceOutputType, SurfaceSnapshot,
+};
 use crate::modulation::ModulationSource;
 
 use anyhow::{Context as _, Result};
@@ -156,12 +167,7 @@ impl MixerCommands for VardaApp {
             .channel_mut(channel_idx)
             .context("Invalid channel")?;
         let idx = ch.add_deck(deck);
-        log::info!(
-            "Added deck {} to channel {} with shader: {}",
-            idx,
-            channel_idx,
-            shader_name
-        );
+        log::info!("Added deck {idx} to channel {channel_idx} with shader: {shader_name}");
         Ok(uuid)
     }
 
@@ -176,12 +182,7 @@ impl MixerCommands for VardaApp {
             .context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
-        log::info!(
-            "Added image deck {} to channel {}: {}",
-            idx,
-            channel_idx,
-            name
-        );
+        log::info!("Added image deck {idx} to channel {channel_idx}: {name}");
         Ok(uuid)
     }
 
@@ -196,12 +197,7 @@ impl MixerCommands for VardaApp {
             .context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
-        log::info!(
-            "Added video deck {} to channel {}: {}",
-            idx,
-            channel_idx,
-            name
-        );
+        log::info!("Added video deck {idx} to channel {channel_idx}: {name}");
         Ok(uuid)
     }
 
@@ -216,12 +212,7 @@ impl MixerCommands for VardaApp {
             .context("Invalid channel")?;
         let name = deck.source_name().to_string();
         let idx = ch.add_deck(deck);
-        log::info!(
-            "Added solid color deck {} to channel {}: {}",
-            idx,
-            channel_idx,
-            name
-        );
+        log::info!("Added solid color deck {idx} to channel {channel_idx}: {name}");
         Ok(uuid)
     }
 
@@ -232,8 +223,7 @@ impl MixerCommands for VardaApp {
             .devices()
             .iter()
             .find(|d| d.id == camera_id)
-            .map(|d| d.name.clone())
-            .unwrap_or_else(|| format!("Camera {}", camera_id));
+            .map_or_else(|| format!("Camera {camera_id}"), |d| d.name.clone());
         let (src_w, src_h) = self
             .camera_manager
             .open_camera(camera_id, &self.context.device)?;
@@ -252,12 +242,7 @@ impl MixerCommands for VardaApp {
             .channel_mut(channel_idx)
             .context("Invalid channel")?;
         let idx = ch.add_deck(deck);
-        log::info!(
-            "Added camera deck {} to channel {}: {}",
-            idx,
-            channel_idx,
-            cam_name
-        );
+        log::info!("Added camera deck {idx} to channel {channel_idx}: {cam_name}");
         Ok(uuid)
     }
 
@@ -272,8 +257,10 @@ impl MixerCommands for VardaApp {
             .devices()
             .iter()
             .find(|d| d.id == depth_sensor_id)
-            .map(|d| d.name.clone())
-            .unwrap_or_else(|| format!("Depth Sensor {}", depth_sensor_id));
+            .map_or_else(
+                || format!("Depth Sensor {depth_sensor_id}"),
+                |d| d.name.clone(),
+            );
         let (src_w, src_h) = crate::depth::open_depth_sensor(
             &mut self.depth_manager,
             depth_sensor_id,
@@ -294,12 +281,7 @@ impl MixerCommands for VardaApp {
             .channel_mut(channel_idx)
             .context("Invalid channel")?;
         let idx = ch.add_deck(deck);
-        log::info!(
-            "Added depth sensor deck {} to channel {}: {}",
-            idx,
-            channel_idx,
-            name
-        );
+        log::info!("Added depth sensor deck {idx} to channel {channel_idx}: {name}");
         Ok(uuid)
     }
 
@@ -342,14 +324,14 @@ impl MixerCommands for VardaApp {
             .map(|e| e.uuid.clone())
             .collect();
         ch.remove_deck(deck_idx);
-        log::info!("Removed deck {} from channel {}", deck_uuid, channel_idx);
+        log::info!("Removed deck {deck_uuid} from channel {channel_idx}");
         self.mixer
             .modulation_mut()
-            .remove_assignments_with_prefix(&format!("deck_{}:", deck_uuid));
+            .remove_assignments_with_prefix(&format!("deck_{deck_uuid}:"));
         for fx_uuid in &effect_uuids {
             self.mixer
                 .modulation_mut()
-                .remove_assignments_with_prefix(&format!("fx_{}:", fx_uuid));
+                .remove_assignments_with_prefix(&format!("fx_{fx_uuid}:"));
         }
         Ok(())
     }
@@ -365,10 +347,10 @@ impl MixerCommands for VardaApp {
         // (split_at_mut or index — Rust's borrow checker doesn't allow two
         //  channel_mut() calls in the same scope)
         let Some(slot) = channels[src_ch].remove_deck_slot(src_deck) else {
-            anyhow::bail!("deck '{}' vanished during move", deck_uuid);
+            anyhow::bail!("deck '{deck_uuid}' vanished during move");
         };
         channels[dst_ch].add_deck_slot(slot);
-        log::info!("Moved deck {} from ch{} to ch{}", deck_uuid, src_ch, dst_ch);
+        log::info!("Moved deck {deck_uuid} from ch{src_ch} to ch{dst_ch}");
         Ok(())
     }
 
@@ -389,12 +371,7 @@ impl MixerCommands for VardaApp {
         }
         let slot = channel.decks.remove(from_idx);
         channel.decks.insert(to_idx, slot);
-        log::info!(
-            "Reordered deck in ch {}: {} -> {}",
-            channel_uuid,
-            from_idx,
-            to_idx
-        );
+        log::info!("Reordered deck in ch {channel_uuid}: {from_idx} -> {to_idx}");
         Ok(())
     }
 
@@ -519,7 +496,7 @@ impl MixerCommands for VardaApp {
                 } else if already_attached {
                     deck.rebind_depth_preprocessor_slots();
                 }
-                log::info!("Added effect {} to deck chain ({})", shader_name, uuid);
+                log::info!("Added effect {shader_name} to deck chain ({uuid})");
                 Ok(uuid)
             }
             EffectChain::Channel { channel_idx } => {
@@ -540,7 +517,7 @@ impl MixerCommands for VardaApp {
                     .channel_mut(channel_idx)
                     .context("Invalid channel")?;
                 ch.add_effect(effect);
-                log::info!("Added channel effect {} ({})", shader_name, uuid);
+                log::info!("Added channel effect {shader_name} ({uuid})");
                 Ok(uuid)
             }
             EffectChain::Master => {
@@ -557,7 +534,7 @@ impl MixerCommands for VardaApp {
                 )?;
                 let uuid = effect.uuid.clone();
                 self.mixer.add_master_effect(effect);
-                log::info!("Added master effect {} ({})", shader_name, uuid);
+                log::info!("Added master effect {shader_name} ({uuid})");
                 Ok(uuid)
             }
         }
@@ -590,7 +567,7 @@ impl MixerCommands for VardaApp {
         // at a UUID that no longer resolves.
         self.mixer
             .modulation_mut()
-            .remove_assignments_with_prefix(&format!("fx_{}:", effect_uuid));
+            .remove_assignments_with_prefix(&format!("fx_{effect_uuid}:"));
         Ok(())
     }
 
@@ -692,7 +669,7 @@ impl AudioCommands for VardaApp {
     fn open_audio_source(&mut self, source_id: AudioSourceId) -> Result<()> {
         self.audio_manager
             .open_source(source_id)
-            .map_err(|e| anyhow::anyhow!("Failed to open audio source: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to open audio source: {e}"))
     }
 
     fn close_audio_source(&mut self, source_id: AudioSourceId) {
@@ -871,7 +848,7 @@ impl MacroCommands for VardaApp {
                     m.button = Some(crate::macros::ButtonSpec {
                         behavior,
                         trigger: Vec::new(),
-                    })
+                    });
                 }
             }
         }
@@ -885,7 +862,7 @@ impl MacroCommands for VardaApp {
                     m.button = Some(crate::macros::ButtonSpec {
                         behavior: crate::macros::ButtonBehavior::Trigger,
                         trigger: actions,
-                    })
+                    });
                 }
             }
         }
@@ -1043,7 +1020,7 @@ impl OutputCommands for VardaApp {
         if let crate::renderer::context::UnifiedOutput::Window(w) = removed {
             w.destroy();
         }
-        log::info!("Closed output '{}'", name);
+        log::info!("Closed output '{name}'");
         Ok(())
     }
 
@@ -1057,7 +1034,7 @@ impl OutputCommands for VardaApp {
             .find(|(_, (name, _))| name == monitor_name)
             .map(|(mi, (n, h))| (mi, (n.clone(), h.clone())))
         else {
-            anyhow::bail!("No monitor named '{}'", monitor_name);
+            anyhow::bail!("No monitor named '{monitor_name}'");
         };
         if let crate::renderer::context::UnifiedOutput::Window(output) =
             &mut self.output.outputs[idx]
@@ -1091,9 +1068,7 @@ impl OutputQueries for VardaApp {
                             let surface_name = self
                                 .output
                                 .surface_manager
-                                .find_by_uuid(&a.surface_uuid)
-                                .map(|(_, s)| s.name.clone())
-                                .unwrap_or_else(|| format!("Surface {}", a.surface_uuid));
+                                .find_by_uuid(&a.surface_uuid).map_or_else(|| format!("Surface {}", a.surface_uuid), |(_, s)| s.name.clone());
                             SurfaceAssignmentSnapshot {
                                 surface_uuid: a.surface_uuid.clone(),
                                 surface_name,
@@ -1121,7 +1096,7 @@ impl OutputQueries for VardaApp {
                                         frames_written: h
                                             .subprocess
                                             .as_ref()
-                                            .and_then(|s| s.audio_frames_written())
+                                            .and_then(super::super::internal::renderer::subprocess::FfmpegSubprocess::audio_frames_written)
                                             .unwrap_or(0),
                                         frames_dropped: p
                                             .dropped
@@ -1139,7 +1114,7 @@ impl OutputQueries for VardaApp {
                     OutputWindowSnapshot {
                         uuid: o.uuid().to_string(),
                         name: o.name().to_string(),
-                        target_label: format!("{}", target),
+                        target_label: format!("{target}"),
                         target,
                         is_on_display,
                         is_active,
@@ -1205,7 +1180,7 @@ impl SurfaceCommands for VardaApp {
             .output
             .surface_manager
             .add_surface(name.to_string(), source);
-        log::info!("Added surface '{}' (uuid {})", name, uuid);
+        log::info!("Added surface '{name}' (uuid {uuid})");
         uuid
     }
 
@@ -1248,7 +1223,7 @@ impl SurfaceCommands for VardaApp {
             .output
             .surface_manager
             .add_circle_surface(name.to_string(), hint, source);
-        log::info!("Added circle surface '{}' (uuid {})", name, uuid);
+        log::info!("Added circle surface '{name}' (uuid {uuid})");
         uuid
     }
 
@@ -1299,7 +1274,7 @@ impl SurfaceCommands for VardaApp {
                 assignments.push(crate::renderer::context::SurfaceAssignment {
                     surface_uuid: surface_uuid.to_string(),
                     enabled: true,
-                    overlap_zones: Default::default(),
+                    overlap_zones: crate::renderer::edge_blend::SurfaceOverlapZones::default(),
                 });
             }
         }
@@ -1354,8 +1329,7 @@ impl DetectCommands for VardaApp {
                 .open_camera(camera_id, &self.context.device)
                 .map_err(|e| {
                     crate::surface::import::ImportError::ImageLoad(format!(
-                        "Failed to open camera {}: {}",
-                        camera_id, e
+                        "Failed to open camera {camera_id}: {e}"
                     ))
                 })?;
         }
@@ -1378,8 +1352,7 @@ impl DetectCommands for VardaApp {
 
         let (rgba, w, h) = frame.ok_or_else(|| {
             crate::surface::import::ImportError::ImageLoad(format!(
-                "No frame received from camera {} within timeout",
-                camera_id
+                "No frame received from camera {camera_id} within timeout"
             ))
         })?;
         crate::surface::import::detect_from_rgba(&rgba, w, h, params)

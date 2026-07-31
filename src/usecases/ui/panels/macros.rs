@@ -525,8 +525,7 @@ fn macro_modulation_ghost(m: &Macro, data: &UIData) -> Option<(f32, egui::Color3
         .modulation_sources
         .iter()
         .position(|e| e.uuid == list[0].source_id)
-        .map(modulator_color)
-        .unwrap_or(egui::Color32::YELLOW);
+        .map_or(egui::Color32::YELLOW, modulator_color);
     Some((offset, color))
 }
 
@@ -546,7 +545,7 @@ fn mod_source_label(idx: usize, entry: &ModSourceUIEntry) -> String {
             freq_low,
             freq_high,
             ..
-        } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
+        } => format!("Audio {freq_low:.0}-{freq_high:.0}Hz"),
         ModSourceUI::ADSR { .. } => format!("ADSR {}", idx + 1),
         ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", idx + 1),
         ModSourceUI::Analyzer { analyzer_type, .. } => {

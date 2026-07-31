@@ -13,7 +13,7 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
-/// Serializes ffmpeg context creation (input_with_interrupt + decoder open).
+/// Serializes ffmpeg context creation (`input_with_interrupt` + decoder open).
 /// ffmpeg's `avcodec_open2` is NOT thread-safe — two threads opening decoders
 /// simultaneously can corrupt the internal codec registry, producing silent
 /// black output. The mutex is released before entering the decode loop so
@@ -80,7 +80,7 @@ struct StreamReceiver {
     frame_data: Arc<Mutex<Option<Vec<u8>>>>,
     stop_flag: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
-    _thread: Option<JoinHandle<()>>,
+    thread: Option<JoinHandle<()>>,
     width: u32,
     height: u32,
 }
@@ -123,7 +123,7 @@ impl StreamManager {
             .iter()
             .position(|r| r.url == url && !r.stop_flag.load(Ordering::SeqCst))
         {
-            log::info!("Reusing existing stream receiver {} for '{}'", idx, url);
+            log::info!("Reusing existing stream receiver {idx} for '{url}'");
             return Some(idx);
         }
 
@@ -140,10 +140,10 @@ impl StreamManager {
         };
 
         let label = match &protocol {
-            StreamProtocol::Srt { .. } => format!("SRT Receive: {}", url),
-            StreamProtocol::Hls => format!("HLS Receive: {}", url),
-            StreamProtocol::Dash => format!("DASH Receive: {}", url),
-            StreamProtocol::Rtmp { .. } => format!("RTMP Receive: {}", url),
+            StreamProtocol::Srt { .. } => format!("SRT Receive: {url}"),
+            StreamProtocol::Hls => format!("HLS Receive: {url}"),
+            StreamProtocol::Dash => format!("DASH Receive: {url}"),
+            StreamProtocol::Rtmp { .. } => format!("RTMP Receive: {url}"),
         };
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -169,27 +169,27 @@ impl StreamManager {
         let url_display = url.to_string();
 
         let thread_name = match &protocol {
-            StreamProtocol::Srt { .. } => format!("srt-recv-{}", url),
-            StreamProtocol::Hls => format!("hls-recv-{}", url),
-            StreamProtocol::Dash => format!("dash-recv-{}", url),
-            StreamProtocol::Rtmp { .. } => format!("rtmp-recv-{}", url),
+            StreamProtocol::Srt { .. } => format!("srt-recv-{url}"),
+            StreamProtocol::Hls => format!("hls-recv-{url}"),
+            StreamProtocol::Dash => format!("dash-recv-{url}"),
+            StreamProtocol::Rtmp { .. } => format!("rtmp-recv-{url}"),
         };
 
         let thread = std::thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
                 stream_receive_thread(
-                    url_for_thread,
-                    url_display,
-                    frame_clone,
-                    stop_clone,
-                    connected_clone,
+                    &url_for_thread,
+                    &url_display,
+                    &frame_clone,
+                    &stop_clone,
+                    &connected_clone,
                 );
             })
             .ok();
 
         if thread.is_none() {
-            log::error!("Failed to spawn stream receive thread for '{}'", url);
+            log::error!("Failed to spawn stream receive thread for '{url}'");
             return None;
         }
 
@@ -200,12 +200,12 @@ impl StreamManager {
             frame_data,
             stop_flag,
             connected,
-            _thread: thread,
+            thread,
             width,
             height,
         });
         self.textures.push((texture, texture_view));
-        log::info!("Stream receiver started for '{}'", url);
+        log::info!("Stream receiver started for '{url}'");
         Some(idx)
     }
 
@@ -273,8 +273,7 @@ impl StreamManager {
     pub fn is_connected(&self, idx: usize) -> bool {
         self.receivers
             .get(idx)
-            .map(|r| r.connected.load(Ordering::SeqCst))
-            .unwrap_or(false)
+            .is_some_and(|r| r.connected.load(Ordering::SeqCst))
     }
 
     /// Number of active receivers.
@@ -314,7 +313,7 @@ impl StreamManager {
             // Don't join — the thread may be blocked in ffmpeg I/O.
             // The interrupt callback will cause ffmpeg to abort, and
             // the thread holds only Arc clones so it's safe to detach.
-            if let Some(t) = r._thread.take() {
+            if let Some(t) = r.thread.take() {
                 drop(t);
             }
         }
@@ -336,9 +335,9 @@ fn build_srt_url(url: &str, mode: SrtMode) -> String {
         SrtMode::Caller => "caller",
     };
     if url.contains('?') {
-        format!("{}&mode={}", url, mode_str)
+        format!("{url}&mode={mode_str}")
     } else {
-        format!("{}?mode={}", url, mode_str)
+        format!("{url}?mode={mode_str}")
     }
 }
 
@@ -348,29 +347,34 @@ fn build_rtmp_url(url: &str, mode: RtmpMode) -> String {
         RtmpMode::Pull => url.to_string(),
         RtmpMode::Listen => {
             if url.contains('?') {
-                format!("{}&listen=1", url)
+                format!("{url}&listen=1")
             } else {
-                format!("{}?listen=1", url)
+                format!("{url}?listen=1")
             }
         }
     }
 }
 
-/// Background thread: decode stream via ffmpeg_next into RGBA frames.
+/// Background thread: decode stream via `ffmpeg_next` into RGBA frames.
 /// Protocol-agnostic — ffmpeg handles SRT, HLS, DASH, and RTMP URLs natively.
+// `decoder` (the ffmpeg decoder) and `decoded` (the frame it produced) are both
+// the clearest names for what they hold; renaming either would obscure the code.
+#[allow(clippy::similar_names)]
 fn stream_receive_thread(
-    url: String,
-    url_display: String,
-    frame_data: Arc<Mutex<Option<Vec<u8>>>>,
-    stop_flag: Arc<AtomicBool>,
-    connected: Arc<AtomicBool>,
+    url: &str,
+    url_display: &str,
+    frame_data: &Mutex<Option<Vec<u8>>>,
+    stop_flag: &Arc<AtomicBool>,
+    connected: &AtomicBool,
 ) {
-    log::info!("Stream receive thread starting for '{}'", url_display);
+    const MIN_BACKOFF_MS: u64 = 500;
+    const MAX_BACKOFF_MS: u64 = 10_000;
+    const MAX_CONSECUTIVE_ERRORS: u32 = 50;
+
+    log::info!("Stream receive thread starting for '{url_display}'");
 
     // Exponential backoff: starts at 500ms, caps at 10s, resets on successful frame
     let mut backoff_ms: u64 = 500;
-    const MIN_BACKOFF_MS: u64 = 500;
-    const MAX_BACKOFF_MS: u64 = 10_000;
 
     loop {
         if stop_flag.load(Ordering::SeqCst) {
@@ -381,9 +385,11 @@ fn stream_receive_thread(
         // Hold the lock through input open + decoder creation, release before
         // entering the decode loop so frame decoding is parallel.
         let setup_result = {
-            let _guard = FFMPEG_INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let _guard = FFMPEG_INIT_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-            let stop_for_interrupt = Arc::clone(&stop_flag);
+            let stop_for_interrupt = Arc::clone(stop_flag);
             (|| -> Option<_> {
                 let ctx = match ffmpeg_next::format::input_with_interrupt(&url, move || {
                     stop_for_interrupt.load(Ordering::SeqCst)
@@ -391,10 +397,7 @@ fn stream_receive_thread(
                     Ok(c) => c,
                     Err(e) => {
                         log::warn!(
-                            "Stream '{}' connection failed: {}, retrying in {}ms...",
-                            url_display,
-                            e,
-                            backoff_ms
+                            "Stream '{url_display}' connection failed: {e}, retrying in {backoff_ms}ms..."
                         );
                         return None;
                     }
@@ -406,9 +409,7 @@ fn stream_receive_thread(
                     .map(|s| s.index())
                     .or_else(|| {
                         log::warn!(
-                            "Stream '{}': no video stream found, retrying in {}ms...",
-                            url_display,
-                            backoff_ms
+                            "Stream '{url_display}': no video stream found, retrying in {backoff_ms}ms..."
                         );
                         None
                     })?;
@@ -417,10 +418,7 @@ fn stream_receive_thread(
                     .stream(stream_idx)
                     .or_else(|| {
                         log::warn!(
-                            "Stream '{}': stream index {} not found, retrying in {}ms...",
-                            url_display,
-                            stream_idx,
-                            backoff_ms
+                            "Stream '{url_display}': stream index {stream_idx} not found, retrying in {backoff_ms}ms..."
                         );
                         None
                     })?
@@ -428,11 +426,8 @@ fn stream_receive_thread(
                 let codec_ctx = ffmpeg_next::codec::Context::from_parameters(codec_params)
                     .map_err(|e| {
                         log::warn!(
-                            "Stream '{}': failed to create codec context: {}, retrying in {}ms...",
-                            url_display,
-                            e,
-                            backoff_ms
-                        )
+                            "Stream '{url_display}': failed to create codec context: {e}, retrying in {backoff_ms}ms..."
+                        );
                     })
                     .ok()?;
                 let decoder = codec_ctx
@@ -440,11 +435,8 @@ fn stream_receive_thread(
                     .video()
                     .map_err(|e| {
                         log::warn!(
-                            "Stream '{}': failed to create video decoder: {}, retrying in {}ms...",
-                            url_display,
-                            e,
-                            backoff_ms
-                        )
+                            "Stream '{url_display}': failed to create video decoder: {e}, retrying in {backoff_ms}ms..."
+                        );
                     })
                     .ok()?;
 
@@ -471,7 +463,7 @@ fn stream_receive_thread(
             continue;
         };
 
-        log::info!("Stream '{}' connected, decoding video", url_display);
+        log::info!("Stream '{url_display}' connected, decoding video");
 
         let mut last_frame_time = std::time::Instant::now();
         // HLS/DASH segments can have multi-second gaps; use a longer timeout
@@ -485,7 +477,6 @@ fn stream_receive_thread(
             std::time::Duration::from_secs(5)
         };
         let mut consecutive_errors: u32 = 0;
-        const MAX_CONSECUTIVE_ERRORS: u32 = 50;
 
         for (stream, packet) in input_ctx.packets() {
             if stop_flag.load(Ordering::SeqCst) {
@@ -499,9 +490,7 @@ fn stream_receive_thread(
                 consecutive_errors += 1;
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                     log::warn!(
-                        "Stream '{}': {} consecutive decode errors, reconnecting",
-                        url_display,
-                        consecutive_errors
+                        "Stream '{url_display}': {consecutive_errors} consecutive decode errors, reconnecting"
                     );
                     break;
                 }
@@ -570,11 +559,7 @@ fn stream_receive_thread(
                         if !connected.load(Ordering::SeqCst) {
                             connected.store(true, Ordering::SeqCst);
                             log::info!(
-                                "Stream '{}' first frame received ({}x{}, stride={})",
-                                url_display,
-                                width,
-                                height,
-                                stride
+                                "Stream '{url_display}' first frame received ({width}x{height}, stride={stride})"
                             );
                         }
                     }
@@ -593,11 +578,7 @@ fn stream_receive_thread(
             }
         }
 
-        log::warn!(
-            "Stream '{}' ended, reconnecting in {}ms...",
-            url_display,
-            backoff_ms
-        );
+        log::warn!("Stream '{url_display}' ended, reconnecting in {backoff_ms}ms...");
         connected.store(false, Ordering::SeqCst);
         std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
         backoff_ms = (backoff_ms * 2).min(MAX_BACKOFF_MS);

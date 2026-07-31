@@ -98,7 +98,7 @@ impl DepthSensorManager {
                     }
                     log::info!("Depth scan: found {} sensor(s)", self.devices.len());
                 }
-                Err(e) => log::warn!("Depth enumeration failed: {}", e),
+                Err(e) => log::warn!("Depth enumeration failed: {e}"),
             }
         }
         #[cfg(not(feature = "depth"))]
@@ -161,6 +161,11 @@ impl DepthSensorManager {
 
     /// Open a real depth sensor and start capturing on a dedicated thread.
     /// Returns the sensor's resolution. If already open, increments ref count.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the Kinect device cannot be opened, or if the
+    /// capture thread cannot be spawned.
     #[cfg(feature = "depth")]
     pub fn open(&mut self, id: DepthSensorId, device: &wgpu::Device) -> Result<(u32, u32)> {
         if let Some(active) = self.active.get_mut(&id) {
@@ -174,6 +179,10 @@ impl DepthSensorManager {
 
     /// Open a synthetic sensor (mock backend). Always available; used for tests
     /// and for exercising the point-cloud pass without hardware.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the capture thread cannot be spawned.
     pub fn open_mock(
         &mut self,
         id: DepthSensorId,
@@ -212,9 +221,15 @@ impl DepthSensorManager {
         let thread = std::thread::Builder::new()
             .name(format!("depth-{id}"))
             .spawn(move || {
-                Self::capture_loop(id, backend.as_mut(), frame_tx, stop_clone, connected_clone);
+                Self::capture_loop(
+                    id,
+                    backend.as_mut(),
+                    &frame_tx,
+                    &stop_clone,
+                    &connected_clone,
+                );
             })
-            .map_err(|e| anyhow::anyhow!("Failed to spawn depth thread: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to spawn depth thread: {e}"))?;
 
         self.active.insert(
             id,
@@ -243,9 +258,9 @@ impl DepthSensorManager {
     fn capture_loop(
         id: DepthSensorId,
         backend: &mut dyn DepthBackend,
-        frame_data: Arc<Mutex<Option<DepthFrame>>>,
-        stop: Arc<AtomicBool>,
-        connected: Arc<AtomicBool>,
+        frame_data: &Mutex<Option<DepthFrame>>,
+        stop: &AtomicBool,
+        connected: &AtomicBool,
     ) {
         log::info!("Depth {} capture thread started ({})", id, backend.name());
         while !stop.load(Ordering::Relaxed) {
@@ -259,7 +274,7 @@ impl DepthSensorManager {
                 None => std::thread::sleep(std::time::Duration::from_millis(2)),
             }
         }
-        log::info!("Depth {} capture thread stopped", id);
+        log::info!("Depth {id} capture thread stopped");
     }
 
     /// Upload latest frames to GPU. Non-blocking. Call once per frame.
@@ -375,8 +390,7 @@ impl DepthSensorManager {
     pub fn is_connected(&self, id: DepthSensorId) -> bool {
         self.active
             .get(&id)
-            .map(|a| a.connected.load(Ordering::SeqCst))
-            .unwrap_or(false)
+            .is_some_and(|a| a.connected.load(Ordering::SeqCst))
     }
 
     /// Whether a sensor has an open capture session.
@@ -386,15 +400,15 @@ impl DepthSensorManager {
 
     /// Reference count for an active sensor (0 if not active).
     pub fn ref_count(&self, id: DepthSensorId) -> u32 {
-        self.active.get(&id).map(|a| a.ref_count).unwrap_or(0)
+        self.active.get(&id).map_or(0, |a| a.ref_count)
     }
 
-    /// Release a sensor reference. Stops the capture thread at ref_count 0.
+    /// Release a sensor reference. Stops the capture thread at `ref_count` 0.
     pub fn release(&mut self, id: DepthSensorId) {
         if let Some(active) = self.active.get_mut(&id) {
             active.ref_count = active.ref_count.saturating_sub(1);
             if active.ref_count == 0 {
-                log::info!("Closing depth sensor {} (no more references)", id);
+                log::info!("Closing depth sensor {id} (no more references)");
                 if let Some(mut removed) = self.active.remove(&id) {
                     removed.stop_flag.store(true, Ordering::Relaxed);
                     if let Some(t) = removed.thread.take() {
@@ -408,7 +422,7 @@ impl DepthSensorManager {
     /// All active sensor IDs, sorted.
     pub fn active_ids(&self) -> Vec<DepthSensorId> {
         let mut ids: Vec<DepthSensorId> = self.active.keys().copied().collect();
-        ids.sort();
+        ids.sort_unstable();
         ids
     }
 }
@@ -418,6 +432,11 @@ impl DepthSensorManager {
 /// With the `depth` feature this opens the real Kinect backend. Without it,
 /// there are no real devices, so this returns an error (callers skip the deck
 /// with a warning, matching camera-not-found behaviour).
+///
+/// # Errors
+///
+/// With the `depth` feature, propagates errors from
+/// [`DepthSensorManager::open`]. Without it, always returns an error.
 pub fn open_depth_sensor(
     manager: &mut DepthSensorManager,
     id: DepthSensorId,

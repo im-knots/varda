@@ -50,13 +50,13 @@ impl EffectLocation {
 }
 
 /// Per-frame GPU timing allocation context.
-/// Hands out (begin_query, end_query) index pairs from a shared QuerySet.
+/// Hands out (`begin_query`, `end_query`) index pairs from a shared `QuerySet`.
 pub struct GpuTimingFrame {
     /// Maximum number of queries in the set (must be even: pairs of begin/end)
     max_queries: u32,
     /// Next available query index
     next_index: u32,
-    /// Records which (ch_idx, deck_idx) owns which query pair
+    /// Records which (`ch_idx`, `deck_idx`) owns which query pair
     pub allocations: Vec<(usize, usize, u32, u32)>,
 }
 
@@ -131,14 +131,14 @@ pub struct Mixer {
     /// Frame counter
     frame_count: u32,
 
-    /// Smoothed GPU load ratio (EMA): actual_frame_time / cpu_render_time.
+    /// Smoothed GPU load ratio (EMA): `actual_frame_time` / `cpu_render_time`.
     /// When > 1.0, GPU execution takes longer than CPU encoding — shaders are
-    /// GPU-bound and render_cost_us underestimates true cost by this factor.
+    /// GPU-bound and `render_cost_us` underestimates true cost by this factor.
     gpu_load_ratio: f32,
 
     /// Smoothed GPU utilization % (0–100): sum of per-deck GPU render costs
     /// divided by frame budget. Uses GPU timestamp data when available,
-    /// falls back to CPU-measured render cost × gpu_load_ratio.
+    /// falls back to CPU-measured render cost × `gpu_load_ratio`.
     gpu_utilization: f32,
 
     /// Shader-based composite pipeline for blending channels (all blend modes via uniform)
@@ -180,32 +180,37 @@ pub struct Mixer {
 
     /// GPU timestamp query set (128 queries = 64 deck measurements)
     pub(crate) query_set: Option<wgpu::QuerySet>,
-    /// Buffer for resolving query results (QUERY_RESOLVE | COPY_SRC)
+    /// Buffer for resolving query results (`QUERY_RESOLVE` | `COPY_SRC`)
     resolve_buffer: Option<wgpu::Buffer>,
-    /// Double-buffered staging buffers for readback (COPY_DST | MAP_READ)
+    /// Double-buffered staging buffers for readback (`COPY_DST` | `MAP_READ`)
     staging_buffers: Option<[wgpu::Buffer; 2]>,
     /// Which staging buffer to write next (alternates 0/1)
     staging_index: usize,
-    /// Nanoseconds per timestamp tick (from queue.get_timestamp_period())
+    /// Nanoseconds per timestamp tick (from `queue.get_timestamp_period()`)
     timestamp_period: f32,
-    /// Per-deck GPU times from the previous frame: (ch_idx, deck_idx) -> microseconds
+    /// Per-deck GPU times from the previous frame: (`ch_idx`, `deck_idx`) -> microseconds
     pub(crate) last_frame_gpu_times: std::collections::HashMap<(usize, usize), f32>,
     /// Timing allocations from the frame whose results are in the readable staging buffer
     prev_timing_allocations: Vec<(usize, usize, u32, u32)>,
-    /// Index of the staging buffer whose map_async has completed (ready to read).
-    /// `usize::MAX` means no buffer is pending/ready. Set by the map_async callback.
+    /// Index of the staging buffer whose `map_async` has completed (ready to read).
+    /// `usize::MAX` means no buffer is pending/ready. Set by the `map_async` callback.
     staging_mapped_idx: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// True while a timing-staging `map_async` is outstanding — from the moment it
     /// is *issued* until the read path consumes and unmaps the buffer. Gates the
     /// resolve/readback path so at most one map is ever in flight. The callback
     /// only sets `staging_mapped_idx` later, so relying on that alone would let a
-    /// second map_async be issued during the pending window, leaving a buffer
+    /// second `map_async` be issued during the pending window, leaving a buffer
     /// permanently mapped and crashing the next submit with "still mapped".
     timing_map_inflight: bool,
 }
 
 impl Mixer {
     /// Create a new mixer with two default channels (A and B)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the composite/blit/tonemap/LUT pipelines fail to
+    /// build on the given GPU device, or if either default channel cannot be created.
     pub fn new(context: &GpuContext, width: u32, height: u32) -> Result<Self> {
         let composite_texture = context.create_compositing_texture(width, height);
         let composite_view = composite_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -350,10 +355,7 @@ impl Mixer {
     /// execution time per category. Logs every frame (not every 120).
     pub fn start_perf_profile(&mut self, frames: u32) {
         self.perf_profile_frames = frames;
-        log::info!(
-            "[PERF_PROFILE] Starting GPU profiling for {} frames",
-            frames
-        );
+        log::info!("[PERF_PROFILE] Starting GPU profiling for {frames} frames");
     }
 
     /// Add a master effect
@@ -372,6 +374,10 @@ impl Mixer {
     }
 
     /// Add a new channel with an auto-generated name (C, D, E, ...)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new channel's GPU pipelines cannot be created.
     pub fn add_channel(&mut self, context: &GpuContext, width: u32, height: u32) -> Result<usize> {
         let name = channel_name(self.next_channel_index);
         self.next_channel_index += 1;
@@ -390,7 +396,7 @@ impl Mixer {
         }
         let name = self.channels[index].name.clone();
         self.channels.remove(index);
-        log::info!("Removed channel {} (was index {})", name, index);
+        log::info!("Removed channel {name} (was index {index})");
         true
     }
 
@@ -536,7 +542,7 @@ impl Mixer {
 
     // ── UUID lookup helpers ────────────────────────────────────────────
 
-    /// Find a mutable deck slot by deck UUID. Returns (channel_index, deck_index) if found.
+    /// Find a mutable deck slot by deck UUID. Returns (`channel_index`, `deck_index`) if found.
     pub fn find_deck_by_uuid(&self, uuid: &str) -> Option<(usize, usize)> {
         for (ch_idx, ch) in self.channels.iter().enumerate() {
             for (dk_idx, slot) in ch.decks.iter().enumerate() {
@@ -609,7 +615,7 @@ impl Mixer {
     // ── Persistence restore helpers ──────────────────────────────────
 
     /// Replace all channels (used by persistence restore).
-    /// Also updates next_channel_index based on the highest "Ch N" name.
+    /// Also updates `next_channel_index` based on the highest "Ch N" name.
     pub fn replace_channels(&mut self, channels: Vec<Channel>) {
         let max_idx = channels
             .iter()
@@ -619,8 +625,7 @@ impl Mixer {
                     .and_then(|s| s.parse::<usize>().ok())
             })
             .max()
-            .map(|n| n + 1)
-            .unwrap_or(channels.len());
+            .map_or(channels.len(), |n| n + 1);
         self.next_channel_index = max_idx;
         self.channels = channels;
     }
@@ -649,7 +654,7 @@ impl Mixer {
         self.transition_sequences = sequences;
     }
 
-    /// Set the next_channel_index counter (used by persistence restore).
+    /// Set the `next_channel_index` counter (used by persistence restore).
     pub fn set_next_channel_index(&mut self, idx: usize) {
         self.next_channel_index = idx;
     }
@@ -665,7 +670,7 @@ impl Mixer {
 
 /// Generate a channel name from its index: 0→"Ch 0", 1→"Ch 1", 2→"Ch 2", etc.
 fn channel_name(index: usize) -> String {
-    format!("Ch {}", index)
+    format!("Ch {index}")
 }
 
 #[cfg(test)]

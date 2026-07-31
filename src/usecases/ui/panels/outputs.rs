@@ -139,7 +139,7 @@ fn render_windowed_controls(
     // Display target selector
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Display:").small());
-        egui::ComboBox::from_id_salt(format!("output_target_{}", output_uuid))
+        egui::ComboBox::from_id_salt(format!("output_target_{output_uuid}"))
             .selected_text(egui::RichText::new(&output.target_label).small())
             .width(160.0)
             .show_ui(ui, |ui| {
@@ -168,7 +168,7 @@ fn render_windowed_controls(
     // Rotation selector
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rotation:").small());
-        egui::ComboBox::from_id_salt(format!("output_rotation_{}", output_uuid))
+        egui::ComboBox::from_id_salt(format!("output_rotation_{output_uuid}"))
             .selected_text(egui::RichText::new(output.rotation.label()).small())
             .width(80.0)
             .show_ui(ui, |ui| {
@@ -212,11 +212,11 @@ fn render_windowed_controls(
     ui.add_space(2.0);
     ui.label(egui::RichText::new("Surfaces:").small().strong());
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt(format!("assign_surf_{}", output_uuid))
+        egui::ComboBox::from_id_salt(format!("assign_surf_{output_uuid}"))
             .selected_text("+ Assign Surface")
             .width(140.0)
             .show_ui(ui, |ui| {
-                for surface in data.surfaces.iter() {
+                for surface in &data.surfaces {
                     let already_assigned = output
                         .surface_assignments
                         .iter()
@@ -231,7 +231,7 @@ fn render_windowed_controls(
             });
     });
 
-    for assignment in output.surface_assignments.iter() {
+    for assignment in &output.surface_assignments {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
             if ui.small_button("x").on_hover_text("Unassign").clicked() {
@@ -270,7 +270,7 @@ fn render_headless_controls(
             // Codec selector
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Codec:").small());
-                let codec_id = egui::Id::new(format!("rec_codec_{}", output_uuid));
+                let codec_id = egui::Id::new(format!("rec_codec_{output_uuid}"));
                 egui::ComboBox::from_id_salt(codec_id)
                     .selected_text(egui::RichText::new(codec.to_string()).small())
                     .width(120.0)
@@ -301,7 +301,7 @@ fn render_headless_controls(
             // File path input
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("File:").small());
-                let path_id = egui::Id::new(format!("rec_path_{}", output_uuid));
+                let path_id = egui::Id::new(format!("rec_path_{output_uuid}"));
                 let mut current_path: String = ui
                     .data(|d| d.get_temp(path_id))
                     .unwrap_or_else(|| path.clone());
@@ -355,7 +355,7 @@ fn render_headless_controls(
             ui.label(egui::RichText::new("Audio:").small());
             let current = output.target.audio_device();
             let selected_text = current.unwrap_or("None (silent)");
-            egui::ComboBox::from_id_salt(format!("out_audio_{}", output_uuid))
+            egui::ComboBox::from_id_salt(format!("out_audio_{output_uuid}"))
                 .selected_text(egui::RichText::new(selected_text).small())
                 .width(160.0)
                 .show_ui(ui, |ui| {
@@ -384,7 +384,7 @@ fn render_headless_controls(
     // Rotation selector
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rotation:").small());
-        egui::ComboBox::from_id_salt(format!("headless_rotation_{}", output_uuid))
+        egui::ComboBox::from_id_salt(format!("headless_rotation_{output_uuid}"))
             .selected_text(egui::RichText::new(output.rotation.label()).small())
             .width(80.0)
             .show_ui(ui, |ui| {
@@ -406,11 +406,11 @@ fn render_headless_controls(
     ui.add_space(2.0);
     ui.label(egui::RichText::new("Surfaces:").small().strong());
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt(format!("assign_surf_{}", output_uuid))
+        egui::ComboBox::from_id_salt(format!("assign_surf_{output_uuid}"))
             .selected_text("+ Assign Surface")
             .width(140.0)
             .show_ui(ui, |ui| {
-                for surface in data.surfaces.iter() {
+                for surface in &data.surfaces {
                     let already_assigned = output
                         .surface_assignments
                         .iter()
@@ -425,7 +425,7 @@ fn render_headless_controls(
             });
     });
 
-    for assignment in output.surface_assignments.iter() {
+    for assignment in &output.surface_assignments {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&assignment.surface_name).small());
             if ui.small_button("x").on_hover_text("Unassign").clicked() {
@@ -444,7 +444,7 @@ fn render_headless_controls(
         if output.is_active {
             let dur = output.active_duration.as_secs_f32();
             ui.label(
-                egui::RichText::new(format!("{:.1}s", dur))
+                egui::RichText::new(format!("{dur:.1}s"))
                     .monospace()
                     .color(egui::Color32::from_rgb(255, 80, 80)),
             );
@@ -485,10 +485,16 @@ fn render_stream_config(
     };
 
     // Protocol dropdown (disabled while active)
-    if !output.is_active {
+    if output.is_active {
+        ui.label(
+            egui::RichText::new(format!("Protocol: {current_proto}"))
+                .small()
+                .weak(),
+        );
+    } else {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Protocol:").small());
-            egui::ComboBox::from_id_salt(format!("stream_proto_{}", output_uuid))
+            egui::ComboBox::from_id_salt(format!("stream_proto_{output_uuid}"))
                 .selected_text(egui::RichText::new(current_proto).small())
                 .width(80.0)
                 .show_ui(ui, |ui| {
@@ -557,12 +563,6 @@ fn render_stream_config(
                     }
                 });
         });
-    } else {
-        ui.label(
-            egui::RichText::new(format!("Protocol: {}", current_proto))
-                .small()
-                .weak(),
-        );
     }
 
     // Protocol-specific config
@@ -575,7 +575,7 @@ fn render_stream_config(
             if !output.is_active {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Codec:").small());
-                    egui::ComboBox::from_id_salt(format!("srt_codec_{}", output_uuid))
+                    egui::ComboBox::from_id_salt(format!("srt_codec_{output_uuid}"))
                         .selected_text(egui::RichText::new(codec.to_string()).small())
                         .width(120.0)
                         .show_ui(ui, |ui| {
@@ -595,7 +595,7 @@ fn render_stream_config(
                 });
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("URL:").small());
-                    let url_id = egui::Id::new(format!("srt_url_{}", output_uuid));
+                    let url_id = egui::Id::new(format!("srt_url_{output_uuid}"));
                     let mut current_url: String = ui
                         .data(|d| d.get_temp(url_id))
                         .unwrap_or_else(|| url.clone());
@@ -660,8 +660,8 @@ fn render_stream_config(
                     }
                 });
             }
-            let player_url = format!("http://localhost:8080/streams/{}/player.html", name);
-            let manifest_url = format!("http://localhost:8080/streams/{}/index.m3u8", name);
+            let player_url = format!("http://localhost:8080/streams/{name}/player.html");
+            let manifest_url = format!("http://localhost:8080/streams/{name}/index.m3u8");
             render_copyable_url(ui, "▶", &player_url, 10.0, actions);
             render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
         }
@@ -684,8 +684,8 @@ fn render_stream_config(
                     audio_device: audio_device.clone(),
                 },
             );
-            let player_url = format!("http://localhost:8080/streams/{}/player.html", name);
-            let manifest_url = format!("http://localhost:8080/streams/{}/manifest.mpd", name);
+            let player_url = format!("http://localhost:8080/streams/{name}/player.html");
+            let manifest_url = format!("http://localhost:8080/streams/{name}/manifest.mpd");
             render_copyable_url(ui, "▶", &player_url, 10.0, actions);
             render_copyable_url(ui, "🌐", &manifest_url, 9.0, actions);
         }
@@ -697,7 +697,7 @@ fn render_stream_config(
             if !output.is_active {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Codec:").small());
-                    egui::ComboBox::from_id_salt(format!("rtmp_codec_{}", output_uuid))
+                    egui::ComboBox::from_id_salt(format!("rtmp_codec_{output_uuid}"))
                         .selected_text(egui::RichText::new(codec.to_string()).small())
                         .width(120.0)
                         .show_ui(ui, |ui| {
@@ -721,7 +721,7 @@ fn render_stream_config(
                 });
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("URL:").small());
-                    let url_id = egui::Id::new(format!("rtmp_url_{}", output_uuid));
+                    let url_id = egui::Id::new(format!("rtmp_url_{output_uuid}"));
                     let mut current_url: String = ui
                         .data(|d| d.get_temp(url_id))
                         .unwrap_or_else(|| url.clone());
@@ -749,7 +749,7 @@ fn render_stream_config(
         OutputTarget::NdiSend { ref sender_name } if !output.is_active => {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Name:").small());
-                let name_id = egui::Id::new(format!("ndi_name_{}", output_uuid));
+                let name_id = egui::Id::new(format!("ndi_name_{output_uuid}"));
                 let mut current_name: String = ui
                     .data(|d| d.get_temp(name_id))
                     .unwrap_or_else(|| sender_name.clone());
@@ -774,7 +774,7 @@ fn render_stream_config(
         OutputTarget::SyphonServer { ref server_name } if !output.is_active => {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Name:").small());
-                let name_id = egui::Id::new(format!("syphon_name_{}", output_uuid));
+                let name_id = egui::Id::new(format!("syphon_name_{output_uuid}"));
                 let mut current_name: String = ui
                     .data(|d| d.get_temp(name_id))
                     .unwrap_or_else(|| server_name.clone());
@@ -808,7 +808,7 @@ fn render_copyable_url(
     font_size: f32,
     actions: &mut UIActions,
 ) {
-    let text = format!("{} {}", icon, url);
+    let text = format!("{icon} {url}");
     let response = ui.add(
         egui::Label::new(
             egui::RichText::new(&text)
@@ -822,7 +822,7 @@ fn render_copyable_url(
         actions
             .session
             .info_notifications
-            .push(format!("📋 Copied to clipboard: {}", url));
+            .push(format!("📋 Copied to clipboard: {url}"));
     }
     response.on_hover_text("Click to copy URL");
 }
@@ -844,7 +844,7 @@ fn render_hls_dash_name_codec(
     if !is_active {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Codec:").small());
-            egui::ComboBox::from_id_salt(format!("{}_codec_{}", prefix, output_uuid))
+            egui::ComboBox::from_id_salt(format!("{prefix}_codec_{output_uuid}"))
                 .selected_text(egui::RichText::new(codec.to_string()).small())
                 .width(120.0)
                 .show_ui(ui, |ui| {
@@ -864,7 +864,7 @@ fn render_hls_dash_name_codec(
         });
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Name:").small());
-            let name_id = egui::Id::new(format!("{}_name_{}", prefix, output_uuid));
+            let name_id = egui::Id::new(format!("{prefix}_name_{output_uuid}"));
             let mut current_name: String = ui
                 .data(|d| d.get_temp(name_id))
                 .unwrap_or_else(|| name.to_string());

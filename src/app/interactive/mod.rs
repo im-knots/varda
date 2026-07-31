@@ -142,17 +142,14 @@ impl super::VardaApp {
                     .html_manager
                     .send_input(html_idx, HtmlInputEvent::Focus(true));
                 log::info!(
-                    "Opened interactive HTML window for deck {} ({}x{})",
-                    deck_uuid,
-                    width,
-                    height
+                    "Opened interactive HTML window for deck {deck_uuid} ({width}x{height})"
                 );
                 self.interactive.window = Some(win);
             }
             Err(e) => {
                 log::error!("Failed to init interactive window surface: {e}");
                 // Reclaim the leaked window box on failure.
-                let ptr = window_static as *const Window as *mut Window;
+                let ptr = std::ptr::from_ref::<Window>(window_static).cast_mut();
                 unsafe {
                     let _ = Box::from_raw(ptr);
                 }

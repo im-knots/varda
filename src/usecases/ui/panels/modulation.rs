@@ -4,6 +4,8 @@ use super::super::{modulator_color, widgets, ModSourceUI, UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::modulation::{LFOWaveform, StepInterpolation};
 
+// Waveform/envelope plotting uses t/x/y, the idiomatic names for this math.
+#[allow(clippy::many_single_char_names)]
 pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.horizontal(|ui| {
         if ui.button("➕ LFO").clicked() {
@@ -71,7 +73,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                     let value_text = data
                         .modulation_current_values
                         .get(sid)
-                        .map(|v| format!(" ({:.2})", v))
+                        .map(|v| format!(" ({v:.2})"))
                         .unwrap_or_default();
 
                     egui::Frame::default()
@@ -85,7 +87,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                             ui.spacing_mut().item_spacing.y = 2.0;
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    egui::RichText::new(format!("{}{}", header_label, value_text))
+                                    egui::RichText::new(format!("{header_label}{value_text}"))
                                         .strong()
                                         .color(mod_color),
                                 );
@@ -116,7 +118,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut selected_wf = current_wf;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Wave:").small());
-                                        egui::ComboBox::from_id_salt(format!("wf_{}", idx))
+                                        egui::ComboBox::from_id_salt(format!("wf_{idx}"))
                                             .selected_text(waveforms[selected_wf])
                                             .width(70.0)
                                             .show_ui(ui, |ui| {
@@ -149,7 +151,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut freq = *frequency;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Freq:").small());
-                                        let path = format!("mod/{}/frequency", sid);
+                                        let path = format!("mod/{sid}/frequency");
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut freq,
@@ -177,7 +179,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut amp = *amplitude;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Amp:").small());
-                                        let path = format!("mod/{}/amplitude", sid);
+                                        let path = format!("mod/{sid}/amplitude");
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut amp,
@@ -205,7 +207,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut ph = *phase;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Phase:").small());
-                                        let path = format!("mod/{}/phase", sid);
+                                        let path = format!("mod/{sid}/phase");
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut ph,
@@ -265,8 +267,8 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                                     let step = (t * 8.0).floor();
                                                     let seed = step as u32;
                                                     let hash = seed
-                                                        .wrapping_mul(1664525)
-                                                        .wrapping_add(1013904223);
+                                                        .wrapping_mul(1_664_525)
+                                                        .wrapping_add(1_013_904_223);
                                                     (hash as f32 / u32::MAX as f32) * 2.0 - 1.0
                                                 }
                                             };
@@ -308,7 +310,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     };
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Mode:").small());
-                                        egui::ComboBox::from_id_salt(format!("audio_mode_{}", idx))
+                                        egui::ComboBox::from_id_salt(format!("audio_mode_{idx}"))
                                             .selected_text(mode_label)
                                             .width(70.0)
                                             .show_ui(ui, |ui| {
@@ -353,15 +355,10 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     };
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Range:").small());
-                                        egui::ComboBox::from_id_salt(format!(
-                                            "audio_preset_{}",
-                                            idx
-                                        ))
-                                        .selected_text(preset_label)
-                                        .width(60.0)
-                                        .show_ui(
-                                            ui,
-                                            |ui| {
+                                        egui::ComboBox::from_id_salt(format!("audio_preset_{idx}"))
+                                            .selected_text(preset_label)
+                                            .width(60.0)
+                                            .show_ui(ui, |ui| {
                                                 use crate::modulation::AudioBandPreset;
                                                 for (name, preset) in [
                                                     ("Low", AudioBandPreset::Low),
@@ -384,14 +381,13 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                                         );
                                                     }
                                                 }
-                                            },
-                                        );
+                                            });
                                     });
                                     // Frequency range sliders (bookshelf)
                                     let mut fl = *freq_low;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Lo:").small());
-                                        let path = format!("mod/{}/freq_low", sid);
+                                        let path = format!("mod/{sid}/freq_low");
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut fl,
@@ -412,7 +408,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut fh = *freq_high;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Hi:").small());
-                                        let path = format!("mod/{}/freq_high", sid);
+                                        let path = format!("mod/{sid}/freq_high");
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut fh,
@@ -431,13 +427,13 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         }
                                     });
                                     // Gain slider
-                                    let mut g = *gain;
+                                    let mut gain_val = *gain;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Gain:").small());
-                                        let path = format!("mod/{}/gain", sid);
+                                        let path = format!("mod/{sid}/gain");
                                         if render_mod_learn_slider(
                                             ui,
-                                            &mut g,
+                                            &mut gain_val,
                                             0.0..=4.0,
                                             |s| s.show_value(true),
                                             &path,
@@ -446,7 +442,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         ) {
                                             actions.commands.push(EngineCommand::UpdateAudioGain {
                                                 uuid: sid.clone(),
-                                                gain: g,
+                                                gain: gain_val,
                                             });
                                         }
                                         render_mod_on_mod_dropdown(ui, data, actions, sid, "gain");
@@ -455,7 +451,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     let mut sm = *smoothing;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Smooth:").small());
-                                        let path = format!("mod/{}/smoothing", sid);
+                                        let path = format!("mod/{sid}/smoothing");
                                         if render_mod_learn_slider(
                                             ui,
                                             &mut sm,
@@ -505,13 +501,11 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             .and_then(|sid| {
                                                 data.audio.devices.iter().find(|d| d.id == sid)
                                             })
-                                            .map(|d| d.name.as_str())
-                                            .unwrap_or("Default");
+                                            .map_or("Default", |d| d.name.as_str());
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new("Src:").small());
                                             egui::ComboBox::from_id_salt(format!(
-                                                "audio_src_{}",
-                                                idx
+                                                "audio_src_{idx}"
                                             ))
                                             .selected_text(src_label)
                                             .width(80.0)
@@ -570,7 +564,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     stage: _,
                                 } => {
                                     // Combined gate button: press → trigger, release → gate off
-                                    let gate_path = format!("mod/{}/gate", sid);
+                                    let gate_path = format!("mod/{sid}/gate");
                                     let any_learn =
                                         data.midi_learn_active || data.keyboard_learn_active;
                                     let gate_id = ui.id().with(("adsr_gate", idx));
@@ -666,13 +660,13 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                                 ));
                                         }
                                     }
-                                    let mut a = *attack;
+                                    let mut attack_val = *attack;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("A:").small());
-                                        let path = format!("mod/{}/attack", sid);
+                                        let path = format!("mod/{sid}/attack");
                                         if render_mod_learn_slider(
                                             ui,
-                                            &mut a,
+                                            &mut attack_val,
                                             0.001..=5.0,
                                             |s| s.logarithmic(true).suffix("s").show_value(true),
                                             &path,
@@ -682,7 +676,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             actions.commands.push(
                                                 EngineCommand::UpdateAdsrAttack {
                                                     uuid: sid.clone(),
-                                                    attack: a,
+                                                    attack: attack_val,
                                                 },
                                             );
                                         }
@@ -690,13 +684,13 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             ui, data, actions, sid, "attack",
                                         );
                                     });
-                                    let mut d = *decay;
+                                    let mut decay_val = *decay;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("D:").small());
-                                        let path = format!("mod/{}/decay", sid);
+                                        let path = format!("mod/{sid}/decay");
                                         if render_mod_learn_slider(
                                             ui,
-                                            &mut d,
+                                            &mut decay_val,
                                             0.001..=5.0,
                                             |s| s.logarithmic(true).suffix("s").show_value(true),
                                             &path,
@@ -705,18 +699,18 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         ) {
                                             actions.commands.push(EngineCommand::UpdateAdsrDecay {
                                                 uuid: sid.clone(),
-                                                decay: d,
+                                                decay: decay_val,
                                             });
                                         }
                                         render_mod_on_mod_dropdown(ui, data, actions, sid, "decay");
                                     });
-                                    let mut s = *sustain;
+                                    let mut sustain_val = *sustain;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("S:").small());
-                                        let path = format!("mod/{}/sustain", sid);
+                                        let path = format!("mod/{sid}/sustain");
                                         if render_mod_learn_slider(
                                             ui,
-                                            &mut s,
+                                            &mut sustain_val,
                                             0.0..=1.0,
                                             |s| s.show_value(true),
                                             &path,
@@ -726,7 +720,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             actions.commands.push(
                                                 EngineCommand::UpdateAdsrSustain {
                                                     uuid: sid.clone(),
-                                                    sustain: s,
+                                                    sustain: sustain_val,
                                                 },
                                             );
                                         }
@@ -734,13 +728,13 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             ui, data, actions, sid, "sustain",
                                         );
                                     });
-                                    let mut r = *release;
+                                    let mut release_val = *release;
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("R:").small());
-                                        let path = format!("mod/{}/release", sid);
+                                        let path = format!("mod/{sid}/release");
                                         if render_mod_learn_slider(
                                             ui,
-                                            &mut r,
+                                            &mut release_val,
                                             0.001..=5.0,
                                             |s| s.logarithmic(true).suffix("s").show_value(true),
                                             &path,
@@ -750,7 +744,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                             actions.commands.push(
                                                 EngineCommand::UpdateAdsrRelease {
                                                     uuid: sid.clone(),
-                                                    release: r,
+                                                    release: release_val,
                                                 },
                                             );
                                         }
@@ -765,14 +759,15 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     );
                                     let rect = response.rect;
                                     painter.rect_filled(rect, 2.0, egui::Color32::from_gray(20));
-                                    let total_time = a + d + 0.3 + r; // sustain shown as ~0.3 segment
-                                    let ax = rect.left() + (a / total_time) * rect.width();
-                                    let dx = ax + (d / total_time) * rect.width();
+                                    // sustain shown as ~0.3 segment
+                                    let total_time = attack_val + decay_val + 0.3 + release_val;
+                                    let ax = rect.left() + (attack_val / total_time) * rect.width();
+                                    let dx = ax + (decay_val / total_time) * rect.width();
                                     let sx = dx + (0.3 / total_time) * rect.width();
-                                    let rx = sx + (r / total_time) * rect.width();
+                                    let rx = sx + (release_val / total_time) * rect.width();
                                     let top = rect.top() + 2.0;
                                     let bot = rect.bottom() - 2.0;
-                                    let sus_y = top + (1.0 - s) * (bot - top);
+                                    let sus_y = top + (1.0 - sustain_val) * (bot - top);
                                     let points = vec![
                                         egui::pos2(rect.left(), bot), // start at 0
                                         egui::pos2(ax, top),          // attack peak
@@ -807,7 +802,7 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                         sid,
                                         steps,
                                         *rate,
-                                        interpolation,
+                                        *interpolation,
                                         *bipolar,
                                         mod_color,
                                         data,
@@ -820,10 +815,10 @@ pub(super) fn render_modulation_section(ui: &mut egui::Ui, data: &UIData, action
                                     output_name,
                                     smoothing,
                                 } => {
-                                    ui.label(format!("Deck: {}", deck_id));
-                                    ui.label(format!("Type: {}", analyzer_type));
-                                    ui.label(format!("Output: {}", output_name));
-                                    ui.label(format!("Smoothing: {:.2}", smoothing));
+                                    ui.label(format!("Deck: {deck_id}"));
+                                    ui.label(format!("Type: {analyzer_type}"));
+                                    ui.label(format!("Output: {output_name}"));
+                                    ui.label(format!("Smoothing: {smoothing:.2}"));
                                 }
                             }
                         });
@@ -842,7 +837,7 @@ fn render_step_sequencer_controls(
     sid: &str,
     steps: &[f32],
     rate: f32,
-    interpolation: &StepInterpolation,
+    interpolation: StepInterpolation,
     bipolar: bool,
     mod_color: egui::Color32,
     data: &UIData,
@@ -852,7 +847,7 @@ fn render_step_sequencer_controls(
     let mut r = rate;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Rate:").small());
-        let path = format!("mod/{}/rate", sid);
+        let path = format!("mod/{sid}/rate");
         if render_mod_learn_slider(
             ui,
             &mut r,
@@ -878,7 +873,7 @@ fn render_step_sequencer_controls(
             StepInterpolation::Smooth => 2,
         };
         let mut selected_interp = current_interp;
-        egui::ComboBox::from_id_salt(format!("step_interp_{}", idx))
+        egui::ComboBox::from_id_salt(format!("step_interp_{idx}"))
             .selected_text(interp_names[selected_interp])
             .width(60.0)
             .show_ui(ui, |ui| {
@@ -929,23 +924,21 @@ fn render_step_sequencer_controls(
             });
         }
         for &preset in &[4, 8, 16, 32] {
-            if steps.len() != preset {
-                if ui
-                    .small_button(egui::RichText::new(format!("{}", preset)).small())
-                    .clicked()
-                {
-                    actions.commands.push(EngineCommand::SetStepSeqCount {
-                        uuid: sid.to_string(),
-                        count: preset,
-                    });
-                }
-            } else {
+            if steps.len() == preset {
                 ui.label(
-                    egui::RichText::new(format!("[{}]", preset))
+                    egui::RichText::new(format!("[{preset}]"))
                         .small()
                         .strong()
                         .color(mod_color),
                 );
+            } else if ui
+                .small_button(egui::RichText::new(format!("{preset}")).small())
+                .clicked()
+            {
+                actions.commands.push(EngineCommand::SetStepSeqCount {
+                    uuid: sid.to_string(),
+                    count: preset,
+                });
             }
         }
     });
@@ -1031,7 +1024,7 @@ fn render_step_sequencer_controls(
     // Current value indicator line
     if let Some(&cur_val) = data.modulation_current_values.get(sid) {
         let display_val = if bipolar {
-            (cur_val + 1.0) / 2.0
+            f32::midpoint(cur_val, 1.0)
         } else {
             cur_val
         };
@@ -1068,7 +1061,7 @@ fn render_step_sequencer_controls(
                 egui::pos2(x0, rect.top()),
                 egui::vec2(step_w, rect.height()),
             );
-            let step_path = format!("mod/{}/step/{}", sid, step_idx);
+            let step_path = format!("mod/{sid}/step/{step_idx}");
             if data.midi_learn_active {
                 let is_target = data.midi_learn_target.as_deref() == Some(step_path.as_str());
                 if is_target {
@@ -1170,7 +1163,7 @@ pub(super) fn render_mod_on_mod_dropdown(
     target_uuid: &str,
     param_name: &str,
 ) {
-    let key = format!("mod:{}:{}", target_uuid, param_name);
+    let key = format!("mod:{target_uuid}:{param_name}");
     let has_assignment = data
         .modulation_assignments
         .get(&key)
@@ -1190,12 +1183,12 @@ pub(super) fn render_mod_on_mod_dropdown(
         egui::Color32::GRAY
     };
 
-    egui::ComboBox::from_id_salt(format!("mom_{}_{}", target_uuid, param_name))
+    egui::ComboBox::from_id_salt(format!("mom_{target_uuid}_{param_name}"))
         .selected_text(egui::RichText::new(btn_text).color(btn_color).small())
         .width(30.0)
         .show_ui(ui, |ui| {
             ui.label(
-                egui::RichText::new(format!("Modulate {}", param_name))
+                egui::RichText::new(format!("Modulate {param_name}"))
                     .small()
                     .strong(),
             );
@@ -1210,7 +1203,7 @@ pub(super) fn render_mod_on_mod_dropdown(
                         freq_low,
                         freq_high,
                         ..
-                    } => format!("Audio {:.0}-{:.0}Hz", freq_low, freq_high),
+                    } => format!("Audio {freq_low:.0}-{freq_high:.0}Hz"),
                     ModSourceUI::ADSR { .. } => format!("ADSR {}", src_idx + 1),
                     ModSourceUI::StepSequencer { .. } => format!("StepSeq {}", src_idx + 1),
                     ModSourceUI::Analyzer { analyzer_type, .. } => {
@@ -1219,7 +1212,7 @@ pub(super) fn render_mod_on_mod_dropdown(
                 };
                 if ui
                     .button(
-                        egui::RichText::new(format!("+ {}", src_name))
+                        egui::RichText::new(format!("+ {src_name}"))
                             .color(color)
                             .small(),
                     )

@@ -2,7 +2,7 @@
 //!
 //! All conversion from winit input types into the engine's `Send`
 //! [`HtmlInputEvent`] happens here so winit never reaches `internal/html`.
-//! Cursor positions are mapped from window logical coordinates to WebView
+//! Cursor positions are mapped from window logical coordinates to `WebView`
 //! **device** pixels (fixed 1:1, see `/spec/html-source.md` §4).
 //!
 //! Key/Code/NamedKey names follow the W3C UI Events spec in both winit and
@@ -26,11 +26,11 @@ use crate::html::HtmlInputEvent;
 /// Lines→pixels factor for `MouseScrollDelta::LineDelta` (typical UA line height).
 const LINE_HEIGHT_PX: f64 = 16.0;
 
-/// Map window logical cursor coords → WebView device-pixel point, clamped to the
-/// WebView size. `scale` is the window scale factor (device px per logical px).
+/// Map window logical cursor coords → `WebView` device-pixel point, clamped to the
+/// `WebView` size. `scale` is the window scale factor (device px per logical px).
 pub fn to_device_point(logical: (f64, f64), scale: f64, size: (u32, u32)) -> (f32, f32) {
-    let max_x = size.0.saturating_sub(1) as f64;
-    let max_y = size.1.saturating_sub(1) as f64;
+    let max_x = f64::from(size.0.saturating_sub(1));
+    let max_y = f64::from(size.1.saturating_sub(1));
     let x = (logical.0 * scale).clamp(0.0, max_x);
     let y = (logical.1 * scale).clamp(0.0, max_y);
     (x as f32, y as f32)
@@ -48,7 +48,7 @@ pub fn mouse_button_index(button: MouseButton) -> u16 {
     }
 }
 
-/// A pointer-move event at a WebView device-pixel point.
+/// A pointer-move event at a `WebView` device-pixel point.
 pub fn mouse_move(point: (f32, f32)) -> HtmlInputEvent {
     HtmlInputEvent::MouseMove {
         x: point.0,
@@ -56,7 +56,7 @@ pub fn mouse_move(point: (f32, f32)) -> HtmlInputEvent {
     }
 }
 
-/// A mouse button press/release at a WebView device-pixel point.
+/// A mouse button press/release at a `WebView` device-pixel point.
 pub fn mouse_button(point: (f32, f32), button: MouseButton, state: ElementState) -> HtmlInputEvent {
     HtmlInputEvent::MouseButton {
         x: point.0,
@@ -71,7 +71,9 @@ pub fn mouse_button(point: (f32, f32), button: MouseButton, state: ElementState)
 /// `PixelDelta` is already physical px; `LineDelta` is scaled by line height.
 pub fn wheel(point: (f32, f32), delta: MouseScrollDelta) -> HtmlInputEvent {
     let (dx, dy) = match delta {
-        MouseScrollDelta::LineDelta(x, y) => (x as f64 * LINE_HEIGHT_PX, y as f64 * LINE_HEIGHT_PX),
+        MouseScrollDelta::LineDelta(x, y) => {
+            (f64::from(x) * LINE_HEIGHT_PX, f64::from(y) * LINE_HEIGHT_PX)
+        }
         MouseScrollDelta::PixelDelta(p) => (p.x, p.y),
     };
     HtmlInputEvent::Wheel {

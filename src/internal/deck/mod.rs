@@ -36,7 +36,7 @@ pub enum ScalingMode {
 
 impl ScalingMode {
     /// Compute UV scale and offset for blitting source into target
-    /// Returns (uv_scale, uv_offset) to transform target UVs to source UVs
+    /// Returns (`uv_scale`, `uv_offset`) to transform target UVs to source UVs
     pub fn compute_uv_transform(
         &self,
         source_w: u32,
@@ -95,13 +95,13 @@ pub struct VideoStagingBuffers {
     buffers: [wgpu::Buffer; 2],
     current: usize,
     mapped: [Arc<AtomicBool>; 2],
-    /// Bytes per row padded to wgpu::COPY_BYTES_PER_ROW_ALIGNMENT (256).
+    /// Bytes per row padded to `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT` (256).
     padded_bpr: u32,
     /// Unpadded bytes per row (actual source data stride).
     unpadded_bpr: u32,
-    /// Number of rows (height for RGBA, blocks_y for compressed).
+    /// Number of rows (height for RGBA, `blocks_y` for compressed).
     rows: u32,
-    /// Tracks which buffers need map_async after the next queue.submit().
+    /// Tracks which buffers need `map_async` after the next `queue.submit()`.
     needs_remap: [bool; 2],
 }
 
@@ -112,11 +112,11 @@ impl VideoStagingBuffers {
     pub fn new(device: &wgpu::Device, unpadded_bpr: u32, rows: u32, label: &str) -> Self {
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bpr = (unpadded_bpr + align - 1) & !(align - 1);
-        let buffer_size = (padded_bpr as u64) * (rows as u64);
+        let buffer_size = u64::from(padded_bpr) * u64::from(rows);
 
         let make_buf = |idx: usize| {
             device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("{} Staging {}", label, idx)),
+                label: Some(&format!("{label} Staging {idx}")),
                 size: buffer_size,
                 usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
@@ -250,7 +250,7 @@ pub enum DeckSource {
         scaling_mode: ScalingMode,
         staging: VideoStagingBuffers,
     },
-    /// HAP video playback (GPU-native BCn, background decode thread)
+    /// HAP video playback (GPU-native `BCn`, background decode thread)
     HapVideo {
         handle: VideoDecodeHandle,
         texture: wgpu::Texture,
@@ -284,7 +284,7 @@ pub enum DeckSource {
         /// REPLACE blit — writes the source's straight RGBA verbatim. Used when
         /// the deck is flagged `transparent` (preserves source alpha).
         blit_pipeline: BlitPipeline,
-        /// ALPHA_BLENDING blit over an opaque black clear — flattens the source
+        /// `ALPHA_BLENDING` blit over an opaque black clear — flattens the source
         /// to opaque. Used by default (unflagged), so an HTML source with alpha<1
         /// composites over black instead of punching transparent holes.
         blit_pipeline_over_black: BlitPipeline,
@@ -299,7 +299,7 @@ pub enum DeckSource {
     },
 }
 
-/// Discriminant for external source types sharing the same DeckSource layout.
+/// Discriminant for external source types sharing the same `DeckSource` layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalSourceKind {
     Camera(crate::camera::CameraId),
@@ -400,7 +400,7 @@ pub struct DepthPreprocessInput {
 pub struct PreprocessorSlot {
     /// Name prefix for shader uniforms (e.g. "depth" → `depth_depth_map`)
     pub name: String,
-    /// Analyzer type this preprocessor needs (e.g. "depth_estimate")
+    /// Analyzer type this preprocessor needs (e.g. "`depth_estimate`")
     pub analyzer_type: String,
     /// Options to pass when starting the analyzer
     pub options: serde_json::Value,
@@ -501,8 +501,8 @@ pub struct Deck {
     /// Decoupled from wall clock so skipped frames don't cause animation jumps.
     render_time: f32,
 
-    /// Fixed time step per render (1/target_fps). Updated by the channel when
-    /// the deck is rendered, so skipped frames simply don't advance render_time.
+    /// Fixed time step per render (`1/target_fps`). Updated by the channel when
+    /// the deck is rendered, so skipped frames simply don't advance `render_time`.
     render_dt: f32,
 
     /// Frame counter
@@ -511,23 +511,23 @@ pub struct Deck {
     /// Last wall-clock render instant (for FPS measurement only, not for TIME uniform)
     last_frame_time: Instant,
 
-    /// External source texture view (set each frame for ExternalSource decks).
-    /// For DepthSensor decks this holds the R16Uint depth view.
+    /// External source texture view (set each frame for `ExternalSource` decks).
+    /// For `DepthSensor` decks this holds the `R16Uint` depth view.
     pub external_source_view: Option<wgpu::TextureView>,
 
-    /// Depth-sensor RGB view (set each frame for DepthSensor decks).
+    /// Depth-sensor RGB view (set each frame for `DepthSensor` decks).
     pub depth_rgb_view: Option<wgpu::TextureView>,
 
-    /// Depth-sensor intrinsics (set each frame for DepthSensor decks).
+    /// Depth-sensor intrinsics (set each frame for `DepthSensor` decks).
     pub depth_intrinsics: Option<crate::depth::backend::DepthIntrinsics>,
 
     /// Native depth-sensor resolution `(w, h)` (set each frame).
     pub depth_source_size: Option<(u32, u32)>,
 
-    /// Point-cloud reprojection params for DepthSensor decks (router-driven).
+    /// Point-cloud reprojection params for `DepthSensor` decks (router-driven).
     pub point_cloud_params: crate::depth::point_cloud::PointCloudParams,
 
-    /// Lazily-built point-cloud pipeline for DepthSensor decks.
+    /// Lazily-built point-cloud pipeline for `DepthSensor` decks.
     point_cloud_pipeline: Option<crate::depth::point_cloud::PointCloudPipeline>,
 
     /// Depth-sensor shader preprocessor, present when this deck's shader (or one
@@ -535,7 +535,7 @@ pub struct Deck {
     /// successfully acquired. See spec/depth-sensor-preprocessor.md.
     pub depth_prepro: Option<DepthPreprocessState>,
 
-    /// Smoothed FPS derived from actual render pipeline timing (EMA of 1/time_delta)
+    /// Smoothed FPS derived from actual render pipeline timing (EMA of `1/time_delta`)
     fps_smoothed: f32,
 
     /// Phase accumulators for smooth speed transitions (generator shader)
@@ -569,7 +569,7 @@ impl Deck {
 
     /// Set the UUID (used during scene restore to preserve identity)
     pub fn set_uuid(&mut self, uuid: String) {
-        self.param_prefix = format!("deck_{}", uuid);
+        self.param_prefix = format!("deck_{uuid}");
         self.uuid = uuid;
     }
 
@@ -686,14 +686,14 @@ impl Deck {
         }
     }
 
-    /// Set the solid color value (only applies to SolidColor sources)
+    /// Set the solid color value (only applies to `SolidColor` sources)
     pub fn set_solid_color(&mut self, new_color: [f32; 4]) {
         if let DeckSource::SolidColor { color } = &mut self.source {
             *color = [
-                new_color[0] as f64,
-                new_color[1] as f64,
-                new_color[2] as f64,
-                new_color[3] as f64,
+                f64::from(new_color[0]),
+                f64::from(new_color[1]),
+                f64::from(new_color[2]),
+                f64::from(new_color[3]),
             ];
         }
     }
@@ -709,7 +709,7 @@ impl Deck {
         }
     }
 
-    /// Set the scaling mode (applies to Image, Video, HapVideo, and ExternalSource sources)
+    /// Set the scaling mode (applies to Image, Video, `HapVideo`, and `ExternalSource` sources)
     pub fn set_scaling_mode(&mut self, mode: ScalingMode) {
         match &mut self.source {
             DeckSource::Image { scaling_mode, .. }
@@ -989,7 +989,7 @@ impl Deck {
     }
 
     /// Set the fixed time step used for the TIME uniform.
-    /// Called by the channel to keep render_dt in sync with the target FPS.
+    /// Called by the channel to keep `render_dt` in sync with the target FPS.
     pub fn set_render_dt(&mut self, dt: f32) {
         self.render_dt = dt;
     }

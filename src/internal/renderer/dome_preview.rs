@@ -97,7 +97,7 @@ impl OrbitCamera {
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct DomeUniforms {
     mvp: [[f32; 4]; 4],
-    /// Content rotation: [azimuth_rad, elevation_rad, roll_rad, 0]
+    /// Content rotation: [`azimuth_rad`, `elevation_rad`, `roll_rad`, 0]
     content_rotation: [f32; 4],
 }
 
@@ -159,10 +159,23 @@ pub struct DomePreviewRenderer {
 }
 
 impl DomePreviewRenderer {
+    /// Create a dome preview renderer at the default preview resolution.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`Self::new_with_size`].
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Self> {
         Self::new_with_size(device, format, DEFAULT_PREVIEW_SIZE, DEFAULT_PREVIEW_SIZE)
     }
 
+    /// Create a dome preview renderer at an explicit resolution.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn new_with_size(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
@@ -249,7 +262,7 @@ impl DomePreviewRenderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[DomeVertex::LAYOUT],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -259,7 +272,7 @@ impl DomePreviewRenderer {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -313,7 +326,7 @@ impl DomePreviewRenderer {
                 module: &overlay_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[OverlayVertex::LAYOUT],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &overlay_shader,
@@ -323,7 +336,7 @@ impl DomePreviewRenderer {
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,

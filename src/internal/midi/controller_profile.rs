@@ -37,7 +37,7 @@ pub struct ProfileMeta {
 /// LED feedback protocol configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LedConfig {
-    /// How LEDs are addressed: "note_velocity", "cc_value"
+    /// How LEDs are addressed: "`note_velocity`", "`cc_value`"
     #[serde(default = "default_led_method")]
     pub method: String,
     #[serde(default)]
@@ -140,7 +140,7 @@ impl ControllerProfileData {
         for (i, ctrl) in self.controls.iter().enumerate() {
             let prefix = format!("controls[{}] '{}'", i, ctrl.name);
             if ctrl.name.trim().is_empty() {
-                errors.push(format!("{}: name is empty", prefix));
+                errors.push(format!("{prefix}: name is empty"));
             }
             if !VALID_CONTROL_TYPES.contains(&ctrl.control_type.as_str()) {
                 errors.push(format!(
@@ -208,16 +208,14 @@ impl ControllerProfileData {
             if let Some(ref sc) = am.shift_control {
                 if !control_names.contains(&sc.as_str()) {
                     errors.push(format!(
-                        "auto_map.shift_control '{}' does not match any control name",
-                        sc
+                        "auto_map.shift_control '{sc}' does not match any control name"
                     ));
                 }
             }
             if let Some(ref pb) = am.page_buttons_control {
                 if !control_names.contains(&pb.as_str()) {
                     errors.push(format!(
-                        "auto_map.page_buttons_control '{}' does not match any control name",
-                        pb
+                        "auto_map.page_buttons_control '{pb}' does not match any control name"
                     ));
                 }
             }
@@ -276,15 +274,14 @@ impl ControllerProfileData {
 
     /// Get the LED send channel (from leds config, default 0).
     pub fn led_channel(&self) -> u8 {
-        self.leds.as_ref().map(|l| l.channel).unwrap_or(0)
+        self.leds.as_ref().map_or(0, |l| l.channel)
     }
 
-    /// Get the LED method (default "note_velocity").
+    /// Get the LED method (default "`note_velocity`").
     pub fn led_method(&self) -> &str {
         self.leds
             .as_ref()
-            .map(|l| l.method.as_str())
-            .unwrap_or("note_velocity")
+            .map_or("note_velocity", |l| l.method.as_str())
     }
 }
 
@@ -293,14 +290,19 @@ impl ControllerProfileData {
 const APC_MINI_PROFILE_JSON: &str = include_str!("apc_mini_profile.json");
 
 /// Load the compiled-in APC Mini mk1 profile.
+///
+/// # Panics
+///
+/// Panics if the bundled `apc_mini_profile.json` fails to deserialize or fails
+/// semantic validation — both indicate a corrupt build artefact, not a runtime
+/// condition.
 pub fn builtin_apc_mini() -> ControllerProfileData {
     let profile: ControllerProfileData = serde_json::from_str(APC_MINI_PROFILE_JSON)
         .expect("Built-in APC Mini profile JSON is invalid");
     let errors = profile.validate();
     assert!(
         errors.is_empty(),
-        "Built-in APC Mini profile validation failed: {:?}",
-        errors
+        "Built-in APC Mini profile validation failed: {errors:?}"
     );
     profile
 }
@@ -372,7 +374,7 @@ impl ProfileRegistry {
                                 path.display()
                             );
                             for err in &errors {
-                                log::warn!("  - {}", err);
+                                log::warn!("  - {err}");
                             }
                         }
                     }
@@ -600,20 +602,15 @@ fn read_param_value(mixer: &Mixer, path: &str) -> f32 {
         ["ch", ch_uuid, "opacity"] => mixer
             .find_channel_by_uuid(ch_uuid)
             .and_then(|ch| mixer.channel(ch))
-            .map(|c| c.opacity)
-            .unwrap_or(-1.0),
-        ["deck", uuid, "opacity"] => deck_slot_by_uuid(mixer, uuid)
-            .map(|d| d.opacity)
-            .unwrap_or(-1.0),
-        ["deck", uuid, "mute"] => deck_slot_by_uuid(mixer, uuid)
-            .map(|d| if d.mute { 1.0 } else { 0.0 })
-            .unwrap_or(-1.0),
-        ["deck", uuid, "solo"] => deck_slot_by_uuid(mixer, uuid)
-            .map(|d| if d.solo { 1.0 } else { 0.0 })
-            .unwrap_or(-1.0),
-        ["deck", uuid, "trigger"] => deck_slot_by_uuid(mixer, uuid)
-            .map(|d| d.opacity)
-            .unwrap_or(-1.0),
+            .map_or(-1.0, |c| c.opacity),
+        ["deck", uuid, "opacity"] => deck_slot_by_uuid(mixer, uuid).map_or(-1.0, |d| d.opacity),
+        ["deck", uuid, "mute"] => {
+            deck_slot_by_uuid(mixer, uuid).map_or(-1.0, |d| if d.mute { 1.0 } else { 0.0 })
+        }
+        ["deck", uuid, "solo"] => {
+            deck_slot_by_uuid(mixer, uuid).map_or(-1.0, |d| if d.solo { 1.0 } else { 0.0 })
+        }
+        ["deck", uuid, "trigger"] => deck_slot_by_uuid(mixer, uuid).map_or(-1.0, |d| d.opacity),
         ["deck", uuid, "param", name] => deck_slot_by_uuid(mixer, uuid)
             .and_then(|d| d.deck.generator_params.get_float(name))
             .unwrap_or(-1.0),

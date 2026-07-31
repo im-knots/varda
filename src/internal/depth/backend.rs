@@ -102,6 +102,8 @@ impl DepthBackend for MockBackend {
         (self.width, self.height)
     }
 
+    // Synthetic image-space math: w/h/x/y/d are the idiomatic names here.
+    #[allow(clippy::many_single_char_names)]
     fn next_frame(&mut self) -> Option<DepthFrame> {
         self.frame = self.frame.wrapping_add(1);
         let (w, h) = (self.width, self.height);

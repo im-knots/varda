@@ -46,11 +46,11 @@ impl Default for ISFUniforms {
 /// Unified shader pipeline — handles generators, filters, single-pass, and multi-pass shaders.
 ///
 /// Binding layout adapts to shader needs:
-///   Simple generator:   [0: Uniforms, 1: UserParams]
-///   Simple filter:      [0: Uniforms, 1: Sampler, 2: inputImage, 3: UserParams]
-///   Multi-pass gen:     [0: Uniforms, 1: Sampler, 2..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: UserParams]
-///   Multi-pass filter:  [0: Uniforms, 1: Sampler, 2: inputImage, 3..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: UserParams]
-///   With imported:      [0: Uniforms, 1: Sampler, ..., N+1..M: imported, M+1..P: preprocessor, P+1: UserParams]
+///   Simple generator:   [0: Uniforms, 1: `UserParams`]
+///   Simple filter:      [0: Uniforms, 1: Sampler, 2: inputImage, 3: `UserParams`]
+///   Multi-pass gen:     [0: Uniforms, 1: Sampler, 2..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
+///   Multi-pass filter:  [0: Uniforms, 1: Sampler, 2: inputImage, 3..N: passBuffers, N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
+///   With imported:      [0: Uniforms, 1: Sampler, ..., N+1..M: imported, M+1..P: preprocessor, P+1: `UserParams`]
 pub struct UnifiedPipeline {
     /// Pipeline for the color-path format. Every render target this pipeline
     /// draws into — final target and pass buffers alike — is
@@ -84,6 +84,11 @@ impl UnifiedPipeline {
     /// - `num_imported_textures`: number of ISF IMPORTED image textures
     /// - `num_preprocessor_textures`: number of preprocessor texture bindings
     /// - `surface_format`: target texture format — always `COLOR_PATH_FORMAT`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SPIR-V fails to parse, fails naga validation, or
+    /// cannot be transpiled to WGSL.
     // Pipeline construction takes many distinct GPU descriptors; no shared invariant to bundle.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -293,7 +298,7 @@ impl UnifiedPipeline {
                     module: &vertex_shader,
                     entry_point: Some("vs_main"),
                     buffers: &[],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader_module,
@@ -303,7 +308,7 @@ impl UnifiedPipeline {
                         blend: blend_state,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -349,6 +354,11 @@ impl UnifiedPipeline {
     /// - `imported_views`: ISF IMPORTED image texture views (empty if none)
     /// - `preprocessor_views`: Preprocessor texture views (empty if none)
     /// - `user_params_buffer`: User params buffer (uses default if None)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pipeline was built with `has_input_image` but `input_view`
+    /// is `None`.
     pub fn create_bind_group(
         &self,
         device: &wgpu::Device,

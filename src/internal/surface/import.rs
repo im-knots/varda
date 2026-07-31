@@ -17,6 +17,11 @@ pub use crate::engine::value::detect::ImportError;
 // ── Raster image import ────────────────────────────────────────────
 
 /// Detect surfaces from a raster image (PNG/JPG bytes).
+///
+/// # Errors
+///
+/// Returns [`ImportError::ImageLoad`] if the bytes cannot be decoded, and
+/// [`ImportError::NoContours`] if detection finds no contours.
 pub fn detect_from_image(
     image_data: &[u8],
     params: &DetectionParams,
@@ -38,6 +43,14 @@ pub fn detect_from_image(
 /// `catch_unwind` so that third-party panics never propagate to the caller.
 /// This is critical for live-performance safety — the main render thread must
 /// never crash due to edge-detection issues.
+///
+/// # Errors
+///
+/// Returns [`ImportError::ImageLoad`] if `rgba` is smaller than `w * h * 4`,
+/// [`ImportError::InternalPanic`] if the detection pass panics, and
+/// [`ImportError::NoContours`] if no contours are found.
+// w/h/r/g/b are the idiomatic names for image dimensions and colour channels.
+#[allow(clippy::many_single_char_names)]
 pub fn detect_from_rgba(
     rgba: &[u8],
     w: u32,
@@ -56,9 +69,9 @@ pub fn detect_from_rgba(
     let gray_pixels: Vec<u8> = rgba
         .chunks_exact(4)
         .map(|px| {
-            let r = px[0] as f32;
-            let g = px[1] as f32;
-            let b = px[2] as f32;
+            let r = f32::from(px[0]);
+            let g = f32::from(px[1]);
+            let b = f32::from(px[2]);
             (0.299 * r + 0.587 * g + 0.114 * b) as u8
         })
         .collect();
@@ -88,7 +101,7 @@ pub fn detect_from_rgba(
             } else {
                 "unknown panic in detection pipeline".to_string()
             };
-            log::debug!("Detection pipeline panicked (recovered): {}", msg);
+            log::debug!("Detection pipeline panicked (recovered): {msg}");
             Err(ImportError::InternalPanic(msg))
         }
     }
@@ -97,6 +110,12 @@ pub fn detect_from_rgba(
 // ── File path dispatch ─────────────────────────────────────────────
 
 /// Detect surfaces from a file, dispatching by extension.
+///
+/// # Errors
+///
+/// Returns [`ImportError::ImageLoad`] if the file cannot be read,
+/// [`ImportError::UnsupportedFormat`] for an unrecognised extension, and
+/// otherwise whatever the format-specific detector returns.
 pub fn detect_from_file(
     path: &std::path::Path,
     params: &DetectionParams,
@@ -124,6 +143,11 @@ pub fn detect_from_file(
 /// Cubic/quadratic bezier control points are preserved into a [`SurfacePath`] on
 /// each detected contour, so curved outlines import as first-class editable
 /// curves rather than pre-flattened polygons.
+///
+/// # Errors
+///
+/// Returns [`ImportError::SvgParse`] if the SVG cannot be parsed, and
+/// [`ImportError::NoContours`] if it contains no usable paths.
 pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> {
     let tree = usvg::Tree::from_data(svg_data, &usvg::Options::default())
         .map_err(|e| ImportError::SvgParse(e.to_string()))?;
@@ -137,7 +161,10 @@ pub fn detect_from_svg(svg_data: &[u8]) -> Result<DetectionResult, ImportError> 
     }
 
     // Flatten each path once for bounding-box, area, and circularity checks.
-    let polylines: Vec<Vec<[f32; 2]>> = paths.iter().map(|p| p.flatten()).collect();
+    let polylines: Vec<Vec<[f32; 2]>> = paths
+        .iter()
+        .map(crate::engine::value::surface::SurfacePath::flatten)
+        .collect();
 
     // Compute bounding box of all points for normalization.
     let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
@@ -305,6 +332,11 @@ const ARC_SEGMENTS: usize = 32;
 const CLOSE_TOLERANCE: f64 = 1e-4;
 
 /// Detect surfaces from DXF data.
+///
+/// # Errors
+///
+/// Returns [`ImportError::DxfParse`] if the drawing cannot be loaded, and
+/// [`ImportError::NoContours`] if it yields no closed polylines.
 pub fn detect_from_dxf(dxf_data: &[u8]) -> Result<DetectionResult, ImportError> {
     let mut cursor = Cursor::new(dxf_data);
     let drawing =
@@ -839,18 +871,15 @@ mod tests {
             .collect();
         assert!(
             names.iter().any(|n| n.contains("left")),
-            "No left screen: {:?}",
-            names
+            "No left screen: {names:?}"
         );
         assert!(
             names.iter().any(|n| n.contains("center")),
-            "No center screen: {:?}",
-            names
+            "No center screen: {names:?}"
         );
         assert!(
             names.iter().any(|n| n.contains("right")),
-            "No right screen: {:?}",
-            names
+            "No right screen: {names:?}"
         );
         for c in &det.contours {
             assert!(c.area > 0.05, "Screen area too small: {}", c.area);
@@ -932,8 +961,8 @@ mod tests {
         // Center circle: cx=200, cy=200, r=70
         for y in 0..400 {
             for x in 0..400 {
-                let dx = x as f64 - 200.0;
-                let dy = y as f64 - 200.0;
+                let dx = f64::from(x) - 200.0;
+                let dy = f64::from(y) - 200.0;
                 if dx * dx + dy * dy <= 70.0 * 70.0 {
                     img.put_pixel(x, y, white);
                 }
@@ -957,14 +986,12 @@ mod tests {
         let circular_count = det.contours.iter().filter(|c| c.is_circular).count();
         assert!(
             circular_count >= 1,
-            "Expected at least 1 circular contour, got {}",
-            circular_count
+            "Expected at least 1 circular contour, got {circular_count}"
         );
         let non_circular = det.contours.iter().filter(|c| !c.is_circular).count();
         assert!(
             non_circular >= 2,
-            "Expected at least 2 non-circular contours, got {}",
-            non_circular
+            "Expected at least 2 non-circular contours, got {non_circular}"
         );
     }
 
@@ -1032,8 +1059,7 @@ mod tests {
         let total_area: f32 = det.contours.iter().map(|c| c.area).sum();
         assert!(
             total_area > 0.15,
-            "L-shape total area too small: {}",
-            total_area
+            "L-shape total area too small: {total_area}"
         );
     }
 
@@ -1201,9 +1227,7 @@ mod tests {
         let area_yes: f32 = det_yes.contours.iter().map(|c| c.area).sum();
         assert!(
             area_yes >= area_no,
-            "Convex hull area ({}) should be >= non-hull area ({})",
-            area_yes,
-            area_no
+            "Convex hull area ({area_yes}) should be >= non-hull area ({area_no})"
         );
     }
 

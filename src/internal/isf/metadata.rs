@@ -115,7 +115,7 @@ pub struct ISFPreprocessor {
     #[serde(rename = "NAME")]
     pub name: String,
 
-    /// Analyzer type to source from (e.g. "depth_estimate", "edge_detect", "face_detect")
+    /// Analyzer type to source from (e.g. "`depth_estimate`", "`edge_detect`", "`face_detect`")
     #[serde(rename = "TYPE")]
     pub preprocessor_type: String,
 
@@ -191,7 +191,7 @@ pub struct ISFPass {
 /// Phase input mapping: which user parameter drives which phase accumulator
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseInput {
-    /// Name of the user parameter that drives this accumulator (e.g., "anim_speed")
+    /// Name of the user parameter that drives this accumulator (e.g., "`anim_speed`")
     #[serde(rename = "PARAM")]
     pub param: String,
 
@@ -262,8 +262,7 @@ impl ISFMetadata {
     pub fn categories_string(&self) -> String {
         self.categories
             .as_ref()
-            .map(|cats| cats.join(", "))
-            .unwrap_or_else(|| "Uncategorized".to_string())
+            .map_or_else(|| "Uncategorized".to_string(), |cats| cats.join(", "))
     }
 }
 

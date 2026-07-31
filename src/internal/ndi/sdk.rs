@@ -5,7 +5,11 @@
 //! If the SDK is not installed, `NdiSdk::load()` returns `None` and
 //! all NDI features gracefully degrade.
 
-use super::ffi::*;
+use super::ffi::{
+    NDIlib_find_create_t, NDIlib_find_instance_t, NDIlib_frame_type_e, NDIlib_recv_create_v3_t,
+    NDIlib_recv_instance_t, NDIlib_send_create_t, NDIlib_send_instance_t, NDIlib_source_t,
+    NDIlib_video_frame_v2_t,
+};
 use libloading::{Library, Symbol};
 use std::os::raw::c_uint;
 
@@ -29,8 +33,8 @@ pub struct NdiSdk {
     pub recv_create_v3:
         unsafe extern "C" fn(*const NDIlib_recv_create_v3_t) -> NDIlib_recv_instance_t,
     pub recv_destroy: unsafe extern "C" fn(NDIlib_recv_instance_t),
-    /// recv_capture_v3(instance, video_out, audio_out, metadata_out, timeout_ms) -> frame_type
-    /// audio_out and metadata_out are opaque pointers (pass null to ignore).
+    /// `recv_capture_v3(instance`, `video_out`, `audio_out`, `metadata_out`, `timeout_ms`) -> `frame_type`
+    /// `audio_out` and `metadata_out` are opaque pointers (pass null to ignore).
     pub recv_capture_v3: unsafe extern "C" fn(
         NDIlib_recv_instance_t,
         *mut NDIlib_video_frame_v2_t,
@@ -82,7 +86,7 @@ impl NdiSdk {
 
         for path in paths {
             if let Ok(lib) = unsafe { Library::new(*path) } {
-                log::info!("Loaded NDI SDK from: {}", path);
+                log::info!("Loaded NDI SDK from: {path}");
                 return Some(lib);
             }
         }
@@ -91,7 +95,7 @@ impl NdiSdk {
 
     /// Try to load NDI from the app bundle or portable directory.
     /// macOS: <exe>/../../Frameworks/libndi.dylib (.app bundle)
-    /// Windows: <exe_dir>/Processing.NDI.Lib.x64.dll (portable ZIP)
+    /// Windows: <`exe_dir>/Processing.NDI.Lib.x64.dll` (portable ZIP)
     fn try_load_from_bundle() -> Option<Library> {
         let exe = std::env::current_exe().ok()?;
         let exe_dir = exe.parent()?;
@@ -118,7 +122,7 @@ impl NdiSdk {
                     Some(lib)
                 }
                 Err(e) => {
-                    log::warn!("Failed to load bundled NDI SDK: {}", e);
+                    log::warn!("Failed to load bundled NDI SDK: {e}");
                     None
                 }
             }

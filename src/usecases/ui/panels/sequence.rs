@@ -34,7 +34,7 @@ fn step_duration_secs(kind: &SequenceStepKindUI, bpm: Option<f32>) -> f64 {
                 DurationUnit::Minutes => val * 60.0,
                 DurationUnit::Hours => val * 3600.0,
                 DurationUnit::Beats => {
-                    let bpm_val = bpm.unwrap_or(120.0) as f64;
+                    let bpm_val = f64::from(bpm.unwrap_or(120.0));
                     val * 60.0 / bpm_val
                 }
             }
@@ -49,7 +49,7 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
     use crate::engine::EngineCommand;
 
     for (seq_idx, seq) in data.sequences.iter().enumerate() {
-        ui.push_id(format!("seq_{}", seq_idx), |ui| {
+        ui.push_id(format!("seq_{seq_idx}"), |ui| {
             let is_selected = data.selected_sequence == Some(seq_idx);
             let border_color = if seq.playing {
                 egui::Color32::from_rgb(80, 200, 80)
@@ -167,7 +167,7 @@ pub(super) fn render_sequence_builder(ui: &mut egui::Ui, data: &UIData, actions:
     }
 }
 
-/// Constant width for GoTo blocks in the timeline strip.
+/// Constant width for `GoTo` blocks in the timeline strip.
 const GOTO_BLOCK_WIDTH: f32 = 24.0;
 /// Minimum width for timed blocks so labels remain visible.
 const MIN_BLOCK_WIDTH: f32 = 30.0;
@@ -217,13 +217,12 @@ pub(super) fn render_timeline_strip(
     let mut clicked_step = None;
 
     for (i, step) in seq.steps.iter().enumerate() {
-        let block_w = match &step.kind {
-            SequenceStepKindUI::GoTo { .. } => GOTO_BLOCK_WIDTH,
-            _ => {
-                let dur = step_duration_secs(&step.kind, bpm).max(0.5);
-                let frac = dur / total_duration;
-                (frac as f32 * timed_width).max(MIN_BLOCK_WIDTH)
-            }
+        let block_w = if let SequenceStepKindUI::GoTo { .. } = &step.kind {
+            GOTO_BLOCK_WIDTH
+        } else {
+            let dur = step_duration_secs(&step.kind, bpm).max(0.5);
+            let frac = dur / total_duration;
+            (frac as f32 * timed_width).max(MIN_BLOCK_WIDTH)
         };
         let block_rect =
             egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(block_w, strip_height))
@@ -259,7 +258,7 @@ pub(super) fn render_timeline_strip(
                     || "?".to_string(),
                     |(_, name)| name.chars().take(3).collect::<String>(),
                 );
-                (None, format!("{}→{}", short_from, short_to))
+                (None, format!("{short_from}→{short_to}"))
             }
             SequenceStepKindUI::Wait {
                 duration_val,
@@ -378,9 +377,9 @@ fn compute_playhead_x(
 /// Darken a color by multiplying RGB by a factor.
 fn darken(c: egui::Color32, factor: f32) -> egui::Color32 {
     egui::Color32::from_rgb(
-        (c.r() as f32 * factor) as u8,
-        (c.g() as f32 * factor) as u8,
-        (c.b() as f32 * factor) as u8,
+        (f32::from(c.r()) * factor) as u8,
+        (f32::from(c.g()) * factor) as u8,
+        (f32::from(c.b()) * factor) as u8,
     )
 }
 
@@ -390,12 +389,12 @@ fn render_duration_editor(
     sequence_uuid: &str,
     step_idx: usize,
     duration_val: f64,
-    duration_unit: &DurationUnit,
+    duration_unit: DurationUnit,
     actions: &mut UIActions,
 ) {
     use crate::engine::EngineCommand;
     let mut dur = duration_val;
-    let max_val = duration_drag_max(*duration_unit);
+    let max_val = duration_drag_max(duration_unit);
     let drag = egui::DragValue::new(&mut dur)
         .range(0.1..=max_val)
         .speed(0.1)
@@ -426,7 +425,7 @@ fn render_duration_editor(
         (DurationUnit::Beats, "b"),
     ];
     for (unit, label) in &units {
-        let is_active = duration_unit == unit;
+        let is_active = duration_unit == *unit;
         let text = if is_active {
             egui::RichText::new(*label)
                 .small()
@@ -471,7 +470,7 @@ pub(super) fn render_sequence_step_editor(
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let from_label = resolve_channel(&data.channels, from_ch)
                     .map_or_else(|| "?".to_string(), |(_, name)| name);
-                egui::ComboBox::from_id_salt(format!("seq{}_from_{}", seq_uuid, step_idx))
+                egui::ComboBox::from_id_salt(format!("seq{seq_uuid}_from_{step_idx}"))
                     .selected_text(egui::RichText::new(from_label).small())
                     .width(55.0)
                     .show_ui(ui, |ui| {
@@ -488,7 +487,7 @@ pub(super) fn render_sequence_step_editor(
                 ui.label(egui::RichText::new("→").small());
                 let to_label = resolve_channel(&data.channels, to_ch)
                     .map_or_else(|| "?".to_string(), |(_, name)| name);
-                egui::ComboBox::from_id_salt(format!("seq{}_to_{}", seq_uuid, step_idx))
+                egui::ComboBox::from_id_salt(format!("seq{seq_uuid}_to_{step_idx}"))
                     .selected_text(egui::RichText::new(to_label).small())
                     .width(55.0)
                     .show_ui(ui, |ui| {
@@ -507,11 +506,11 @@ pub(super) fn render_sequence_step_editor(
                     seq_uuid,
                     step_idx,
                     *duration_val,
-                    duration_unit,
+                    *duration_unit,
                     actions,
                 );
                 ui.separator();
-                egui::ComboBox::from_id_salt(format!("seq{}_ease_{}", seq_uuid, step_idx))
+                egui::ComboBox::from_id_salt(format!("seq{seq_uuid}_ease_{step_idx}"))
                     .selected_text(egui::RichText::new(easing.as_str()).small())
                     .width(70.0)
                     .show_ui(ui, |ui| {
@@ -526,7 +525,7 @@ pub(super) fn render_sequence_step_editor(
                         }
                     });
                 let shader_label = transition_shader.as_deref().unwrap_or("Opacity");
-                egui::ComboBox::from_id_salt(format!("seq{}_shader_{}", seq_uuid, step_idx))
+                egui::ComboBox::from_id_salt(format!("seq{seq_uuid}_shader_{step_idx}"))
                     .selected_text(egui::RichText::new(shader_label).small())
                     .width(70.0)
                     .show_ui(ui, |ui| {
@@ -582,7 +581,7 @@ pub(super) fn render_sequence_step_editor(
                     seq_uuid,
                     step_idx,
                     *duration_val,
-                    duration_unit,
+                    *duration_unit,
                     actions,
                 );
             });
@@ -592,8 +591,8 @@ pub(super) fn render_sequence_step_editor(
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.label(egui::RichText::new("GoTo").small().strong());
                 ui.label(egui::RichText::new("Step:").small());
-                let mut target = *step_index as i32;
-                let max = seq.steps.len().saturating_sub(1) as i32;
+                let mut target = i32::try_from(*step_index).unwrap_or(i32::MAX);
+                let max = i32::try_from(seq.steps.len().saturating_sub(1)).unwrap_or(i32::MAX);
                 if ui
                     .add(egui::DragValue::new(&mut target).range(0..=max).speed(0.1))
                     .changed()

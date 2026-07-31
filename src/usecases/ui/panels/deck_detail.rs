@@ -50,7 +50,7 @@ fn learn_overlay(
 
 /// Render point-cloud controls for a depth-sensor deck. Values are sent
 /// normalized (0.0–1.0) through the generic `deck/<uuid>/depth/<name>` param
-/// path, matching the router in src/internal/param_router.rs. See
+/// path, matching the router in `src/internal/param_router.rs`. See
 /// spec/depth-sensors.md.
 fn render_depth_controls(
     ui: &mut egui::Ui,
@@ -123,7 +123,7 @@ fn render_depth_controls(
 /// Render depth-preprocessor controls for a deck whose shader declared a
 /// `depth_sensor` PREPROCESSOR. Values are sent normalized (0.0–1.0) through the
 /// generic `deck/<uuid>/depth_prepro/<name>` param path, matching the router in
-/// src/internal/param_router.rs. See spec/depth-sensor-preprocessor.md.
+/// `src/internal/param_router.rs`. See spec/depth-sensor-preprocessor.md.
 fn render_depth_prepro_controls(
     ui: &mut egui::Ui,
     deck: &DeckUIInfo,
@@ -200,8 +200,7 @@ pub(super) fn render_bottom_panel(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     if let Some(target) = &data.midi_learn_target {
                         ui.label(
                             egui::RichText::new(format!(
-                                "🎹 MIDI LEARN — Move a control to map: {}",
-                                target
+                                "🎹 MIDI LEARN — Move a control to map: {target}"
                             ))
                             .strong()
                             .color(egui::Color32::WHITE),
@@ -253,7 +252,7 @@ pub(super) fn stage_selection_id() -> egui::Id {
 const UI_MAX_WARP_SUBDIVISIONS: u32 = 16;
 
 /// `(cols, rows)` of a surface's warp. `None` or a corner-pin reads as 2×2.
-fn warp_grid_dims(warp: &Option<crate::renderer::warp::WarpMode>) -> (u32, u32) {
+fn warp_grid_dims(warp: Option<&crate::renderer::warp::WarpMode>) -> (u32, u32) {
     match warp {
         Some(crate::renderer::warp::WarpMode::Mesh(m)) => (m.cols, m.rows),
         _ => (2, 2),
@@ -278,6 +277,8 @@ fn rc_to_corner(row: usize, col: usize) -> usize {
 }
 
 /// Axis-aligned bbox `(x, y, w, h)` of a surface's primary contour.
+// minx/miny/maxx/maxy are the idiomatic bbox names; renaming them hurts readability.
+#[allow(clippy::similar_names)]
 fn surface_bbox(surface: &SurfaceUI) -> [f32; 4] {
     let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for v in &surface.vertices {
@@ -318,6 +319,8 @@ fn render_stage_bottom_bar(ui: &mut egui::Ui, data: &UIData, actions: &mut UIAct
 }
 
 /// Per-surface warp editor: subdivide steppers + a draggable grid canvas.
+// r/c (row/col) and x/y/w/h (bbox) are the clearest names for this grid geometry.
+#[allow(clippy::many_single_char_names)]
 fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &mut UIActions) {
     use crate::renderer::warp::WarpMode;
     let uuid = surface.uuid.clone();
@@ -327,7 +330,7 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
     let (cols, rows) = if let Some(WarpMode::Bezier(b)) = &surface.warp {
         (b.anchor_cols, b.anchor_rows)
     } else {
-        warp_grid_dims(&surface.warp)
+        warp_grid_dims(surface.warp.as_ref())
     };
 
     ui.horizontal(|ui| {
@@ -516,8 +519,7 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
                 let p = handles
                     .iter()
                     .find(|h| h.0 == *r && h.1 == *c)
-                    .map(|h| h.2)
-                    .unwrap_or([0.0, 0.0]);
+                    .map_or([0.0, 0.0], |h| h.2);
                 to_screen(p[0], p[1])
             })
             .collect();
@@ -1025,7 +1027,7 @@ pub(super) fn render_selected_deck_detail(
                                     .trailing_fill(true);
                                 let resp = ui.add(slider);
                                 if resp.changed() {
-                                    actions.commands.push(EngineCommand::VideoSeek { deck_uuid: deck.uuid.clone(), position_secs: pos as f64 });
+                                    actions.commands.push(EngineCommand::VideoSeek { deck_uuid: deck.uuid.clone(), position_secs: f64::from(pos) });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/seek", deck.uuid), data, actions);
                                 ui.label(format_time(duration));
@@ -1037,7 +1039,7 @@ pub(super) fn render_selected_deck_detail(
                                 ui.label("Speed:");
                                 let resp = ui.add(egui::Slider::new(&mut speed, 0.1..=4.0).step_by(0.05).suffix("x"));
                                 if resp.changed() {
-                                    actions.commands.push(EngineCommand::VideoSetSpeed { deck_uuid: deck.uuid.clone(), speed: speed as f64 });
+                                    actions.commands.push(EngineCommand::VideoSetSpeed { deck_uuid: deck.uuid.clone(), speed: f64::from(speed) });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/speed", deck.uuid), data, actions);
                             });
@@ -1075,10 +1077,10 @@ pub(super) fn render_selected_deck_detail(
                                     .show_value(false).trailing_fill(true));
                                 if resp.changed()
                                 {
-                                    actions.commands.push(EngineCommand::VideoSetInPoint { deck_uuid: deck.uuid.clone(), secs: in_pt as f64 });
+                                    actions.commands.push(EngineCommand::VideoSetInPoint { deck_uuid: deck.uuid.clone(), secs: f64::from(in_pt) });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/in_point", deck.uuid), data, actions);
-                                ui.label(format_time(in_pt as f64));
+                                ui.label(format_time(f64::from(in_pt)));
                             });
 
                             // Out-point
@@ -1089,10 +1091,10 @@ pub(super) fn render_selected_deck_detail(
                                     .show_value(false).trailing_fill(true));
                                 if resp.changed()
                                 {
-                                    actions.commands.push(EngineCommand::VideoSetOutPoint { deck_uuid: deck.uuid.clone(), secs: out_pt as f64 });
+                                    actions.commands.push(EngineCommand::VideoSetOutPoint { deck_uuid: deck.uuid.clone(), secs: f64::from(out_pt) });
                                 }
                                 learn_overlay(ui, resp.rect, format!("deck/{}/video/out_point", deck.uuid), data, actions);
-                                ui.label(format_time(out_pt as f64));
+                                ui.label(format_time(f64::from(out_pt)));
                             });
 
                             // Set from current / clear buttons
@@ -1198,7 +1200,7 @@ pub(super) fn render_selected_deck_detail(
                                                     .logarithmic(true)
                                                     .suffix(if at.play_duration_is_beats { " beats" } else { " sec" }));
                                                 if resp.changed() {
-                                                    actions.commands.push(EngineCommand::SetAutoTransitionPlayDurationValue { deck_uuid: deck.uuid.clone(), value: val as f64 });
+                                                    actions.commands.push(EngineCommand::SetAutoTransitionPlayDurationValue { deck_uuid: deck.uuid.clone(), value: f64::from(val) });
                                                 }
                                                 resp.rect
                                             };
@@ -1245,7 +1247,7 @@ pub(super) fn render_selected_deck_detail(
                                                     .logarithmic(true)
                                                     .suffix(if at.transition_duration_is_beats { " beats" } else { " sec" }));
                                                 if resp.changed() {
-                                                    actions.commands.push(EngineCommand::SetAutoTransitionDurationValue { deck_uuid: deck.uuid.clone(), value: val as f64 });
+                                                    actions.commands.push(EngineCommand::SetAutoTransitionDurationValue { deck_uuid: deck.uuid.clone(), value: f64::from(val) });
                                                 }
                                                 resp.rect
                                             };
@@ -1277,7 +1279,7 @@ pub(super) fn render_selected_deck_detail(
                                         ui.horizontal(|ui| {
                                             ui.label("Shader:");
                                             let current = at.transition_shader_name.as_deref().unwrap_or("(fade)");
-                                            egui::ComboBox::from_id_salt(format!("at_shader_{}_{}", ch_idx, deck_idx))
+                                            egui::ComboBox::from_id_salt(format!("at_shader_{ch_idx}_{deck_idx}"))
                                                 .selected_text(current)
                                                 .width(120.0)
                                                 .show_ui(ui, |ui| {
@@ -1402,11 +1404,11 @@ pub(super) fn render_selected_deck_detail(
                                     ui.label("Render:");
                                     let options = ["Auto", "60", "30", "15"];
                                     let current_idx = match deck.render_fps {
-                                        DeckRenderFps::Auto => 0,
                                         DeckRenderFps::Fixed(60) => 1,
                                         DeckRenderFps::Fixed(30) => 2,
                                         DeckRenderFps::Fixed(15) => 3,
-                                        DeckRenderFps::Fixed(_) => 0, // fallback
+                                        // Auto and any other fixed rate fall back to "Auto"
+                                        DeckRenderFps::Auto | DeckRenderFps::Fixed(_) => 0,
                                     };
                                     let mut selected = current_idx;
                                     egui::ComboBox::from_id_salt("sel_deck_render_fps")
@@ -1432,10 +1434,10 @@ pub(super) fn render_selected_deck_detail(
                                     // Show render cost
                                     if deck.gpu_render_cost_us > 0.0 {
                                         let ms = deck.gpu_render_cost_us / 1000.0;
-                                        ui.label(egui::RichText::new(format!("⚡{:.1}ms GPU", ms)).small().weak());
+                                        ui.label(egui::RichText::new(format!("⚡{ms:.1}ms GPU")).small().weak());
                                     } else if deck.render_cost_us > 0.0 {
                                         let ms = deck.render_cost_us / 1000.0;
-                                        ui.label(egui::RichText::new(format!("⚡{:.1}ms", ms)).small().weak());
+                                        ui.label(egui::RichText::new(format!("⚡{ms:.1}ms")).small().weak());
                                     }
                                 });
 
@@ -1445,7 +1447,7 @@ pub(super) fn render_selected_deck_detail(
                                     ui.add_space(4.0);
                                     ui.label(egui::RichText::new(&gen_params.shader_name).strong());
                                     let deck_uuid = deck.uuid.clone();
-                                    let midi_path_prefix = format!("deck/{}", deck_uuid);
+                                    let midi_path_prefix = format!("deck/{deck_uuid}");
                                     let deck_uuid_assign = deck_uuid.clone();
                                     let deck_uuid_remove = deck_uuid.clone();
                                     widgets::render_params(
@@ -1454,21 +1456,21 @@ pub(super) fn render_selected_deck_detail(
                                         &data.modulation_sources,
                                         &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam { deck_uuid: deck.uuid.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
-                                            target: format!("deck_{}:{}", deck_uuid_assign, name), source_id: source_uuid.to_string(), amount: 0.5,
+                                            target: format!("deck_{deck_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
-                                            target: format!("deck_{}:{}", deck_uuid_remove, name),
+                                            target: format!("deck_{deck_uuid_remove}:{name}"),
                                         }),
                                         &mut actions.commands,
                                         &mut actions.session.gesture_active,
-                                        &format!("sel_{}_{}", ch_idx, deck_idx),
+                                        &format!("sel_{ch_idx}_{deck_idx}"),
                                         Some(&midi_path_prefix),
                                         data.midi_learn_active,
                                         &mut actions.session.midi_learn_select,
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
-                                        &format!("deck_{}", deck_uuid),
+                                        &format!("deck_{deck_uuid}"),
                                         data.keyboard_learn_active,
                                         &mut actions.session.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
@@ -1522,28 +1524,28 @@ pub(super) fn render_selected_deck_detail(
                                     let eff_uuid_param = eff_uuid.clone();
                                     let eff_uuid_assign = eff_uuid.clone();
                                     let eff_uuid_remove = eff_uuid.clone();
-                                    let eff_midi_prefix = format!("deck/{}/effect/{}", deck_uuid_eff, eff_uuid);
+                                    let eff_midi_prefix = format!("deck/{deck_uuid_eff}/effect/{eff_uuid}");
                                     widgets::render_effect_params(
                                         ui,
                                         &eff_params.params,
                                         &data.modulation_sources,
                                         &|name: &str, val: ParamValue| EngineCommand::SetEffectParam { effect_uuid: eff_uuid_param.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
-                                            target: format!("fx_{}:{}", eff_uuid_assign, name), source_id: source_uuid.to_string(), amount: 0.5,
+                                            target: format!("fx_{eff_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: 0.5,
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
-                                            target: format!("fx_{}:{}", eff_uuid_remove, name),
+                                            target: format!("fx_{eff_uuid_remove}:{name}"),
                                         }),
                                         &mut actions.commands,
                                         &mut actions.session.gesture_active,
-                                        &format!("fx_{}_{}", deck_uuid_eff, eff_uuid),
+                                        &format!("fx_{deck_uuid_eff}_{eff_uuid}"),
                                         Some(&eff_midi_prefix),
                                         data.midi_learn_active,
                                         &mut actions.session.midi_learn_select,
                                         data.midi_learn_target.as_deref(),
                                         &data.modulation_assignments,
                                         &data.modulation_current_values,
-                                        &format!("fx_{}", eff_uuid),
+                                        &format!("fx_{eff_uuid}"),
                                         data.keyboard_learn_active,
                                         &mut actions.session.keyboard_learn_select,
                                         data.keyboard_learn_target.as_deref(),
@@ -1584,7 +1586,7 @@ pub(super) fn render_selected_deck_detail(
 
                 // Remaining space: always present drop target that fills remaining width
                 let has_fx_drag = egui::DragAndDrop::payload::<LibraryDrag>(ui.ctx())
-                    .map(|p| matches!(&*p, LibraryDrag::Effect(_))).unwrap_or(false);
+                    .is_some_and(|p| matches!(&*p, LibraryDrag::Effect(_)));
                 let remaining_w = ui.available_width().max(80.0);
                 let remaining_h = ui.available_height().max(40.0);
                 let stroke = if has_fx_drag { egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 200, 255)) } else { egui::Stroke::NONE };

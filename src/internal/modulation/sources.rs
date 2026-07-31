@@ -63,9 +63,9 @@ pub enum ModulationSource {
     Analyzer {
         /// UUID of the deck whose analyzer to read from.
         deck_id: String,
-        /// Type of analyzer (e.g. "brightness", "face_detect").
+        /// Type of analyzer (e.g. "brightness", "`face_detect`").
         analyzer_type: String,
-        /// Name of the scalar output (e.g. "brightness", "face_x").
+        /// Name of the scalar output (e.g. "brightness", "`face_x`").
         output_name: String,
         /// Smoothing factor (0.0 = no smoothing, 0.99 = heavy smoothing).
         #[serde(default = "default_analyzer_smoothing")]
@@ -75,7 +75,7 @@ pub enum ModulationSource {
 
 impl ModulationSource {
     /// Compare two sources by configuration fields only.
-    /// Ignores ADSR runtime state (stage, stage_time, gate, current_level).
+    /// Ignores ADSR runtime state (stage, `stage_time`, gate, `current_level`).
     pub fn config_eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
@@ -277,7 +277,7 @@ impl ModulationSource {
                     LFOWaveform::Sawtooth => 2.0 * t - 1.0,
                     LFOWaveform::Random => {
                         let seed = (time * *frequency).floor() as u32;
-                        let hash = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                        let hash = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                         (hash as f32 / u32::MAX as f32) * 2.0 - 1.0
                     }
                 };

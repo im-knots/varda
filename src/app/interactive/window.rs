@@ -2,8 +2,8 @@
 //! deck's live HTML texture and carries the input state needed to forward
 //! mouse/keyboard/scroll/IME into the offscreen Servo `WebView`.
 //!
-//! It is fixed 1:1 to the deck's WebView size and non-resizable (see
-//! `/spec/html-source.md` §4), so the surface and the WebView share a device
+//! It is fixed 1:1 to the deck's `WebView` size and non-resizable (see
+//! `/spec/html-source.md` §4), so the surface and the `WebView` share a device
 //! pixel grid and cursor mapping is the identity (plus clamping). Modeled on
 //! `OutputWindow` but display-only — it never joins `output.outputs`.
 
@@ -25,7 +25,7 @@ pub(crate) struct InteractiveWindow {
     blit_pipeline: BlitPipeline,
     /// Deck/instance this window drives.
     pub(crate) target: InteractiveTarget,
-    /// Last known cursor position in physical (== WebView device) pixels.
+    /// Last known cursor position in physical (== `WebView` device) pixels.
     pub(crate) cursor: (f64, f64),
     /// Currently-held modifier keys.
     pub(crate) modifiers: ModifiersState,
@@ -50,7 +50,7 @@ impl InteractiveWindow {
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(wgpu::TextureFormat::is_srgb)
             .unwrap_or(caps.formats[0]);
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -81,12 +81,12 @@ impl InteractiveWindow {
         self.window.id()
     }
 
-    /// WebView size in device pixels (for coordinate clamping).
+    /// `WebView` size in device pixels (for coordinate clamping).
     pub(crate) fn webview_size(&self) -> (u32, u32) {
         (self.target.width, self.target.height)
     }
 
-    /// Translate a winit window event into input events for the WebView,
+    /// Translate a winit window event into input events for the `WebView`,
     /// updating tracked cursor/modifier/composition state. Returns the events to
     /// forward to the servo thread (usually 0 or 1). `CloseRequested` is handled
     /// by the caller; unhandled events return empty.
@@ -202,7 +202,7 @@ impl InteractiveWindow {
     /// Close the OS window and reclaim the leaked `Box<Window>` (mirrors
     /// `OutputWindow::destroy`). Sole owner after removal from app state.
     pub(crate) fn destroy(self) {
-        let window_ptr = self.window as *const Window as *mut Window;
+        let window_ptr = std::ptr::from_ref::<Window>(self.window).cast_mut();
         drop(self.surface);
         unsafe {
             let _ = Box::from_raw(window_ptr);

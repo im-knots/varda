@@ -5,13 +5,13 @@
 
 use std::os::raw::{c_char, c_float, c_int};
 
-/// Opaque handle returned by NDIlib_find_create_v2.
+/// Opaque handle returned by `NDIlib_find_create_v2`.
 pub type NDIlib_find_instance_t = *mut std::ffi::c_void;
 
-/// Opaque handle returned by NDIlib_recv_create_v3.
+/// Opaque handle returned by `NDIlib_recv_create_v3`.
 pub type NDIlib_recv_instance_t = *mut std::ffi::c_void;
 
-/// Opaque handle returned by NDIlib_send_create.
+/// Opaque handle returned by `NDIlib_send_create`.
 pub type NDIlib_send_instance_t = *mut std::ffi::c_void;
 
 /// NDI source descriptor (returned by find).
@@ -24,7 +24,7 @@ pub struct NDIlib_source_t {
     pub p_url_address: *const c_char,
 }
 
-/// Settings for NDIlib_find_create_v2.
+/// Settings for `NDIlib_find_create_v2`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct NDIlib_find_create_t {
@@ -46,7 +46,7 @@ impl Default for NDIlib_find_create_t {
     }
 }
 
-/// NDI FourCC pixel formats.
+/// NDI `FourCC` pixel formats.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct NDIlib_FourCC_video_type_e(pub u32);
@@ -70,7 +70,7 @@ pub struct NDIlib_video_frame_v2_t {
     pub xres: c_int,
     /// Height in pixels.
     pub yres: c_int,
-    /// FourCC pixel format.
+    /// `FourCC` pixel format.
     pub FourCC: NDIlib_FourCC_video_type_e,
     /// Frame rate numerator.
     pub frame_rate_N: c_int,
@@ -92,7 +92,7 @@ pub struct NDIlib_video_frame_v2_t {
     pub timestamp: i64,
 }
 
-/// Frame type returned by NDIlib_recv_capture_v3.
+/// Frame type returned by `NDIlib_recv_capture_v3`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct NDIlib_frame_type_e(pub c_int);
@@ -106,7 +106,7 @@ impl NDIlib_frame_type_e {
     pub const STATUS_CHANGE: Self = Self(100);
 }
 
-/// Settings for NDIlib_recv_create_v3.
+/// Settings for `NDIlib_recv_create_v3`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct NDIlib_recv_create_v3_t {
@@ -122,7 +122,7 @@ pub struct NDIlib_recv_create_v3_t {
     pub p_ndi_recv_name: *const c_char,
 }
 
-/// Settings for NDIlib_send_create_t.
+/// Settings for `NDIlib_send_create_t`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct NDIlib_send_create_t {

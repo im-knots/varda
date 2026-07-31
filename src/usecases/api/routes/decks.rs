@@ -18,7 +18,7 @@ use crate::usecases::api::{command_response, SharedState};
 /// Strip `..` components from a path to prevent directory traversal attacks.
 /// If the path can be canonicalized (i.e. it exists), use the canonical form;
 /// otherwise strip `..` components manually and return the cleaned path.
-fn sanitize_path(p: std::path::PathBuf) -> std::path::PathBuf {
+fn sanitize_path(p: &std::path::Path) -> std::path::PathBuf {
     if let Ok(canonical) = p.canonicalize() {
         return canonical;
     }
@@ -50,7 +50,7 @@ mod sanitize_path_tests {
 
     #[test]
     fn strips_all_parent_dir_components() {
-        let cleaned = sanitize_path(nonexistent(
+        let cleaned = sanitize_path(&nonexistent(
             "/varda_test_nope/foo/../bar/../../baz_zzz_missing",
         ));
         assert!(!has_parent_dir(&cleaned), "'..' survived: {cleaned:?}");
@@ -58,7 +58,7 @@ mod sanitize_path_tests {
 
     #[test]
     fn retains_non_traversal_components() {
-        let cleaned = sanitize_path(nonexistent("../../secret_zzz_missing_dir/asset.png"));
+        let cleaned = sanitize_path(&nonexistent("../../secret_zzz_missing_dir/asset.png"));
         assert!(!has_parent_dir(&cleaned));
         // The real, non-traversal segments must be preserved.
         let s = cleaned.to_string_lossy();
@@ -68,7 +68,7 @@ mod sanitize_path_tests {
 
     #[test]
     fn normal_relative_path_passes_through_unchanged() {
-        let cleaned = sanitize_path(nonexistent("assets_zzz_missing/textures/tile.png"));
+        let cleaned = sanitize_path(&nonexistent("assets_zzz_missing/textures/tile.png"));
         assert_eq!(
             cleaned,
             PathBuf::from("assets_zzz_missing/textures/tile.png")
@@ -77,7 +77,7 @@ mod sanitize_path_tests {
 
     #[test]
     fn bare_parent_dir_reduces_to_empty() {
-        let cleaned = sanitize_path(nonexistent("nope_zzz/.."));
+        let cleaned = sanitize_path(&nonexistent("nope_zzz/.."));
         // ".." is stripped; only the leading normal component remains.
         assert!(!has_parent_dir(&cleaned));
         assert_eq!(cleaned, PathBuf::from("nope_zzz"));
@@ -284,7 +284,7 @@ pub async fn add_image_deck(
     Path(channel_uuid): Path<String>,
     Json(body): Json<AddImageDeckBody>,
 ) -> impl IntoResponse {
-    let path = sanitize_path(body.path);
+    let path = sanitize_path(&body.path);
     match state
         .send_command(EngineCommand::AddImageDeck { channel_uuid, path })
         .await
@@ -300,7 +300,7 @@ pub async fn add_video_deck(
     Path(channel_uuid): Path<String>,
     Json(body): Json<AddVideoDeckBody>,
 ) -> impl IntoResponse {
-    let path = sanitize_path(body.path);
+    let path = sanitize_path(&body.path);
     match state
         .send_command(EngineCommand::AddVideoDeck { channel_uuid, path })
         .await
@@ -985,13 +985,14 @@ pub async fn reset_generator_params(
 
 #[derive(Deserialize, ToSchema)]
 pub struct RequestAnalyzerBody {
-    /// Analyzer type to request (e.g. "face_detect", "brightness").
+    /// Analyzer type to request (e.g. "`face_detect`", "brightness").
     pub analyzer_type: String,
     /// Options passed to the analyzer (optional, default empty object).
     #[serde(default)]
     pub options: serde_json::Value,
 }
 
+/// Attach an analyzer to a deck (reference-counted). Body: `{"analyzer_type", "options"}`.
 #[utoipa::path(post, path = "/api/decks/{deck_uuid}/analyzers",
     params(("deck_uuid" = String, Path, description = "Deck UUID")),
     request_body = RequestAnalyzerBody,
@@ -1015,6 +1016,7 @@ pub async fn request_analyzer(
     }
 }
 
+/// Release an analyzer; it stops when the last consumer detaches.
 #[utoipa::path(delete, path = "/api/decks/{deck_uuid}/analyzers/{analyzer_type}",
     params(
         ("deck_uuid" = String, Path, description = "Deck UUID"),

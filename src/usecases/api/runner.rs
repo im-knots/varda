@@ -1,7 +1,7 @@
-//! ApiRunner — HTTP/WS delivery layer for the Varda engine.
+//! `ApiRunner` — HTTP/WS delivery layer for the Varda engine.
 //!
 //! Owns the axum server and tokio runtime. Runs on a background thread.
-//! For windowed operation this runs alongside UIRunner.
+//! For windowed operation this runs alongside `UIRunner`.
 //! For headless operation this is the primary consumer.
 
 use crate::engine::{CommandEnvelope, EngineState};
@@ -201,18 +201,18 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "Depth Sensors", description = "Depth sensor (Kinect/LIDAR) scanning, listing, and point-cloud deck creation"),
     )
 )]
-/// The assembled OpenAPI spec. Public so `tests/api_docs.rs` can render the
+/// The assembled `OpenAPI` spec. Public so `tests/api_docs.rs` can render the
 /// route reference in `docs/13-api.md` from it.
 pub struct ApiDoc;
 
 /// Build the axum router with all routes and middleware.
 pub fn build_router(shared: SharedState) -> Router {
+    use axum::routing::get;
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
-
-    use axum::routing::get;
 
     Router::new()
         // ── System ──────────────────────────────────────────────
@@ -1132,7 +1132,7 @@ impl ApiServerHandle {
     pub fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         if let Err(e) = self.thread_handle.join() {
-            log::warn!("API server thread panicked: {:?}", e);
+            log::warn!("API server thread panicked: {e:?}");
         }
     }
 }
@@ -1140,6 +1140,12 @@ impl ApiServerHandle {
 /// Start the HTTP API server on a background tokio runtime.
 ///
 /// Returns an `ApiServerHandle` for graceful shutdown, or `None` if binding failed.
+///
+/// # Panics
+///
+/// The spawned server thread panics if the bound listener's local address cannot
+/// be queried. The panic is caught by `catch_unwind` and logged, so it does not
+/// propagate to the caller.
 pub fn start(
     port: u16,
     command_tx: mpsc::UnboundedSender<CommandEnvelope>,
@@ -1154,11 +1160,7 @@ pub fn start(
     // Pre-check: try to bind synchronously to fail fast with a clear message
     let test_bind = std::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], port)));
     if let Err(e) = test_bind {
-        log::warn!(
-            "Cannot bind API server on port {}: {} — API disabled",
-            port,
-            e
-        );
+        log::warn!("Cannot bind API server on port {port}: {e} — API disabled");
         return None;
     }
     // Drop the sync listener so the async one can bind
@@ -1172,7 +1174,7 @@ pub fn start(
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    log::error!("Failed to create tokio runtime for API server: {}", e);
+                    log::error!("Failed to create tokio runtime for API server: {e}");
                     return;
                 }
             };
@@ -1183,12 +1185,12 @@ pub fn start(
                 let listener = match tokio::net::TcpListener::bind(addr).await {
                     Ok(l) => l,
                     Err(e) => {
-                        log::error!("Failed to bind API server on port {}: {}", port, e);
+                        log::error!("Failed to bind API server on port {port}: {e}");
                         return;
                     }
                 };
                 let local_addr = listener.local_addr().unwrap();
-                log::info!("HTTP API server listening on http://{}", local_addr);
+                log::info!("HTTP API server listening on http://{local_addr}");
 
                 let mut shutdown_rx = shutdown_rx;
                 if let Err(e) = axum::serve(listener, app)
@@ -1198,7 +1200,7 @@ pub fn start(
                     })
                     .await
                 {
-                    log::error!("API server error: {}", e);
+                    log::error!("API server error: {e}");
                 }
                 log::info!("API server stopped");
             });

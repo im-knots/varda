@@ -1,9 +1,10 @@
-//! Output action processing for VardaApp (unified windowed + headless).
+//! Output action processing for `VardaApp` (unified windowed + headless).
 
 use super::VardaApp;
 use crate::renderer::context::{
     HeadlessOutput, OutputSource, OutputTarget, OutputWindow, SurfaceAssignment, UnifiedOutput,
 };
+use crate::renderer::edge_blend::SurfaceOverlapZones;
 
 impl VardaApp {
     /// Create pending outputs (deferred from UI actions).
@@ -32,7 +33,7 @@ impl VardaApp {
             }
             let idx = self.output.outputs.len() + 1;
             let name = if config.name.is_empty() {
-                format!("Output {}", idx)
+                format!("Output {idx}")
             } else {
                 config.name.clone()
             };
@@ -41,7 +42,7 @@ impl VardaApp {
             if target.is_windowed() {
                 // Windowed/Display: needs an OS window
                 let mut window_attrs =
-                    Window::default_attributes().with_title(format!("Varda - {}", name));
+                    Window::default_attributes().with_title(format!("Varda - {name}"));
 
                 // Restore saved window size, or default to 1280x720
                 if let Some([w, h]) = config.window_size {
@@ -63,7 +64,7 @@ impl VardaApp {
                         let window_static: &'static Window = Box::leak(Box::new(window));
                         match OutputWindow::new(&self.context, window_static, name.clone()) {
                             Ok(mut output) => {
-                                output.uuid = config.uuid.clone();
+                                output.uuid.clone_from(&config.uuid);
                                 // Force position after full initialization — macOS
                                 // ignores with_position() in attrs and surface.configure()
                                 // can reset position, so we set it last.
@@ -85,7 +86,7 @@ impl VardaApp {
                                     .map(|a| SurfaceAssignment {
                                         surface_uuid: a.surface_uuid.clone(),
                                         enabled: a.enabled,
-                                        overlap_zones: Default::default(),
+                                        overlap_zones: SurfaceOverlapZones::default(),
                                     })
                                     .collect();
                                 output.edge_blend_mode = config.edge_blend_mode;
@@ -114,18 +115,18 @@ impl VardaApp {
                                 self.output.outputs.push(UnifiedOutput::Window(output));
                             }
                             Err(e) => {
-                                log::error!("Failed to create output window: {}", e);
+                                log::error!("Failed to create output window: {e}");
                                 self.session
                                     .notifications
-                                    .error(format!("Failed to create output: {}", e));
+                                    .error(format!("Failed to create output: {e}"));
                             }
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to create output window: {}", e);
+                        log::error!("Failed to create output window: {e}");
                         self.session
                             .notifications
-                            .error(format!("Failed to create window: {}", e));
+                            .error(format!("Failed to create window: {e}"));
                     }
                 }
             } else {
@@ -138,7 +139,7 @@ impl VardaApp {
                     self.render_width,
                     self.render_height,
                 );
-                headless.uuid = config.uuid.clone();
+                headless.uuid.clone_from(&config.uuid);
                 // Restore surface assignments from config
                 headless.surface_assignments = config
                     .surface_assignments
@@ -146,13 +147,13 @@ impl VardaApp {
                     .map(|a| SurfaceAssignment {
                         surface_uuid: a.surface_uuid.clone(),
                         enabled: a.enabled,
-                        overlap_zones: Default::default(),
+                        overlap_zones: SurfaceOverlapZones::default(),
                     })
                     .collect();
                 headless.edge_blend_mode = config.edge_blend_mode;
                 headless.edge_blend = config.edge_blend;
                 headless.rotation = config.rotation;
-                log::info!("Created headless output '{}'", name);
+                log::info!("Created headless output '{name}'");
                 self.output.outputs.push(UnifiedOutput::Headless(headless));
             }
         }
@@ -175,10 +176,7 @@ impl VardaApp {
         if auto_count == 0 {
             return;
         }
-        log::debug!(
-            "[edge-blend] recompute_auto: {} outputs in Auto mode",
-            auto_count
-        );
+        log::debug!("[edge-blend] recompute_auto: {auto_count} outputs in Auto mode");
 
         // Build OutputSurfaceInfo for each output (include surface_uuid in MappedRegion).
         let infos: Vec<OutputSurfaceInfo> = self
@@ -216,7 +214,7 @@ impl VardaApp {
             .collect();
 
         // Clear overlap zones on all Auto-mode assignments before applying new results.
-        for output in self.output.outputs.iter_mut() {
+        for output in &mut self.output.outputs {
             if output.edge_blend_mode() == EdgeBlendMode::Auto {
                 for assignment in output.surface_assignments_mut() {
                     assignment.overlap_zones = SurfaceOverlapZones::default();

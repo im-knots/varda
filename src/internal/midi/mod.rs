@@ -57,7 +57,7 @@ pub enum MidiMessage {
 }
 
 impl MidiMessage {
-    /// Parse raw MIDI bytes into a MidiMessage, tagged with a device ID.
+    /// Parse raw MIDI bytes into a `MidiMessage`, tagged with a device ID.
     pub fn from_bytes(data: &[u8], device_id: DeviceId) -> Option<Self> {
         if data.is_empty() {
             return None;
@@ -132,8 +132,8 @@ impl MidiMessage {
                 channel,
                 note,
                 ..
-            } => Some(MidiKey::Note(*device_id, *channel, *note)),
-            MidiMessage::NoteOff {
+            }
+            | MidiMessage::NoteOff {
                 device_id,
                 channel,
                 note,
@@ -150,10 +150,10 @@ impl MidiMessage {
     /// Normalized value (0.0–1.0). Clock messages return 0.
     pub fn normalized_value(&self) -> f32 {
         match self {
-            MidiMessage::ControlChange { value, .. } => *value as f32 / 127.0,
-            MidiMessage::NoteOn { velocity, .. } => *velocity as f32 / 127.0,
-            MidiMessage::NoteOff { .. } => 0.0,
-            MidiMessage::ClockTick { .. }
+            MidiMessage::ControlChange { value, .. } => f32::from(*value) / 127.0,
+            MidiMessage::NoteOn { velocity, .. } => f32::from(*velocity) / 127.0,
+            MidiMessage::NoteOff { .. }
+            | MidiMessage::ClockTick { .. }
             | MidiMessage::ClockStart { .. }
             | MidiMessage::ClockContinue { .. }
             | MidiMessage::ClockStop { .. } => 0.0,
@@ -162,22 +162,21 @@ impl MidiMessage {
 }
 
 /// Unique identifier for a MIDI control (for mapping).
-/// Includes device_id so the same CC# on different devices maps independently.
+/// Includes `device_id` so the same CC# on different devices maps independently.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
 pub enum MidiKey {
-    /// CC message: (device_id, channel, cc_number)
+    /// CC message: (`device_id`, channel, `cc_number`)
     CC(DeviceId, u8, u8),
-    /// Note message: (device_id, channel, note_number)
+    /// Note message: (`device_id`, channel, `note_number`)
     Note(DeviceId, u8, u8),
 }
 
 impl MidiKey {
     pub fn device_id(&self) -> DeviceId {
         match self {
-            MidiKey::CC(d, _, _) => *d,
-            MidiKey::Note(d, _, _) => *d,
+            MidiKey::CC(d, _, _) | MidiKey::Note(d, _, _) => *d,
         }
     }
 }
@@ -213,8 +212,7 @@ impl MidiDeviceInfo {
     pub fn profile_name(&self) -> &str {
         self.profile
             .as_ref()
-            .map(|p| p.profile.name.as_str())
-            .unwrap_or("Generic")
+            .map_or("Generic", |p| p.profile.name.as_str())
     }
 }
 
@@ -224,14 +222,14 @@ impl MidiDeviceInfo {
 pub struct MidiDeviceManager {
     receiver: Receiver<MidiMessage>,
     sender: Sender<MidiMessage>,
-    /// All known devices (by DeviceId).
+    /// All known devices (by `DeviceId`).
     pub devices: HashMap<DeviceId, MidiDeviceInfo>,
     /// Next device ID to assign.
     next_device_id: DeviceId,
     /// Held alive so callbacks keep firing.
     input_connections: Vec<midir::MidiInputConnection<()>>,
-    /// Output connections keyed by DeviceId. Mutex for interior mutability
-    /// (MidiOutputConnection::send requires &mut self, but send_raw takes &self).
+    /// Output connections keyed by `DeviceId`. Mutex for interior mutability
+    /// (`MidiOutputConnection::send` requires &mut self, but `send_raw` takes &self).
     output_connections: HashMap<DeviceId, Mutex<midir::MidiOutputConnection>>,
     /// Controller profile registry for device detection.
     pub profile_registry: ProfileRegistry,
@@ -258,6 +256,10 @@ fn strip_port_suffix(name: &str) -> &str {
 
 impl MidiDeviceManager {
     /// Create a new device manager and scan for connected devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the initial device scan fails — see [`scan_devices`](Self::scan_devices).
     pub fn new() -> anyhow::Result<Self> {
         let (sender, receiver) = channel();
 
@@ -280,6 +282,12 @@ impl MidiDeviceManager {
     }
 
     /// Scan for MIDI devices. Can be called again to rescan (hot-plug).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the platform MIDI backend cannot create the throwaway
+    /// `MidiInput`/`MidiOutput` clients used to enumerate ports. Failures to
+    /// connect to an individual port are logged and skipped, not returned.
     pub fn scan_devices(&mut self) -> anyhow::Result<()> {
         // Disconnect existing connections by dropping them
         self.input_connections.clear();
@@ -290,7 +298,7 @@ impl MidiDeviceManager {
         // Snapshot output port names (throwaway MidiOutput, collect names, drop)
         let output_port_names: Vec<String> = {
             let midi_out = MidiOutput::new("Varda scan")
-                .map_err(|e| anyhow::anyhow!("Failed to create MidiOutput for scan: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to create MidiOutput for scan: {e}"))?;
             let ports = midi_out.ports();
             ports
                 .iter()
@@ -301,7 +309,7 @@ impl MidiDeviceManager {
         // Snapshot input port names (throwaway MidiInput, collect names, drop)
         let input_port_names: Vec<String> = {
             let midi_in = MidiInput::new("Varda scan")
-                .map_err(|e| anyhow::anyhow!("Failed to create MidiInput for scan: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to create MidiInput for scan: {e}"))?;
             let ports = midi_in.ports();
             ports
                 .iter()
@@ -319,7 +327,7 @@ impl MidiDeviceManager {
         let mut matched_outputs: Vec<bool> = vec![false; output_port_names.len()];
 
         // For each input: assign DeviceId, check matching output, connect
-        for in_name in input_port_names.iter() {
+        for in_name in &input_port_names {
             let device_id = self.next_device_id;
             self.next_device_id += 1;
 
@@ -353,14 +361,9 @@ impl MidiDeviceManager {
             let profile = self.profile_registry.detect(in_name);
             let profile_name = profile
                 .as_ref()
-                .map(|p| p.profile.name.as_str())
-                .unwrap_or("Generic");
+                .map_or("Generic", |p| p.profile.name.as_str());
             log::info!(
-                "MIDI device [{}]: {} (profile={}, output={})",
-                device_id,
-                in_name,
-                profile_name,
-                has_output
+                "MIDI device [{device_id}]: {in_name} (profile={profile_name}, output={has_output})"
             );
 
             self.devices.insert(
@@ -379,18 +382,18 @@ impl MidiDeviceManager {
             // new CoreMIDI client and port ordering may differ between instances.
             let tx = self.sender.clone();
             let dev_id = device_id;
-            let port_label = format!("Varda In {}", device_id);
+            let port_label = format!("Varda In {device_id}");
             match MidiInput::new(&port_label) {
                 Ok(midi_in) => {
                     let ports = midi_in.ports();
                     let target_port = ports
                         .iter()
-                        .find(|p| midi_in.port_name(p).map(|n| n == *in_name).unwrap_or(false));
+                        .find(|p| midi_in.port_name(p).is_ok_and(|n| n == *in_name));
                     if let Some(port) = target_port {
                         match midi_in.connect(
                             port,
                             &port_label,
-                            move |_ts, data, _| {
+                            move |_ts, data, ()| {
                                 // Raw byte logging for diagnostics.
                                 // Enable with RUST_LOG=varda::midi=debug
                                 log::debug!(
@@ -407,22 +410,19 @@ impl MidiDeviceManager {
                         ) {
                             Ok(conn) => {
                                 log::debug!(
-                                    "[MIDI] Connected input: '{}' (dev={})",
-                                    in_name,
-                                    device_id
+                                    "[MIDI] Connected input: '{in_name}' (dev={device_id})"
                                 );
                                 self.input_connections.push(conn);
                             }
-                            Err(e) => log::warn!("Failed to connect MIDI input {}: {}", in_name, e),
+                            Err(e) => log::warn!("Failed to connect MIDI input {in_name}: {e}"),
                         }
                     } else {
                         log::warn!(
-                            "MIDI input port '{}' not found during connect (port list changed?)",
-                            in_name
+                            "MIDI input port '{in_name}' not found during connect (port list changed?)"
                         );
                     }
                 }
-                Err(e) => log::warn!("Failed to create MidiInput for {}: {}", in_name, e),
+                Err(e) => log::warn!("Failed to create MidiInput for {in_name}: {e}"),
             }
         }
 
@@ -436,13 +436,9 @@ impl MidiDeviceManager {
             let profile = self.profile_registry.detect(out_name);
             let profile_name = profile
                 .as_ref()
-                .map(|p| p.profile.name.as_str())
-                .unwrap_or("Generic");
+                .map_or("Generic", |p| p.profile.name.as_str());
             log::info!(
-                "MIDI output-only device [{}]: {} (profile={})",
-                device_id,
-                out_name,
-                profile_name
+                "MIDI output-only device [{device_id}]: {out_name} (profile={profile_name})"
             );
             self.connect_output(device_id, out_name);
             self.devices.insert(
@@ -462,25 +458,22 @@ impl MidiDeviceManager {
 
     /// Connect an output port by name and store the connection.
     fn connect_output(&mut self, device_id: DeviceId, port_name: &str) {
-        match MidiOutput::new(&format!("Varda Out {}", device_id)) {
+        match MidiOutput::new(&format!("Varda Out {device_id}")) {
             Ok(midi_out) => {
                 let ports = midi_out.ports();
-                let port = ports.iter().find(|p| {
-                    midi_out
-                        .port_name(p)
-                        .map(|n| n == port_name)
-                        .unwrap_or(false)
-                });
+                let port = ports
+                    .iter()
+                    .find(|p| midi_out.port_name(p).is_ok_and(|n| n == port_name));
                 if let Some(port) = port {
-                    match midi_out.connect(port, &format!("Varda Out {}", device_id)) {
+                    match midi_out.connect(port, &format!("Varda Out {device_id}")) {
                         Ok(conn) => {
                             self.output_connections.insert(device_id, Mutex::new(conn));
                         }
-                        Err(e) => log::warn!("Failed to connect MIDI output {}: {}", port_name, e),
+                        Err(e) => log::warn!("Failed to connect MIDI output {port_name}: {e}"),
                     }
                 }
             }
-            Err(e) => log::warn!("Failed to create MidiOutput for {}: {}", port_name, e),
+            Err(e) => log::warn!("Failed to create MidiOutput for {port_name}: {e}"),
         }
     }
 
@@ -496,15 +489,13 @@ impl MidiDeviceManager {
                         }
                     }
                     // Device disabled or unknown — skip
-                    continue;
                 }
-                Err(TryRecvError::Empty) => return None,
-                Err(TryRecvError::Disconnected) => return None,
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return None,
             }
         }
     }
 
-    /// Send a Note On message to a specific device (by device_id).
+    /// Send a Note On message to a specific device (by `device_id`).
     pub fn send_note_on(&self, device_id: DeviceId, channel: u8, note: u8, velocity: u8) {
         let status = 0x90 | (channel & 0x0F);
         self.send_raw(device_id, &[status, note, velocity]);
@@ -515,7 +506,7 @@ impl MidiDeviceManager {
         if let Some(conn_mutex) = self.output_connections.get(&device_id) {
             if let Ok(mut conn) = conn_mutex.lock() {
                 if let Err(e) = conn.send(bytes) {
-                    log::warn!("Failed to send MIDI to device {}: {}", device_id, e);
+                    log::warn!("Failed to send MIDI to device {device_id}: {e}");
                 }
             }
         }
@@ -555,14 +546,14 @@ impl MidiDeviceManager {
 ///   crossfader                              → mixer crossfader position
 ///   deck/<uuid>/opacity                     → deck opacity
 ///   deck/<uuid>/param/<name>                → generator param (float)
-///   deck/<uuid>/effect/<effect_uuid>/param/<name> → deck effect param (float)
+///   deck/<uuid>/effect/<`effect_uuid>/param`/<name> → deck effect param (float)
 ///   ch/<uuid>/opacity                       → channel opacity
-///   ch/<uuid>/effect/<effect_uuid>/param/<name>   → channel effect param (float)
-///   master/effect/<effect_uuid>/param/<name>      → master effect param (float)
-///   mod/<mod_uuid>/<param_name>             → modulation source param
+///   ch/<uuid>/effect/<`effect_uuid>/param`/<name>   → channel effect param (float)
+///   master/effect/<`effect_uuid>/param`/<name>      → master effect param (float)
+///   mod/<`mod_uuid`>/<`param_name`>             → modulation source param
 #[derive(Debug, Clone)]
 pub struct MidiMappingStore {
-    /// MidiKey → parameter path
+    /// `MidiKey` → parameter path
     pub mappings: HashMap<MidiKey, String>,
     /// Whether learn mode is active
     pub learn_mode: bool,
@@ -587,7 +578,7 @@ impl MidiMappingStore {
 
     /// Set a mapping from a MIDI key to a parameter path
     pub fn set(&mut self, key: MidiKey, path: String) {
-        log::info!("MIDI mapped {} → {}", key, path);
+        log::info!("MIDI mapped {key} → {path}");
         self.mappings.insert(key, path);
     }
 
@@ -616,7 +607,7 @@ impl MidiMappingStore {
     /// Select a parameter path as the learn target (must be in learn mode).
     pub fn select_learn_target(&mut self, param_path: String) {
         if self.learn_mode {
-            log::info!("MIDI learn target: {}", param_path);
+            log::info!("MIDI learn target: {param_path}");
             self.learn_target = Some(param_path);
         }
     }
@@ -672,10 +663,10 @@ impl MidiMappingStore {
             .iter()
             .filter(|(key, _)| !auto_map.handles_key(key.device_id(), key))
             .map(|(key, path)| {
-                let device_name = devices
-                    .get(&key.device_id())
-                    .map(|d| d.name.clone())
-                    .unwrap_or_else(|| format!("unknown_{}", key.device_id()));
+                let device_name = devices.get(&key.device_id()).map_or_else(
+                    || format!("unknown_{}", key.device_id()),
+                    |d| d.name.clone(),
+                );
                 let (msg_type, channel, number) = match key {
                     MidiKey::CC(_, ch, cc) => ("cc".to_string(), *ch, *cc),
                     MidiKey::Note(_, ch, note) => ("note".to_string(), *ch, *note),
@@ -708,17 +699,16 @@ impl MidiMappingStore {
             .collect();
 
         for entry in &config.mappings {
-            let device_id = match name_to_id.get(entry.device_name.as_str()) {
-                Some(id) => *id,
-                None => {
-                    log::warn!(
-                        "MIDI mapping references unknown device '{}', skipping: {} -> {}",
-                        entry.device_name,
-                        entry.device_name,
-                        entry.param_path
-                    );
-                    continue;
-                }
+            let device_id = if let Some(id) = name_to_id.get(entry.device_name.as_str()) {
+                *id
+            } else {
+                log::warn!(
+                    "MIDI mapping references unknown device '{}', skipping: {} -> {}",
+                    entry.device_name,
+                    entry.device_name,
+                    entry.param_path
+                );
+                continue;
             };
             let key = match entry.msg_type.as_str() {
                 "cc" => MidiKey::CC(device_id, entry.channel, entry.number),
@@ -764,7 +754,7 @@ impl MidiMappingEntry {
     pub fn validate(&self, prefix: &str) -> Vec<String> {
         let mut errors = Vec::new();
         if self.device_name.trim().is_empty() {
-            errors.push(format!("{}: device_name is empty", prefix));
+            errors.push(format!("{prefix}: device_name is empty"));
         }
         if self.msg_type != "cc" && self.msg_type != "note" {
             errors.push(format!(
@@ -785,7 +775,7 @@ impl MidiMappingEntry {
             ));
         }
         if self.param_path.trim().is_empty() {
-            errors.push(format!("{}: param_path is empty", prefix));
+            errors.push(format!("{prefix}: param_path is empty"));
         }
         errors
     }
@@ -797,12 +787,18 @@ impl MidiConfig {
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         for (i, entry) in self.mappings.iter().enumerate() {
-            errors.extend(entry.validate(&format!("mappings[{}]", i)));
+            errors.extend(entry.validate(&format!("mappings[{i}]")));
         }
         errors
     }
 
     /// Load from a JSON file
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if its contents are not
+    /// valid MIDI-config JSON. Semantic validation issues are logged as warnings
+    /// and do not fail the load.
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read MIDI config: {}", path.as_ref().display()))?;
@@ -816,10 +812,15 @@ impl MidiConfig {
     }
 
     /// Save to a JSON file
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config cannot be serialized to JSON or if the
+    /// atomic write to `path` fails (missing directory, permissions, disk full).
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
         let errors = self.validate();
         for e in &errors {
-            log::error!("MIDI config save: {}", e);
+            log::error!("MIDI config save: {e}");
         }
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize MIDI config")?;
@@ -894,7 +895,7 @@ mod tests {
     #[test]
     fn test_midi_key_display_with_device() {
         let key = MidiKey::CC(3, 0, 48);
-        let display = format!("{}", key);
+        let display = format!("{key}");
         assert!(display.contains("dev3"));
         assert!(display.contains("48"));
     }
@@ -1011,7 +1012,7 @@ mod tests {
     #[test]
     fn test_midi_config_validate_empty_device() {
         let entry = MidiMappingEntry {
-            device_name: "".into(),
+            device_name: String::new(),
             msg_type: "cc".into(),
             channel: 0,
             number: 0,
@@ -1057,7 +1058,7 @@ mod tests {
             msg_type: "cc".into(),
             channel: 0,
             number: 0,
-            param_path: "".into(),
+            param_path: String::new(),
         };
         assert!(entry
             .validate("m[0]")

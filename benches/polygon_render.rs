@@ -8,16 +8,16 @@
 //! reclaims them, producing the 60→3 FPS cliff reported on Intel Macs.
 //!
 //! Three groups isolate the cost:
-//!   polygon_surface_prepare   — per-surface triangulate + create_bind_group only.
+//!   `polygon_surface_prepare`   — per-surface triangulate + `create_bind_group` only.
 //!                               This is where the per-frame allocations live, so
 //!                               the ring-buffer fix should move the needle here.
-//!   polygon_surface_render    — full encode → submit → poll for N surfaces, with
+//!   `polygon_surface_render`    — full encode → submit → poll for N surfaces, with
 //!                               a poll(Wait) every frame. Because it drains the
 //!                               GPU each iteration, frames never pipeline, so this
 //!                               group structurally CANNOT see a cross-frame
 //!                               write-after-read (WAR) hazard on the persistent
 //!                               vertex/param pools.
-//!   polygon_surface_pipelined — submits several frames back-to-back and polls
+//!   `polygon_surface_pipelined` — submits several frames back-to-back and polls
 //!                               ONCE at the end. This reproduces the real
 //!                               renderer's CPU-ahead-of-GPU pipelining, so a
 //!                               persistent single-buffer pool that is rewritten

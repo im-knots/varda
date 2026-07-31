@@ -112,6 +112,13 @@ pub struct DomemasterRenderer {
 
 impl DomemasterRenderer {
     /// Create a new domemaster renderer with the given configuration.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today: every wgpu resource here is created
+    /// infallibly (device validation failures surface on the device's error
+    /// scope instead). The `Result` keeps the constructor signature uniform
+    /// with the other pipelines so callers can `?` it.
     pub fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
@@ -224,7 +231,7 @@ impl DomemasterRenderer {
                 module: &vertex_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &fragment_shader,
@@ -234,7 +241,7 @@ impl DomemasterRenderer {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -504,7 +511,7 @@ mod tests {
     fn output_source_domemaster_display() {
         use crate::renderer::context::OutputSource;
         let source = OutputSource::Domemaster;
-        assert_eq!(format!("{}", source), "Domemaster");
+        assert_eq!(format!("{source}"), "Domemaster");
     }
 
     #[test]

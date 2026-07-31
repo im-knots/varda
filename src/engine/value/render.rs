@@ -99,9 +99,9 @@ impl std::fmt::Display for OutputSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OutputSource::Master => write!(f, "Master"),
-            OutputSource::Channel(idx) => write!(f, "Ch {}", idx),
+            OutputSource::Channel(idx) => write!(f, "Ch {idx}"),
             OutputSource::Channels(indices) => {
-                let names: Vec<String> = indices.iter().map(|i| format!("Ch {}", i)).collect();
+                let names: Vec<String> = indices.iter().map(|i| format!("Ch {i}")).collect();
                 write!(f, "{}", names.join("+"))
             }
             OutputSource::Deck(ch, dk) => write!(f, "Ch {} Deck {}", ch + 1, dk + 1),
@@ -220,6 +220,7 @@ impl OutputTarget {
     /// Return a clone of this target with the audio passthrough device replaced.
     /// No-op for non-ffmpeg targets. Lets the GUI flip the device without
     /// re-specifying every variant field.
+    #[must_use]
     pub fn with_audio_device(&self, device: Option<String>) -> OutputTarget {
         let mut target = self.clone();
         match &mut target {
@@ -238,9 +239,9 @@ impl std::fmt::Display for OutputTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OutputTarget::Windowed => write!(f, "Windowed"),
-            OutputTarget::Display { name, .. } => write!(f, "{}", name),
-            OutputTarget::Recording { path, codec, .. } => write!(f, "Rec [{}]: {}", codec, path),
-            OutputTarget::SrtStream { url, codec, .. } => write!(f, "SRT [{}]: {}", codec, url),
+            OutputTarget::Display { name, .. } => write!(f, "{name}"),
+            OutputTarget::Recording { path, codec, .. } => write!(f, "Rec [{codec}]: {path}"),
+            OutputTarget::SrtStream { url, codec, .. } => write!(f, "SRT [{codec}]: {url}"),
             OutputTarget::HlsStream {
                 name,
                 codec,
@@ -248,15 +249,15 @@ impl std::fmt::Display for OutputTarget {
                 ..
             } => {
                 if *low_latency {
-                    write!(f, "LL-HLS [{}]: {}", codec, name)
+                    write!(f, "LL-HLS [{codec}]: {name}")
                 } else {
-                    write!(f, "HLS [{}]: {}", codec, name)
+                    write!(f, "HLS [{codec}]: {name}")
                 }
             }
-            OutputTarget::DashStream { name, codec, .. } => write!(f, "DASH [{}]: {}", codec, name),
-            OutputTarget::RtmpStream { url, codec, .. } => write!(f, "RTMP [{}]: {}", codec, url),
-            OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {}", sender_name),
-            OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {}", server_name),
+            OutputTarget::DashStream { name, codec, .. } => write!(f, "DASH [{codec}]: {name}"),
+            OutputTarget::RtmpStream { url, codec, .. } => write!(f, "RTMP [{codec}]: {url}"),
+            OutputTarget::NdiSend { sender_name } => write!(f, "NDI: {sender_name}"),
+            OutputTarget::SyphonServer { server_name } => write!(f, "Syphon: {server_name}"),
         }
     }
 }
@@ -272,15 +273,15 @@ pub enum RecordingCodec {
     H265,
     /// AV1 via SVT-AV1 (-c:v libsvtav1 -preset 10 -crf 28)
     AV1,
-    /// ProRes 422 (-c:v prores_ks -profile:v 2)
+    /// `ProRes` 422 (-c:v `prores_ks` -profile:v 2)
     ProRes,
-    /// ProRes 4444 with alpha (-c:v prores_ks -profile:v 4 -pix_fmt yuva444p10le)
+    /// `ProRes` 4444 with alpha (-c:v `prores_ks` -profile:v 4 -`pix_fmt` yuva444p10le)
     ProRes4444,
     /// HAP (-c:v hap -format hap)
     Hap,
-    /// HAP Alpha (-c:v hap -format hap_alpha)
+    /// HAP Alpha (-c:v hap -format `hap_alpha`)
     HapAlpha,
-    /// HAP Q (-c:v hap -format hap_q)
+    /// HAP Q (-c:v hap -format `hap_q`)
     HapQ,
 }
 
@@ -374,7 +375,7 @@ pub enum TonemapMode {
     Uchimura = 5,
     /// AMD Lottes — fast, invertible, high contrast.
     Lottes = 6,
-    /// AgX — neutral, minimal hue shift, modern ACES alternative.
+    /// `AgX` — neutral, minimal hue shift, modern ACES alternative.
     AgX = 7,
     /// Khronos PBR Neutral — color-accurate, minimal look.
     KhronosPbrNeutral = 8,

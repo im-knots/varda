@@ -71,6 +71,11 @@ impl Mixer {
     /// `preview_channels` are force-rendered even when culled by opacity, so their
     /// off-air previews update live — without affecting the compositor (see
     /// /spec/channel-preview.md).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any channel fails to render its decks, or if master
+    /// effect / tonemap / LUT compositing fails on the GPU device.
     pub fn render(
         &mut self,
         context: &GpuContext,
@@ -86,14 +91,13 @@ impl Mixer {
 
         // Tick auto-crossfade
         if let Some(auto) = &mut self.auto_crossfade {
-            match auto.tick(dt) {
-                Some(value) => self.crossfader = value,
-                None => {
-                    let target = auto.to;
-                    self.crossfader = target;
-                    self.auto_crossfade = None;
-                    log::info!("Auto-crossfade complete, crossfader = {:.2}", target);
-                }
+            if let Some(value) = auto.tick(dt) {
+                self.crossfader = value;
+            } else {
+                let target = auto.to;
+                self.crossfader = target;
+                self.auto_crossfade = None;
+                log::info!("Auto-crossfade complete, crossfader = {target:.2}");
             }
         }
 
@@ -121,20 +125,19 @@ impl Mixer {
             }
 
             if let Some(auto) = &mut bsc.auto {
-                match auto.tick(dt) {
-                    Some(value) => self.crossfader = value,
-                    None => {
-                        let target = bsc.to;
-                        self.crossfader = target;
-                        self.beat_sync_crossfade = None;
-                        log::info!("Beat-synced crossfade complete, crossfader = {:.2}", target);
-                    }
+                if let Some(value) = auto.tick(dt) {
+                    self.crossfader = value;
+                } else {
+                    let target = bsc.to;
+                    self.crossfader = target;
+                    self.beat_sync_crossfade = None;
+                    log::info!("Beat-synced crossfade complete, crossfader = {target:.2}");
                 }
             }
         }
 
         // Tick transition sequence
-        let bpm = audio_data.bpm.map(|b| b as f64);
+        let bpm = audio_data.bpm.map(f64::from);
         self.tick_sequence(dt, bpm);
 
         // ── GPU Timestamp: read previous frame results ──────────────────
@@ -226,7 +229,7 @@ impl Mixer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Video Upload Encoder"),
                 });
-        for channel in self.channels.iter_mut() {
+        for channel in &mut self.channels {
             channel.tick_video_frames(&mut video_encoder);
         }
         let mut prefix_cmds = vec![video_encoder.finish()];
@@ -274,7 +277,7 @@ impl Mixer {
                 timing_frame.as_mut(),
                 self.query_set.as_ref(),
             ) {
-                log::error!("Channel {} render failed, skipping: {}", ch_idx, e);
+                log::error!("Channel {ch_idx} render failed, skipping: {e}");
                 continue;
             }
             rendered_channels += 1;
@@ -300,7 +303,7 @@ impl Mixer {
         // Request re-mapping of staging buffers AFTER the submit that
         // included the video upload commands. map_async can complete
         // synchronously on Metal/UMA so must not be called before that submit.
-        for channel in self.channels.iter_mut() {
+        for channel in &mut self.channels {
             channel.request_video_remap();
         }
 
@@ -319,7 +322,7 @@ impl Mixer {
 
         self.sync_transition_progress();
         let t_mixer_composite = std::time::Instant::now();
-        let composite_cmds = self.composite_channels(context)?;
+        let composite_cmds = self.composite_channels(context);
         let mixer_composite_us = t_mixer_composite.elapsed().as_micros();
 
         let t_master_fx = std::time::Instant::now();
@@ -365,7 +368,7 @@ impl Mixer {
                             },
                         );
                         enc.resolve_query_set(qs, 0..query_count, resolve_buf, 0);
-                        let byte_count = (query_count as u64) * 8;
+                        let byte_count = u64::from(query_count) * 8;
                         let write_idx = self.staging_index;
                         enc.copy_buffer_to_buffer(
                             resolve_buf,
@@ -396,7 +399,7 @@ impl Mixer {
                         self.timing_map_inflight = true;
 
                         // Save allocations for readback next frame
-                        self.prev_timing_allocations = timing.allocations.clone();
+                        self.prev_timing_allocations.clone_from(&timing.allocations);
                         self.staging_index = 1 - self.staging_index;
                     }
                 }
@@ -455,7 +458,7 @@ impl Mixer {
             // Per-channel GPU drain breakdown
             let ch_gpu_str: String = per_ch_gpu_us
                 .iter()
-                .map(|(name, us)| format!("{}={}us", name, us))
+                .map(|(name, us)| format!("{name}={us}us"))
                 .collect::<Vec<_>>()
                 .join(", ");
             let total_per_ch_gpu: u128 = per_ch_gpu_us.iter().map(|(_, us)| us).sum();
@@ -505,7 +508,7 @@ impl Mixer {
         Ok(())
     }
 
-    fn composite_channels(&mut self, context: &GpuContext) -> Result<Vec<wgpu::CommandBuffer>> {
+    fn composite_channels(&mut self, context: &GpuContext) -> Vec<wgpu::CommandBuffer> {
         let mut cmd_buffers: Vec<wgpu::CommandBuffer> = Vec::new();
         let channel_count = self.channels.len();
         if channel_count == 0 {
@@ -534,7 +537,7 @@ impl Mixer {
                 });
             }
             cmd_buffers.push(encoder.finish());
-            return Ok(cmd_buffers);
+            return cmd_buffers;
         }
 
         // If we have exactly 2 channels and a transition shader is active, use it
@@ -569,7 +572,7 @@ impl Mixer {
                     transition.params.buffer(),
                 );
 
-                return Ok(Vec::new());
+                return Vec::new();
             }
         }
 
@@ -706,7 +709,7 @@ impl Mixer {
             slot += 1;
         }
 
-        Ok(cmd_buffers)
+        cmd_buffers
     }
 
     /// Prepare sub-mix textures for all unique multi-channel surface sources.
@@ -715,7 +718,7 @@ impl Mixer {
         self.sub_mix_cache.retain(|k, _| needed.contains(k));
 
         for mut indices in sources.iter().cloned() {
-            indices.sort();
+            indices.sort_unstable();
             indices.dedup();
             if !self.sub_mix_cache.contains_key(&indices) {
                 let width = self.composite_texture.width();
@@ -756,9 +759,8 @@ impl Mixer {
 
     /// Composite a specific subset of channels into the cached sub-mix texture.
     fn composite_sub_mix(&self, indices: &[usize], context: &GpuContext) {
-        let (sub_tex, sub_view) = match self.sub_mix_cache.get(indices) {
-            Some(entry) => entry,
-            None => return,
+        let Some((sub_tex, sub_view)) = self.sub_mix_cache.get(indices) else {
+            return;
         };
 
         let opacities = self.compositing_opacities();
@@ -968,7 +970,7 @@ impl Mixer {
 
         let mut read_from_composite = true;
 
-        for effect in self.master_effects.iter_mut() {
+        for effect in &mut self.master_effects {
             if !effect.enabled {
                 continue;
             }
@@ -1071,7 +1073,7 @@ impl Mixer {
 
             // Tonemap directly: channel composite → cached texture
             // (no copy needed since source and target are different textures)
-            let cached_view = &self.tonemapped_channel_cache[&ch_idx].1;
+            let tonemap_target = &self.tonemapped_channel_cache[&ch_idx].1;
             let mut encoder =
                 context
                     .device
@@ -1079,7 +1081,7 @@ impl Mixer {
                         label: Some("Channel Tonemap Encoder"),
                     });
             self.tonemap_pipeline
-                .render(&context.device, &mut encoder, ch_view, cached_view);
+                .render(&context.device, &mut encoder, ch_view, tonemap_target);
             context.queue.submit(Some(encoder.finish()));
 
             // Apply LUT to the tonemapped channel copy
@@ -1155,9 +1157,8 @@ fn apply_lut_in_place(
     scratch_view: &wgpu::TextureView,
     context: &GpuContext,
 ) {
-    let lut = match lut {
-        Some(l) => l,
-        None => return,
+    let Some(lut) = lut else {
+        return;
     };
 
     let mut encoder = context

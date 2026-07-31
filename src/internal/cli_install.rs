@@ -1,12 +1,12 @@
 //! First-launch CLI installation.
 //!
 //! Detects when varda is running from an installed location (.app bundle or
-//! AppImage) and ensures a `varda` command is available in the user's PATH.
+//! `AppImage`) and ensures a `varda` command is available in the user's PATH.
 //!
 //! - **macOS**: creates a wrapper script in `/usr/local/bin/varda` that sets
 //!   `DYLD_FALLBACK_LIBRARY_PATH` and execs the binary inside the .app.
 //!   Uses `osascript` for the admin prompt.
-//! - **Linux**: symlinks the AppImage to `~/.local/bin/varda`.
+//! - **Linux**: symlinks the `AppImage` to `~/.local/bin/varda`.
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::Path;
@@ -17,12 +17,12 @@ use std::path::PathBuf;
 /// This is intentionally silent on success and non-fatal on failure.
 pub fn ensure_cli_installed() {
     if let Err(e) = try_install() {
-        log::debug!("CLI install check skipped: {}", e);
+        log::debug!("CLI install check skipped: {e}");
     }
 }
 
 fn try_install() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {}", e))?;
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let exe = exe.canonicalize().unwrap_or_else(|_| exe.clone());
 
     #[cfg(target_os = "macos")]
@@ -101,7 +101,7 @@ fn install_macos_with_admin(wrapper_content: &str) -> Result<(), String> {
         .arg("-e")
         .arg(&script)
         .output()
-        .map_err(|e| format!("osascript failed: {}", e))?;
+        .map_err(|e| format!("osascript failed: {e}"))?;
 
     if output.status.success() {
         log::info!("CLI wrapper installed: /usr/local/bin/varda");
@@ -188,8 +188,7 @@ mod tests {
         let msg = result.unwrap_err();
         assert!(
             msg.contains("not running from .app bundle") || msg.contains("not a .app bundle"),
-            "unexpected error: {}",
-            msg
+            "unexpected error: {msg}"
         );
     }
 

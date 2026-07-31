@@ -36,7 +36,7 @@ impl AudioSourceValues {
 /// All audio source data for the current frame.
 #[derive(Debug, Clone, Default)]
 pub struct AudioValues {
-    /// Per-source audio data, keyed by AudioSourceId.
+    /// Per-source audio data, keyed by `AudioSourceId`.
     pub sources: std::collections::HashMap<crate::audio::AudioSourceId, AudioSourceValues>,
 }
 
@@ -75,8 +75,7 @@ impl AnalyzerValues {
                     && e.analyzer_type == analyzer_type
                     && e.output_name == output_name
             })
-            .map(|e| e.value)
-            .unwrap_or(0.0)
+            .map_or(0.0, |e| e.value)
     }
 
     /// Add a scalar value entry. Called when collecting from deck analyzers.

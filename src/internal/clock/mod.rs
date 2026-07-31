@@ -163,7 +163,7 @@ impl ClockManager {
 
     // ── Manual BPM methods ──────────────────────────────────────
 
-    /// Update the manual BPM value (clamped 20–300). Only effective in ForceManual mode.
+    /// Update the manual BPM value (clamped 20–300). Only effective in `ForceManual` mode.
     pub fn set_manual_bpm(&mut self, bpm: f32) {
         let bpm = bpm.clamp(20.0, 300.0);
         if let ClockPreference::ForceManual {
@@ -174,7 +174,7 @@ impl ClockManager {
         }
     }
 
-    /// Get the current manual BPM (if in ForceManual mode).
+    /// Get the current manual BPM (if in `ForceManual` mode).
     pub fn manual_bpm(&self) -> Option<f32> {
         match &self.preference {
             ClockPreference::ForceManual { bpm } => Some(*bpm),
@@ -316,7 +316,7 @@ impl ClockManager {
                 let bpm = *bpm;
                 let start = *self.manual_start_time.get_or_insert(now);
                 let elapsed = now.duration_since(start).as_secs_f64();
-                let phase = ((elapsed * bpm as f64 / 60.0) % 1.0) as f32;
+                let phase = ((elapsed * f64::from(bpm) / 60.0) % 1.0) as f32;
                 self.state = ClockState {
                     bpm,
                     beat_phase: phase,

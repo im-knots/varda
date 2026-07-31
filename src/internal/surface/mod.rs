@@ -310,6 +310,11 @@ impl Surface {
     /// Ensure a curve authoring path exists, lazily building one from the current
     /// polygon vertices. Curve editing supersedes circle regeneration, so any
     /// `circle_hint` is dropped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the path is still absent after being populated above —
+    /// unreachable.
     pub fn ensure_path(&mut self) -> &mut curve::SurfacePath {
         if self.path.is_none() {
             self.path = Some(curve::SurfacePath::from_polygon(&self.vertices, true));
@@ -321,7 +326,11 @@ impl Surface {
     /// Regenerate the flattened `hole_contours` cache from `holes` (mirrors
     /// `regenerate_from_path` for the outline). Call after any hole edit.
     pub fn regenerate_holes(&mut self) {
-        self.hole_contours = self.holes.iter().map(|h| h.flatten()).collect();
+        self.hole_contours = self
+            .holes
+            .iter()
+            .map(super::super::engine::value::surface::SurfacePath::flatten)
+            .collect();
     }
 
     /// Add a subtractive cut-out hole (8i.7) from a closed [`SurfacePath`] in
@@ -612,7 +621,7 @@ impl Surface {
     }
 
     /// Get a mutable reference to a specific contour's vertices.
-    /// Contour 0 = primary vertices, 1+ = extra_contours[idx-1].
+    /// Contour 0 = primary vertices, 1+ = `extra_contours`[idx-1].
     pub fn contour_mut(&mut self, contour_idx: usize) -> Option<&mut Vec<[f32; 2]>> {
         if contour_idx == 0 {
             Some(&mut self.vertices)
@@ -836,7 +845,7 @@ impl SurfaceManager {
         let original = self.surfaces.iter().find(|s| s.uuid == uuid)?.clone();
         let new_uuid = generate_short_uuid();
         let mut copy = original;
-        copy.uuid = new_uuid.clone();
+        copy.uuid.clone_from(&new_uuid);
         copy.name = format!("{} (copy)", copy.name);
         // Offset slightly so it's visible
         for v in &mut copy.vertices {
@@ -863,8 +872,15 @@ impl SurfaceManager {
 
     /// Combine multiple surfaces into one using polygon boolean union.
     /// Overlapping regions merge into a single outline. Disjoint regions
-    /// become extra_contours. Returns the UUID of the combined surface.
+    /// become `extra_contours`. Returns the UUID of the combined surface.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resolved index list is empty when its minimum is taken —
+    /// unreachable, since an early return covers fewer than two indices.
     pub fn combine_surfaces(&mut self, uuids: &[String]) -> Option<String> {
+        use geo::BooleanOps;
+
         if uuids.len() < 2 {
             return None;
         }
@@ -902,7 +918,6 @@ impl SurfaceManager {
         }
 
         // Iteratively union all polygons
-        use geo::BooleanOps;
         let mut result = geo::MultiPolygon::new(vec![geo_polys[0].clone()]);
         for poly in &geo_polys[1..] {
             let other = geo::MultiPolygon::new(vec![poly.clone()]);
@@ -926,7 +941,7 @@ impl SurfaceManager {
         let output_type = self.surfaces[first_idx].output_type;
 
         // Remove selected surfaces in reverse order to preserve indices
-        let mut sorted_indices: Vec<usize> = indices.to_vec();
+        let mut sorted_indices: Vec<usize> = indices.clone();
         sorted_indices.sort_unstable();
         sorted_indices.dedup();
         for &idx in sorted_indices.iter().rev() {
@@ -971,7 +986,7 @@ pub(crate) fn verts_to_geo(verts: &[[f32; 2]]) -> Option<geo::Polygon<f64>> {
     }
     let coords: Vec<geo::Coord<f64>> = verts
         .iter()
-        .map(|v| geo::coord! { x: v[0] as f64, y: v[1] as f64 })
+        .map(|v| geo::coord! { x: f64::from(v[0]), y: f64::from(v[1]) })
         .collect();
     let ring = geo::LineString::new(coords);
     Some(geo::Polygon::new(ring, vec![]))
@@ -990,7 +1005,7 @@ pub(crate) fn verts_to_geo_with_holes(
     let to_ring = |vs: &[[f32; 2]]| -> geo::LineString<f64> {
         geo::LineString::new(
             vs.iter()
-                .map(|v| geo::coord! { x: v[0] as f64, y: v[1] as f64 })
+                .map(|v| geo::coord! { x: f64::from(v[0]), y: f64::from(v[1]) })
                 .collect(),
         )
     };
@@ -1245,7 +1260,7 @@ mod tests {
                 assert!((c2[0] - 4.0).abs() < 1e-4);
                 assert!((to[0] - 6.0).abs() < 1e-4);
             }
-            _ => panic!("expected cubic"),
+            PathSegment::Line { .. } => panic!("expected cubic"),
         }
     }
 
