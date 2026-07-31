@@ -16,18 +16,23 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # VK_DRIVER_FILES pins the adapter at the Vulkan loader level, but its value
-  # is the ICD path discovered by the install step below, so it is exported to
-  # $GITHUB_ENV there rather than hardcoded here.
+  # The adapter is pinned by VK_DRIVER_FILES, exported to $GITHUB_ENV by the
+  # install step below because the ICD path is discovered rather than fixed.
   #
-  # egui_kittest honours this (egui-wgpu uses `Backends::from_env()`, and
-  # defaults to PRIMARY | GL). Restricting it to Vulkan stops the snapshot
-  # renderer from picking Mesa's GL/llvmpipe path, which is a different
-  # rasterizer and would render the goldens differently.
-  WGPU_BACKEND: vulkan
+  # Note WGPU_BACKEND is deliberately *not* set: `GpuContext::new_headless`
+  # builds its instance with `Backends::all()` and never reads it, and the one
+  # thing that did honour it (egui_kittest, via egui-wgpu's `Backends::from_env`)
+  # no longer runs here. Loader-level pinning is what actually constrains this.
+  #
   # Turn `tests/common/mod.rs`'s no-adapter skip into a hard failure. Without
   # this the entire GPU suite reports green on a runner with a broken driver.
   VARDA_REQUIRE_GPU: 1
+  # Exclude the egui golden-image tests. Their reference PNGs are rendered on a
+  # developer's Metal GPU and lavapipe rounds a few pixels differently, so the
+  # comparison is cross-renderer and needs a tolerance wide enough to hide real
+  # regressions. They stay a local-only check — see tests/ui_snapshots.rs. Every
+  # other GPU suite below runs for real on lavapipe.
+  VARDA_SKIP_GOLDEN_SNAPSHOTS: 1
 
 jobs:
   test:
@@ -104,16 +109,3 @@ jobs:
       # covered without anyone remembering to list it here.
       - name: Run test suite
         run: cargo test --workspace
-
-      # The golden PNGs in tests/snapshots/ were generated on macOS/Metal. If
-      # lavapipe's rasterization diverges, these artifacts are the diff — see
-      # the cross-driver open question in spec/render-testing.md.
-      - name: Upload snapshot diffs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: snapshot-diffs
-          path: |
-            tests/snapshots/**/*.new.png
-            tests/snapshots/**/*.diff.png
-          if-no-files-found: ignore
