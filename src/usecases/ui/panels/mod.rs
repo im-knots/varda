@@ -3,9 +3,9 @@
 //! Each sub-module renders a specific panel or UI section.
 //! The `render_ui` function orchestrates the top-level layout.
 
+mod bottom_bar;
 mod deck_detail;
 mod effects;
-mod geometry;
 mod library;
 mod macros;
 mod midi;
@@ -20,7 +20,7 @@ pub(crate) mod utils;
 
 use super::{EffectDrag, LibraryDrag, UIActions, UIData};
 use crate::engine::{EffectTarget, EngineCommand};
-use deck_detail::render_bottom_panel;
+use bottom_bar::render_bottom_panel;
 use library::render_library_panel;
 use mixer::render_central_panel;
 use notifications_overlay::render_notifications;

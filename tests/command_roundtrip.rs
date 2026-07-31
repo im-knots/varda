@@ -8,14 +8,17 @@ use varda::engine::{CommandResult, EngineCommand, ErrorCode};
 
 use clap::Parser;
 
+mod common;
+
 fn parse_args(args: &[&str]) -> AppConfig {
     AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
 }
 
 fn headless_app() -> Option<VardaApp> {
-    let gpu = varda::renderer::context::GpuContext::new_headless().ok()?;
+    let gpu = common::headless_gpu()?;
     let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
-    VardaApp::new(gpu, &config).ok()
+    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
 fn send_cmd(app: &mut VardaApp, cmd: EngineCommand) -> CommandResult {
@@ -456,7 +459,7 @@ fn solid_color_deck_source_kind() {
 // ── Presets & ToggleParam ───────────────────────────────────────────
 
 fn headless_app_in(dir: &std::path::Path) -> Option<VardaApp> {
-    let gpu = varda::renderer::context::GpuContext::new_headless().ok()?;
+    let gpu = common::headless_gpu()?;
     let ws = dir.to_str().unwrap();
     let config = parse_args(&[
         "--headless",
@@ -466,7 +469,8 @@ fn headless_app_in(dir: &std::path::Path) -> Option<VardaApp> {
         "--workspace",
         ws,
     ]);
-    VardaApp::new(gpu, &config).ok()
+    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }
 
 #[test]

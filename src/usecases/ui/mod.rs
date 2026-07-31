@@ -1196,6 +1196,31 @@ pub fn collect_params(params: &ShaderParams) -> Vec<ParamUIInfo> {
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
+impl SurfaceUI {
+    /// An axis-aligned quad surface with no warp, for UI tests.
+    ///
+    /// Vertices wind clockwise from the top-left: `(x, y)` → `(x+w, y)` →
+    /// `(x+w, y+h)` → `(x, y+h)`.
+    pub fn test_quad(uuid: &str, x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self {
+            uuid: uuid.to_string(),
+            name: format!("Surface {uuid}"),
+            vertices: vec![[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+            extra_contours: vec![],
+            source: OutputSource::Master,
+            content_mapping: ContentMapping::Fill,
+            output_type: SurfaceOutputType::Projection,
+            circle_hint: None,
+            warp: None,
+            warp_bound: false,
+            path: None,
+            holes: vec![],
+            hole_contours: vec![],
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
 impl UIData {
     /// Representative test fixture for UI testing.
     ///

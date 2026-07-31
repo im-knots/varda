@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<()> {
     // First-launch CLI install (non-blocking, non-fatal)
     varda::cli_install::ensure_cli_installed();
 
-    log::info!("Varda VJ Software - Starting up...");
+    log::info!("Varda VJ - Starting up...");
     if config.headless {
         log::info!("Headless mode enabled (API port {})", config.api_port);
     }

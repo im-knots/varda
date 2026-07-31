@@ -16,9 +16,8 @@ use varda::renderer::{context::GpuContext, BlitPipeline, COLOR_PATH_FORMAT};
 const W: u32 = 16;
 const H: u32 = 16;
 
-fn headless_gpu() -> Option<GpuContext> {
-    GpuContext::new_headless().ok()
-}
+mod common;
+use common::headless_gpu;
 
 /// Reference linear → sRGB (IEC 61966-2-1), to check the shader against.
 fn srgb_from_linear(c: f32) -> f32 {
@@ -173,7 +172,6 @@ fn encode_solid(ctx: &GpuContext, linear: [f64; 3], encode: bool) -> [u8; 4] {
 #[test]
 fn encode_applies_the_srgb_transfer_function() {
     let Some(ctx) = headless_gpu() else {
-        eprintln!("no GPU adapter — skipping");
         return;
     };
     // Mid and deep-shadow values: the shadows are where the mismatch was worst.

@@ -9,9 +9,8 @@
 
 use varda::renderer::GpuContext;
 
-fn headless() -> Option<GpuContext> {
-    GpuContext::new_headless().ok()
-}
+mod common;
+use common::headless_gpu as headless;
 
 /// Provoke a real validation error: a texture row stride smaller than the
 /// texture's actual row. This is the exact class of error that aborted the app
@@ -56,7 +55,6 @@ fn provoke_validation_error(gpu: &GpuContext) {
 #[test]
 fn a_validation_error_is_captured_instead_of_aborting() {
     let Some(gpu) = headless() else {
-        eprintln!("no headless adapter; skipping");
         return;
     };
 

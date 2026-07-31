@@ -14,6 +14,8 @@ use varda::usecases::api::SharedState;
 
 use clap::Parser;
 
+mod common;
+
 fn parse_args(args: &[&str]) -> AppConfig {
     AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
 }
@@ -25,9 +27,10 @@ fn parse_args(args: &[&str]) -> AppConfig {
 /// published once at setup; tests that need to verify state mutations after API
 /// calls should re-read from the shared `engine_state` arc.
 fn setup() -> Option<axum::Router> {
-    let gpu = varda::renderer::context::GpuContext::new_headless().ok()?;
+    let gpu = common::headless_gpu()?;
     let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
-    let app = VardaApp::new(gpu, &config).ok()?;
+    // Once a GPU exists, a construction failure is a bug, not a reason to skip.
+    let app = VardaApp::new(gpu, &config).expect("VardaApp::new");
 
     let _real_cmd_tx = app.command_sender();
     let state_reader = app.state_reader();

@@ -6,6 +6,8 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      - 'shaders/**'
+      - 'kittest.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'
@@ -14,6 +16,20 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Pin the adapter at the Vulkan loader level. mesa-vulkan-drivers ships
+  # several ICDs (radeon/intel/virtio/nouveau alongside lavapipe), so naming
+  # lavapipe keeps the rasterizer identical across runner types. This is the
+  # pin that applies to `GpuContext::new_headless`, which builds its instance
+  # with `Backends::all()` and ignores WGPU_BACKEND.
+  VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+  # egui_kittest *does* honour this (egui-wgpu uses `Backends::from_env()`, and
+  # defaults to PRIMARY | GL). Restricting it to Vulkan stops the snapshot
+  # renderer from picking Mesa's GL/llvmpipe path, which is a different
+  # rasterizer and would render the goldens differently.
+  WGPU_BACKEND: vulkan
+  # Turn `tests/common/mod.rs`'s no-adapter skip into a hard failure. Without
+  # this the entire GPU suite reports green on a runner with a broken driver.
+  VARDA_REQUIRE_GPU: 1
 
 jobs:
   test:
@@ -22,6 +38,7 @@ jobs:
     # references __isoc23_strtol / __isoc23_strtoull / __isoc23_strtoll
     # which only exist in glibc >= 2.38. ubuntu-22.04 (glibc 2.35) fails.
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
@@ -47,18 +64,46 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libfreenect.so \
             || { echo "::error::libfreenect-dev did not provide libfreenect.so"; exit 1; }
 
+      # GitHub runners have no GPU. lavapipe (Mesa's software Vulkan
+      # implementation) provides the headless adapter that the render, engine,
+      # and egui snapshot suites need. Without it they all skip and the job is
+      # green having tested nothing. egui_kittest already prefers a CPU adapter
+      # over a hardware one, so its snapshot renderer picks lavapipe unaided.
+      - name: Install lavapipe (software Vulkan)
+        run: |
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+          test -e "$VK_DRIVER_FILES" \
+            || { echo "::error::mesa-vulkan-drivers did not provide $VK_DRIVER_FILES"; exit 1; }
+
+      # Prove the adapter is real before building the suite, and print the
+      # summary so a driver/version change is visible in the log.
+      - name: Verify lavapipe adapter
+        run: |
+          vulkaninfo --summary | tee /tmp/vulkaninfo.txt
+          grep -qi llvmpipe /tmp/vulkaninfo.txt \
+            || { echo "::error::lavapipe did not enumerate as a Vulkan device"; exit 1; }
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Run unit tests
-        run: cargo test --lib
+      # The whole suite, not a curated subset: with an adapter present there is
+      # no GPU-free/GPU-gated split to maintain, and a newly added GPU test is
+      # covered without anyone remembering to list it here.
+      - name: Run test suite
+        run: cargo test --workspace
 
-      # GPU-free integration suite: egui/AccessKit interaction tests run entirely
-      # on the CPU (no wgpu device is created without `.snapshot()`), so they work
-      # on GPU-less GitHub runners. The headless-engine and snapshot suites still
-      # require a GPU adapter and are gated separately.
-      - name: Run GPU-free integration tests
-        run: cargo test --test ui_integration
+      # The golden PNGs in tests/snapshots/ were generated on macOS/Metal. If
+      # lavapipe's rasterization diverges, these artifacts are the diff — see
+      # the cross-driver open question in spec/render-testing.md.
+      - name: Upload snapshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-diffs
+          path: |
+            tests/snapshots/**/*.new.png
+            tests/snapshots/**/*.diff.png
+          if-no-files-found: ignore
