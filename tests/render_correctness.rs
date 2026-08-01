@@ -52,10 +52,8 @@ fn f16_to_f32(bits: u16) -> f32 {
     sign_f * mag
 }
 
-/// Render one frame, then read back the mixer composite (`Rgba16Float`) as
-/// linear-light RGBA f32, row-major, `W*H` pixels. Blocks on `poll(Wait)` —
-/// allowed here because this is a test, not the render thread.
-fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
+/// Advance the mixer by one frame with silent audio and no modulation.
+fn render_once(ctx: &GpuContext, mixer: &mut Mixer) {
     let audio = AudioData::default();
     let audio_values = AudioValues {
         sources: std::collections::HashMap::default(),
@@ -64,16 +62,21 @@ fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
     mixer
         .render(ctx, &audio, &audio_values, &analyzer_values, 60, &[])
         .expect("render");
+}
 
+/// Read back the mixer composite (`Rgba16Float`) as linear-light RGBA f32,
+/// row-major, `w*h` pixels. Blocks on `poll(Wait)` — allowed here because this
+/// is a test, not the render thread.
+fn read_back(ctx: &GpuContext, mixer: &Mixer, width: u32, height: u32) -> Vec<[f32; 4]> {
     let tex = mixer.composite_texture();
     let bytes_per_pixel = 8u32; // Rgba16Float
-    let unpadded = W * bytes_per_pixel;
+    let unpadded = width * bytes_per_pixel;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded = unpadded.div_ceil(align) * align;
 
     let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("render-test readback"),
-        size: u64::from(padded * H),
+        size: u64::from(padded * height),
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -93,12 +96,12 @@ fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded),
-                rows_per_image: Some(H),
+                rows_per_image: Some(height),
             },
         },
         wgpu::Extent3d {
-            width: W,
-            height: H,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
     );
@@ -116,23 +119,33 @@ fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
         .ok();
     rx.recv().expect("map channel").expect("map ok");
 
-    let mut out = Vec::with_capacity((W * H) as usize);
+    let mut out = Vec::with_capacity((width * height) as usize);
     {
         let data = buffer.slice(..).get_mapped_range();
-        for row in 0..H {
+        let channel = |px: usize, i: usize| {
+            f16_to_f32(u16::from_le_bytes([data[px + i * 2], data[px + i * 2 + 1]]))
+        };
+        for row in 0..height {
             let base = (row * padded) as usize;
-            for col in 0..W {
+            for col in 0..width {
                 let px = base + (col as usize) * 8;
-                let r = f16_to_f32(u16::from_le_bytes([data[px], data[px + 1]]));
-                let g = f16_to_f32(u16::from_le_bytes([data[px + 2], data[px + 3]]));
-                let b = f16_to_f32(u16::from_le_bytes([data[px + 4], data[px + 5]]));
-                let a = f16_to_f32(u16::from_le_bytes([data[px + 6], data[px + 7]]));
-                out.push([r, g, b, a]);
+                out.push([
+                    channel(px, 0),
+                    channel(px, 1),
+                    channel(px, 2),
+                    channel(px, 3),
+                ]);
             }
         }
     }
     buffer.unmap();
     out
+}
+
+/// Render one frame and read it back at the default test size.
+fn render_and_read(ctx: &GpuContext, mixer: &mut Mixer) -> Vec<[f32; 4]> {
+    render_once(ctx, mixer);
+    read_back(ctx, mixer, W, H)
 }
 
 /// Centre pixel of the readback — representative for uniform solid composites.
@@ -753,6 +766,106 @@ fn deck_effect_transforms_pixels() {
     assert_lo(twice[0], "inverted-twice.R");
     assert_lo(twice[1], "inverted-twice.G");
     assert_lo(twice[2], "inverted-twice.B");
+}
+
+// ── Generator framing ────────────────────────────────────────────────
+
+/// `dull_skull` must keep its subject on screen for the whole animation.
+///
+/// Its camera used to orbit the world origin without bound (`rotAngle =
+/// PHASE_TIME_1`). Past roughly 68° it crossed behind the backdrop half-space
+/// the skull melts into, and from there every frame was solid black until the
+/// orbit came back around — the shader went dark for a third of its cycle. The
+/// swing is now `sin(PHASE_TIME_1) * sway_range` about the skull's mean
+/// position, which bounds it and keeps the camera in front of the backdrop.
+///
+/// Driven at maximum `speed` and `rot_speed` so a few hundred frames stand in
+/// for minutes of a set. Measured over these samples at this resolution:
+///
+/// | metric                | fixed            | buggy                  |
+/// |-----------------------|------------------|------------------------|
+/// | dark-pixel fraction   | 0.000 throughout | 0.49–1.00 on 12/30     |
+/// | mean horizontal edge  | 0.0034–0.0062    | 0.0000 while blacked   |
+///
+/// The dark fraction is the decisive one. The edge floor additionally catches
+/// the frames where the drifting backdrop swallowed the skull into a
+/// featureless blob, which measured 0.0013–0.0024.
+#[test]
+fn dull_skull_stays_in_frame_for_the_whole_sway() {
+    const SW: u32 = 320;
+    const SH: u32 = 180;
+    const FRAMES: usize = 400;
+    const SAMPLE_EVERY: usize = 20;
+    /// Fixed measures 0.000; buggy reaches 1.000.
+    const MAX_DARK_FRACTION: f32 = 0.25;
+    /// Fixed measures 0.0034 at worst; a swallowed skull measures 0.0024.
+    const MIN_EDGE: f32 = 0.0020;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/dull_skull.fs");
+    let shader = varda::isf::ISFShader::from_file(&path).expect("parse dull_skull.fs");
+
+    let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
+    mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
+    let mut deck = Deck::new(&ctx, shader, SW, SH).expect("deck");
+    deck.generator_params.set_float("speed", 3.0);
+    deck.generator_params.set_float("rot_speed", 2.0);
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+
+    // Thresholds above were measured on gamma-encoded values — the space the
+    // audience sees, and the only one in which "is anything visible" means
+    // anything. The composite is linear, so encode before measuring.
+    let encode = |v: f32| -> f32 {
+        if v <= 0.003_130_8 {
+            v * 12.92
+        } else {
+            1.055 * v.max(0.0).powf(1.0 / 2.4) - 0.055
+        }
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    for frame in 1..=FRAMES {
+        render_once(&ctx, &mut mixer);
+        if !frame.is_multiple_of(SAMPLE_EVERY) {
+            continue;
+        }
+
+        let lum: Vec<f32> = read_back(&ctx, &mixer, SW, SH)
+            .iter()
+            .map(|p| encode(0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]))
+            .collect();
+
+        let dark = lum.iter().filter(|v| **v < 0.05).count() as f32 / lum.len() as f32;
+        let mut edge = 0.0f32;
+        for row in 0..SH as usize {
+            for col in 1..SW as usize {
+                edge += (lum[row * SW as usize + col] - lum[row * SW as usize + col - 1]).abs();
+            }
+        }
+        edge /= (SH * (SW - 1)) as f32;
+
+        if dark > MAX_DARK_FRACTION {
+            failures.push(format!(
+                "frame {frame}: {:.0}% of the frame is black",
+                dark * 100.0
+            ));
+        } else if edge < MIN_EDGE {
+            failures.push(format!(
+                "frame {frame}: no discernible subject (edge {edge:.5})"
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "the camera left the skull on {} of {} sampled frames:\n  {}",
+        failures.len(),
+        FRAMES / SAMPLE_EVERY,
+        failures.join("\n  ")
+    );
 }
 
 /// A shader that emits above display white must reach the compositor unclamped.

@@ -202,6 +202,38 @@ pub struct PhaseInput {
     /// Constant scale factor applied to `dt * param_value` (default 1.0)
     #[serde(rename = "SCALE", default = "default_scale")]
     pub scale: f32,
+
+    /// Additional parameters multiplied into the rate before integration, for the common
+    /// "master speed × per-element rate" shape. Accepts a bare string or an array of
+    /// names; absent means no extra factors.
+    /// See [/spec/phase-accumulators.md](/spec/phase-accumulators.md).
+    #[serde(
+        rename = "MULTIPLY_BY",
+        default,
+        deserialize_with = "deserialize_multiply_by",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub multiply_by: Vec<String>,
+}
+
+/// Accept `"MULTIPLY_BY": "rot_speed"` and `"MULTIPLY_BY": ["a", "b"]` alike, so the
+/// single-factor case stays terse in shader metadata.
+fn deserialize_multiply_by<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(OneOrMany::One(name)) => vec![name],
+        Some(OneOrMany::Many(names)) => names,
+    })
 }
 
 fn default_scale() -> f32 {
@@ -292,6 +324,29 @@ mod tests {
             (pi[1].scale - 1.0).abs() < 1e-5,
             "Default scale should be 1.0"
         );
+        assert!(
+            pi.iter().all(|p| p.multiply_by.is_empty()),
+            "MULTIPLY_BY is optional and absent here"
+        );
+    }
+
+    #[test]
+    fn parse_phase_input_multiply_by_accepts_string_or_array() {
+        let json = r#"{
+            "DESCRIPTION": "Test shader",
+            "INPUTS": [],
+            "PHASE_INPUTS": [
+                {"PARAM": "speed", "MULTIPLY_BY": "rot_speed", "INDEX": 1, "SCALE": 0.2},
+                {"PARAM": "speed", "MULTIPLY_BY": ["time_scale", "flow_speed"], "INDEX": 2}
+            ]
+        }"#;
+        let meta: ISFMetadata = serde_json::from_str(json).unwrap();
+        let pi = meta.phase_inputs.unwrap();
+        assert_eq!(pi[0].param, "speed");
+        assert_eq!(pi[0].multiply_by, vec!["rot_speed"]);
+        assert_eq!(pi[0].index, 1);
+        assert!((pi[0].scale - 0.2).abs() < 1e-5);
+        assert_eq!(pi[1].multiply_by, vec!["time_scale", "flow_speed"]);
     }
 
     #[test]

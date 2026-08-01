@@ -38,7 +38,8 @@
             "MIN": 0.0,
             "MAX": 2.0
         }
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "cycle_speed", "INDEX": 0, "SCALE": 1.0}]
 }*/
 
 #version 450
@@ -96,7 +97,7 @@ void main() {
     
     float shift = hue_shift;
     if (auto_cycle != 0u) {
-        shift += TIME * cycle_speed;
+        shift += PHASE_TIME_0;
     }
     
     hsv.x = fract(hsv.x + shift);

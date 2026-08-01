@@ -13,7 +13,10 @@
         {"NAME": "look_at", "TYPE": "point2D", "DEFAULT": [0.5, 0.5], "LABEL": "Look At"},
         {"NAME": "tint", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Tint"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0, "SCALE": 1.0}]
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "MULTIPLY_BY": "time_scale", "INDEX": 0, "SCALE": 1.0},
+        {"PARAM": "speed", "MULTIPLY_BY": ["time_scale", "flow_speed"], "INDEX": 1, "SCALE": 1.0}
+    ]
 }*/
 
 #version 450
@@ -59,12 +62,11 @@ layout(set = 0, binding = 1) uniform UserParams {
 #define MAX_ITER 35
 #define FAR 6.
 
-// Original used `#define time iTime*1.1`; PHASE_TIME_0 is the smooth
-// phase accumulator driven by the `speed` PHASE_INPUTS param, and
-// `time_scale` exposes the original's baked-in 1.1 multiplier as a
-// tunable (defaulting to 1.1 so the untouched default reproduces the
-// original speed exactly).
-#define time (PHASE_TIME_0 * time_scale)
+// Original used `#define time iTime*1.1`; PHASE_TIME_0 accumulates
+// `speed * time_scale`, where `time_scale` exposes the original's baked-in
+// 1.1 multiplier as a tunable (defaulting to 1.1 so the untouched default
+// reproduces the original speed exactly).
+#define time PHASE_TIME_0
 
 mat2 mm2(in float a){float c = cos(a), s = sin(a);return mat2(c,-s,s,c);}
 
@@ -288,10 +290,10 @@ void main() {
         vec3 pos2 = ro+rd*sph.y;
         vec3 rf = reflect( rd, pos );
         vec3 rf2 = reflect( rd, pos2 );
-        // flow_speed independently scales the time argument fed into
-        // flow(), separate from the overall speed/time_scale driving
-        // the rest of the scene.
-        float flowT = time * flow_speed;
+        // PHASE_TIME_1 accumulates the same rate as PHASE_TIME_0 with
+        // flow_speed folded in, so the shell flow tracks the overall
+        // speed/time_scale while staying independently tunable.
+        float flowT = PHASE_TIME_1;
         float nz = (-log(abs(flow(rf*1.2,flowT)-.01)));
         float nz2 = (-log(abs(flow(rf2*1.2,-flowT)-.01)));
         col += (0.1*nz*nz* vec3(0.12,0.12,.5) + 0.05*nz2*nz2*vec3(0.55,0.2,.55))*0.8*sphere_reflect_intensity;

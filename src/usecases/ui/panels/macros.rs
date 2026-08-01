@@ -13,6 +13,7 @@
 use super::super::{modulator_color, widgets, ModSourceUI, ModSourceUIEntry, UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::macros::{ButtonBehavior, GlobalAction, Macro, MacroCurve, MacroKind, TriggerAction};
+use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 
 // ── Central column (compact widgets) ────────────────────────────────
@@ -469,7 +470,7 @@ fn render_macro_modulation(ui: &mut egui::Ui, m: &Macro, data: &UIData, actions:
                     actions.commands.push(EngineCommand::AssignModulation {
                         target: Macro::value_mod_key(&m.uuid),
                         source_id: entry.uuid.clone(),
-                        amount: 0.5,
+                        amount: DEFAULT_ASSIGNMENT_AMOUNT,
                     });
                 }
             }

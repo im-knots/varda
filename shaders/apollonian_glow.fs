@@ -22,7 +22,10 @@
         {"NAME": "glow_color", "TYPE": "color", "DEFAULT": [1.0, 0.1667, 0.1111, 1.0], "LABEL": "Glow Color"},
         {"NAME": "fog_tint", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Fog Tint"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0, "SCALE": 1.0}]
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "INDEX": 0, "SCALE": 1.0},
+        {"PARAM": "speed", "MULTIPLY_BY": "spin_speed", "INDEX": 1, "SCALE": 0.3333333}
+    ]
 }*/
 
 #version 450
@@ -115,7 +118,7 @@ float fractal2(vec3 p, float t, int iters) {
 // every raymarch/AO/normal sample, is the entire lighting model.
 float map(vec3 p, float t) {
     p.z -= depth;
-    p.xz *= pseudoRot(t * spin_speed / 3.0);
+    p.xz *= pseudoRot(PHASE_TIME_1);
     float ball = length(p) - glow_radius;
     float f1 = fractal1(p / fractal_scale, int(fractal1_iters)) * fractal_scale;
     float f2 = fractal2(p / fractal_scale, t, int(fractal2_iters)) * fractal_scale;

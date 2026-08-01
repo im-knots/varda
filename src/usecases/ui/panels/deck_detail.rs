@@ -9,6 +9,7 @@ use super::utils::{
 };
 use crate::channel::DeckRenderFps;
 use crate::engine::EngineCommand;
+use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 use crate::{BlendMode, ScalingMode};
 
@@ -811,7 +812,7 @@ pub(super) fn render_selected_deck_detail(
                                         &data.modulation_sources,
                                         &|name: &str, val: ParamValue| EngineCommand::SetGeneratorParam { deck_uuid: deck.uuid.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
-                                            target: format!("deck_{deck_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: 0.5,
+                                            target: format!("deck_{deck_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
                                             target: format!("deck_{deck_uuid_remove}:{name}"),
@@ -886,7 +887,7 @@ pub(super) fn render_selected_deck_detail(
                                         &data.modulation_sources,
                                         &|name: &str, val: ParamValue| EngineCommand::SetEffectParam { effect_uuid: eff_uuid_param.clone(), name: name.to_string(), value: val },
                                         Some(&|name: &str, source_uuid: &str| EngineCommand::AssignModulation {
-                                            target: format!("fx_{eff_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: 0.5,
+                                            target: format!("fx_{eff_uuid_assign}:{name}"), source_id: source_uuid.to_string(), amount: DEFAULT_ASSIGNMENT_AMOUNT,
                                         }),
                                         Some(&|name: &str| EngineCommand::ClearModulation {
                                             target: format!("fx_{eff_uuid_remove}:{name}"),

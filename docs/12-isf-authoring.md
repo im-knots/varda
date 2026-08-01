@@ -95,6 +95,39 @@ Declare them in the metadata:
 
 Then use in the shader: `float angle = PHASE_TIME_0 * 6.28318;` for smooth rotation that doesn't jump when the user adjusts speed.
 
+The value integrated is the parameter's **modulated** value — the same one the shader reads from the user-parameter buffer. Routing an audio band or LFO at `rotation_speed` therefore changes how fast the phase advances, and because integration is continuous the animation speeds up and slows down without ever jumping. A shader should read `PHASE_TIME_N` rather than the raw parameter for anything that advances over time; reading the raw parameter and multiplying by `TIME` reintroduces the jump.
+
+#### Combining two rates
+
+Multiplying an accumulator by a parameter — `PHASE_TIME_0 * rot_speed` — reintroduces the same jump, because it scales an ever-growing phase by a live value. When a per-element rate should ride on top of a master speed, fold both into one accumulator with `MULTIPLY_BY`:
+
+```json
+"PHASE_INPUTS": [
+    { "PARAM": "speed", "INDEX": 0, "SCALE": 1.0 },
+    { "PARAM": "speed", "MULTIPLY_BY": "rot_speed", "INDEX": 1, "SCALE": 0.2 }
+]
+```
+
+`PHASE_TIME_1` now accumulates `dt × speed × rot_speed × 0.2`, so the shader writes `float rotAngle = PHASE_TIME_1;` and both parameters stay smooth and modulatable. `MULTIPLY_BY` also takes an array when a rate depends on three parameters: `"MULTIPLY_BY": ["time_scale", "flow_speed"]`.
+
+Two rules follow from this. Never multiply `PHASE_TIME_N` by a user parameter, and never apply a parameter that already drives an accumulator a second time in the shader body — the phase already contains it, so applying it again makes the response quadratic in that parameter.
+
+#### Bounding an accumulator
+
+An accumulator grows without limit, which is correct for anything that should cycle forever — a hue, a scroll offset, an angle that wraps. It is wrong for anything that must stay within a range. Feeding an unbounded phase straight into a camera angle is how `dull_skull` used to orbit off behind its own backdrop and render black for a third of every cycle.
+
+Wrap the phase in a periodic function and scale *that* by the amplitude parameter:
+
+```glsl
+float swayAngle = sin(PHASE_TIME_1) * sway_range;
+```
+
+This is not the forbidden `PHASE_TIME_N * param`: the sine is already bounded, so `sway_range` scales a value in [-1, 1] rather than one that grows forever. `sway_range` is an amplitude, so it stays a plain uniform.
+
+#### What does not belong in `PHASE_INPUTS`
+
+Only parameters that express a *rate*. A parameter setting a static angle, scale, threshold, or count must stay a plain uniform; integrating it would ramp it to its limit and hold there. Shaders that step a simulation into a persistent buffer are already continuous by construction and need no accumulator for their step-rate coefficients.
+
 ## Binding Layout
 
 | Binding | Content |

@@ -1015,7 +1015,7 @@ mod tests {
 
     fn headless_app() -> Option<VardaApp> {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        let config = crate::testing::headless_config();
         VardaApp::new(gpu, &config).ok()
     }
 

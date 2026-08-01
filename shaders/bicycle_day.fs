@@ -33,7 +33,10 @@
         {"NAME": "tree_base_y", "TYPE": "float", "DEFAULT": 0.35, "MIN": -0.5, "MAX": 1.0, "LABEL": "Tree Base Height"},
         {"NAME": "tree_tint", "TYPE": "color", "DEFAULT": [0.6, 0.8, 1.0, 1.0], "LABEL": "Tree Tint"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0, "SCALE": 1.0}]
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "INDEX": 0, "SCALE": 1.0},
+        {"PARAM": "speed", "MULTIPLY_BY": "sun_spin", "INDEX": 1, "SCALE": 1.0}
+    ]
 }*/
 
 #version 450
@@ -251,7 +254,7 @@ vec3 raymarch(vec3 from, vec3 dir, float t) {
     dir.y -= 0.02;
 
     float sunsize = sun_size - max(0.0, audio_level) * sun_audio_react; // audio-reactive sun size
-    float an = atan(dir.x, dir.y) + PHASE_TIME_0 * sun_spin; // angle for drawing/rotating sun
+    float an = atan(dir.x, dir.y) + PHASE_TIME_1; // angle for drawing/rotating sun
     float s = pow(clamp(1.0 - length(dir.xy) * sunsize - abs(0.2 - mod(an, 0.4)), 0.0, 1.0), 0.1);
     float sb = pow(clamp(1.0 - length(dir.xy) * (sunsize - 0.2) - abs(0.2 - mod(an, 0.4)), 0.0, 1.0), 0.1);
     float sg = pow(clamp(1.0 - length(dir.xy) * (sunsize - 4.5) - 0.5 * abs(0.2 - mod(an, 0.4)), 0.0, 1.0), 3.0);

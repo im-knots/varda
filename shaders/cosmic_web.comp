@@ -26,6 +26,7 @@
         {"NAME": "node_color",     "TYPE": "color", "DEFAULT": [1.0,  0.75, 0.20, 1.0], "LABEL": "Node Color"},
         {"NAME": "bg_color",       "TYPE": "color", "DEFAULT": [0.0,  0.0,  0.0,  1.0], "LABEL": "Background"}
     ],
+    "PHASE_INPUTS": [{"PARAM": "evolve_speed", "INDEX": 0, "SCALE": 0.2}],
     "BUFFERS": [
         {"NAME": "modes",   "TYPE": "storage", "STRUCT": "Mode", "COUNT": 96,     "STRIDE": 16, "PERSISTENT": false},
         {"NAME": "density", "TYPE": "storage", "STRUCT": "Cell", "COUNT": 262144, "STRIDE": 4,  "PERSISTENT": false}
@@ -120,7 +121,7 @@ float densityAt(int cx, int cy) {
 // ── Cosmic clock: a monotonic forward time split into discrete formation
 //    epochs. The scale factor `a` (= fract) ramps 0->1 within an epoch, so
 //    structure grows monotonically rather than breathing back and forth.
-float cosmicClock() { return TIME * max(evolve_speed, 0.0) * 0.2; }
+float cosmicClock() { return PHASE_TIME_0; }
 
 // =====================================================================
 // PASS 0: Synthesise the Gaussian displacement field as plane-wave modes

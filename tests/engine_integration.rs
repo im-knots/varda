@@ -1,6 +1,6 @@
 //! Engine integration tests — multi-step command workflows through real headless `VardaApp`.
 
-use varda::app::{AppConfig, VardaApp};
+use varda::app::VardaApp;
 use varda::engine::{
     BlendMode, CommandResult, DeckSnapshot, EffectTarget, EngineCommand, ErrorCode, SurfaceQueries,
 };
@@ -8,17 +8,11 @@ use varda::modulation::LFOWaveform;
 use varda::renderer::context::OutputSource;
 use varda::surface::SurfacePath;
 
-use clap::Parser;
-
 mod common;
-
-fn parse_args(args: &[&str]) -> AppConfig {
-    AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
-}
 
 fn headless_app() -> Option<VardaApp> {
     let gpu = common::headless_gpu()?;
-    let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+    let config = varda::testing::headless_config();
     // Once a GPU exists, a construction failure is a bug, not a reason to skip.
     Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }

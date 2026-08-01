@@ -16,7 +16,7 @@ fn parse_args(args: &[&str]) -> AppConfig {
 
 fn headless_app() -> Option<VardaApp> {
     let gpu = common::headless_gpu()?;
-    let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+    let config = varda::testing::headless_config();
     // Once a GPU exists, a construction failure is a bug, not a reason to skip.
     Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }

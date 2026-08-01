@@ -1067,18 +1067,12 @@ mod tests {
 
     #[test]
     fn fps_smoothing_converges() {
-        use clap::Parser;
-        fn parse_args(args: &[&str]) -> super::super::AppConfig {
-            super::super::AppConfig::parse_from(
-                std::iter::once("varda").chain(args.iter().copied()),
-            )
-        }
         let gpu = crate::renderer::context::GpuContext::new_headless();
         let Ok(gpu) = gpu else {
             eprintln!("Skipping: no headless GPU available");
             return;
         };
-        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        let config = crate::testing::headless_config();
         let Ok(mut app) = VardaApp::new(gpu, &config) else {
             eprintln!("Skipping: VardaApp creation failed");
             return;
@@ -1095,18 +1089,12 @@ mod tests {
 
     #[test]
     fn fps_smoothing_window_cap() {
-        use clap::Parser;
-        fn parse_args(args: &[&str]) -> super::super::AppConfig {
-            super::super::AppConfig::parse_from(
-                std::iter::once("varda").chain(args.iter().copied()),
-            )
-        }
         let gpu = crate::renderer::context::GpuContext::new_headless();
         let Ok(gpu) = gpu else {
             eprintln!("Skipping: no headless GPU available");
             return;
         };
-        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        let config = crate::testing::headless_config();
         let Ok(mut app) = VardaApp::new(gpu, &config) else {
             eprintln!("Skipping: VardaApp creation failed");
             return;

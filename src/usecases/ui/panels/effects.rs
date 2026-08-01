@@ -5,6 +5,7 @@ use super::utils::{
     channel_color, render_effect_drag_ghost, render_effect_drag_handle, render_effect_drop_zone,
 };
 use crate::engine::EngineCommand;
+use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 
 pub(super) fn render_master_effect_detail(
@@ -83,7 +84,7 @@ pub(super) fn render_master_effect_detail(
                                                                 "fx_{eff_uuid_master}:{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
-                                                            amount: 0.5,
+                                                            amount: DEFAULT_ASSIGNMENT_AMOUNT,
                                                         }
                                                     }),
                                                     Some(&|name: &str| {
@@ -344,7 +345,7 @@ pub(super) fn render_channel_effect_detail(
                                                                 "fx_{eff_uuid_ch_assign}:{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
-                                                            amount: 0.5,
+                                                            amount: DEFAULT_ASSIGNMENT_AMOUNT,
                                                         }
                                                     }),
                                                     Some(&|name: &str| {
