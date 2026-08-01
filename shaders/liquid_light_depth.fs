@@ -368,6 +368,10 @@ void main() {
          * (0.3 + edge_glow * 0.5);
 
     col *= color_intensity;
+    // Saturation, matching the flat version. Three pigments that overlap across
+    // most of the field average towards their own mean, so the dish drifts to
+    // pastel however dense the individual dyes are.
+    col = mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), col, 1.62);
     // Warm tungsten cast of an overhead projector lamp.
     col *= mix(vec3(1.0), vec3(1.12, 0.98, 0.82), warmth);
     // Round lamp falloff.
@@ -376,6 +380,16 @@ void main() {
     // No dye means no light — an empty field must read as black, not as a flat
     // colour that looks like a working shader with nothing in front of it.
     col *= smoothstep(0.0, 0.05, thickness);
+
+    // ---- Final grade, matching the flat version ----
+    // Contrast is a power about a mid-grey rather than the flat version's pivot
+    // subtraction, because this pass stays unbounded linear all the way to the
+    // tonemap. A pivot would drive darks negative and clip the highlights the
+    // tonemap is there to roll off; a power is monotonic and HDR-safe.
+    const float BRIGHTNESS = 0.82;
+    const float CONTRAST = 1.22;
+    const float MID = 0.35;
+    col = MID * pow(max(col, 0.0) / MID, vec3(CONTRAST)) * BRIGHTNESS;
 
     fragColor = vec4(max(col + keep, 0.0), 1.0);
 }

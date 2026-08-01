@@ -68,8 +68,8 @@ pub struct FfmpegSubprocess {
     frame_tx: Option<mpsc::SyncSender<Vec<u8>>>,
     /// Writer thread handle
     writer_thread: Option<std::thread::JoinHandle<()>>,
-    /// Shared frame counter (updated by writer thread)
-    frames_written: Arc<AtomicU64>,
+    /// Frame tallies, shared with the writer thread.
+    counters: FrameCounters,
     /// Writer thread error flag (set when write fails during normal operation)
     write_failed: Arc<AtomicBool>,
     /// Set by `stop()` before killing ffmpeg — tells the writer thread that a
@@ -93,6 +93,33 @@ pub struct FfmpegSubprocess {
 /// Bounded channel capacity — 2 frames of buffer allows the writer thread
 /// to stay one frame ahead without accumulating unbounded latency.
 const FRAME_CHANNEL_CAPACITY: usize = 2;
+
+/// Ceiling on repeated frames emitted to cover one gap, in
+/// [`FfmpegSubprocess::start_writer_thread`]. Half a second at 60 fps: long
+/// enough to ride out any hitch worth correcting, short enough that a genuine
+/// freeze degrades into a shortened timeline rather than a burst of writes into
+/// a pipe that is already struggling.
+const MAX_PAD_FRAMES_PER_ARRIVAL: u64 = 30;
+
+/// What the writer thread has put down the pipe, split by where it came from.
+///
+/// `written` counts frames the renderer actually produced and is the health
+/// stat; `padded` counts repeats the writer inserted to cover gaps where it
+/// did not. The two together are the length of the video timeline.
+#[derive(Clone)]
+struct FrameCounters {
+    written: Arc<AtomicU64>,
+    padded: Arc<AtomicU64>,
+}
+
+impl FrameCounters {
+    fn new() -> Self {
+        Self {
+            written: Arc::new(AtomicU64::new(0)),
+            padded: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
 
 /// Compute video/buffer bitrate in kbps for RTMP output based on resolution and frame rate.
 fn compute_rtmp_bitrate(width: u32, height: u32, fps: u32) -> (u32, u32) {
@@ -122,6 +149,10 @@ pub struct AudioInput {
     pub sample_rate: u32,
     /// Device native channel count.
     pub channels: u16,
+    /// Samples the capture callback discarded because this subscriber's channel
+    /// was full. The writer replaces them with silence so the sample count keeps
+    /// matching elapsed time — see [`AudioPipe::start`].
+    pub lost_samples: Arc<AtomicU64>,
 }
 
 /// ffmpeg argument vectors + the live listener/receiver, computed before the
@@ -132,6 +163,7 @@ struct PreparedAudio {
     out_args: Vec<String>,
     listener: TcpListener,
     rx: crossbeam_channel::Receiver<PcmChunk>,
+    lost_samples: Arc<AtomicU64>,
 }
 
 /// Build the ffmpeg audio input/output args and bind the loopback TCP endpoint
@@ -145,11 +177,22 @@ fn prepare_audio(
         return Ok(None);
     };
     let (listener, audio_url) = create_audio_endpoint()?;
-    // Input opts (must precede the audio `-i`): wallclock timestamps anchor the
-    // first sample near the first video frame; f32le matches the raw PCM tap.
+    // Input opts (must precede the audio `-i`); f32le matches the raw PCM tap.
+    //
+    // Timestamps come from the sample count, which is ffmpeg's default for a raw
+    // input: sample N sits at N/sample_rate. This used to pass
+    // `-use_wallclock_as_timestamps 1`, stamping each buffer with the moment it
+    // arrived over the socket, and that was the cause of audio breaking up
+    // whenever the renderer hitched. Arrival time is not a clock — it carries
+    // scheduler jitter, and it stalls outright when ffmpeg stops draining the
+    // socket to wait on the video pipe. Every one of those stalls was written
+    // into the file as a timing hole.
+    //
+    // The capture device's sample clock has none of those problems: the hardware
+    // delivers exactly `sample_rate` samples per second no matter what the rest
+    // of the process is doing. It is the most accurate clock available here, so
+    // it is the one the recording is built on. See /spec/av-sync.md.
     let in_args = vec![
-        "-use_wallclock_as_timestamps".into(),
-        "1".into(),
         "-f".into(),
         "f32le".into(),
         "-ar".into(),
@@ -185,6 +228,7 @@ fn prepare_audio(
         out_args,
         listener,
         rx: audio.rx,
+        lost_samples: audio.lost_samples,
     }))
 }
 
@@ -209,7 +253,12 @@ fn finalize_audio(
     label: String,
 ) -> anyhow::Result<Option<AudioPipe>> {
     match prepared {
-        Some(p) => Ok(Some(AudioPipe::start(p.listener, p.rx, label)?)),
+        Some(p) => Ok(Some(AudioPipe::start(
+            p.listener,
+            p.rx,
+            p.lost_samples,
+            label,
+        )?)),
         None => Ok(None),
     }
 }
@@ -222,20 +271,37 @@ pub struct AudioPipe {
     writer_thread: Option<std::thread::JoinHandle<()>>,
     /// PCM chunks written to the socket so far (health stat).
     frames_written: Arc<AtomicU64>,
+    /// Samples of silence spliced in to replace PCM lost to backpressure.
+    silence_spliced: Arc<AtomicU64>,
 }
+
+/// Samples of silence written per `write_all` when filling a gap. Only used on
+/// the rare backpressure path, so a modest buffer is plenty.
+const SILENCE_BLOCK: usize = 4096;
 
 impl AudioPipe {
     /// Start the audio writer thread. It accepts ffmpeg's connection to the
     /// loopback listener, then drains `rx` into the stream as f32le bytes.
+    ///
+    /// `lost_samples` counts PCM the capture callback had to discard because
+    /// this pipe was backed up. The writer replaces each lost sample with a
+    /// sample of silence before writing the next real chunk. That matters now
+    /// that timestamps come from the sample count: a gap left unfilled does not
+    /// read as a gap, it pulls every later sample earlier, so a single dropout
+    /// would desynchronise the rest of the recording. Filling it costs a brief
+    /// mute and keeps the timeline exact.
     fn start(
         listener: TcpListener,
         rx: crossbeam_channel::Receiver<PcmChunk>,
+        lost_samples: Arc<AtomicU64>,
         label: String,
     ) -> anyhow::Result<Self> {
         let shutting_down = Arc::new(AtomicBool::new(false));
         let frames_written = Arc::new(AtomicU64::new(0));
+        let silence_spliced = Arc::new(AtomicU64::new(0));
         let sd = shutting_down.clone();
         let fw = frames_written.clone();
+        let spliced = silence_spliced.clone();
         // Non-blocking accept so teardown can interrupt a wait for an ffmpeg that
         // never connects (e.g. it died at startup) instead of a wedged thread.
         listener
@@ -267,9 +333,29 @@ impl AudioPipe {
                     return;
                 }
                 let _ = stream.set_nodelay(true);
+                let silence = [0f32; SILENCE_BLOCK];
                 loop {
                     match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                         Ok(chunk) => {
+                            // Restore any time the capture callback had to throw
+                            // away, before the samples that follow it.
+                            let mut lost = lost_samples.swap(0, Ordering::Relaxed);
+                            if lost > 0 {
+                                spliced.fetch_add(lost, Ordering::Relaxed);
+                                log::warn!(
+                                    "audio backpressure on '{label}': spliced {lost} samples of \
+                                     silence to hold the timeline"
+                                );
+                            }
+                            while lost > 0 {
+                                let n = lost.min(SILENCE_BLOCK as u64) as usize;
+                                let bytes: &[u8] = bytemuck::cast_slice(&silence[..n]);
+                                if stream.write_all(bytes).is_err() {
+                                    return;
+                                }
+                                lost -= n as u64;
+                            }
+
                             let bytes: &[u8] = bytemuck::cast_slice(&chunk.samples);
                             if let Err(e) = stream.write_all(bytes) {
                                 if sd.load(Ordering::SeqCst) {
@@ -300,6 +386,7 @@ impl AudioPipe {
 
         Ok(Self {
             shutting_down,
+            silence_spliced,
             writer_thread: Some(writer_thread),
             frames_written,
         })
@@ -318,6 +405,11 @@ impl AudioPipe {
     fn frames_written(&self) -> u64 {
         self.frames_written.load(Ordering::Relaxed)
     }
+
+    /// Samples of silence written in place of PCM lost to backpressure.
+    fn silence_spliced(&self) -> u64 {
+        self.silence_spliced.load(Ordering::Relaxed)
+    }
 }
 
 impl Drop for AudioPipe {
@@ -328,10 +420,27 @@ impl Drop for AudioPipe {
 
 impl FfmpegSubprocess {
     /// Start the background writer thread that drains the channel into ffmpeg stdin.
+    /// Start the video writer thread.
+    ///
+    /// The raw video input is declared at a constant `fps`, so ffmpeg times each
+    /// frame by its position in the stream: frame N is at N/fps regardless of
+    /// when it was produced. That makes a missing frame invisible in the video
+    /// but *silent* about time — the recorded timeline simply comes out shorter
+    /// than the session was. The audio track is built on the capture device's
+    /// sample clock and stays true to real time, so every skipped frame used to
+    /// pull the two apart a little more, and the drift accumulated for as long
+    /// as the recording ran.
+    ///
+    /// So when the renderer misses its slot, the writer repeats the previous
+    /// frame often enough to cover the gap. Repeating a frame is nearly free to
+    /// encode — it differs from its predecessor in nothing — and it keeps the
+    /// file constant-frame-rate, which is what editors want. See
+    /// /spec/av-sync.md.
     fn start_writer_thread(
         mut stdin: std::process::ChildStdin,
         rx: mpsc::Receiver<Vec<u8>>,
-        frames_written: Arc<AtomicU64>,
+        fps: u32,
+        counters: FrameCounters,
         write_failed: Arc<AtomicBool>,
         shutting_down: Arc<AtomicBool>,
         label: String,
@@ -339,22 +448,75 @@ impl FfmpegSubprocess {
         std::thread::Builder::new()
             .name(format!("ffmpeg-writer-{label}"))
             .spawn(move || {
+                let fps = f64::from(fps.max(1));
+                // Frames emitted so far, padding included. Counted separately
+                // from `frames_written` so the health stat still reports what
+                // the renderer actually produced.
+                let mut emitted: u64 = 0;
+                // Anchored on the *first* frame, not on this thread starting.
+                // ffmpeg takes a moment to come up and the caller may not have
+                // a frame ready the instant it does; timing from spawn would
+                // read that startup as a gap and open every recording with a
+                // frozen still.
+                let mut started: Option<std::time::Instant> = None;
+
                 for frame in rx {
-                    if let Err(e) = stdin.write_all(&frame) {
-                        if shutting_down.load(Ordering::SeqCst) {
-                            log::debug!("ffmpeg pipe closed during shutdown for '{label}': {e}");
-                        } else {
-                            log::error!("ffmpeg write error for '{label}': {e}");
-                            write_failed.store(true, Ordering::SeqCst);
+                    let pad = started.map_or_else(
+                        || {
+                            started = Some(std::time::Instant::now());
+                            0
+                        },
+                        |t| Self::pad_count(t.elapsed(), fps, emitted),
+                    );
+                    for _ in 0..pad {
+                        if let Err(e) = stdin.write_all(&frame) {
+                            Self::report_write_error(&e, &shutting_down, &write_failed, &label);
+                            return;
                         }
+                        emitted += 1;
+                    }
+                    if pad > 0 {
+                        counters.padded.fetch_add(pad, Ordering::Relaxed);
+                    }
+
+                    if let Err(e) = stdin.write_all(&frame) {
+                        Self::report_write_error(&e, &shutting_down, &write_failed, &label);
                         return;
                     }
-                    frames_written.fetch_add(1, Ordering::Relaxed);
+                    emitted += 1;
+                    counters.written.fetch_add(1, Ordering::Relaxed);
                 }
                 // Channel closed — normal shutdown, flush stdin
                 let _ = stdin.flush();
             })
             .expect("failed to spawn ffmpeg writer thread")
+    }
+
+    /// How many repeated frames to emit before the frame that just arrived.
+    ///
+    /// `emitted` is everything written so far, padding included. If real time
+    /// has moved further than that, the difference is the renderer's shortfall
+    /// and repeating the previous frame covers it. Capped at
+    /// [`MAX_PAD_FRAMES_PER_ARRIVAL`]: past that the app was not really
+    /// recording anyway, and a burst of writes into a pipe that is already
+    /// behind would make things worse rather than better.
+    fn pad_count(elapsed: std::time::Duration, fps: f64, emitted: u64) -> u64 {
+        let due = (elapsed.as_secs_f64() * fps) as u64;
+        due.saturating_sub(emitted).min(MAX_PAD_FRAMES_PER_ARRIVAL)
+    }
+
+    fn report_write_error(
+        e: &std::io::Error,
+        shutting_down: &Arc<AtomicBool>,
+        write_failed: &Arc<AtomicBool>,
+        label: &str,
+    ) {
+        if shutting_down.load(Ordering::SeqCst) {
+            log::debug!("ffmpeg pipe closed during shutdown for '{label}': {e}");
+        } else {
+            log::error!("ffmpeg write error for '{label}': {e}");
+            write_failed.store(true, Ordering::SeqCst);
+        }
     }
 
     /// Spawn an ffmpeg recording subprocess.
@@ -450,14 +612,15 @@ impl FfmpegSubprocess {
         log::info!("Recording started: {path} ({codec}, {width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
-        let frames_written = Arc::new(AtomicU64::new(0));
+        let counters = FrameCounters::new();
         let write_failed = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
             stdin,
             rx,
-            frames_written.clone(),
+            fps,
+            counters.clone(),
             write_failed.clone(),
             shutting_down.clone(),
             path.to_string(),
@@ -468,7 +631,7 @@ impl FfmpegSubprocess {
             child,
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
-            frames_written,
+            counters,
             write_failed,
             shutting_down,
             label: path.to_string(),
@@ -546,14 +709,15 @@ impl FfmpegSubprocess {
         log::info!("SRT server started: {srt_url} ({width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
-        let frames_written = Arc::new(AtomicU64::new(0));
+        let counters = FrameCounters::new();
         let write_failed = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
             stdin,
             rx,
-            frames_written.clone(),
+            fps,
+            counters.clone(),
             write_failed.clone(),
             shutting_down.clone(),
             url.to_string(),
@@ -564,7 +728,7 @@ impl FfmpegSubprocess {
             child,
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
-            frames_written,
+            counters,
             write_failed,
             shutting_down,
             label: url.to_string(),
@@ -660,14 +824,15 @@ impl FfmpegSubprocess {
         log::info!("{mode} output started: {playlist} ({width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
-        let frames_written = Arc::new(AtomicU64::new(0));
+        let counters = FrameCounters::new();
         let write_failed = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
             stdin,
             rx,
-            frames_written.clone(),
+            fps,
+            counters.clone(),
             write_failed.clone(),
             shutting_down.clone(),
             name.to_string(),
@@ -678,7 +843,7 @@ impl FfmpegSubprocess {
             child,
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
-            frames_written,
+            counters,
             write_failed,
             shutting_down,
             label: name.to_string(),
@@ -758,7 +923,7 @@ impl FfmpegSubprocess {
         log::info!("RTMP output started: {url} ({width}x{height} @ {fps}fps, {maxrate}kbps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
-        let frames_written = Arc::new(AtomicU64::new(0));
+        let counters = FrameCounters::new();
         let write_failed = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
@@ -766,7 +931,8 @@ impl FfmpegSubprocess {
         let writer_thread = Self::start_writer_thread(
             stdin,
             rx,
-            frames_written.clone(),
+            fps,
+            counters.clone(),
             write_failed.clone(),
             shutting_down.clone(),
             label.clone(),
@@ -777,7 +943,7 @@ impl FfmpegSubprocess {
             child,
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
-            frames_written,
+            counters,
             write_failed,
             shutting_down,
             label,
@@ -859,14 +1025,15 @@ impl FfmpegSubprocess {
         log::info!("DASH output started: {manifest} ({width}x{height} @ {fps}fps)");
 
         let stdin = child.stdin.take().expect("ffmpeg stdin not piped");
-        let frames_written = Arc::new(AtomicU64::new(0));
+        let counters = FrameCounters::new();
         let write_failed = Arc::new(AtomicBool::new(false));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::sync_channel(FRAME_CHANNEL_CAPACITY);
         let writer_thread = Self::start_writer_thread(
             stdin,
             rx,
-            frames_written.clone(),
+            fps,
+            counters.clone(),
             write_failed.clone(),
             shutting_down.clone(),
             name.to_string(),
@@ -877,7 +1044,7 @@ impl FfmpegSubprocess {
             child,
             frame_tx: Some(tx),
             writer_thread: Some(writer_thread),
-            frames_written,
+            counters,
             write_failed,
             shutting_down,
             label: name.to_string(),
@@ -994,7 +1161,7 @@ impl FfmpegSubprocess {
                     .expect("failed to spawn placeholder"),
             );
             let label = self.label.clone();
-            let frames_written = self.frames_written.clone();
+            let counters = self.counters.clone();
             let stderr = child.stderr.take();
 
             std::thread::Builder::new()
@@ -1044,11 +1211,12 @@ impl FfmpegSubprocess {
                     if let Some(mut pipe) = stderr {
                         Self::drain_stderr_pipe(&mut pipe, &label);
                     }
-                    let frames = frames_written.load(Ordering::Relaxed);
+                    let frames = counters.written.load(Ordering::Relaxed);
                     log::info!(
-                        "ffmpeg finished: {} ({} frames, {:.1}s)",
+                        "ffmpeg finished: {} ({} frames{}, {:.1}s)",
                         label,
                         frames,
+                        Self::pad_summary(counters.padded.load(Ordering::Relaxed)),
                         duration.as_secs_f32()
                     );
                 })
@@ -1078,14 +1246,27 @@ impl FfmpegSubprocess {
             // 5. Reap the child process
             let _ = self.child.wait();
 
-            let frames = self.frames_written.load(Ordering::Relaxed);
+            let frames = self.counters.written.load(Ordering::Relaxed);
+            let padded = self.counters.padded.load(Ordering::Relaxed);
             self.drain_stderr();
             log::info!(
-                "ffmpeg finished: {} ({} frames, {:.1}s)",
+                "ffmpeg finished: {} ({} frames{}, {:.1}s)",
                 self.label,
                 frames,
+                Self::pad_summary(padded),
                 duration.as_secs_f32()
             );
+        }
+    }
+
+    /// Completion-log fragment naming repeated frames, empty when there were
+    /// none. Padding is not an error — it is how a hitchy session still comes
+    /// out in sync — but it is worth knowing the renderer struggled.
+    fn pad_summary(padded: u64) -> String {
+        if padded == 0 {
+            String::new()
+        } else {
+            format!(" + {padded} repeated to cover renderer gaps")
         }
     }
 
@@ -1096,13 +1277,27 @@ impl FfmpegSubprocess {
 
     /// Number of frames written so far.
     pub fn frames_written(&self) -> u64 {
-        self.frames_written.load(Ordering::Relaxed)
+        self.counters.written.load(Ordering::Relaxed)
     }
 
     /// Number of audio PCM chunks written to the socket so far, or `None` for a
     /// video-only output (no audio passthrough).
     pub fn audio_frames_written(&self) -> Option<u64> {
         self.audio.as_ref().map(AudioPipe::frames_written)
+    }
+
+    /// Repeated frames emitted to cover gaps where the renderer missed its
+    /// slot. Nonzero means the session dropped frames; the recording is still
+    /// in sync, but the visible result is a brief freeze.
+    pub fn frames_padded(&self) -> u64 {
+        self.counters.padded.load(Ordering::Relaxed)
+    }
+
+    /// Samples of silence spliced into the audio to replace PCM lost to
+    /// backpressure. Nonzero means audio was audibly interrupted, as opposed to
+    /// merely delayed. `None` for a video-only output.
+    pub fn audio_silence_spliced(&self) -> Option<u64> {
+        self.audio.as_ref().map(AudioPipe::silence_spliced)
     }
 
     /// The label (path or URL) for this subprocess.
@@ -1332,6 +1527,7 @@ mod tests {
             rx,
             sample_rate,
             channels,
+            lost_samples: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -1356,9 +1552,6 @@ mod tests {
         assert!(has_pair(&p.in_args, "-ar", "44100"));
         assert!(has_pair(&p.in_args, "-ac", "2"));
         assert!(p.in_args.contains(&"-i".to_string()));
-        assert!(p
-            .in_args
-            .contains(&"-use_wallclock_as_timestamps".to_string()));
         // Output: AAC, stereo downmix, async resample, explicit mapping.
         assert!(has_pair(&p.out_args, "-c:a", "aac"));
         assert!(has_pair(&p.out_args, "-ac", "2"));
@@ -1366,6 +1559,35 @@ mod tests {
         assert!(has_pair(&p.out_args, "-map", "1:a:0"));
         // Recording must NOT force 48k — native rate is preserved (Decision 5).
         assert!(!has_pair(&p.out_args, "-ar", "48000"));
+    }
+
+    /// Audio must be timed by its own sample count, never by when it turned up.
+    ///
+    /// This is the whole of the recording's timebase. A raw f32le input with no
+    /// timestamp option gets PTS from the sample count, which is exactly the
+    /// device's clock; adding `-use_wallclock_as_timestamps` replaces that with
+    /// the moment each buffer reached the socket. The two look identical while
+    /// everything is keeping up and diverge the instant anything stalls —
+    /// notably when ffmpeg stops draining the audio socket because it is
+    /// waiting on the video pipe. Every such stall lands in the file as a hole
+    /// in the audio timeline, which is what "the music goes off-beat and drops
+    /// bits when the renderer hitches" sounded like.
+    ///
+    /// Checked on both policies because all five spawners share `prepare_audio`
+    /// and the streaming ones would otherwise regress unnoticed.
+    #[test]
+    fn audio_is_timed_by_its_sample_clock_not_by_arrival() {
+        for is_stream in [false, true] {
+            let p = prepare_audio(Some(dummy_audio(48000, 2)), is_stream)
+                .unwrap()
+                .expect("audio prepared");
+            assert!(
+                !p.in_args
+                    .contains(&"-use_wallclock_as_timestamps".to_string()),
+                "audio timestamps must come from the sample count, not arrival time \
+                 (is_stream={is_stream}); see /spec/av-sync.md"
+            );
+        }
     }
 
     #[test]
@@ -1391,6 +1613,156 @@ mod tests {
         );
         // Mono device still reported faithfully on the input side.
         assert!(has_pair(&p.in_args, "-ac", "1"));
+    }
+
+    // ── A/V sync: holding the video timeline against the audio clock ────
+
+    /// A renderer keeping up must not be padded at all.
+    ///
+    /// Padding is repair work; doing it when nothing is broken would inflate
+    /// every recording with duplicate frames and make the encoder do work for
+    /// nothing.
+    #[test]
+    fn a_renderer_on_time_is_never_padded() {
+        let fps = 60.0;
+        // Frame N arrives exactly on its slot, having already emitted N frames.
+        for n in 0..120u64 {
+            let elapsed =
+                std::time::Duration::from_secs_f64(f64::from(u32::try_from(n).unwrap()) / fps);
+            assert_eq!(
+                FfmpegSubprocess::pad_count(elapsed, fps, n),
+                0,
+                "frame {n} arrived on time and should need no padding"
+            );
+        }
+    }
+
+    /// A gap in the renderer is covered by exactly as many frames as it swallowed.
+    ///
+    /// This is what keeps the video timeline honest. Raw video is timed by
+    /// position — frame N is at N/fps whenever it was made — so a frame that is
+    /// never written does not register as a pause, it shortens the recording.
+    /// The audio track is timed by the capture device's sample clock and stays
+    /// true to real time, so every unwritten frame used to slide the two apart,
+    /// permanently and cumulatively. Repeating the last frame across the gap
+    /// costs almost nothing to encode and keeps the two clocks agreeing.
+    #[test]
+    fn a_renderer_gap_is_covered_frame_for_frame() {
+        let fps = 60.0;
+        // 10 frames written, then a 100 ms stall: 6 frames' worth of real time
+        // has passed unrecorded (10/60 s = 166.7 ms, +100 ms = 266.7 ms = 16
+        // frames due), so 6 repeats bring the timeline back to real time.
+        let elapsed = std::time::Duration::from_secs_f64(10.0 / fps + 0.1);
+        assert_eq!(FfmpegSubprocess::pad_count(elapsed, fps, 10), 6);
+    }
+
+    /// A long freeze degrades gracefully instead of flooding the pipe.
+    #[test]
+    fn a_long_freeze_is_capped_rather_than_burst_written() {
+        let fps = 60.0;
+        let elapsed = std::time::Duration::from_secs(30);
+        assert_eq!(
+            FfmpegSubprocess::pad_count(elapsed, fps, 0),
+            MAX_PAD_FRAMES_PER_ARRIVAL,
+            "a 30 s stall must not emit 1800 frames in one go"
+        );
+    }
+
+    /// Running ahead of the clock never produces negative padding.
+    #[test]
+    fn a_renderer_ahead_of_the_clock_is_not_padded() {
+        let fps = 60.0;
+        assert_eq!(
+            FfmpegSubprocess::pad_count(std::time::Duration::from_millis(1), fps, 100),
+            0
+        );
+    }
+
+    /// PCM lost to backpressure is replaced by an equal span of silence.
+    ///
+    /// Now that audio is timed by its sample count, a dropped chunk does not
+    /// leave a hole — it pulls everything after it earlier, so one dropout
+    /// would put the rest of the recording out of sync with the picture.
+    /// Writing silence in its place costs a brief mute and keeps the count
+    /// exact. The assertion is on the byte count for that reason: it is the
+    /// only thing the timeline is made of.
+    #[test]
+    fn lost_audio_is_replaced_by_an_equal_span_of_silence() {
+        use std::io::Read as _;
+
+        const CHUNK: usize = 64;
+        const LOST: u64 = 500;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (tx, rx) = crossbeam_channel::bounded::<PcmChunk>(4);
+        let lost_samples = Arc::new(AtomicU64::new(LOST));
+
+        let mut pipe = AudioPipe::start(listener, rx, lost_samples, "test".into()).expect("pipe");
+
+        // Stand in for ffmpeg: connect and read everything written.
+        let mut client = std::net::TcpStream::connect(addr).expect("connect");
+        tx.send(PcmChunk {
+            samples: vec![0.5; CHUNK],
+        })
+        .expect("send");
+
+        let expected_samples = LOST as usize + CHUNK;
+        let mut buf = vec![0u8; expected_samples * 4];
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("timeout");
+        client.read_exact(&mut buf).expect("read all PCM");
+
+        let samples: &[f32] = bytemuck::cast_slice(&buf);
+        assert!(
+            samples[..LOST as usize].iter().all(|s| *s == 0.0),
+            "the gap should be filled with silence"
+        );
+        assert!(
+            samples[LOST as usize..].iter().all(|s| *s == 0.5),
+            "the real chunk should follow the silence, intact"
+        );
+        assert_eq!(pipe.silence_spliced(), LOST);
+
+        pipe.stop();
+    }
+
+    /// With nothing lost, not a single extra sample is invented.
+    #[test]
+    fn an_unimpeded_audio_pipe_writes_only_captured_samples() {
+        use std::io::Read as _;
+
+        const CHUNK: usize = 32;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (tx, rx) = crossbeam_channel::bounded::<PcmChunk>(4);
+        let mut pipe = AudioPipe::start(
+            listener,
+            rx,
+            Arc::new(AtomicU64::new(0)),
+            "test-clean".into(),
+        )
+        .expect("pipe");
+
+        let mut client = std::net::TcpStream::connect(addr).expect("connect");
+        tx.send(PcmChunk {
+            samples: vec![0.25; CHUNK],
+        })
+        .expect("send");
+
+        let mut buf = vec![0u8; CHUNK * 4];
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("timeout");
+        client.read_exact(&mut buf).expect("read chunk");
+
+        let samples: &[f32] = bytemuck::cast_slice(&buf);
+        assert!(samples.iter().all(|s| *s == 0.25));
+        assert_eq!(pipe.silence_spliced(), 0);
+
+        pipe.stop();
     }
 
     #[test]

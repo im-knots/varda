@@ -500,6 +500,23 @@ mod tests {
         let _ = harness;
     }
 
+    /// Every preview and stage canvas now sizes itself from the render
+    /// resolution, so a portrait or square project drives layout arithmetic
+    /// that a 16:9 fixture never reaches.
+    #[test]
+    fn render_ui_smoke_non_landscape_resolutions() {
+        for (w, h) in [(1080u32, 1920u32), (1080, 1080), (1080, 1350), (0, 0)] {
+            let mut data = UIData::test_fixture();
+            data.render_width = w;
+            data.render_height = h;
+            data.stage_editor_open = true;
+            let harness = egui_kittest::Harness::new_ui(|ui| {
+                let _ = render_ui(ui, &data);
+            });
+            let _ = harness;
+        }
+    }
+
     /// Smoke test: `render_ui` with empty channels doesn't panic.
     #[test]
     fn render_ui_smoke_empty_channels() {

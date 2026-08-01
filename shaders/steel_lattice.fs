@@ -16,7 +16,10 @@
         {"NAME": "diffuse_tint", "TYPE": "color", "DEFAULT": [1.0, 0.97, 0.92, 1.0], "LABEL": "Diffuse Tint"},
         {"NAME": "specular_tint", "TYPE": "color", "DEFAULT": [1.0, 0.9, 0.92, 1.0], "LABEL": "Specular Tint"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0, "SCALE": 1.0}]
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "INDEX": 0, "SCALE": 1.0},
+        {"PARAM": "speed", "MULTIPLY_BY": "look_speed", "INDEX": 1, "SCALE": 0.25}
+    ]
 }*/
 
 #version 450
@@ -217,16 +220,19 @@ void main() {
     vec3 rd = normalize(vec3(su, 0.5));
 
     // iTime -> PHASE_TIME_0 (bound to "speed") for smooth motion that
-    // doesn't jump when the user drags the slider. look_speed additionally
-    // scales the rotation rate on top of the phase accumulator.
-    rd.xy *= rot(PHASE_TIME_0 * 0.5 * look_speed);
-    rd.xz *= rot(PHASE_TIME_0 * 0.25 * look_speed);
+    // doesn't jump when the user drags the slider. The look rotation runs at
+    // speed × look_speed, so that product is integrated as slot 1 rather than
+    // applied to slot 0 — scaling accumulated phase by a live parameter is the
+    // discontinuity the accumulator exists to remove. Slot 1 carries the
+    // quarter rate; the half rate is twice it.
+    rd.xy *= rot(PHASE_TIME_1 * 2.0);
+    rd.xz *= rot(PHASE_TIME_1);
 
     vec3 ro = vec3(0.0, 0.0, PHASE_TIME_0 * 1.0);
 
     vec3 lp = vec3(0.0, 0.125, -0.125);
-    lp.xy *= rot(PHASE_TIME_0 * 0.5 * look_speed);
-    lp.xz *= rot(PHASE_TIME_0 * 0.25 * look_speed);
+    lp.xy *= rot(PHASE_TIME_1 * 2.0);
+    lp.xz *= rot(PHASE_TIME_1);
     lp += ro + vec3(0.0, 1.0, 0.0);
 
     vec3 sceneCol = vec3(0.0);

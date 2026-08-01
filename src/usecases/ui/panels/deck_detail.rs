@@ -267,9 +267,17 @@ pub(super) fn render_selected_deck_detail(
         ui.horizontal_top(|ui| {
             // Column 0: Deck preview — scales with bottom bar height
             if let Some(tex_id) = data.deck_preview_textures.get(&deck.uuid) {
+                // Height-driven from the bottom bar, with the visible panel
+                // width as the other bound so an ultra-wide project cannot
+                // produce a column wider than the bar it sits in.
                 let available_height = ui.available_height() - 12.0; // margin
-                let preview_height = available_height.max(60.0);
-                let preview_width = preview_height * 16.0 / 9.0;
+                let preview = super::utils::preview_size(
+                    egui::vec2(ui.available_width(), available_height.max(60.0)),
+                    data.render_width,
+                    data.render_height,
+                );
+                let preview_width = preview.x;
+                let preview_height = preview.y;
                 egui::Frame::default()
                     .inner_margin(6.0)
                     .corner_radius(4.0)

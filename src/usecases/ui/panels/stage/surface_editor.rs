@@ -43,13 +43,19 @@ pub(crate) fn render_surface_editor(ui: &mut egui::Ui, data: &UIData, actions: &
 
     ui.add_space(4.0);
 
-    // 2D Canvas — draw surfaces as rectangles
-    let canvas_width = ui.available_width() - 4.0;
-    let canvas_height = canvas_width * 0.5625; // 16:9 aspect
-    let (canvas_rect, canvas_response) = ui.allocate_exact_size(
-        egui::vec2(canvas_width, canvas_height),
-        egui::Sense::click_and_drag(),
+    // 2D Canvas — draw surfaces as rectangles. Surfaces are stored in
+    // normalised output coordinates, so the canvas has to carry the render
+    // aspect or a square surface is drawn as a wide one.
+    let width = ui.available_width() - 4.0;
+    let canvas = crate::usecases::ui::panels::utils::preview_size(
+        egui::vec2(width, width),
+        data.render_width,
+        data.render_height,
     );
+    let canvas_width = canvas.x;
+    let canvas_height = canvas.y;
+    let (canvas_rect, canvas_response) =
+        ui.allocate_exact_size(canvas, egui::Sense::click_and_drag());
 
     let painter = ui.painter_at(canvas_rect);
 

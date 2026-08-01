@@ -853,9 +853,21 @@ impl VardaApp {
         self.mixer.resize(&self.context, width, height);
         // Clear sub-mix cache since textures were recreated
         self.mixer.clear_sub_mix_cache();
+        let stopped = self.resize_headless_outputs(width, height);
         self.session
             .notifications
             .info(format!("📐 Resolution changed to {width}×{height}"));
+        if !stopped.is_empty() {
+            self.session.notifications.warn(format!(
+                "⏹ Stopped {} to resize: {}",
+                if stopped.len() == 1 {
+                    "an output".to_string()
+                } else {
+                    format!("{} outputs", stopped.len())
+                },
+                stopped.join(", ")
+            ));
+        }
     }
 
     /// Current target FPS (0 = uncapped).
@@ -1374,6 +1386,50 @@ mod tests {
         // Should keep previous resolution
         assert!(app.render_width() > 0);
         assert!(app.render_height() > 0);
+    }
+
+    /// A headless output used to take the render resolution once, at creation,
+    /// so switching a project to portrait afterwards left the recording buffer
+    /// landscape and ffmpeg was spawned with the stale `-s WxH`. The saved file
+    /// came out the old shape with the portrait composite squashed into it.
+    #[test]
+    fn headless_outputs_follow_the_render_resolution() {
+        let Some(mut app) = headless_app() else {
+            return;
+        };
+        fire(
+            &mut app,
+            crate::engine::EngineCommand::CreateHeadlessOutput {
+                target: crate::engine::value::render::OutputTarget::Recording {
+                    path: "unused.mp4".into(),
+                    codec: crate::renderer::context::RecordingCodec::H264,
+                    audio_device: None,
+                },
+            },
+        );
+
+        let dimensions = |app: &VardaApp| {
+            app.output
+                .outputs
+                .iter()
+                .filter_map(|o| match o {
+                    UnifiedOutput::Headless(h) => Some((h.width, h.height)),
+                    UnifiedOutput::Window(_) => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            dimensions(&app),
+            vec![(app.render_width(), app.render_height())],
+            "a new output should start at the current render resolution"
+        );
+
+        app.set_render_resolution(1080, 1920);
+        assert_eq!(
+            dimensions(&app),
+            vec![(1080, 1920)],
+            "the output should have followed the resolution change"
+        );
     }
 
     #[test]

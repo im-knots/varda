@@ -421,6 +421,31 @@ pub struct SurfaceAssignment {
     pub overlap_zones: super::edge_blend::SurfaceOverlapZones,
 }
 
+/// The largest centred `[x, y, w, h]` of `content_aspect` (width ÷ height) that
+/// fits a `canvas_width` × `canvas_height` canvas, in normalised coordinates.
+///
+/// Content narrower than the canvas gets bars on the left and right, wider gets
+/// them above and below, and an exact match returns the full unit square so the
+/// usual case costs nothing. Degenerate inputs — a zero-sized canvas, or an
+/// aspect that is zero, negative, infinite or NaN — also return the full square,
+/// which stretches rather than producing a NaN-sized quad.
+pub fn aspect_fit_rect(content_aspect: f32, canvas_width: u32, canvas_height: u32) -> [f32; 4] {
+    if canvas_width == 0
+        || canvas_height == 0
+        || !content_aspect.is_finite()
+        || content_aspect <= 0.0
+    {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+    let canvas_aspect = canvas_width as f32 / canvas_height as f32;
+    let (w, h) = if content_aspect > canvas_aspect {
+        (1.0, canvas_aspect / content_aspect)
+    } else {
+        (content_aspect / canvas_aspect, 1.0)
+    };
+    [(1.0 - w) * 0.5, (1.0 - h) * 0.5, w, h]
+}
+
 /// An output window that displays content on a separate display/projector.
 ///
 /// Each output window has its own OS window and wgpu surface, but shares
@@ -609,17 +634,56 @@ impl OutputWindow {
         self.preview_texture_view = view;
     }
 
-    /// Render the routed content to this output window's surface (simple single-source blit)
+    /// Render the routed content stretched over the whole window.
+    ///
+    /// Used for the projector calibration card, which has to reach the physical
+    /// edges of the output for alignment against it to mean anything. Content
+    /// should go through [`render_fit`](Self::render_fit) instead.
     pub fn render(&self, context: &GpuContext, content_view: &wgpu::TextureView) {
-        let fullscreen_quad: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        self.render_quad(context, content_view, [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    /// Render the routed content letterboxed to `content_aspect` (width ÷ height).
+    ///
+    /// With no surfaces defined the window is the whole canvas, so content used
+    /// to be stretched to fill it: a 1080×1920 composite arrived correctly
+    /// proportioned and was squashed into a 16:9 window. The pass clears to
+    /// black, so insetting the quad puts bars around the content rather than
+    /// distorting it. A window that already matches the content aspect insets by
+    /// nothing and renders exactly as before.
+    pub fn render_fit(
+        &self,
+        context: &GpuContext,
+        content_view: &wgpu::TextureView,
+        content_aspect: f32,
+    ) {
+        // Measured against the rotated dimensions: the surface pass draws into
+        // an intermediate at those and rotation is applied on the way to the
+        // swap chain, so a 90° output turns a landscape window into a portrait
+        // canvas.
+        let (ew, eh) = self
+            .rotation
+            .effective_dimensions(self.size.width, self.size.height);
+        self.render_quad(
+            context,
+            content_view,
+            aspect_fit_rect(content_aspect, ew, eh),
+        );
+    }
+
+    /// Blit `content_view` into one normalised `[x, y, w, h]` rectangle of the
+    /// window, with the content's full extent mapped across it.
+    fn render_quad(&self, context: &GpuContext, content_view: &wgpu::TextureView, rect: [f32; 4]) {
+        let [x, y, w, h] = rect;
+        let quad: [[f32; 2]; 4] = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
         self.render_surfaces(
             context,
             &[SurfaceRenderInfo {
                 uuid: "",
                 content_view,
-                vertices: &fullscreen_quad,
+                vertices: &quad,
                 extra_contours: &[],
-                bounding_box: [0.0, 0.0, 1.0, 1.0],
+                bounding_box: rect,
                 uv_scale: [1.0, 1.0],
                 uv_offset: [0.0, 0.0],
                 warp_mode: None,
@@ -1243,23 +1307,7 @@ impl HeadlessOutput {
         height: u32,
     ) -> Self {
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Headless Output Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (texture, texture_view, eb_tex, eb_view) = Self::create_textures(device, width, height);
         let readback = super::ReadbackBuffer::new(device, width, height);
         let blit_pipeline =
             BlitPipeline::new(device, format).expect("Failed to create headless blit pipeline");
@@ -1267,21 +1315,6 @@ impl HeadlessOutput {
             .expect("Failed to create headless polygon pipeline");
         let edge_blend_pipeline = super::edge_blend::EdgeBlendPipeline::new(device, format)
             .expect("Failed to create headless edge blend pipeline");
-        let eb_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Headless Edge Blend Intermediate"),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let eb_view = eb_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         Self {
             uuid: crate::deck::generate_short_uuid(),
@@ -1307,6 +1340,85 @@ impl HeadlessOutput {
             edge_blend_texture_view: eb_view,
             rotation: OutputRotation::default(),
         }
+    }
+
+    /// The render target and the edge-blend intermediate, which are the only
+    /// two resources whose size depends on the output dimensions. The pipelines
+    /// are size-independent, so [`resize`](Self::resize) rebuilds just these.
+    fn create_textures(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::Texture,
+        wgpu::TextureView,
+    ) {
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Headless Output Texture"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let eb_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Headless Edge Blend Intermediate"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let eb_view = eb_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, texture_view, eb_tex, eb_view)
+    }
+
+    /// Rebuild this output's GPU resources at a new size.
+    ///
+    /// A headless output used to take the render resolution once, when it was
+    /// created, and never look at it again. A recording made before the project
+    /// was switched to a portrait resolution therefore kept a landscape buffer,
+    /// the portrait composite was stretch-blitted into it, and the saved file
+    /// came out the old shape with squashed content. The same held for NDI and
+    /// Syphon, which published the stale dimensions.
+    ///
+    /// Callers must stop any subprocess-backed target before resizing: ffmpeg is
+    /// spawned with a fixed `-s WxH` and raw frames of a different size desync
+    /// the stream rather than being rejected. NDI and Syphon take the dimensions
+    /// per frame and need no restart.
+    ///
+    /// A resize to the current size is a no-op, so this is safe to call
+    /// unconditionally.
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if width == 0 || height == 0 || (width == self.width && height == self.height) {
+            return;
+        }
+        let (texture, texture_view, eb_tex, eb_view) = Self::create_textures(device, width, height);
+        self.texture = texture;
+        self.texture_view = texture_view;
+        self.edge_blend_texture = eb_tex;
+        self.edge_blend_texture_view = eb_view;
+        self.readback = super::ReadbackBuffer::new(device, width, height);
+        self.width = width;
+        self.height = height;
     }
 
     /// Set output rotation. Headless outputs don't have intermediate textures to rebuild,
@@ -1424,7 +1536,69 @@ impl UnifiedOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::OutputRotation;
+    use super::{aspect_fit_rect, OutputRotation};
+
+    /// Content and canvas agree, so nothing is inset — the case every 16:9
+    /// project has always been in, and the one that must not change.
+    #[test]
+    fn matching_aspect_fills_the_canvas() {
+        assert_eq!(
+            aspect_fit_rect(16.0 / 9.0, 1920, 1080),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+        assert_eq!(aspect_fit_rect(1.0, 800, 800), [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    /// A portrait project in a landscape window: full height, pillarboxed.
+    #[test]
+    fn portrait_content_in_a_landscape_canvas_is_pillarboxed() {
+        let [x, y, w, h] = aspect_fit_rect(1080.0 / 1920.0, 1920, 1080);
+        // 9:16 inside 16:9 leaves a column (9/16)/(16/9) = 0.3164 of the width.
+        assert!((w - 0.316_406).abs() < 1e-4, "width {w}");
+        assert_eq!(h, 1.0);
+        assert!((x - (1.0 - w) / 2.0).abs() < 1e-6, "not centred: {x}");
+        assert_eq!(y, 0.0);
+    }
+
+    /// The inverse, which is what a 16:9 project sent to a phone-shaped output
+    /// gets: full width, bars above and below.
+    #[test]
+    fn landscape_content_in_a_portrait_canvas_is_letterboxed() {
+        let [x, y, w, h] = aspect_fit_rect(16.0 / 9.0, 1080, 1920);
+        assert_eq!(w, 1.0);
+        assert!((h - 0.316_406).abs() < 1e-4, "height {h}");
+        assert_eq!(x, 0.0);
+        assert!((y - (1.0 - h) / 2.0).abs() < 1e-6, "not centred: {y}");
+    }
+
+    /// The fitted rectangle must stay inside the canvas whatever it is handed,
+    /// or content spills off the edge of the projector.
+    #[test]
+    fn the_fitted_rect_never_leaves_the_unit_square() {
+        for aspect in [0.1_f32, 0.5, 1.0, 1.777, 4.0, 32.0] {
+            for (cw, ch) in [(1920u32, 1080u32), (1080, 1920), (1000, 1000), (3840, 800)] {
+                let [x, y, w, h] = aspect_fit_rect(aspect, cw, ch);
+                assert!(
+                    x >= 0.0 && y >= 0.0 && x + w <= 1.000_01 && y + h <= 1.000_01,
+                    "aspect {aspect} in {cw}×{ch} gave {:?}",
+                    [x, y, w, h]
+                );
+            }
+        }
+    }
+
+    /// A malformed scene or a window mid-minimise must not produce a NaN quad.
+    #[test]
+    fn degenerate_inputs_fall_back_to_filling() {
+        assert_eq!(aspect_fit_rect(16.0 / 9.0, 0, 0), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(aspect_fit_rect(0.0, 1920, 1080), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(aspect_fit_rect(-2.0, 1920, 1080), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(aspect_fit_rect(f32::NAN, 1920, 1080), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            aspect_fit_rect(f32::INFINITY, 1920, 1080),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+    }
 
     #[test]
     fn output_rotation_default_is_deg0() {

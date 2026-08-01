@@ -315,6 +315,9 @@ pub(super) fn render_clock_popover(ui: &mut egui::Ui, data: &UIData, actions: &m
     ui.label(egui::RichText::new(status).weak().small());
 }
 
+/// A named render resolution offered in the popover: label, width, height.
+type ResolutionPreset = (&'static str, u32, u32);
+
 /// Render the resolution popover (shown when clicking resolution in the top bar).
 pub(super) fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, actions: &mut UIActions) {
     ui.set_min_width(200.0);
@@ -324,22 +327,35 @@ pub(super) fn render_resolution_popover(ui: &mut egui::Ui, data: &UIData, action
     let current_w = data.render_width;
     let current_h = data.render_height;
 
-    // Common presets
-    let presets: &[(&str, u32, u32)] = &[
+    // Landscape presets, then the shapes short-form video actually ships in.
+    // 1080×1920 is the single 9:16 master every vertical platform takes —
+    // Reels, TikTok, Shorts, Stories and Facebook Reels all specify exactly
+    // that. 1080×1350 is the 4:5 Instagram feed post, which claims more of the
+    // scroll than square does, and 1080×1080 is the 1:1 fallback.
+    let landscape: &[ResolutionPreset] = &[
         ("720p", 1280, 720),
         ("1080p", 1920, 1080),
         ("1440p", 2560, 1440),
         ("4K", 3840, 2160),
     ];
+    let vertical: &[ResolutionPreset] = &[
+        ("9:16 Reels / TikTok / Shorts", 1080, 1920),
+        ("9:16 4K vertical", 2160, 3840),
+        ("4:5 Instagram feed", 1080, 1350),
+        ("1:1 Square", 1080, 1080),
+    ];
 
-    for &(label, w, h) in presets {
-        let is_current = current_w == w && current_h == h;
-        let text = format!("{label} ({w}×{h})");
-        if ui.radio(is_current, text).clicked() && !is_current {
-            actions.commands.push(EngineCommand::SetRenderResolution {
-                width: w,
-                height: h,
-            });
+    for (heading, presets) in [("Landscape", landscape), ("Vertical & square", vertical)] {
+        ui.label(egui::RichText::new(heading).strong().small());
+        for &(label, w, h) in presets {
+            let is_current = current_w == w && current_h == h;
+            let text = format!("{label} ({w}×{h})");
+            if ui.radio(is_current, text).clicked() && !is_current {
+                actions.commands.push(EngineCommand::SetRenderResolution {
+                    width: w,
+                    height: h,
+                });
+            }
         }
     }
 

@@ -617,6 +617,13 @@ pub struct OutputUI {
     pub rotation: crate::renderer::context::OutputRotation,
     /// Audio passthrough health for an active ffmpeg output (None = video-only).
     pub audio_passthrough: Option<AudioPassthroughUI>,
+    /// Pixel size of the texture the output panel previews. A headless output
+    /// is at the render resolution; a windowed one is at its (rotated) window
+    /// size, which need not share the render aspect. The panel has to size the
+    /// widget from this rather than from the render resolution, or a windowed
+    /// preview is stretched whenever the two disagree.
+    pub preview_width: u32,
+    pub preview_height: u32,
 }
 
 /// Live audio passthrough health for an active output.
@@ -628,6 +635,9 @@ pub struct AudioPassthroughUI {
     pub frames_written: u64,
     /// PCM chunks dropped on backpressure.
     pub frames_dropped: u64,
+    /// Samples of silence written in place of those drops. This, not the chunk
+    /// count, is what the listener hears.
+    pub silence_spliced: u64,
 }
 
 /// Dome-mode UI actions (camera interaction, mode toggle, config changes).

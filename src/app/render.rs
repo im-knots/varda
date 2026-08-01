@@ -53,6 +53,10 @@ struct HeadlessDeliverySinks<'a> {
     syphon_manager: &'a mut crate::syphon::SyphonManager,
     audio_manager: &'a mut crate::audio::AudioManager,
     notifications: &'a mut crate::notifications::NotificationSystem,
+    /// Rate to reopen an ffmpeg output at, for the SRT reconnect path. Must
+    /// match what `cmd_start_output` uses, or a reconnected stream would be
+    /// timed differently from the one it replaced.
+    encoder_fps: u32,
 }
 
 impl VardaApp {
@@ -498,6 +502,7 @@ impl VardaApp {
             }
         }
 
+        let render_aspect = self.render_width as f32 / self.render_height.max(1) as f32;
         let mixer = &self.mixer;
 
         // Run domemaster renderer if enabled (content rotation is updated each frame via set_content_rotation)
@@ -527,6 +532,7 @@ impl VardaApp {
                         &self.output.surface_manager,
                         &self.output.calibration_textures,
                         domemaster_view,
+                        render_aspect,
                     );
                 }
                 crate::renderer::context::UnifiedOutput::Headless(_) => {
@@ -542,6 +548,7 @@ impl VardaApp {
             syphon_manager: &mut self.external_io.syphon_manager,
             audio_manager: &mut self.audio_manager,
             notifications: &mut self.session.notifications,
+            encoder_fps: crate::app::state::encoder_fps(self.target_fps),
         };
         Self::render_headless_outputs_inner(
             &mut self.output.outputs,
@@ -560,6 +567,7 @@ impl VardaApp {
         surface_manager: &crate::surface::SurfaceManager,
         calibration_textures: &[(wgpu::Texture, wgpu::TextureView)],
         domemaster_view: Option<&wgpu::TextureView>,
+        render_aspect: f32,
     ) {
         use crate::renderer::context::CalibrationMode;
         // Projector calibration: one full-frame test card over the whole output,
@@ -573,7 +581,10 @@ impl VardaApp {
         // Surfaces calibration: each surface shows a colored test card through its warp.
         let surfaces_cal = output.calibration_mode == CalibrationMode::Surfaces;
         if surface_manager.surfaces.is_empty() {
-            output.render(context, mixer.composite_view());
+            // No stage geometry, so the window is the whole canvas and the
+            // master's shape is the only thing that can define the picture.
+            // Surfaces below are user-placed and carry their own aspect.
+            output.render_fit(context, mixer.composite_view(), render_aspect);
         } else if !output.surface_assignments.is_empty() {
             // Draw in global stacking order (surface-manager Vec order, index 0 =
             // bottom), not per-assignment order — see 8i.12. For each surface, find
@@ -962,7 +973,7 @@ impl VardaApp {
                                 &codec,
                                 h.width,
                                 h.height,
-                                30,
+                                sinks.encoder_fps,
                                 audio_input,
                             ) {
                                 Ok(new_sub) => {

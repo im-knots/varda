@@ -868,6 +868,220 @@ fn dull_skull_stays_in_frame_for_the_whole_sway() {
     );
 }
 
+/// Automating a control must not make the picture stutter.
+///
+/// Passing `no_shader_scales_accumulated_phase_by_a_parameter` is necessary but
+/// not sufficient. A parameter can be perfectly continuous and still be an
+/// *amplitude* — something that sets where the image is sampled rather than how
+/// fast it moves — and an LFO on an amplitude drives the picture out and back at
+/// the LFO's rate. That reads as sloshing, and it is what an operator means when
+/// they say an automated fader looks stuttery.
+///
+/// `liquid_light.fs`'s Agitation was built both ways, so the two are measured
+/// against each other here. Per-frame luminance change under a 1 Hz triangle
+/// LFO sweeping Agitation 0.1..0.9, against the same shader with the fader
+/// parked at the midpoint:
+///
+/// | Agitation implemented as | parked  | automated | ratio  |
+/// |--------------------------|---------|-----------|--------|
+/// | domain-warp gain         | 0.00135 | 0.01814   | 13.5x  |
+/// | mixing rate (slot 1)     | 0.00475 | 0.00459   | 0.97x  |
+///
+/// A rate scores at or below 1.0 because the LFO spends half its time below the
+/// midpoint, slowing the churn. Anything much above 1.0 means the fader is
+/// moving the fluid rather than stirring it.
+#[test]
+fn liquid_light_agitation_survives_being_automated() {
+    const SW: u32 = 256;
+    const SH: u32 = 144;
+    const WARMUP: usize = 300;
+    const MEASURE: usize = 120;
+    /// Triangle period in frames — a brisk but ordinary LFO.
+    const PERIOD: usize = 60;
+    const LOW: f32 = 0.1;
+    const HIGH: f32 = 0.9;
+    /// Rate scores 0.97x, the amplitude version it replaced scored 13.5x.
+    const MAX_RATIO: f32 = 3.0;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/liquid_light.fs");
+    let shader = varda::isf::ISFShader::from_file(&path).expect("parse liquid_light.fs");
+
+    let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
+        read_back(ctx, mixer, SW, SH)
+            .iter()
+            .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+            .collect()
+    };
+    let mean_delta = |a: &[f32], b: &[f32]| -> f32 {
+        a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
+    };
+
+    // Median per-frame change over MEASURE frames, with Agitation set by
+    // `automate` each frame. Median rather than mean so one outlier cannot
+    // carry the result either way.
+    let run = |automate: &dyn Fn(usize) -> f32| -> f32 {
+        let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
+        mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
+        let mut deck = Deck::new(&ctx, shader.clone(), SW, SH).expect("deck");
+        deck.generator_params.set_float("flow_speed", 0.5);
+        deck.generator_params.set_float("agitation", automate(0));
+        mixer.channel_mut(0).unwrap().add_deck(deck);
+
+        for _ in 0..WARMUP {
+            render_once(&ctx, &mut mixer);
+        }
+        let mut prev = luminance(&ctx, &mixer);
+        let mut deltas = Vec::with_capacity(MEASURE);
+        for frame in 0..MEASURE {
+            mixer.channel_mut(0).unwrap().decks[0]
+                .deck
+                .generator_params
+                .set_float("agitation", automate(frame));
+            render_once(&ctx, &mut mixer);
+            let cur = luminance(&ctx, &mixer);
+            deltas.push(mean_delta(&prev, &cur));
+            prev = cur;
+        }
+        deltas.sort_by(|a, b| a.partial_cmp(b).expect("no NaN frames"));
+        deltas[deltas.len() / 2]
+    };
+
+    let midpoint = (LOW + HIGH) * 0.5;
+    let parked = run(&|_| midpoint);
+    let automated = run(&|frame: usize| {
+        let phase = (frame % PERIOD) as f32 / PERIOD as f32;
+        let triangle = if phase < 0.5 {
+            phase * 2.0
+        } else {
+            2.0 - phase * 2.0
+        };
+        LOW + (HIGH - LOW) * triangle
+    });
+
+    // Guard the guard: a frozen dish makes any automation look smooth.
+    assert!(
+        parked > 1e-4,
+        "the dish is not moving with the fader parked ({parked:.6}), so this proves nothing"
+    );
+
+    let ratio = automated / parked;
+    assert!(
+        ratio <= MAX_RATIO,
+        "automating Agitation makes the fluid slosh: {automated:.5} per frame under a \
+         {PERIOD}-frame LFO against {parked:.5} parked ({ratio:.1}x — allowed {MAX_RATIO:.1}x). \
+         Agitation is setting a position rather than a rate; see spec/phase-accumulators.md \
+         § Authoring Rules."
+    );
+}
+
+/// Moving a rate fader must change the speed of the motion, not cut to a
+/// different frame of it.
+///
+/// This is the behavioural half of the phase-accumulator contract; the source
+/// half is `no_shader_scales_accumulated_phase_by_a_parameter` in
+/// `tests/shader_param_contract_guard.rs`. Both exist because the guard reads
+/// source and so cannot see a value that crosses a function boundary, while
+/// this measures pixels and so catches the mistake however it is spelled.
+///
+/// The subject is `liquid_light`'s Dish Rotation, chosen because it is a *pure*
+/// rate: it drives accumulator slot 2 and has no other effect on the image. An
+/// earlier version of this test used Agitation, which was where the bug
+/// actually shipped, and had to be retargeted when Agitation gained a
+/// legitimate instantaneous effect — it now opens the domain warp as well as
+/// speeding the flow. Once a fader changes the picture for a good reason, a
+/// pixel metric can no longer tell that change apart from a teleport: measured
+/// against the restored bug, correct code scored 1.26x and buggy code 1.90x,
+/// which is not a gap a threshold can live in. A pure rate keeps the
+/// measurement clean.
+///
+/// Mean per-pixel luminance change between consecutive frames, 30 s of
+/// accumulated phase in, with Dish Rotation nudged from 0.40 to 0.45:
+///
+/// | metric                       | fixed  | buggy  |
+/// |------------------------------|--------|--------|
+/// | steady-state delta per frame | 0.0031 | 0.0021 |
+/// | delta across the fader move  | 0.0034 | 0.0369 |
+/// | ratio                        | 1.1x   | 17.6x  |
+///
+/// Buggy numbers taken by writing `float dish = PHASE_TIME_2 * swirl;`, which
+/// is the shape the guard and this test both exist to reject.
+#[test]
+fn liquid_light_dish_rotation_changes_speed_rather_than_position() {
+    const SW: u32 = 256;
+    const SH: u32 = 144;
+    /// 30 s at 60 fps. The jump grows with accumulated phase, so a short run
+    /// would let the bug through; a set lasts far longer than this.
+    const WARMUP: usize = 1800;
+    /// Frames of steady state to average the baseline over.
+    const BASELINE_FRAMES: usize = 10;
+    /// Fixed measures 1.1x, buggy 17.6x, so the threshold sits between them
+    /// with room for run-to-run variation on either side.
+    const MAX_RATIO: f32 = 5.0;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/liquid_light.fs");
+    let shader = varda::isf::ISFShader::from_file(&path).expect("parse liquid_light.fs");
+
+    let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
+    mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
+    let mut deck = Deck::new(&ctx, shader, SW, SH).expect("deck");
+    deck.generator_params.set_float("flow_speed", 1.0);
+    deck.generator_params.set_float("swirl", 0.4);
+    mixer.channel_mut(0).unwrap().add_deck(deck);
+
+    let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
+        read_back(ctx, mixer, SW, SH)
+            .iter()
+            .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+            .collect()
+    };
+    let mean_delta = |a: &[f32], b: &[f32]| -> f32 {
+        a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
+    };
+
+    for _ in 0..WARMUP {
+        render_once(&ctx, &mut mixer);
+    }
+
+    let mut prev = luminance(&ctx, &mixer);
+    let mut baseline = 0.0f32;
+    for _ in 0..BASELINE_FRAMES {
+        render_once(&ctx, &mut mixer);
+        let cur = luminance(&ctx, &mixer);
+        baseline += mean_delta(&prev, &cur);
+        prev = cur;
+    }
+    baseline /= BASELINE_FRAMES as f32;
+
+    // Guard the guard: a static image would make any jump look proportional.
+    assert!(
+        baseline > 1e-4,
+        "the dish is not turning (baseline {baseline:.6}), so this proves nothing"
+    );
+
+    mixer.channel_mut(0).unwrap().decks[0]
+        .deck
+        .generator_params
+        .set_float("swirl", 0.45);
+    render_once(&ctx, &mut mixer);
+    let jump = mean_delta(&prev, &luminance(&ctx, &mixer));
+
+    assert!(
+        jump <= baseline * MAX_RATIO,
+        "moving Dish Rotation spun the dish: {jump:.4} against a steady-state {baseline:.4} \
+         ({:.1}x — allowed {MAX_RATIO:.1}x). Accumulated phase is being scaled by a live \
+         parameter again; see spec/phase-accumulators.md.",
+        jump / baseline
+    );
+}
+
 /// A shader that emits above display white must reach the compositor unclamped.
 ///
 /// The clamp-removal pass (spec/unified-color-pipeline.md step 7) replaced the

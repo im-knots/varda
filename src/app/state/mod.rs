@@ -15,4 +15,4 @@ mod presets;
 mod sequences;
 mod surfaces;
 
-pub(crate) use outputs::resolve_output_audio;
+pub(crate) use outputs::{encoder_fps, resolve_output_audio};

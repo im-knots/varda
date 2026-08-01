@@ -12,7 +12,9 @@
         {"NAME": "scroll_speed", "LABEL": "Scroll Speed", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 5.0},
         {"NAME": "horizontal", "LABEL": "Horizontal", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 1.0}
     ],
-    "PHASE_INPUTS": [{"PARAM": "scroll_speed", "INDEX": 0, "SCALE": 0.01}]
+    "PHASE_INPUTS": [
+        {"PARAM": "scroll_speed", "MULTIPLY_BY": "line_density", "INDEX": 0, "SCALE": 0.01}
+    ]
 }*/
 
 #version 450
@@ -59,9 +61,12 @@ void main() {
     vec4 src = texture(sampler2D(inputImage, texSampler), uv);
 
     float coord = (horizontal > 0.5) ? uv.y : uv.x;
-    coord += PHASE_TIME_0;
 
-    float scanline = fract(coord * line_density);
+    // Scroll is added after the density multiply, with Line Density inside the
+    // integral instead. Added to `coord` it was multiplied by a density of up
+    // to 1000, so nudging that fader mid-scroll threw the lines hundreds of
+    // cycles away. Bars travel at the same screen speed either way.
+    float scanline = fract(coord * line_density + PHASE_TIME_0);
     float line = smoothstep(line_width, line_width + 0.1, scanline);
 
     // Flicker

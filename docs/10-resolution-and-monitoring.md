@@ -23,16 +23,35 @@ Set it from the 📐 control in the top bar:
 
 ### Presets
 
+**Landscape**
+
 - 1280×720 (720p)
 - 1920×1080 (1080p) — default
 - 2560×1440 (1440p)
 - 3840×2160 (4K)
 
+**Vertical & square**
+
+- 1080×1920 (9:16) — Instagram Reels, TikTok, YouTube Shorts, Stories and Facebook Reels all take this exact size, so it is the one vertical master to record if you only record one
+- 2160×3840 (9:16 at 4K)
+- 1080×1350 (4:5) — Instagram feed posts, which take up more of the scroll than square
+- 1080×1080 (1:1) — square
+
 ### Custom Resolution
 
 Choose **Custom…** to enter freeform width × height for LED walls, vertical strips, or unusual aspect ratios — there is no aspect-ratio lock and **no artificial maximum**. The render size is bounded only by your GPU's maximum texture size (commonly 8192² or 16384²), so capable hardware can render at 8K and beyond.
 
-Changes take effect immediately: the engine resizes every render texture and confirms with a toast (e.g. "📐 Resolution changed to 3840×2160"). Scenes saved without these fields default to 1920×1080. The stage/output system independently fits the master render to each output's actual display resolution.
+Changes take effect immediately: the engine resizes every render texture and confirms with a toast (e.g. "📐 Resolution changed to 3840×2160"). Scenes saved without these fields default to 1920×1080.
+
+Every preview in the UI follows the resolution you set. Switch to a vertical project and the deck thumbnails, the deck and channel previews and the main output preview all become tall and narrow, as do the stage surface and warp editor canvases — so what you arrange on screen matches what you record.
+
+### What outputs do when you change resolution
+
+Everything you send out conforms to the resolution you set, not to the shape it happened to have when you created it.
+
+**Recordings, NDI, Syphon and streams** are resized to match. Anything already running through ffmpeg — a recording or a stream — is **stopped**, and a toast names which ones. The encoder's frame size is fixed when it starts, so it can't follow you mid-take; stopping is safer than writing frames it will misread, and safer than restarting, which would reopen the file and wipe the take you already have. Start it again and it comes back at the new size. NDI and Syphon keep publishing across the change without interruption.
+
+**Output windows** letterbox. The window is whatever size you or the OS made it, so a 9:16 project on a 16:9 projector is centred with black bars rather than stretched. The projector calibration card still covers the full output — it has to, for alignment to mean anything — and surfaces you place on the stage carry their own shape, so neither is letterboxed.
 
 ## Per-Deck Scaling
 

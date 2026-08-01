@@ -113,9 +113,12 @@ fn every_shader_user_params_block_matches_engine_layout() {
         } else {
             compile_glsl_to_spirv(&shader.fragment_source, &name)
         };
-        let Ok(spirv) = compiled else {
-            failures.push(format!("{name}: failed to compile"));
-            continue;
+        let spirv = match compiled {
+            Ok(spirv) => spirv,
+            Err(err) => {
+                failures.push(format!("{name}: failed to compile: {err:#}"));
+                continue;
+            }
         };
 
         let Some(actual) = reflect_user_params(&spirv) else {

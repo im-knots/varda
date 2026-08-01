@@ -47,6 +47,7 @@ struct PcmSubscriber {
     token: PcmToken,
     sender: Sender<PcmChunk>,
     dropped: Arc<AtomicU64>,
+    lost_samples: Arc<AtomicU64>,
 }
 
 /// Handle returned by [`AudioManager::subscribe_pcm`]. The receiver yields raw
@@ -57,14 +58,25 @@ pub struct PcmSubscription {
     pub format: AudioFormat,
     pub token: PcmToken,
     pub dropped: Arc<AtomicU64>,
+    /// Total samples lost to those drops. The consumer owes the stream this
+    /// much silence; see `AudioPipe::start` in the ffmpeg subprocess.
+    pub lost_samples: Arc<AtomicU64>,
 }
 
 /// Fan a chunk of raw interleaved PCM out to every passthrough subscriber.
 ///
-/// Never blocks: on a full channel the chunk is dropped (newest-drop, matching
-/// the video frame-drop philosophy in `FfmpegSubprocess`) and counted so the
-/// owning output can surface a health warning. Disconnected subscribers (the
-/// output stopped without unsubscribing) are silently skipped.
+/// Never blocks — this runs on the real-time capture callback, where waiting on
+/// a consumer would stall the device and corrupt every listener. So on a full
+/// channel the chunk is dropped and counted.
+///
+/// The *duration* of the drop is counted too, and that is the part that matters
+/// downstream. Video can drop a frame and lose nothing but a moment of motion,
+/// because each surviving frame still says when it belongs. A PCM stream has no
+/// such labels: it is timed purely by how many samples have gone past, so
+/// silently dropping some does not leave a hole, it drags everything after it
+/// earlier. Consumers replace `lost_samples` with silence to keep the count
+/// honest. Disconnected subscribers (the output stopped without unsubscribing)
+/// are silently skipped.
 fn fan_out_pcm(subs: &[PcmSubscriber], samples: &[f32]) {
     for sub in subs {
         match sub.sender.try_send(PcmChunk {
@@ -73,6 +85,8 @@ fn fan_out_pcm(subs: &[PcmSubscriber], samples: &[f32]) {
             Ok(()) | Err(crossbeam_channel::TrySendError::Disconnected(_)) => {}
             Err(crossbeam_channel::TrySendError::Full(_)) => {
                 sub.dropped.fetch_add(1, Ordering::Relaxed);
+                sub.lost_samples
+                    .fetch_add(samples.len() as u64, Ordering::Relaxed);
             }
         }
     }
@@ -485,10 +499,12 @@ impl AudioManager {
         let (sender, receiver) = bounded::<PcmChunk>(PCM_CHANNEL_CAPACITY);
         let token = NEXT_PCM_TOKEN.fetch_add(1, Ordering::Relaxed);
         let dropped = Arc::new(AtomicU64::new(0));
+        let lost_samples = Arc::new(AtomicU64::new(0));
         let sub = PcmSubscriber {
             token,
             sender,
             dropped: dropped.clone(),
+            lost_samples: lost_samples.clone(),
         };
         source.pcm_subs.rcu(|cur| {
             let mut next = Vec::with_capacity(cur.len() + 1);
@@ -502,6 +518,7 @@ impl AudioManager {
             format,
             token,
             dropped,
+            lost_samples,
         })
     }
 
@@ -1182,15 +1199,30 @@ mod tests {
 
     // ── Phase 19a: PCM passthrough tap ─────────────────────────────────
 
+    /// A subscriber plus its receiver, drop counter and lost-sample counter.
     fn make_sub(cap: usize) -> (PcmSubscriber, Receiver<PcmChunk>, Arc<AtomicU64>) {
+        let (sub, rx, dropped, _) = make_sub_counted(cap);
+        (sub, rx, dropped)
+    }
+
+    fn make_sub_counted(
+        cap: usize,
+    ) -> (
+        PcmSubscriber,
+        Receiver<PcmChunk>,
+        Arc<AtomicU64>,
+        Arc<AtomicU64>,
+    ) {
         let (sender, receiver) = bounded::<PcmChunk>(cap);
         let dropped = Arc::new(AtomicU64::new(0));
+        let lost_samples = Arc::new(AtomicU64::new(0));
         let sub = PcmSubscriber {
             token: NEXT_PCM_TOKEN.fetch_add(1, Ordering::Relaxed),
             sender,
             dropped: dropped.clone(),
+            lost_samples: lost_samples.clone(),
         };
-        (sub, receiver, dropped)
+        (sub, receiver, dropped, lost_samples)
     }
 
     #[test]
@@ -1218,6 +1250,27 @@ mod tests {
         }
 
         assert_eq!(dropped.load(Ordering::Relaxed), 3);
+    }
+
+    /// A drop must record how much *time* was lost, not just that one happened.
+    ///
+    /// Consumers time the PCM stream by counting samples, so the only way to
+    /// survive a dropout is to put back exactly as many samples as went
+    /// missing. A chunk count cannot say that — chunks vary in length — so the
+    /// sample total is what the writer needs.
+    #[test]
+    fn pcm_fan_out_records_how_many_samples_were_lost() {
+        // Capacity 2, receiver never drains: 5 sends of 8 samples → 2 buffered,
+        // 3 dropped, so 24 samples owed back to the stream.
+        let (sub, _rx, dropped, lost) = make_sub_counted(2);
+        let subs = vec![sub];
+
+        for _ in 0..5 {
+            fan_out_pcm(&subs, &[0.0; 8]);
+        }
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 3);
+        assert_eq!(lost.load(Ordering::Relaxed), 24);
     }
 
     #[test]
