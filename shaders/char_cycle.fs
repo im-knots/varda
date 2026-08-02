@@ -30,7 +30,10 @@
         "secretlanguage_font_atlas":  { "PATH": "character_atlases/secretlanguage_font_atlas.png" },
         "witchy_font_atlas":          { "PATH": "character_atlases/witchy_font_atlas.png" }
     },
-    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0}]
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "INDEX": 0},
+        {"PARAM": "speed", "MULTIPLY_BY": "speed_variation", "INDEX": 1}
+    ]
 }*/
 
 #version 450
@@ -208,7 +211,11 @@ void main() {
         float cellId = cellCoord.y * gf + cellCoord.x;
         float cellOffset = cellId * offset_amount;
         float h = fract(sin(cellId * 127.1 + 311.7) * 43758.5453);
-        float charIdx = floor(mod(PHASE_TIME_0 * (1.0 + (h * 2.0 - 1.0) * speed_variation) + cellOffset, numChars));
+        // Each cell runs at speed·(1 ± speed_variation). The spread term is its
+        // own integral rather than a multiply on PHASE_TIME_0, or moving Speed
+        // Variation would jump every cell to a different glyph at once; `h` is
+        // spatial and constant in time, so it stays outside.
+        float charIdx = floor(mod(PHASE_TIME_0 + (h * 2.0 - 1.0) * PHASE_TIME_1 + cellOffset, numChars));
 
         // Line thickness in cell-UV space
         float lw = 0.02;

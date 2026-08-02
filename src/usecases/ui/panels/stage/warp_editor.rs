@@ -70,7 +70,7 @@ pub(crate) fn render_stage_bottom_bar(ui: &mut egui::Ui, data: &UIData, actions:
         .filter_map(|u| data.surfaces.iter().find(|s| &s.uuid == u))
         .collect();
     if sel.len() == 1 {
-        render_surface_warp_editor(ui, sel[0], actions);
+        render_surface_warp_editor(ui, sel[0], data, actions);
     } else {
         let msg = if sel.is_empty() {
             "Select a surface on the stage to edit its warp"
@@ -86,7 +86,12 @@ pub(crate) fn render_stage_bottom_bar(ui: &mut egui::Ui, data: &UIData, actions:
 /// Per-surface warp editor: subdivide steppers + a draggable grid canvas.
 // r/c (row/col) and x/y/w/h (bbox) are the clearest names for this grid geometry.
 #[allow(clippy::many_single_char_names)]
-fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &mut UIActions) {
+fn render_surface_warp_editor(
+    ui: &mut egui::Ui,
+    surface: &SurfaceUI,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
     use crate::renderer::warp::WarpMode;
     let uuid = surface.uuid.clone();
     let bound = surface.warp_bound;
@@ -196,14 +201,18 @@ fn render_surface_warp_editor(ui: &mut egui::Ui, surface: &SurfaceUI, actions: &
         });
     });
 
-    // Canvas sized to remaining bottom-bar space, capped to 16:9.
+    // Canvas sized to the remaining bottom-bar space, at the render aspect: the
+    // warp cage is in normalised output coordinates, so a 16:9 canvas would put
+    // the control points somewhere other than where they land on the output.
     let avail = ui.available_size();
-    let canvas_width = (avail.x - 8.0).max(64.0);
-    let canvas_height = (canvas_width * 0.5625).min((avail.y - 4.0).max(64.0));
-    let (canvas_rect, resp) = ui.allocate_exact_size(
-        egui::vec2(canvas_width, canvas_height),
-        egui::Sense::click_and_drag(),
+    let canvas = crate::usecases::ui::panels::utils::preview_size(
+        egui::vec2((avail.x - 8.0).max(64.0), (avail.y - 4.0).max(64.0)),
+        data.render_width,
+        data.render_height,
     );
+    let canvas_width = canvas.x;
+    let canvas_height = canvas.y;
+    let (canvas_rect, resp) = ui.allocate_exact_size(canvas, egui::Sense::click_and_drag());
     let painter = ui.painter_at(canvas_rect);
     painter.rect_filled(canvas_rect, 2.0, egui::Color32::from_rgb(15, 15, 25));
 

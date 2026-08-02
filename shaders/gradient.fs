@@ -12,7 +12,8 @@
         {"NAME": "color_b", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Color B"},
         {"NAME": "color_c", "TYPE": "color", "DEFAULT": [0.0, 0.5, 1.0, 1.0], "LABEL": "Color C"},
         {"NAME": "anim_speed", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Animation Speed"}
-    ]
+    ],
+    "PHASE_INPUTS": [{"PARAM": "anim_speed", "INDEX": 0, "SCALE": 0.1}]
 }*/
 
 #version 450
@@ -76,7 +77,7 @@ void main() {
     }
 
     // Animation
-    t += TIME * anim_speed * 0.1;
+    t += PHASE_TIME_0;
 
     // Repeat mode
     if (repeat_mode > 0.5) {

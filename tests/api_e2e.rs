@@ -8,17 +8,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
-use varda::app::{AppConfig, VardaApp};
+use varda::app::VardaApp;
 use varda::engine::CommandResult;
 use varda::usecases::api::SharedState;
 
-use clap::Parser;
-
 mod common;
-
-fn parse_args(args: &[&str]) -> AppConfig {
-    AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
-}
 
 /// Create a headless `VardaApp` and wire its command channel to an axum router.
 ///
@@ -28,7 +22,7 @@ fn parse_args(args: &[&str]) -> AppConfig {
 /// calls should re-read from the shared `engine_state` arc.
 fn setup() -> Option<axum::Router> {
     let gpu = common::headless_gpu()?;
-    let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+    let config = varda::testing::headless_config();
     // Once a GPU exists, a construction failure is a bug, not a reason to skip.
     let app = VardaApp::new(gpu, &config).expect("VardaApp::new");
 

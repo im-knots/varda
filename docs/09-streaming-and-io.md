@@ -108,7 +108,7 @@ Each output can record to a video file independently. Multiple simultaneous reco
 3. Pick a **Codec:** from the table above.
 4. Click **▶ Start** to begin; the button becomes **⏹ Stop** and a red elapsed-time counter shows while recording.
 
-Each recording starts and stops independently, and ffmpeg writes directly to the path you specify. Recording uses non-blocking frame delivery — if the encoder can't keep up, frames are silently dropped rather than stalling the render thread.
+Each recording starts and stops independently, and ffmpeg writes directly to the path you specify. Recording uses non-blocking frame delivery — if the encoder can't keep up, frames are dropped rather than stalling the render thread, and the previous frame is repeated in the file so the recording keeps constant frame rate and stays the right length.
 
 > **Add audio with passthrough.** To include sound, pick a device in the output's **Audio:** dropdown — see [Audio Passthrough](#audio-passthrough) below.
 
@@ -124,13 +124,14 @@ Every ffmpeg-backed output (Recording, SRT, HLS, DASH, RTMP) can mux audio from 
 2. In the output's **Audio:** dropdown, pick a capture device, or **None (silent)** for video-only (the default).
 3. Click **▶ Start**. The output now carries that device's audio.
 
-While the output is active, a small readout shows the selected device with live `sent` / `dropped` chunk counts. A non-zero drop count (shown amber) means the encoder briefly couldn't keep up — audio is never allowed to stall the real-time capture thread, so the oldest backlog is dropped instead.
+While the output is active, a small readout shows the selected device with live `sent` / `dropped` chunk counts. A non-zero drop count (shown amber) means the encoder briefly couldn't keep up — audio is never allowed to stall the real-time capture thread, so a chunk is dropped instead. When that happens the readout also reports how many samples were `muted`: the gap is filled with silence so the rest of the recording stays in time. A few hundred muted samples is a click you may not notice; a steadily climbing count means the machine is struggling.
 
 ### What you get
 
 - **Recording** muxes AAC at the device's **native sample rate** for faithful, edit-ready captures.
 - **Streaming targets** (SRT, HLS, DASH, RTMP) normalize to **48 kHz AAC** for platform compatibility (Twitch/YouTube expect 48k).
-- Audio is **downmixed to stereo** and kept in sync (±~1 frame) via asynchronous resampling — good for live-set recordings and streams.
+- Audio is **downmixed to stereo**.
+- **Sync holds even when the renderer stumbles.** Timing comes from the capture device's own sample clock, which runs at a steady rate no matter what the GPU is doing. If the renderer misses frames, the recording repeats the last frame to cover the gap rather than quietly shortening the video — so the music stays where it should be instead of sliding ahead of the picture. You may see a brief freeze in a heavy passage; you will not hear the audio break up.
 
 ### Graceful fallback
 

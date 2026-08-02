@@ -28,10 +28,15 @@ pub(super) fn render_right_panel(ui: &mut egui::Ui, data: &UIData, actions: &mut
             });
         });
 
-        // Main output preview (clickable to select master)
-        let preview_width = ui.available_width() - 10.0;
-        let preview_height = preview_width * 0.5625;
-        let preview_size = egui::vec2(preview_width, preview_height);
+        // Main output preview (clickable to select master). The height is
+        // capped at the panel width so a portrait project does not push the
+        // MIDI, modulation and output sections off the bottom of the panel.
+        let width = ui.available_width() - 10.0;
+        let preview_size = super::utils::preview_size(
+            egui::vec2(width, width),
+            data.render_width,
+            data.render_height,
+        );
 
         if let Some(texture_id) = data.main_output_texture {
             let img_response = ui.add(

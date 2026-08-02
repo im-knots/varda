@@ -117,6 +117,10 @@ keyboard-types = { version = "0.8", optional = true }
 # without libfreenect installed must pass `--no-default-features` (or drop
 # `depth` from the feature set).
 freenectrs = { version = "0.1.0", optional = true }
+# Scratch workspaces for tests (src/testing.rs). Also a dev-dependency, which
+# covers unit tests; this entry is what makes the helper reachable from
+# integration tests, where the lib is built as a plain dependency.
+tempfile = { version = "3.27.0", optional = true }
 
 # Syphon client FFI (macOS only). The syphon module is compiled unconditionally
 # on macOS; Syphon.framework itself is dlopen'd at runtime (via libloading), so
@@ -151,7 +155,7 @@ html = ["dep:servo", "dep:url", "dep:euclid", "dep:keyboard-types"]
 # persistence, API, UI, tests) always compiles via a mock backend when the
 # feature is off. See spec/depth-sensors.md.
 depth = ["dep:freenectrs"]
-test-fixtures = []
+test-fixtures = ["dep:tempfile"]
 url = ["dep:url"]
 euclid = ["dep:euclid"]
 keyboard-types = ["dep:keyboard-types"]

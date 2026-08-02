@@ -13,7 +13,10 @@
         {"NAME": "grain", "TYPE": "float", "DEFAULT": 0.1, "MIN": 0.0, "MAX": 0.3, "LABEL": "Grain"},
         {"NAME": "look_at", "TYPE": "point2D", "DEFAULT": [0.5, 0.5], "LABEL": "Look At"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0, "SCALE": 1.0}]
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "INDEX": 0, "SCALE": 1.0},
+        {"PARAM": "speed", "MULTIPLY_BY": "blink_speed", "INDEX": 1, "SCALE": 2.0}
+    ]
 }*/
 
 #version 450
@@ -103,7 +106,10 @@ vec3 eye(vec2 fst, vec2 cst, vec2 mouse, float t) {
     move = pow(move, 4.0);
 
     // Autonomous blink cycle, with a manual override to pin the eyes open.
-    float autoOpen = (sin(t * 2.0 * blink_speed + noise * 100.0) + 1.0) / 2.0;
+    // The blink runs at speed × blink_speed, integrated as slot 1: scaling the
+    // accumulated phase by the fader instead would snap every eye to a new
+    // point in its blink the moment the fader moved.
+    float autoOpen = (sin(PHASE_TIME_1 + noise * 100.0) + 1.0) / 2.0;
     autoOpen = 1.0 - pow(autoOpen, 3.0);
     float eyeOpen = mix(autoOpen, 1.0, force_open);
 

@@ -19,7 +19,7 @@
         {"NAME": "look_at", "TYPE": "point2D", "DEFAULT": [0.0, 0.0], "LABEL": "Look At"},
         {"NAME": "tint", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Tint"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0, "SCALE": 1.0}]
+    "PHASE_INPUTS": [{"PARAM": "speed", "MULTIPLY_BY": "drift_speed", "INDEX": 0, "SCALE": 1.0}]
 }*/
 
 #version 450
@@ -77,8 +77,11 @@ void main() {
     p.y *= RENDERSIZE.y / RENDERSIZE.x;
 
     vec3 dir = vec3(p * zoom, 1.0);
-    float t = PHASE_TIME_0;
-    float time = t * drift_speed + 0.25;
+    // The only motion in the shader is the camera drifting into the nest, at
+    // speed × drift_speed. That product is the accumulator's input, so moving
+    // either fader bends the flight path instead of jumping the camera to a
+    // different part of the field.
+    float time = PHASE_TIME_0 + 0.25;
 
     // Mouse rotation replaced with a `look_at` point2D control. Unlike
     // eyes.fs's `look_at` (a screen-space gaze target that gets y-flipped

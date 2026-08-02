@@ -25,6 +25,18 @@ pub enum LFOWaveform {
     Random,
 }
 
+/// Depth given to a modulation assignment created from a parameter's dropdown.
+///
+/// Full range. The contribution is scaled by the parameter's range before it is
+/// applied, so 1.0 means "this source can traverse the whole slider" — which is
+/// the entire point of a sweep mode like [`AudioReactMode::Increase`]. Anything
+/// less silently caps the sweep partway: at 0.5 an Increase source climbs to the
+/// midpoint and resets, never reaching the top of the fader.
+///
+/// Performers dial depth back on the source (LFO `amplitude`, audio `gain`), not
+/// here — see /spec/modulation.md § Range-Scaled Modulation.
+pub const DEFAULT_ASSIGNMENT_AMOUNT: f32 = 1.0;
+
 /// How audio energy drives the modulation value.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema, Default)]
 pub enum AudioReactMode {

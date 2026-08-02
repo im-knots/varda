@@ -183,9 +183,77 @@ fn bench_prefix_construction(c: &mut Criterion) {
     g.finish();
 }
 
+/// Per-frame cost of reading the values that drive phase accumulators.
+///
+/// `base` is `get_float` — what the accumulator used before it respected
+/// modulation. `empty_mod` and `active_lfo` are `get_float_modulated` with and
+/// without an assignment on the parameter. The gap between `base` and the others
+/// is the price of making phase accumulation audio-reactive, paid at most four
+/// times per deck and per effect.
+fn bench_phase_accumulator_reads(c: &mut Criterion) {
+    const PHASE_PARAMS: [&str; 4] = ["p0", "p1", "p2", "p3"];
+
+    let mut g = c.benchmark_group("phase_accumulator_reads");
+    g.sample_size(500);
+
+    for n_inputs in [1usize, 4] {
+        let names = &PHASE_PARAMS[..n_inputs];
+        let eng_empty = ModulationEngine::new();
+        let eng_lfo = engine_with_lfo("deck0:p0");
+
+        let params_base = make_params(14);
+        g.bench_with_input(BenchmarkId::new("base", n_inputs), &n_inputs, |b, _| {
+            b.iter(|| {
+                let mut acc = 0.0f32;
+                for name in names {
+                    acc += params_base.get_float(name).unwrap_or(1.0);
+                }
+                criterion::black_box(acc)
+            });
+        });
+
+        let mut params_em = make_params(14);
+        g.bench_with_input(
+            BenchmarkId::new("empty_mod", n_inputs),
+            &n_inputs,
+            |b, _| {
+                b.iter(|| {
+                    let mut acc = 0.0f32;
+                    for name in names {
+                        acc += params_em
+                            .get_float_modulated(name, &eng_empty, Some("deck0"))
+                            .unwrap_or(1.0);
+                    }
+                    criterion::black_box(acc)
+                });
+            },
+        );
+
+        let mut params_lfo = make_params(14);
+        g.bench_with_input(
+            BenchmarkId::new("active_lfo", n_inputs),
+            &n_inputs,
+            |b, _| {
+                b.iter(|| {
+                    let mut acc = 0.0f32;
+                    for name in names {
+                        acc += params_lfo
+                            .get_float_modulated(name, &eng_lfo, Some("deck0"))
+                            .unwrap_or(1.0);
+                    }
+                    criterion::black_box(acc)
+                });
+            },
+        );
+    }
+
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_shader_params_buffer,
-    bench_prefix_construction
+    bench_prefix_construction,
+    bench_phase_accumulator_reads
 );
 criterion_main!(benches);

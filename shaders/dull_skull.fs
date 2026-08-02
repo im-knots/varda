@@ -5,14 +5,24 @@
     "CATEGORIES": ["Generator", "Generative"],
     "INPUTS": [
         {"NAME": "speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Speed"},
-        {"NAME": "rot_speed", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 2.0, "LABEL": "Rotation Speed"},
+        {"NAME": "rot_speed", "TYPE": "float", "DEFAULT": 0.4, "MIN": 0.0, "MAX": 2.0, "LABEL": "Sway Speed"},
+        {"NAME": "sway_range", "TYPE": "float", "DEFAULT": 0.5, "MIN": 0.0, "MAX": 1.0, "LABEL": "Sway Range"},
+        {"NAME": "camera_dist", "TYPE": "float", "DEFAULT": 4.5, "MIN": 3.5, "MAX": 9.0, "LABEL": "Camera Distance"},
+        {"NAME": "head_turn", "TYPE": "float", "DEFAULT": 0.0, "MIN": -1.2, "MAX": 1.2, "LABEL": "Head Turn"},
+        {"NAME": "jaw_open", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 1.0, "LABEL": "Mouth Open"},
+        {"NAME": "jaw_chatter", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 2.0, "LABEL": "Jaw Chatter"},
+        {"NAME": "drift", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 1.0, "LABEL": "Drift"},
+        {"NAME": "backdrop_dist", "TYPE": "float", "DEFAULT": 2.0, "MIN": 0.0, "MAX": 6.0, "LABEL": "Backdrop"},
         {"NAME": "brightness", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.2, "MAX": 3.0, "LABEL": "Brightness"},
         {"NAME": "fresnel_strength", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Fresnel"},
         {"NAME": "eye_brightness", "TYPE": "float", "DEFAULT": 0.7, "MIN": 0.0, "MAX": 2.0, "LABEL": "Eye Glow"},
         {"NAME": "fog_density", "TYPE": "float", "DEFAULT": 0.0002, "MIN": 0.0, "MAX": 0.001, "LABEL": "Fog Density"},
         {"NAME": "bg_color", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Background"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "speed", "INDEX": 0, "SCALE": 0.2}]
+    "PHASE_INPUTS": [
+        {"PARAM": "speed", "INDEX": 0, "SCALE": 0.2},
+        {"PARAM": "speed", "MULTIPLY_BY": "rot_speed", "INDEX": 1, "SCALE": 1.0}
+    ]
 }*/
 
 #version 450
@@ -29,7 +39,9 @@ layout(set = 0, binding = 0) uniform ISFUniforms {
 };
 
 layout(set = 0, binding = 1) uniform UserParams {
-    float speed; float rot_speed; float brightness; float fresnel_strength;
+    float speed; float rot_speed; float sway_range; float camera_dist;
+    float head_turn; float jaw_open; float jaw_chatter; float drift;
+    float backdrop_dist; float brightness; float fresnel_strength;
     float eye_brightness; float fog_density; vec4 bg_color;
 };
 
@@ -37,6 +49,11 @@ const float PI = 3.141592;
 const int MAX_STEPS = 32;
 const float MAX_DIST = 24.0;
 const float SURF_DIST = 0.005;
+
+// Mean position of the skull in world space — the drift in Transform() swings
+// it about this point. The camera orbits and aims here rather than at the world
+// origin, which is what keeps the skull framed at every sway angle.
+const vec3 PIVOT = vec3(0.0, 0.4, 0.3);
 
 mat2 Rot(float a) { float s = sin(a), c = cos(a); return mat2(c, -s, s, c); }
 
@@ -93,18 +110,19 @@ vec3 GetRayDir(vec2 suv, vec3 p, vec3 l, float z) {
 float tFunc(float time) { float tv = 3.0 + time * 0.5; return tv + sin(time * 0.5) * 0.3; }
 
 vec3 Transform(vec3 p, float t) {
-    p.y -= 0.4; p.y += sin(t + 1.6) * 0.3;
-    p.z += sin(t * 0.9 - 1.6) * 0.6 - 0.3;
-    p.yz *= Rot(sin(-t + 1.0) * 0.3);
-    p.xy *= Rot(cos(-t * 0.7 + 4.0) * 0.4);
-    p.xz *= Rot(sin(t * 0.5) * cos(t * 0.3 + 1.0));
+    p.y -= 0.4; p.y += sin(t + 1.6) * 0.3 * drift;
+    p.z += sin(t * 0.9 - 1.6) * 0.6 * drift - 0.3;
+    p.yz *= Rot(sin(-t + 1.0) * 0.3 * drift);
+    p.xy *= Rot(cos(-t * 0.7 + 4.0) * 0.4 * drift);
+    p.xz *= Rot(sin(t * 0.5) * cos(t * 0.3 + 1.0) * drift + head_turn);
     return p;
 }
 
 
 vec2 map(vec3 p, float time) {
     float t = tFunc(time);
-    mat2 ani = Rot(sin(t - 1.7) * 0.2 - 0.1);
+    // Lower-jaw hinge. More negative opens the mouth.
+    mat2 ani = Rot(sin(t - 1.7) * 0.2 * jaw_chatter - 0.1 - jaw_open * 0.45);
     vec3 p_skull = Transform(p, t);
 
     // HEAD
@@ -179,8 +197,9 @@ vec2 map(vec3 p, float time) {
     float eyeH = sMin(eyes, Sphere(vec3(abs(p_skull.x), p_skull.yz) - vec3(0.25, 0.0, 0.7), 0.35), 0.05);
     d = sMax(sMax(-p_eyeH.y, eyeH, 0.2), d, 0.05);
 
-    // PLANE
-    vec3 pPla = p; pPla.z += sin(p.y * 0.2 - t * 0.7) - 0.2;
+    // BACKDROP — a half-space the skull melts into. Offset by backdrop_dist so
+    // its ripple stays behind the skull instead of periodically swallowing it.
+    vec3 pPla = p; pPla.z += sin(p.y * 0.2 - t * 0.7) * 0.5 + backdrop_dist;
     d = sMin(d, pPla.z, 0.8);
 
     // EYEBALLS
@@ -241,13 +260,16 @@ void main() {
     vec2 suv = (vUv - 0.5) * vec2(RENDERSIZE.x / RENDERSIZE.y, 1.0);
 
     float time = PHASE_TIME_0;
-    // Auto-rotation replacing iMouse
-    float rotAngle = time * rot_speed;
+    // Bounded sway rather than a full orbit: PHASE_TIME_1 integrates
+    // speed * rot_speed, and the sine caps the swing at sway_range radians so
+    // the camera stays in front of the backdrop and the skull stays in frame.
+    float rotAngle = sin(PHASE_TIME_1) * sway_range;
 
-    vec3 ro = vec3(0.0, 0.0, 4.0);
+    vec3 ro = vec3(0.0, 0.0, camera_dist);
     ro.xz *= Rot(-rotAngle);
     ro.yz *= Rot(sin(time * 0.13) * 0.3);
-    vec3 rd = GetRayDir(suv, ro, vec3(0.0), 1.0);
+    ro += PIVOT;
+    vec3 rd = GetRayDir(suv, ro, PIVOT, 1.0);
 
     vec3 col = bg_color.rgb;
     vec2 res = RM(ro, rd, time);

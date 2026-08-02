@@ -1299,17 +1299,17 @@ mod tests {
         fn create_pending_interactive(&self, _varda: &mut VardaApp) {}
     }
 
-    fn headless_config() -> AppConfig {
-        AppConfig::parse_from(["varda", "--headless", "--no-osc", "--no-ndi", "--no-syphon"])
-    }
-
     /// A runner with a real headless engine attached, or `None` when the machine
     /// has no GPU adapter — matching the skip-without-adapter pattern used by the
     /// other GPU tests.
     fn headless_runner() -> Option<UIRunner> {
         let gpu = GpuContext::new_headless().ok()?;
-        let varda = VardaApp::new(gpu, &headless_config()).expect("VardaApp::new");
-        let mut runner = UIRunner::new(headless_config());
+        // One config for both halves, so the engine and the runner agree on
+        // which scratch workspace a shutdown save writes to. The scratch
+        // workspace is not optional: `render_headless` saves on shutdown.
+        let config = crate::testing::headless_config();
+        let varda = VardaApp::new(gpu, &config).expect("VardaApp::new");
+        let mut runner = UIRunner::new(config);
         runner.varda = Some(varda);
         Some(runner)
     }
@@ -1375,6 +1375,11 @@ mod tests {
         let Some(mut runner) = headless_runner() else {
             return;
         };
+        let workspace = runner
+            .config
+            .workspace_root
+            .clone()
+            .expect("headless_config supplies a scratch workspace");
         runner
             .shutdown_flag
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1382,6 +1387,12 @@ mod tests {
         let host = FakeHost::default();
         runner.render_headless(&host);
 
+        // This test writes a default scene to disk. Pin where, so the isolation
+        // is enforced rather than merely conventional.
+        assert!(
+            workspace.join(".varda").join("scene.json").is_file(),
+            "the shutdown save must land in the scratch workspace"
+        );
         assert_eq!(host.exits.get(), 1, "shutdown exits the event loop");
         assert_eq!(
             host.outputs_created.get(),

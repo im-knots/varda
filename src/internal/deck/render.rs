@@ -1,6 +1,8 @@
 //! Deck rendering — source rendering, effect chain, video frame updates, and resize.
 
-use super::{Deck, DeckSource, ExternalSourceKind, PassBuffer, PreprocessorSlot, ScalingMode};
+use super::{
+    Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, PreprocessorSlot, ScalingMode,
+};
 use crate::analyzer::traits::TextureData;
 use crate::analyzer::{AnalyzerRegistry, DeckAnalyzers, PreprocessorCategory};
 use crate::audio::AudioData;
@@ -70,19 +72,36 @@ fn upload_texture_to_slot(
     );
 }
 
-/// Accumulate phase times: for each `PhaseInput`, adds `dt * param_value * scale` to the accumulator.
+/// Accumulate phase times: for each `PhaseInput`, adds
+/// `dt * param_value * multiply_by * scale` to the accumulator.
+///
+/// Parameter values are the modulated ones, not the stored bases. A shader that declares
+/// `PHASE_INPUTS` reads `PHASE_TIME_N` rather than the raw speed uniform, so integrating
+/// the base value would make modulation of that parameter invisible.
+///
+/// See [/spec/phase-accumulators.md](/spec/phase-accumulators.md).
 fn accumulate_phase_times(
     accumulators: &mut [f32; 4],
     dt: f32,
     phase_inputs: Option<&[PhaseInput]>,
-    params: &ShaderParams,
+    params: &mut ShaderParams,
+    modulation: &ModulationEngine,
+    param_prefix: &str,
 ) {
-    if let Some(inputs) = phase_inputs {
-        for pi in inputs {
-            if pi.index < 4 {
-                let param_val = params.get_float(&pi.param).unwrap_or(1.0);
-                accumulators[pi.index] += dt * param_val * pi.scale;
+    let Some(inputs) = phase_inputs else {
+        return;
+    };
+    for pi in inputs {
+        if pi.index < 4 {
+            let mut rate = params
+                .get_float_modulated(&pi.param, modulation, Some(param_prefix))
+                .unwrap_or(1.0);
+            for factor in &pi.multiply_by {
+                rate *= params
+                    .get_float_modulated(factor, modulation, Some(param_prefix))
+                    .unwrap_or(1.0);
             }
+            accumulators[pi.index] += dt * rate * pi.scale;
         }
     }
 }
@@ -358,7 +377,9 @@ impl Deck {
             &mut self.phase_accumulators,
             time_delta,
             self.generator_phase_inputs.as_deref(),
-            &self.generator_params,
+            &mut self.generator_params,
+            modulation,
+            param_prefix,
         );
         let generator_phase_times = self.phase_accumulators;
 
@@ -772,11 +793,20 @@ impl Deck {
         for &effect_idx in &enabled_effects {
             // Accumulate phase times for this effect
             let effect = &mut self.effects[effect_idx];
+            let Effect {
+                phase_accumulators,
+                phase_inputs_config,
+                params,
+                param_prefix,
+                ..
+            } = effect;
             accumulate_phase_times(
-                &mut effect.phase_accumulators,
+                phase_accumulators,
                 time_delta,
-                effect.phase_inputs_config.as_deref(),
-                &effect.params,
+                phase_inputs_config.as_deref(),
+                params,
+                modulation,
+                param_prefix,
             );
             let effect_phase_times = effect.phase_accumulators;
 
@@ -1419,7 +1449,63 @@ mod tests {
     use super::*;
     use crate::isf::ISFInput;
     use crate::isf::PhaseInput;
+    use crate::modulation::{LFOWaveform, ModulationSource};
     use crate::params::ShaderParams;
+
+    /// Empty engine — every parameter reads back its base value.
+    fn no_modulation() -> ModulationEngine {
+        ModulationEngine::new()
+    }
+
+    /// A square LFO at 0 Hz holds a constant +1.0, so modulation depth is exactly
+    /// `amount` regardless of when the engine is ticked.
+    fn constant_modulation(target: &str, amount: f32) -> ModulationEngine {
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(ModulationSource::LFO {
+            waveform: LFOWaveform::Square,
+            frequency: 0.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
+        });
+        engine.assign(target, &uuid, amount, None);
+        engine.update(
+            0.0,
+            &crate::modulation::AudioValues::default(),
+            &crate::modulation::AnalyzerValues::default(),
+        );
+        engine
+    }
+
+    fn phase(param: &str, index: usize, scale: f32) -> PhaseInput {
+        PhaseInput {
+            param: param.into(),
+            index,
+            scale,
+            multiply_by: Vec::new(),
+        }
+    }
+
+    fn phase_product(param: &str, multiply_by: &[&str], index: usize, scale: f32) -> PhaseInput {
+        PhaseInput {
+            multiply_by: multiply_by.iter().map(|s| (*s).to_string()).collect(),
+            ..phase(param, index, scale)
+        }
+    }
+
+    fn float_input(name: &str, default: f64, min: f32, max: f32) -> ISFInput {
+        ISFInput {
+            name: name.into(),
+            input_type: "float".into(),
+            default: Some(serde_json::json!(default)),
+            min: Some(min),
+            max: Some(max),
+            label: None,
+            values: None,
+            labels: None,
+            identity: None,
+        }
+    }
 
     #[test]
     fn isf_uniforms_size_is_80_bytes() {
@@ -1433,90 +1519,85 @@ mod tests {
     #[test]
     fn accumulate_phase_times_basic() {
         let mut accum = [0.0f32; 4];
-        let inputs = vec![PhaseInput {
-            param: "speed".into(),
-            index: 0,
-            scale: 1.0,
-        }];
-        let isf_inputs = vec![ISFInput {
-            name: "speed".into(),
-            input_type: "float".into(),
-            default: Some(serde_json::json!(2.0)),
-            min: Some(0.0),
-            max: Some(5.0),
-            label: None,
-            values: None,
-            labels: None,
-            identity: None,
-        }];
-        let params = ShaderParams::from_inputs(&isf_inputs);
+        let inputs = vec![phase("speed", 0, 1.0)];
+        let isf_inputs = vec![float_input("speed", 2.0, 0.0, 5.0)];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+        let modulation = no_modulation();
 
         // dt=0.1, speed=2.0, scale=1.0 → accumulate 0.2
-        accumulate_phase_times(&mut accum, 0.1, Some(&inputs), &params);
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &modulation,
+            "deck0",
+        );
         assert!((accum[0] - 0.2).abs() < 1e-5);
         assert_eq!(accum[1], 0.0);
 
         // Accumulate again: 0.2 + 0.2 = 0.4
-        accumulate_phase_times(&mut accum, 0.1, Some(&inputs), &params);
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &modulation,
+            "deck0",
+        );
         assert!((accum[0] - 0.4).abs() < 1e-5);
     }
 
     #[test]
     fn accumulate_phase_times_with_scale() {
         let mut accum = [0.0f32; 4];
-        let inputs = vec![PhaseInput {
-            param: "speed".into(),
-            index: 0,
-            scale: 0.3,
-        }];
-        let isf_inputs = vec![ISFInput {
-            name: "speed".into(),
-            input_type: "float".into(),
-            default: Some(serde_json::json!(1.0)),
-            min: Some(0.0),
-            max: Some(5.0),
-            label: None,
-            values: None,
-            labels: None,
-            identity: None,
-        }];
-        let params = ShaderParams::from_inputs(&isf_inputs);
+        let inputs = vec![phase("speed", 0, 0.3)];
+        let isf_inputs = vec![float_input("speed", 1.0, 0.0, 5.0)];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
 
         // dt=0.5, speed=1.0, scale=0.3 → 0.15
-        accumulate_phase_times(&mut accum, 0.5, Some(&inputs), &params);
+        accumulate_phase_times(
+            &mut accum,
+            0.5,
+            Some(&inputs),
+            &mut params,
+            &no_modulation(),
+            "deck0",
+        );
         assert!((accum[0] - 0.15).abs() < 1e-5);
     }
 
     #[test]
     fn accumulate_phase_times_speed_change_is_continuous() {
         let mut accum = [0.0f32; 4];
-        let inputs = vec![PhaseInput {
-            param: "speed".into(),
-            index: 0,
-            scale: 1.0,
-        }];
-        let isf_inputs = vec![ISFInput {
-            name: "speed".into(),
-            input_type: "float".into(),
-            default: Some(serde_json::json!(1.0)),
-            min: Some(0.0),
-            max: Some(5.0),
-            label: None,
-            values: None,
-            labels: None,
-            identity: None,
-        }];
+        let inputs = vec![phase("speed", 0, 1.0)];
+        let isf_inputs = vec![float_input("speed", 1.0, 0.0, 5.0)];
         let mut params = ShaderParams::from_inputs(&isf_inputs);
+        let modulation = no_modulation();
 
         // Run 10 frames at speed=1.0, dt=0.016
         for _ in 0..10 {
-            accumulate_phase_times(&mut accum, 0.016, Some(&inputs), &params);
+            accumulate_phase_times(
+                &mut accum,
+                0.016,
+                Some(&inputs),
+                &mut params,
+                &modulation,
+                "deck0",
+            );
         }
         let before_change = accum[0];
 
         // Change speed to 3.0 — no jump should occur
         params.set_float("speed", 3.0);
-        accumulate_phase_times(&mut accum, 0.016, Some(&inputs), &params);
+        accumulate_phase_times(
+            &mut accum,
+            0.016,
+            Some(&inputs),
+            &mut params,
+            &modulation,
+            "deck0",
+        );
         let after_change = accum[0];
 
         // Value should increase by dt*3.0, not jump to TIME*3.0
@@ -1531,76 +1612,27 @@ mod tests {
     fn accumulate_phase_times_multi_index() {
         let mut accum = [0.0f32; 4];
         let inputs = vec![
-            PhaseInput {
-                param: "speed".into(),
-                index: 0,
-                scale: 1.0,
-            },
-            PhaseInput {
-                param: "rot_x".into(),
-                index: 1,
-                scale: 1.0,
-            },
-            PhaseInput {
-                param: "rot_y".into(),
-                index: 2,
-                scale: 1.0,
-            },
-            PhaseInput {
-                param: "rot_z".into(),
-                index: 3,
-                scale: 1.0,
-            },
+            phase("speed", 0, 1.0),
+            phase("rot_x", 1, 1.0),
+            phase("rot_y", 2, 1.0),
+            phase("rot_z", 3, 1.0),
         ];
         let isf_inputs = vec![
-            ISFInput {
-                name: "speed".into(),
-                input_type: "float".into(),
-                default: Some(serde_json::json!(1.0)),
-                min: Some(0.0),
-                max: Some(5.0),
-                label: None,
-                values: None,
-                labels: None,
-                identity: None,
-            },
-            ISFInput {
-                name: "rot_x".into(),
-                input_type: "float".into(),
-                default: Some(serde_json::json!(0.5)),
-                min: Some(-1.0),
-                max: Some(1.0),
-                label: None,
-                values: None,
-                labels: None,
-                identity: None,
-            },
-            ISFInput {
-                name: "rot_y".into(),
-                input_type: "float".into(),
-                default: Some(serde_json::json!(0.3)),
-                min: Some(-1.0),
-                max: Some(1.0),
-                label: None,
-                values: None,
-                labels: None,
-                identity: None,
-            },
-            ISFInput {
-                name: "rot_z".into(),
-                input_type: "float".into(),
-                default: Some(serde_json::json!(0.0)),
-                min: Some(-1.0),
-                max: Some(1.0),
-                label: None,
-                values: None,
-                labels: None,
-                identity: None,
-            },
+            float_input("speed", 1.0, 0.0, 5.0),
+            float_input("rot_x", 0.5, -1.0, 1.0),
+            float_input("rot_y", 0.3, -1.0, 1.0),
+            float_input("rot_z", 0.0, -1.0, 1.0),
         ];
-        let params = ShaderParams::from_inputs(&isf_inputs);
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
 
-        accumulate_phase_times(&mut accum, 0.1, Some(&inputs), &params);
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &no_modulation(),
+            "deck0",
+        );
         assert!((accum[0] - 0.1).abs() < 1e-5); // speed=1.0 * 0.1
         assert!((accum[1] - 0.05).abs() < 1e-5); // rot_x=0.5 * 0.1
         assert!((accum[2] - 0.03).abs() < 1e-5); // rot_y=0.3 * 0.1
@@ -1610,9 +1642,254 @@ mod tests {
     #[test]
     fn accumulate_phase_times_none_is_noop() {
         let mut accum = [0.0f32; 4];
-        let params = ShaderParams::from_inputs(&[]);
-        accumulate_phase_times(&mut accum, 0.1, None, &params);
+        let mut params = ShaderParams::from_inputs(&[]);
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            None,
+            &mut params,
+            &no_modulation(),
+            "deck0",
+        );
         assert_eq!(accum, [0.0; 4]);
+    }
+
+    #[test]
+    fn accumulate_phase_times_uses_modulated_value() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![phase("speed", 0, 1.0)];
+        let isf_inputs = vec![float_input("speed", 1.0, 0.0, 5.0)];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+
+        // amount 0.5 over a 0..5 range lifts the effective speed by 2.5 → 3.5
+        let modulation = constant_modulation("deck0:speed", 0.5);
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &modulation,
+            "deck0",
+        );
+        assert!(
+            (accum[0] - 0.35).abs() < 1e-5,
+            "modulated speed 3.5 over dt 0.1 should accumulate 0.35, got {}",
+            accum[0]
+        );
+    }
+
+    #[test]
+    fn accumulate_phase_times_ignores_modulation_of_other_prefixes() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![phase("speed", 0, 1.0)];
+        let isf_inputs = vec![float_input("speed", 1.0, 0.0, 5.0)];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+
+        let modulation = constant_modulation("deck9:speed", 0.5);
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &modulation,
+            "deck0",
+        );
+        assert!((accum[0] - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn accumulate_phase_times_modulation_onset_is_continuous() {
+        let inputs = vec![phase("speed", 0, 1.0)];
+        let isf_inputs = vec![float_input("speed", 1.0, 0.0, 5.0)];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+
+        let unmodulated = no_modulation();
+        let mut accum = [0.0f32; 4];
+        for _ in 0..10 {
+            accumulate_phase_times(
+                &mut accum,
+                0.016,
+                Some(&inputs),
+                &mut params,
+                &unmodulated,
+                "deck0",
+            );
+        }
+        let before = accum[0];
+
+        // Modulation kicking in changes the rate, never the phase itself.
+        let modulated = constant_modulation("deck0:speed", 0.4);
+        accumulate_phase_times(
+            &mut accum,
+            0.016,
+            Some(&inputs),
+            &mut params,
+            &modulated,
+            "deck0",
+        );
+        let expected_delta = 0.016 * (1.0 + 0.4 * 5.0);
+        assert!(
+            (accum[0] - before - expected_delta).abs() < 1e-5,
+            "phase should stay continuous across modulation onset: before={before}, after={}, expected delta={expected_delta}",
+            accum[0]
+        );
+    }
+
+    #[test]
+    fn accumulate_phase_times_multiplies_second_param_into_rate() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![phase_product("speed", &["rot_speed"], 0, 0.5)];
+        let isf_inputs = vec![
+            float_input("speed", 2.0, 0.0, 5.0),
+            float_input("rot_speed", 3.0, 0.0, 5.0),
+        ];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+
+        // dt 0.1 × speed 2.0 × rot_speed 3.0 × scale 0.5 → 0.3
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &no_modulation(),
+            "deck0",
+        );
+        assert!((accum[0] - 0.3).abs() < 1e-5, "got {}", accum[0]);
+    }
+
+    #[test]
+    fn accumulate_phase_times_product_responds_to_modulating_either_operand() {
+        let inputs = vec![phase_product("speed", &["rot_speed"], 0, 1.0)];
+        let isf_inputs = vec![
+            float_input("speed", 1.0, 0.0, 5.0),
+            float_input("rot_speed", 1.0, 0.0, 5.0),
+        ];
+
+        // Modulating the second operand must move the rate just as the first does.
+        for target in ["deck0:speed", "deck0:rot_speed"] {
+            let mut params = ShaderParams::from_inputs(&isf_inputs);
+            let mut accum = [0.0f32; 4];
+            accumulate_phase_times(
+                &mut accum,
+                0.1,
+                Some(&inputs),
+                &mut params,
+                &constant_modulation(target, 0.2),
+                "deck0",
+            );
+            // The modulated operand becomes 1.0 + 0.2 * 5.0 = 2.0, the other stays 1.0.
+            assert!(
+                (accum[0] - 0.2).abs() < 1e-5,
+                "modulating {target} should double the rate, got {}",
+                accum[0]
+            );
+        }
+    }
+
+    #[test]
+    fn accumulate_phase_times_multiplies_every_listed_factor() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![phase_product(
+            "speed",
+            &["time_scale", "flow_speed"],
+            0,
+            1.0,
+        )];
+        let isf_inputs = vec![
+            float_input("speed", 2.0, 0.0, 5.0),
+            float_input("time_scale", 1.5, 0.0, 5.0),
+            float_input("flow_speed", 3.0, 0.0, 5.0),
+        ];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+
+        // dt 0.1 × 2.0 × 1.5 × 3.0 → 0.9
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &no_modulation(),
+            "deck0",
+        );
+        assert!((accum[0] - 0.9).abs() < 1e-5, "got {}", accum[0]);
+    }
+
+    #[test]
+    fn accumulate_phase_times_missing_multiply_by_target_is_unit_factor() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![phase_product("speed", &["not_a_param"], 0, 1.0)];
+        let isf_inputs = vec![float_input("speed", 2.0, 0.0, 5.0)];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &no_modulation(),
+            "deck0",
+        );
+        assert!((accum[0] - 0.2).abs() < 1e-5, "got {}", accum[0]);
+    }
+
+    #[test]
+    fn accumulate_phase_times_product_is_continuous_across_operand_change() {
+        let inputs = vec![phase_product("speed", &["rot_speed"], 0, 1.0)];
+        let isf_inputs = vec![
+            float_input("speed", 1.0, 0.0, 5.0),
+            float_input("rot_speed", 1.0, 0.0, 5.0),
+        ];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+        let modulation = no_modulation();
+
+        let mut accum = [0.0f32; 4];
+        for _ in 0..10 {
+            accumulate_phase_times(
+                &mut accum,
+                0.016,
+                Some(&inputs),
+                &mut params,
+                &modulation,
+                "deck0",
+            );
+        }
+        let before = accum[0];
+
+        params.set_float("rot_speed", 4.0);
+        accumulate_phase_times(
+            &mut accum,
+            0.016,
+            Some(&inputs),
+            &mut params,
+            &modulation,
+            "deck0",
+        );
+        let expected_delta = 0.016 * 4.0;
+        assert!(
+            (accum[0] - before - expected_delta).abs() < 1e-5,
+            "phase should stay continuous when the second operand changes: before={before}, after={}",
+            accum[0]
+        );
+    }
+
+    #[test]
+    fn accumulate_phase_times_modulation_clamps_to_param_range() {
+        let mut accum = [0.0f32; 4];
+        let inputs = vec![phase("speed", 0, 1.0)];
+        let isf_inputs = vec![float_input("speed", 4.0, 0.0, 5.0)];
+        let mut params = ShaderParams::from_inputs(&isf_inputs);
+
+        // 4.0 + 1.0 * 5.0 would be 9.0; the parameter max caps it at 5.0
+        let modulation = constant_modulation("deck0:speed", 1.0);
+        accumulate_phase_times(
+            &mut accum,
+            0.1,
+            Some(&inputs),
+            &mut params,
+            &modulation,
+            "deck0",
+        );
+        assert!((accum[0] - 0.5).abs() < 1e-5, "got {}", accum[0]);
     }
 
     // ── Offensive: zero-size texture guard on resize ─────────────────

@@ -95,6 +95,87 @@ Declare them in the metadata:
 
 Then use in the shader: `float angle = PHASE_TIME_0 * 6.28318;` for smooth rotation that doesn't jump when the user adjusts speed.
 
+The value integrated is the parameter's **modulated** value — the same one the shader reads from the user-parameter buffer. Routing an audio band or LFO at `rotation_speed` therefore changes how fast the phase advances, and because integration is continuous the animation speeds up and slows down without ever jumping. A shader should read `PHASE_TIME_N` rather than the raw parameter for anything that advances over time; reading the raw parameter and multiplying by `TIME` reintroduces the jump.
+
+#### Combining two rates
+
+Multiplying an accumulator by a parameter — `PHASE_TIME_0 * rot_speed` — reintroduces the same jump, because it scales an ever-growing phase by a live value. When a per-element rate should ride on top of a master speed, fold both into one accumulator with `MULTIPLY_BY`:
+
+```json
+"PHASE_INPUTS": [
+    { "PARAM": "speed", "INDEX": 0, "SCALE": 1.0 },
+    { "PARAM": "speed", "MULTIPLY_BY": "rot_speed", "INDEX": 1, "SCALE": 0.2 }
+]
+```
+
+`PHASE_TIME_1` now accumulates `dt × speed × rot_speed × 0.2`, so the shader writes `float rotAngle = PHASE_TIME_1;` and both parameters stay smooth and modulatable. `MULTIPLY_BY` also takes an array when a rate depends on three parameters: `"MULTIPLY_BY": ["time_scale", "flow_speed"]`.
+
+Two rules follow from this. Never multiply `PHASE_TIME_N` by a user parameter, and never apply a parameter that already drives an accumulator a second time in the shader body — the phase already contains it, so applying it again makes the response quadratic in that parameter.
+
+The first rule catches you out most often when you never wrote the multiply. Adding phase into a coordinate that something else scales later is the same thing:
+
+```glsl
+coord += PHASE_TIME_0;
+float pattern = fract(coord * line_count);   // = fract(coord*n + PHASE_TIME_0*n)
+```
+
+`line_count` reads as purely spatial, but it multiplies the scroll phase, so nudging it slides the whole field. Scale the position only and add the phase afterwards, with the count inside the integral:
+
+```glsl
+float pattern = fract(coord * line_count + PHASE_TIME_1);   // MULTIPLY_BY: line_count
+```
+
+The lines then travel at the same screen speed however many of them there are, which is what the original multiply gave you, without the jump. `bars.fs`, `lines.fs` and `scanlines.fs` all shipped the broken form.
+
+`tests/shader_param_contract_guard.rs` fails the build on all of these. It walks the whole multiplicative chain, so a parameter hiding behind a constant (`PHASE_TIME_0 * 0.5 * look_speed`) is caught, and it follows local aliases within a function, so `float t = PHASE_TIME_0;` buys you nothing. It stops at function calls, because `sin(PHASE_TIME_0) * amount` is legitimate — that scales an amplitude, not a phase. What it cannot see is a phase passed into a function as an argument and scaled in the callee.
+
+#### Rates that are affine, not products
+
+`MULTIPLY_BY` covers `speed × amount`. It does not cover `speed × (1 + k · amount)`, the shape you want when `amount` at zero should still leave the base motion running — the product form would stop the animation dead there.
+
+Integration is linear, so split the term across two accumulators and add them in the shader:
+
+```json
+"PHASE_INPUTS": [
+    { "PARAM": "flow_speed", "INDEX": 0 },
+    { "PARAM": "flow_speed", "MULTIPLY_BY": "agitation", "INDEX": 1, "SCALE": 0.8 }
+]
+```
+
+```glsl
+float t = PHASE_TIME_0 + PHASE_TIME_1;   // = ∫ flow_speed·(1 + 0.8·agitation) dt
+```
+
+That is exact, and continuous in both parameters. `big_bang.fs` does this.
+
+A factor that varies across the image but not over time — a per-cell hash, say — stays *outside* the integral, because only the parameter needs to be inside it. `char_cycle.fs` gives every cell its own rate with `PHASE_TIME_0 + h * PHASE_TIME_1`.
+
+The cost is one slot per affine term, and there are only four.
+
+#### Bounding an accumulator
+
+An accumulator grows without limit, which is correct for anything that should cycle forever — a hue, a scroll offset, an angle that wraps. It is wrong for anything that must stay within a range. Feeding an unbounded phase straight into a camera angle is how `dull_skull` used to orbit off behind its own backdrop and render black for a third of every cycle.
+
+Wrap the phase in a periodic function and scale *that* by the amplitude parameter:
+
+```glsl
+float swayAngle = sin(PHASE_TIME_1) * sway_range;
+```
+
+This is not the forbidden `PHASE_TIME_N * param`: the sine is already bounded, so `sway_range` scales a value in [-1, 1] rather than one that grows forever. `sway_range` is an amplitude, so it stays a plain uniform.
+
+#### Prefer a rate to an amplitude for anything that will be automated
+
+Passing the guard is not the same as feeling right under an LFO. An amplitude parameter sets *where* something is; automating it moves that thing out and back at the LFO's rate, which reads as sloshing or stutter. A rate parameter can only make motion faster or slower, so no automation of it — however fast, however often reversed — can relocate anything.
+
+`liquid_light.fs`'s Agitation was built both ways. As an amplitude on the domain-warp gain it was continuous and passed every guard, but a 1 Hz triangle LFO drove per-frame change to 13.5× the parked-fader baseline. Rebuilt as a mixing *rate* on accumulator slot 1 — advancing the inner warp stages against the outer one, so the fine structure keeps reorganising — the same LFO measures 0.97×, indistinguishable from leaving the fader alone, while still spanning a 10.5× range in mixing speed.
+
+So when a control needs more authority, reach for another rate before an amplitude. The question to ask is whether the parameter names a speed or a position; only the first survives being automated.
+
+#### What does not belong in `PHASE_INPUTS`
+
+Only parameters that express a *rate*. A parameter setting a static angle, scale, threshold, or count must stay a plain uniform; integrating it would ramp it to its limit and hold there. Shaders that step a simulation into a persistent buffer are already continuous by construction and need no accumulator for their step-rate coefficients.
+
 ## Binding Layout
 
 | Binding | Content |

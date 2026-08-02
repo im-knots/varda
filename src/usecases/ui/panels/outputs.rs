@@ -1,5 +1,7 @@
 //! Unified output management and warp calibration.
 
+use std::fmt::Write as _;
+
 use super::super::{UIActions, UIData};
 use crate::engine::EngineCommand;
 use crate::renderer::context::OutputTarget;
@@ -73,14 +75,17 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         } else {
                             egui::Color32::from_rgb(120, 200, 255)
                         };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "♪ {} — {} sent, {} dropped",
-                                audio.device, audio.frames_written, audio.frames_dropped
-                            ))
-                            .small()
-                            .color(color),
+                        // Spliced silence is the audible part of a drop, so it
+                        // is what the warning reports; the chunk count alone
+                        // says nothing about how long the interruption was.
+                        let mut text = format!(
+                            "♪ {} — {} sent, {} dropped",
+                            audio.device, audio.frames_written, audio.frames_dropped
                         );
+                        if audio.silence_spliced > 0 {
+                            let _ = write!(text, ", {} samples muted", audio.silence_spliced);
+                        }
+                        ui.label(egui::RichText::new(text).small().color(color));
                     }
 
                     // Preview toggle + image
@@ -101,12 +106,16 @@ pub(super) fn render_output_section(ui: &mut egui::Ui, data: &UIData, actions: &
                         }
                         if show_preview {
                             if let Some(&tex_id) = data.output_preview_textures.get(&idx) {
-                                let preview_width = ui.available_width().min(320.0);
-                                let preview_height = preview_width * 9.0 / 16.0;
-                                ui.image(egui::load::SizedTexture::new(
-                                    tex_id,
-                                    egui::vec2(preview_width, preview_height),
-                                ));
+                                let width = ui.available_width().min(320.0);
+                                // The output's own texture size, not the render
+                                // resolution: a windowed output previews its
+                                // window, which can be a different shape.
+                                let size = super::utils::preview_size(
+                                    egui::vec2(width, width),
+                                    output.preview_width,
+                                    output.preview_height,
+                                );
+                                ui.image(egui::load::SizedTexture::new(tex_id, size));
                             } else {
                                 ui.label(
                                     egui::RichText::new("No preview available").small().weak(),
@@ -1070,6 +1079,8 @@ mod tests {
             edge_blend: crate::renderer::edge_blend::EdgeBlendConfig::default(),
             rotation: crate::renderer::context::OutputRotation::default(),
             audio_passthrough: None,
+            preview_width: 1920,
+            preview_height: 1080,
         });
         let mut actions = UIActions::new();
         let _harness = egui_kittest::Harness::new_ui(|ui| {

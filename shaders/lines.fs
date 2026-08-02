@@ -13,7 +13,10 @@
         {"NAME": "color1", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0], "LABEL": "Line Color"},
         {"NAME": "color2", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 1.0], "LABEL": "Background"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "anim_speed", "INDEX": 0}]
+    "PHASE_INPUTS": [
+        {"PARAM": "anim_speed", "INDEX": 0},
+        {"PARAM": "anim_speed", "MULTIPLY_BY": "line_count", "INDEX": 1, "SCALE": 0.05}
+    ]
 }*/
 
 #version 450
@@ -64,28 +67,35 @@ void main() {
 
     int st = int(floor(style + 0.5));
     float coord;
+    // Scroll is added below, after the line_count multiply, with Line Count
+    // carried inside the integral by slot 1. Folded into `coord` as it used to
+    // be, the accumulated phase was multiplied by Line Count and the whole
+    // field slid whenever that fader moved. The radial style has never
+    // scrolled — it rotates the wave instead.
+    float scroll = PHASE_TIME_1;
 
     if (st == 0) {
         // Horizontal lines
         float wave = sin(p.x * wave_freq * PI * 2.0 + t) * wave_amount * 0.1;
-        coord = p.y + wave + t * 0.05;
+        coord = p.y + wave;
     } else if (st == 1) {
         // Vertical lines
         float wave = sin(p.y * wave_freq * PI * 2.0 + t) * wave_amount * 0.1;
-        coord = p.x + wave + t * 0.05;
+        coord = p.x + wave;
     } else if (st == 2) {
         // Radial lines from center
         vec2 c = p - vec2(0.5 * RENDERSIZE.x / RENDERSIZE.y, 0.5);
         float angle = atan(c.y, c.x) / (2.0 * PI) + 0.5;
         float wave = sin(length(c) * wave_freq * PI * 8.0 + t) * wave_amount * 0.05;
         coord = angle + wave;
+        scroll = 0.0;
     } else {
         // Diagonal lines
         float wave = sin((p.x + p.y) * wave_freq * PI * 2.0 + t) * wave_amount * 0.1;
-        coord = (p.x + p.y) * 0.707 + wave + t * 0.05;
+        coord = (p.x + p.y) * 0.707 + wave;
     }
 
-    float pattern = fract(coord * line_count);
+    float pattern = fract(coord * line_count + scroll);
     float lw = line_width * line_count;
     float line = smoothstep(0.5 - lw - 0.01, 0.5 - lw, pattern) - smoothstep(0.5 + lw, 0.5 + lw + 0.01, pattern);
 

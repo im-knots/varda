@@ -70,6 +70,52 @@ impl VardaApp {
         CommandResult::Ok
     }
 
+    /// Resize every headless output to the render resolution, returning the
+    /// names of any that had to be stopped to do it.
+    ///
+    /// Recording, NDI, Syphon and the ffmpeg stream targets all size their
+    /// buffers from the render resolution, but they did so only once, when they
+    /// were created. Changing the project resolution afterwards left them at the
+    /// old size and the composite was stretch-blitted into it, so a recording
+    /// made after switching a project to portrait still wrote a landscape file
+    /// with squashed content.
+    ///
+    /// Anything backed by an ffmpeg subprocess has to stop: the encoder was
+    /// spawned with a fixed `-s WxH` and feeding it raw frames of another size
+    /// desyncs the stream rather than failing cleanly. Restarting it here would
+    /// be worse than stopping — a recording would reopen the same path and
+    /// truncate the take already on disk. NDI and Syphon carry their dimensions
+    /// per frame and keep running across the change.
+    pub(in crate::app) fn resize_headless_outputs(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Vec<String> {
+        let device = &self.context.device;
+        let mut stopped = Vec::new();
+        let mut released = Vec::new();
+        for output in &mut self.output.outputs {
+            let UnifiedOutput::Headless(h) = output else {
+                continue;
+            };
+            if h.width == width && h.height == height {
+                continue;
+            }
+            if let Some(mut sub) = h.subprocess.take() {
+                sub.stop();
+                h.active = false;
+                h.started_at = None;
+                released.extend(h.audio_pcm.take());
+                stopped.push(h.name.clone());
+            }
+            h.resize(device, width, height);
+        }
+        for pass in released {
+            self.release_passthrough(Some(*pass));
+        }
+        stopped
+    }
+
     /// Start a headless output (spawn ffmpeg subprocess or activate NDI/Syphon).
     pub fn cmd_start_output(&mut self, output_uuid: &str) -> CommandResult {
         let idx = match self.resolve_output(output_uuid) {
@@ -79,11 +125,20 @@ impl VardaApp {
         // Snapshot what we need so no borrow of `self.output` is held across the
         // audio-subscription and spawn work (which borrow other `self` fields).
         // Also take any stale subscription left by a prior delivery failure.
+        //
+        // The encoder's frame size is fixed for the life of the subprocess, so
+        // pin the output to the render resolution first. `set_render_resolution`
+        // already keeps outputs in step; this is belt and braces for the paths
+        // that assign `render_width`/`render_height` directly, such as the
+        // workspace loader applying a scene's resolution.
+        let (render_width, render_height) = (self.render_width, self.render_height);
+        let device = &self.context.device;
         let (target, name, width, height, stale) = match self.output.outputs.get_mut(idx) {
             Some(UnifiedOutput::Headless(h)) => {
                 if h.active {
                     return CommandResult::Ok; // already active
                 }
+                h.resize(device, render_width, render_height);
                 (
                     h.target.clone(),
                     h.name.clone(),
@@ -110,6 +165,8 @@ impl VardaApp {
             &name,
         );
 
+        let fps = encoder_fps(self.target_fps);
+
         let spawn_result = match &target {
             OutputTarget::SrtStream { url, codec, .. } => {
                 crate::renderer::FfmpegSubprocess::spawn_srt(
@@ -117,7 +174,7 @@ impl VardaApp {
                     codec,
                     width,
                     height,
-                    30,
+                    fps,
                     audio_input,
                 )
             }
@@ -127,7 +184,7 @@ impl VardaApp {
                     codec,
                     width,
                     height,
-                    30,
+                    fps,
                     audio_input,
                 )
             }
@@ -141,7 +198,7 @@ impl VardaApp {
                 codec,
                 width,
                 height,
-                30,
+                fps,
                 *low_latency,
                 audio_input,
             ),
@@ -154,7 +211,7 @@ impl VardaApp {
                 codec,
                 width,
                 height,
-                30,
+                fps,
                 audio_input,
             ),
             OutputTarget::RtmpStream { url, codec, .. } => {
@@ -163,7 +220,7 @@ impl VardaApp {
                     codec,
                     width,
                     height,
-                    30,
+                    fps,
                     audio_input,
                 )
             }
@@ -535,6 +592,31 @@ impl VardaApp {
     }
 }
 
+/// The frame rate an ffmpeg output is opened at.
+///
+/// Must be the rate frames are actually produced at. A raw video input is timed
+/// by position — frame N sits at N/fps — so if the encoder is told a rate the
+/// renderer is not running at, the recording comes out at the wrong speed and
+/// drifts against its own audio, which runs on the capture device's clock.
+///
+/// Every output used to be opened at a hardcoded 30 while the app defaults to
+/// 60, so a stock recording was labelled at half the rate it was made: twice as
+/// long as the session, in slow motion, with the audio running out halfway. It
+/// also disabled the gap padding in `FfmpegSubprocess`, which measures the
+/// renderer's shortfall against this same rate and saw a surplus instead.
+///
+/// Uncapped (`target_fps == 0`) has no rate to report, so it takes 60 — the
+/// default cap, and the closest thing to an expected rate. A wildly different
+/// actual rate will be corrected by frame padding rather than by mislabelling.
+pub(crate) fn encoder_fps(target_fps: u32) -> u32 {
+    const UNCAPPED_ASSUMED_FPS: u32 = 60;
+    if target_fps == 0 {
+        UNCAPPED_ASSUMED_FPS
+    } else {
+        target_fps
+    }
+}
+
 /// Resolve a persisted audio device name to a live PCM subscription for output
 /// passthrough. Returns `(AudioInput for ffmpeg, AudioPassthrough to retain for
 /// teardown)`. On a missing/unopenable device, emits a warning and returns
@@ -569,6 +651,7 @@ pub(crate) fn resolve_output_audio(
             rx: sub.receiver,
             sample_rate: sub.format.sample_rate,
             channels: sub.format.channels,
+            lost_samples: sub.lost_samples,
         };
         let passthrough = AudioPassthrough {
             source_id,
@@ -581,5 +664,38 @@ pub(crate) fn resolve_output_audio(
             "Failed to open audio device '{device_name}' for output '{output_name}'; video-only"
         ));
         (None, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encoder_fps;
+
+    /// An ffmpeg output must be opened at the rate frames are actually made.
+    ///
+    /// Raw video carries no per-frame timing, so the rate declared at spawn is
+    /// the only thing that says how long the recording is. Declaring a rate the
+    /// renderer is not running at plays the result back at the wrong speed and
+    /// slides it against its own audio, which is timed by the capture device's
+    /// sample clock and cannot be talked into agreeing.
+    ///
+    /// Every spawn site used to pass a literal 30 while the app defaults to 60.
+    /// See /spec/av-sync.md.
+    #[test]
+    fn outputs_are_opened_at_the_rate_frames_are_produced() {
+        for target in [24, 25, 30, 50, 60, 120, 144] {
+            assert_eq!(
+                encoder_fps(target),
+                target,
+                "an output must be encoded at the rate the renderer runs at"
+            );
+        }
+    }
+
+    /// Uncapped has no rate to declare, so it takes the default cap. Frame
+    /// padding absorbs the difference if the real rate turns out lower.
+    #[test]
+    fn an_uncapped_renderer_falls_back_to_a_declarable_rate() {
+        assert_eq!(encoder_fps(0), 60);
     }
 }

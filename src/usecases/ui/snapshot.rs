@@ -270,6 +270,7 @@ pub(crate) fn build_ui_data(
                 active_duration,
                 surface_assignments,
                 calibration_mode,
+                (preview_width, preview_height),
             ) = match o {
                 crate::renderer::context::UnifiedOutput::Window(w) => {
                     let sa = w
@@ -296,6 +297,7 @@ pub(crate) fn build_ui_data(
                         std::time::Duration::ZERO,
                         sa,
                         w.calibration_mode,
+                        (w.preview_texture.width(), w.preview_texture.height()),
                     )
                 }
                 crate::renderer::context::UnifiedOutput::Headless(h) => {
@@ -320,6 +322,7 @@ pub(crate) fn build_ui_data(
                         o.active_duration(),
                         sa,
                         crate::renderer::context::CalibrationMode::Off,
+                        (h.width, h.height),
                     )
                 }
             };
@@ -335,6 +338,11 @@ pub(crate) fn build_ui_data(
                             .and_then(crate::internal::renderer::subprocess::FfmpegSubprocess::audio_frames_written)
                             .unwrap_or(0),
                         frames_dropped: p.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                        silence_spliced: h
+                            .subprocess
+                            .as_ref()
+                            .and_then(crate::internal::renderer::subprocess::FfmpegSubprocess::audio_silence_spliced)
+                            .unwrap_or(0),
                     })
                 }
                 crate::renderer::context::UnifiedOutput::Window(_) => None,
@@ -353,6 +361,8 @@ pub(crate) fn build_ui_data(
                 edge_blend,
                 rotation: o.rotation(),
                 audio_passthrough,
+                preview_width,
+                preview_height,
             }
         })
         .collect();

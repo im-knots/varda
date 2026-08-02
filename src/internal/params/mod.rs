@@ -185,6 +185,40 @@ impl ShaderParams {
         }
     }
 
+    /// Get a float value with modulation applied — the same value this parameter
+    /// uploads to the GPU this frame.
+    ///
+    /// Takes `&mut self` so it can reuse the modulation-key scratch string; this
+    /// runs on the per-frame path and must not allocate.
+    pub fn get_float_modulated(
+        &mut self,
+        name: &str,
+        modulation: &ModulationEngine,
+        param_prefix: Option<&str>,
+    ) -> Option<f32> {
+        let base = self.values.get(name)?;
+        if !matches!(base, ParamValue::Float(_)) {
+            return None;
+        }
+
+        self.mod_key_scratch.clear();
+        if let Some(prefix) = param_prefix {
+            self.mod_key_scratch.push_str(prefix);
+            self.mod_key_scratch.push(':');
+        }
+        self.mod_key_scratch.push_str(name);
+
+        match Self::apply_modulation_to_value_with_key(
+            &self.mod_key_scratch,
+            base,
+            modulation,
+            self.definitions.get(name),
+        ) {
+            ParamValue::Float(v) => Some(v),
+            _ => None,
+        }
+    }
+
     /// Set a float value
     pub fn set_float(&mut self, name: &str, value: f32) {
         if let Some(ParamValue::Float(v)) = self.values.get_mut(name) {
@@ -491,6 +525,7 @@ impl ShaderParams {
 mod tests {
     use super::*;
     use crate::isf::ISFInput;
+    use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 
     fn make_float_input(name: &str, default: f64, min: f32, max: f32) -> ISFInput {
         ISFInput {
@@ -832,6 +867,182 @@ mod tests {
         let base = params.build_buffer_data().to_vec();
         // Modulated should differ from base (LFO at t=0.25 is non-zero)
         assert_ne!(modulated, base, "Modulated buffer should differ from base");
+    }
+
+    #[test]
+    fn get_float_modulated_matches_uploaded_value() {
+        let inputs = vec![make_float_input("speed", 1.0, 0.0, 5.0)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(crate::modulation::ModulationSource::LFO {
+            waveform: crate::modulation::LFOWaveform::Square,
+            frequency: 0.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar: true,
+        });
+        engine.assign("deck0:speed", &uuid, 0.5, None);
+        engine.update(
+            0.0,
+            &crate::modulation::AudioValues::default(),
+            &crate::modulation::AnalyzerValues::default(),
+        );
+
+        let value = params
+            .get_float_modulated("speed", &engine, Some("deck0"))
+            .expect("speed is a float param");
+        assert!((value - 3.5).abs() < 1e-5, "got {value}");
+
+        let uploaded = params.build_modulated_buffer_data(&engine, Some("deck0"))[..4]
+            .try_into()
+            .map(f32::from_le_bytes)
+            .expect("first param serialises as 4 bytes");
+        assert!((uploaded - value).abs() < 1e-6);
+    }
+
+    /// A modulation source pinned to a constant output, standing in for any
+    /// point along a sweep. A square LFO at frequency 0 and phase 0 sits on its
+    /// high half forever, so its amplitude *is* its output.
+    fn pinned_source(value: f32) -> crate::modulation::ModulationSource {
+        crate::modulation::ModulationSource::LFO {
+            waveform: crate::modulation::LFOWaveform::Square,
+            frequency: 0.0,
+            phase: 0.0,
+            amplitude: value,
+            bipolar: true,
+        }
+    }
+
+    /// A sweep must be able to reach the far end of the fader.
+    ///
+    /// `AudioReactMode::Increase` ramps its output 0 → 1 and wraps, so with the
+    /// fader parked at its minimum the parameter should climb all the way to the
+    /// maximum before resetting. Assignments used to be created at half depth,
+    /// which capped the climb at the midpoint: the sweep visibly stopped halfway
+    /// up the slider and snapped back. Depth belongs on the source (LFO
+    /// `amplitude`, audio `gain`), not on the assignment — see
+    /// /spec/modulation.md § Range-Scaled Modulation.
+    #[test]
+    fn full_depth_assignment_lets_a_sweep_span_the_whole_range() {
+        let inputs = vec![make_float_input("speed", 0.0, 0.0, 5.0)];
+        let at = |amount: f32, ramp: f32| -> f32 {
+            let mut params = ShaderParams::from_inputs(&inputs);
+            let mut engine = ModulationEngine::new();
+            let uuid = engine.add_source(pinned_source(ramp));
+            engine.assign("deck0:speed", &uuid, amount, None);
+            engine.update(
+                0.0,
+                &crate::modulation::AudioValues::default(),
+                &crate::modulation::AnalyzerValues::default(),
+            );
+            params
+                .get_float_modulated("speed", &engine, Some("deck0"))
+                .expect("speed is a float param")
+        };
+
+        // Top of the ramp must land on the top of the fader, not partway up.
+        let top = at(DEFAULT_ASSIGNMENT_AMOUNT, 1.0);
+        assert!(
+            (top - 5.0).abs() < 1e-5,
+            "a full sweep should reach the parameter maximum of 5.0, got {top}"
+        );
+        // And the ramp must map linearly onto the range on the way there.
+        let middle = at(DEFAULT_ASSIGNMENT_AMOUNT, 0.5);
+        assert!(
+            (middle - 2.5).abs() < 1e-5,
+            "half a sweep should sit at the midpoint 2.5, got {middle}"
+        );
+
+        // The bug, pinned: half depth stalls a full sweep at the midpoint.
+        let halved = at(0.5, 1.0);
+        assert!(
+            (halved - 2.5).abs() < 1e-5,
+            "half depth should cap a full sweep at 2.5, got {halved}"
+        );
+    }
+
+    /// End-to-end version of the above through a real audio sweep source.
+    ///
+    /// With the fader parked at its minimum, both sweep directions must cover
+    /// the fader top to bottom: `Increase` climbs to the maximum before wrapping,
+    /// `Decrease` starts at the maximum and walks down. Anything less than full
+    /// assignment depth truncates the excursion.
+    #[test]
+    fn audio_sweep_modes_traverse_the_whole_fader_from_the_bottom() {
+        use crate::modulation::{AudioReactMode, AudioSourceValues, ModulationSource};
+
+        // Flat full-scale FFT → energy_in_range reads 1.0 on every frame.
+        let loud = || {
+            let mut audio = crate::modulation::AudioValues::default();
+            audio.sources.insert(
+                0,
+                AudioSourceValues {
+                    fft: vec![1.0; 256],
+                    level: 1.0,
+                    sample_rate: 48000.0,
+                },
+            );
+            audio
+        };
+
+        let inputs = vec![make_float_input("speed", 0.0, 0.0, 5.0)];
+        let excursion = |mode: AudioReactMode| -> (f32, f32) {
+            let mut params = ShaderParams::from_inputs(&inputs);
+            let mut engine = ModulationEngine::new();
+            let uuid = engine.add_source(ModulationSource::AudioBand {
+                source_id: None,
+                freq_low: 20.0,
+                freq_high: 20000.0,
+                gain: 1.0,
+                smoothing: 0.0,
+                mode,
+                noise_gate: 0.0,
+            });
+            engine.assign("deck0:speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT, None);
+
+            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+            // Long enough for the ramp to cross the full 0..1 span at the
+            // default step of raw * dt * 4.
+            for frame in 0..200 {
+                engine.update(
+                    frame as f32 * 0.016,
+                    &loud(),
+                    &crate::modulation::AnalyzerValues::default(),
+                );
+                let v = params
+                    .get_float_modulated("speed", &engine, Some("deck0"))
+                    .expect("speed is a float param");
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+            (lo, hi)
+        };
+
+        for mode in [AudioReactMode::Increase, AudioReactMode::Decrease] {
+            let (lo, hi) = excursion(mode);
+            assert!(
+                lo < 0.1,
+                "{mode:?} should reach the bottom of the 0..5 fader, got {lo}"
+            );
+            assert!(
+                hi > 4.9,
+                "{mode:?} should reach the top of the 0..5 fader, got {hi} \
+                 — the sweep is being truncated before it fills the slider"
+            );
+        }
+    }
+
+    #[test]
+    fn get_float_modulated_returns_none_for_non_float() {
+        let inputs = vec![make_bool_input("invert", true)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        let engine = ModulationEngine::new();
+        assert!(params
+            .get_float_modulated("invert", &engine, Some("deck0"))
+            .is_none());
+        assert!(params
+            .get_float_modulated("missing", &engine, Some("deck0"))
+            .is_none());
     }
 
     #[test]

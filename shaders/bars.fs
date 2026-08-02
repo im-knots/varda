@@ -12,7 +12,7 @@
         {"NAME": "color2", "TYPE": "color", "DEFAULT": [0.0, 0.0, 0.0, 1.0], "LABEL": "Gap Color"},
         {"NAME": "softness", "TYPE": "float", "DEFAULT": 0.02, "MIN": 0.0, "MAX": 0.5, "LABEL": "Softness"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "anim_speed", "INDEX": 0, "SCALE": 0.1}]
+    "PHASE_INPUTS": [{"PARAM": "anim_speed", "MULTIPLY_BY": "bar_count", "INDEX": 0, "SCALE": 0.1}]
 }*/
 
 #version 450
@@ -61,11 +61,13 @@ void main() {
     float ca = cos(angle), sa = sin(angle);
     float coord = p.x * ca + p.y * sa;
 
-    // Animate
-    coord += PHASE_TIME_0;
-
-    // Create bars
-    float pattern = fract(coord * bar_count);
+    // Create bars. The scroll is added in pattern space rather than to `coord`,
+    // because `coord * bar_count` would multiply the accumulated phase by Bar
+    // Count and slide the whole field the moment that fader moved. Bar Count is
+    // inside the integral instead, which keeps the bars travelling at the same
+    // speed across the screen however many of them there are — the behaviour
+    // the multiply gave, minus the jump.
+    float pattern = fract(coord * bar_count + PHASE_TIME_0);
     float bar;
     if (softness > 0.001) {
         bar = smoothstep(0.5 - bar_width * 0.5 - softness, 0.5 - bar_width * 0.5, pattern)

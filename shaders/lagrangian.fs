@@ -139,8 +139,10 @@ void main() {
     vec3 color = bg_color.rgb;
     float alpha = bg_color.a;
 
-    // Typing speed: characters per time unit
-    float charsPerSec = speed * 8.0;
+    // Characters typed per unit of accumulated phase. `speed` is already integrated
+    // into PHASE_TIME_0, so applying it again here would make the typing rate
+    // quadratic in the Speed fader.
+    const float charsPerUnit = 8.0;
 
     for (int layer = 0; layer < 5; layer++) {
         if (layer >= numLayers) break;
@@ -152,13 +154,11 @@ void main() {
         float scale = mix(0.5, 1.0, 1.0 - depthT);
         float opacity = mix(0.15, 1.0, pow(1.0 - depthT, 1.5));
 
-        // Each layer is offset in time so they type at different phases
-        float layerTimeOffset = layerF * float(TOTAL_CHARS + LOOP_PAUSE) / charsPerSec * 0.3;
-        float t = PHASE_TIME_0 + layerTimeOffset;
-
         // Global cursor: how many chars have been typed so far (loops)
         int loopLen = TOTAL_CHARS + LOOP_PAUSE;
-        float rawCursor = t * charsPerSec;
+
+        // Each layer is offset by a fixed number of characters so they type at different phases
+        float rawCursor = PHASE_TIME_0 * charsPerUnit + layerF * float(loopLen) * 0.3;
         int globalCursor = int(mod(rawCursor, float(loopLen)));
 
         // Character cell dimensions

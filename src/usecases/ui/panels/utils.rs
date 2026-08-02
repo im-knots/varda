@@ -9,6 +9,46 @@ pub(super) fn format_time(secs: f64) -> String {
     format!("{m:02}:{s:02}")
 }
 
+/// The size to draw a preview or output-space canvas at so that it keeps the
+/// render resolution's aspect ratio while fitting inside `budget`.
+///
+/// Every preview widget used to hardcode 16:9, so a portrait project — a phone
+/// video at 1080×1920, say — rendered correctly but was squashed into a
+/// landscape rectangle everywhere in the UI. The GPU side was never the
+/// problem: `PreviewEncoder` already downscales with the aspect preserved, and
+/// recordings always came out right. Only the widgets lied.
+///
+/// The result is scaled to *contain*: it never exceeds `budget` on either axis,
+/// and touches it on whichever axis binds first. Callers pass the space they are
+/// willing to give up, which for a width-driven panel means passing a height cap
+/// as well, or a tall project would push everything below it off the panel.
+///
+/// This also governs the stage surface and warp canvases. They are not preview
+/// images, but they map normalised output coordinates onto a rectangle, so a
+/// 16:9 canvas draws a square surface as a wide one whenever the output is not
+/// 16:9 — the same lie in a place where it misleads about geometry the user is
+/// editing.
+pub(super) fn preview_size(
+    budget: egui::Vec2,
+    render_width: u32,
+    render_height: u32,
+) -> egui::Vec2 {
+    let budget = egui::vec2(budget.x.max(1.0), budget.y.max(1.0));
+    // A render resolution is never zero in practice; the fallback keeps a
+    // malformed scene file from producing a NaN-sized widget.
+    let aspect = if render_width == 0 || render_height == 0 {
+        16.0 / 9.0
+    } else {
+        render_width as f32 / render_height as f32
+    };
+    let height_at_full_width = budget.x / aspect;
+    if height_at_full_width <= budget.y {
+        egui::vec2(budget.x, height_at_full_width)
+    } else {
+        egui::vec2(budget.y * aspect, budget.y)
+    }
+}
+
 pub(super) fn render_collapsed_column(ui: &mut egui::Ui, label: &str, open_id: egui::Id) {
     let strip_width = 20.0;
     let min_height = ui.available_height().max(60.0);
@@ -250,6 +290,106 @@ mod tests {
         assert_eq!(format_time(30.7), "00:30");
         assert_eq!(format_time(59.9), "00:59");
         assert_eq!(format_time(60.1), "01:00");
+    }
+
+    /// The historical 16:9 sizing must be reproduced exactly, or every existing
+    /// layout shifts the moment this helper is wired in.
+    #[test]
+    fn preview_size_leaves_a_landscape_project_where_it_was() {
+        let size = preview_size(egui::vec2(100.0, 100.0), 1920, 1080);
+        assert!((size.x - 100.0).abs() < 1e-3);
+        assert!((size.y - 56.25).abs() < 1e-3, "got {}", size.y);
+    }
+
+    #[test]
+    fn preview_size_makes_a_portrait_project_tall_and_narrow() {
+        let size = preview_size(egui::vec2(100.0, 100.0), 1080, 1920);
+        assert!((size.x - 56.25).abs() < 1e-3, "got {}", size.x);
+        assert!((size.y - 100.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn preview_size_never_exceeds_its_budget() {
+        for (w, h) in [(1920u32, 1080u32), (1080, 1920), (1080, 1080), (2560, 1080)] {
+            let budget = egui::vec2(320.0, 180.0);
+            let size = preview_size(budget, w, h);
+            assert!(
+                size.x <= budget.x + 1e-3 && size.y <= budget.y + 1e-3,
+                "{w}x{h} produced {size:?} for budget {budget:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn preview_size_preserves_the_render_aspect() {
+        for (w, h) in [(1920u32, 1080u32), (1080, 1920), (1080, 1350), (1080, 1080)] {
+            let size = preview_size(egui::vec2(200.0, 200.0), w, h);
+            let want = w as f32 / h as f32;
+            assert!(
+                (size.x / size.y - want).abs() < 1e-3,
+                "{w}x{h} produced aspect {}",
+                size.x / size.y
+            );
+        }
+    }
+
+    /// A zero from a malformed scene must not reach the layout as a NaN.
+    #[test]
+    fn preview_size_falls_back_when_the_resolution_is_degenerate() {
+        let size = preview_size(egui::vec2(160.0, 160.0), 0, 0);
+        assert!(size.x.is_finite() && size.y.is_finite());
+        assert!((size.x / size.y - 16.0 / 9.0).abs() < 1e-3);
+    }
+
+    /// The portrait bug was one mistake made independently in seven places:
+    /// every preview widget and both stage canvases baked in 16:9 rather than
+    /// asking what the project actually renders at. They are all routed through
+    /// [`preview_size`] now, and this stops the eighth copy from landing.
+    ///
+    /// Matching on the literals is crude but it is what the bug looked like
+    /// every time, and it costs nothing to keep honest.
+    #[test]
+    fn no_panel_hardcodes_a_16_by_9_widget() {
+        // The camera feed is sized to the camera, not to the render resolution;
+        // it has its own aspect problem and its own fix.
+        const EXEMPT: &[&str] = &["camera_detect.rs"];
+        const LITERALS: &[&str] = &["0.5625", "16.0 / 9.0", "9.0 / 16.0"];
+
+        let panels =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/usecases/ui/panels");
+        let mut offenders = Vec::new();
+        let mut stack = vec![panels];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read the panels directory") {
+                let path = entry.expect("read a directory entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if path.extension().is_none_or(|e| e != "rs")
+                    || name == "utils.rs"
+                    || EXEMPT.contains(&name)
+                {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).expect("read a panel source file");
+                for (n, line) in body.lines().enumerate() {
+                    if LITERALS.iter().any(|lit| line.contains(lit)) {
+                        offenders.push(format!("{name}:{}: {}", n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these size a widget from a hardcoded 16:9 instead of the render \
+             resolution — use utils::preview_size:\n{}",
+            offenders.join("\n")
+        );
     }
 
     #[test]

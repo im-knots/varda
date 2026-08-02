@@ -1784,17 +1784,10 @@ mod tests {
     // none is available (CI / sandbox), matching the engine_impl.rs tests.
 
     use crate::engine::{CommandOutcome, CommandResult};
-    use clap::Parser as _;
 
     fn headless_app() -> Option<super::VardaApp> {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let config = super::super::AppConfig::parse_from([
-            "varda",
-            "--headless",
-            "--no-osc",
-            "--no-ndi",
-            "--no-syphon",
-        ]);
+        let config = crate::testing::headless_config();
         super::VardaApp::new(gpu, &config).ok()
     }
 

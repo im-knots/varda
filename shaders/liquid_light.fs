@@ -13,9 +13,16 @@
         {"NAME": "vignette_amt", "TYPE": "float", "DEFAULT": 0.6, "MIN": 0.0, "MAX": 1.0, "LABEL": "Vignette"},
         {"NAME": "palette", "TYPE": "float", "DEFAULT": 0.0, "MIN": 0.0, "MAX": 3.0, "LABEL": "Palette (0=Classic 1=Acid 2=Sunset 3=Deep)"},
         {"NAME": "agitation", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0, "LABEL": "Agitation"},
-        {"NAME": "focus_soft", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0, "LABEL": "Soft Focus"}
+        {"NAME": "focus_soft", "TYPE": "float", "DEFAULT": 0.3, "MIN": 0.0, "MAX": 1.0, "LABEL": "Soft Focus"},
+        {"NAME": "swirl", "TYPE": "float", "DEFAULT": 0.0, "MIN": -1.0, "MAX": 1.0, "LABEL": "Dish Rotation"},
+        {"NAME": "hue_cycle", "TYPE": "float", "DEFAULT": 0.0, "MIN": -1.0, "MAX": 1.0, "LABEL": "Dye Hue Cycle"}
     ],
-    "PHASE_INPUTS": [{"PARAM": "flow_speed", "INDEX": 0}]
+    "PHASE_INPUTS": [
+        {"PARAM": "flow_speed", "INDEX": 0},
+        {"PARAM": "flow_speed", "MULTIPLY_BY": "agitation", "INDEX": 1, "SCALE": 9.0},
+        {"PARAM": "swirl", "INDEX": 2, "SCALE": 0.6},
+        {"PARAM": "hue_cycle", "INDEX": 3, "SCALE": 0.4}
+    ]
 }*/
 
 #version 450
@@ -53,6 +60,8 @@ layout(set = 0, binding = 1) uniform UserParams {
     float palette;
     float agitation;
     float focus_soft;
+    float swirl;
+    float hue_cycle;
 };
 
 // ---- Noise primitives (quintic-interpolated, no grid artifacts) ----
@@ -92,20 +101,43 @@ float fbm(vec2 p, int octaves) {
 // ---- Inigo Quilez canonical domain warping ----
 // fbm(p + fbm(p + fbm(p))) with q and r exposed for color mapping.
 // This single technique creates all the organic, stretchy, liquid movement.
-float pattern(vec2 p, float t, out vec2 q, out vec2 r) {
-    float agit = 1.0 + agitation * 0.8;
-
+//
+// Both `t` and `churn` are accumulated phases — see PHASE_INPUTS in the header
+// — and nothing in here may multiply either by a live parameter, which is the
+// discontinuity the accumulators exist to remove.
+//
+// `t` is the flow: how far the dye has travelled. `churn` is the mixing, and it
+// advances the *inner* warp stages against the outer one, so the fine structure
+// keeps reorganising relative to the coarse structure. That is what stirring
+// looks like — the fluid does not go anywhere in particular, it just stops
+// resembling its earlier self.
+//
+// Agitation drives `churn` as a rate, never as an amplitude. This is the whole
+// point: an amplitude knob moves sample positions, so automating it slides the
+// pattern one way and then back, which reads as sloshing or stutter rather than
+// as mixing. A rate can only speed the churn up and slow it down, and no fader
+// move — however fast, however often reversed — can relocate the fluid.
+float pattern(vec2 p, float t, float churn, out vec2 q, out vec2 r) {
     q = vec2(
-        fbm(p + vec2(0.0, 0.0) + vec2(t * 0.11 * agit, t * 0.07 * agit), 5),
-        fbm(p + vec2(5.2, 1.3) + vec2(t * 0.08 * agit, -t * 0.06 * agit), 5)
+        fbm(p + vec2(0.0, 0.0) + vec2(t * 0.11, t * 0.07), 5),
+        fbm(p + vec2(5.2, 1.3) + vec2(t * 0.08, -t * 0.06), 5)
     );
 
     r = vec2(
-        fbm(p + 4.0 * q + vec2(1.7, 9.2) + vec2(t * 0.05 * agit, 0.0), 5),
-        fbm(p + 4.0 * q + vec2(8.3, 2.8) + vec2(0.0, -t * 0.04 * agit), 5)
+        fbm(p + 4.0 * q + vec2(1.7, 9.2) + vec2(t * 0.05 + churn * 0.31, churn * 0.22), 5),
+        fbm(p + 4.0 * q + vec2(8.3, 2.8) + vec2(-churn * 0.27, -t * 0.04 + churn * 0.35), 5)
     );
 
-    return fbm(p + 4.0 * r, 5);
+    return fbm(p + 4.0 * r + vec2(churn * 0.14, -churn * 0.11), 5);
+}
+
+// Rotate a colour about the greyscale axis (Rodrigues about 1/√3). Linear in
+// `c`, so rotating the blended dye is identical to rotating each dye first —
+// which is why this is applied once rather than four times.
+vec3 hueRotate(vec3 c, float a) {
+    const vec3 k = vec3(0.577350269);
+    float ca = cos(a);
+    return c * ca + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - ca);
 }
 
 // ---- Dye palettes: vivid Flo-Master ink colors ----
@@ -141,15 +173,30 @@ void main() {
 
     vec2 p = (uv - 0.5) * 2.0;
     p.x *= RENDERSIZE.x / RENDERSIZE.y;
-    float t = PHASE_TIME_0;
     int pal = int(floor(palette + 0.5));
 
+    // Flow phase: how far the dye has travelled, from Flow Speed alone.
+    float t = PHASE_TIME_0;
+
+    // Mixing phase: ∫ flow_speed·agitation dt. Agitation is orthogonal to Flow
+    // Speed in what it does — one moves the dye, the other stirs it — but stays
+    // multiplied by it, so Flow Speed remains the master: park it at zero and
+    // the dish is genuinely still, agitated or not.
+    float churn = PHASE_TIME_1;
+
+    // Dish rotation — the operator turning the clock glass on the projector
+    // bed. Only the liquid turns; the lens vignette below stays put, because
+    // it belongs to the projector rather than to the dish.
+    float dish = PHASE_TIME_2;
+    float dc = cos(dish), ds = sin(dish);
+    vec2 rp = vec2(p.x * dc - p.y * ds, p.x * ds + p.y * dc);
+
     // Scale coordinate space for blob size
-    vec2 wp = p * blob_scale * 0.7;
+    vec2 wp = rp * blob_scale * 0.7;
 
     // ---- Core: IQ double domain warp produces the organic liquid structure ----
     vec2 q, r;
-    float f = pattern(wp, t, q, r);
+    float f = pattern(wp, t, churn, q, r);
 
     // ---- Color mapping from warp intermediates (q and r) ----
     // This is how IQ gets color variation: the intermediate warp vectors
@@ -183,6 +230,13 @@ void main() {
 
     vec3 liquid = c0 * w0 + c1 * w1 + c2 * w2 + c3 * w3;
 
+    // ---- Dye hue cycle ----
+    // Applied to the blended dye only, so the warm edge glow and the tungsten
+    // tint added below keep their lamp colour. The angle is accumulated, so
+    // returning the fader to zero parks the hue where it drifted to rather
+    // than snapping it back.
+    liquid = hueRotate(liquid, PHASE_TIME_3);
+
     // ---- Luminosity variation from the warp field ----
     // The field value f acts as "dye density": brighter where liquid is thin,
     // deeper/richer where it pools. This is the main depth cue.
@@ -208,7 +262,7 @@ void main() {
     // ---- Color intensity and saturation boost ----
     liquid *= color_intensity;
     float lum = dot(liquid, vec3(0.299, 0.587, 0.114));
-    liquid = mix(vec3(lum), liquid, 1.4);
+    liquid = mix(vec3(lum), liquid, 1.62);
 
     // ---- Projector warmth: tungsten lamp tint ----
     liquid = mix(liquid, liquid * vec3(1.12, 0.98, 0.78), warmth);
@@ -228,8 +282,19 @@ void main() {
     float vig = 1.0 - smoothstep(0.4, 1.3, length(p * 0.7)) * vignette_amt;
     liquid *= vig;
 
-    // ---- Gentle tone curve: preserve the luminous projected quality ----
-    liquid = pow(liquid, vec3(0.92));
+    // ---- Final grade ----
+    // Four dye territories that overlap across most of the frame average
+    // towards their own mean, so the dish drifts to pastel however saturated
+    // the individual dyes are. Pulling the level down and the contrast up about
+    // a mid pivot re-separates them, and reads as dense aniline ink under a hot
+    // lamp rather than as watercolour. The 0.92 gamma keeps the soft projected
+    // falloff this shader is built around; it used to be the whole grade, which
+    // is why the image was lifting rather than sitting down.
+    const float BRIGHTNESS = 0.82;
+    const float CONTRAST = 1.22;
+    const float PIVOT = 0.42;
+    liquid = pow(max(liquid, 0.0), vec3(0.92)) * BRIGHTNESS;
+    liquid = (liquid - PIVOT) * CONTRAST + PIVOT;
 
     liquid = clamp(liquid, 0.0, 1.0);
     fragColor = vec4(liquid, 1.0);

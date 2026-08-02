@@ -5,6 +5,7 @@ use super::utils::{
     channel_color, render_effect_drag_ghost, render_effect_drag_handle, render_effect_drop_zone,
 };
 use crate::engine::EngineCommand;
+use crate::modulation::DEFAULT_ASSIGNMENT_AMOUNT;
 use crate::params::ParamValue;
 
 pub(super) fn render_master_effect_detail(
@@ -83,7 +84,7 @@ pub(super) fn render_master_effect_detail(
                                                                 "fx_{eff_uuid_master}:{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
-                                                            amount: 0.5,
+                                                            amount: DEFAULT_ASSIGNMENT_AMOUNT,
                                                         }
                                                     }),
                                                     Some(&|name: &str| {
@@ -254,8 +255,13 @@ pub(super) fn render_channel_effect_detail(
                 // Channel composite preview (first column before effect cards)
                 if let Some(&tex_id) = data.channel_preview_textures.get(&ch_idx) {
                     let available_height = ui.available_height() - 12.0;
-                    let preview_height = available_height.max(60.0);
-                    let preview_width = preview_height * 16.0 / 9.0;
+                    let preview = super::utils::preview_size(
+                        egui::vec2(ui.available_width(), available_height.max(60.0)),
+                        data.render_width,
+                        data.render_height,
+                    );
+                    let preview_width = preview.x;
+                    let preview_height = preview.y;
                     egui::Frame::default()
                         .inner_margin(6.0)
                         .corner_radius(4.0)
@@ -344,7 +350,7 @@ pub(super) fn render_channel_effect_detail(
                                                                 "fx_{eff_uuid_ch_assign}:{name}"
                                                             ),
                                                             source_id: source_uuid.to_string(),
-                                                            amount: 0.5,
+                                                            amount: DEFAULT_ASSIGNMENT_AMOUNT,
                                                         }
                                                     }),
                                                     Some(&|name: &str| {

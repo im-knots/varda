@@ -7,6 +7,8 @@
 pub mod app;
 pub mod engine;
 mod internal;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod testing;
 pub mod usecases;
 
 // Re-export all internal domain modules at crate root so existing

@@ -906,8 +906,15 @@ pub(super) fn render_deck_thumbnail(
     let mut solo = deck.solo;
     let mut mute = deck.mute;
     let is_selected = data.selected_deck == Some((ch_idx, idx));
-    let preview_width = 100.0;
-    let preview_height = preview_width * 0.5625;
+    // Square budget, so a 16:9 project keeps the 100×56 card it has always had
+    // while a portrait one grows downward to 56×100 instead of being squashed.
+    let preview = super::utils::preview_size(
+        egui::vec2(100.0, 100.0),
+        data.render_width,
+        data.render_height,
+    );
+    let preview_width = preview.x;
+    let preview_height = preview.y;
     let slider_width = 18.0;
     let card_width = preview_width + slider_width + 8.0; // preview + slider + padding
 

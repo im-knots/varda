@@ -1509,15 +1509,10 @@ impl AnalyzerCommands for VardaApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
-
-    fn parse_args(args: &[&str]) -> super::super::AppConfig {
-        super::super::AppConfig::parse_from(std::iter::once("varda").chain(args.iter().copied()))
-    }
 
     fn headless_app() -> Option<super::super::VardaApp> {
         let gpu = crate::renderer::context::GpuContext::new_headless().ok()?;
-        let config = parse_args(&["--headless", "--no-osc", "--no-ndi", "--no-syphon"]);
+        let config = crate::testing::headless_config();
         super::super::VardaApp::new(gpu, &config).ok()
     }
 

@@ -8,18 +8,14 @@
 //! impossible: an address either resolves to the entity the caller meant or
 //! fails with `NotFound`.
 
-use varda::app::{AppConfig, VardaApp};
+use varda::app::VardaApp;
 use varda::engine::{CommandResult, EffectTarget, EngineCommand, ErrorCode};
-
-use clap::Parser;
 
 mod common;
 
 fn headless_app() -> Option<VardaApp> {
     let gpu = common::headless_gpu()?;
-    let config = AppConfig::parse_from(
-        ["varda", "--headless", "--no-osc", "--no-ndi", "--no-syphon"].iter(),
-    );
+    let config = varda::testing::headless_config();
     // Once a GPU exists, a construction failure is a bug, not a reason to skip.
     Some(VardaApp::new(gpu, &config).expect("VardaApp::new"))
 }

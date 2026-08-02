@@ -22,7 +22,8 @@
     ],
     "PHASE_INPUTS": [
         {"PARAM": "speed", "INDEX": 0},
-        {"PARAM": "star_speed", "INDEX": 1}
+        {"PARAM": "star_speed", "INDEX": 1},
+        {"PARAM": "star_speed", "MULTIPLY_BY": "particle_count", "INDEX": 2, "SCALE": 0.1}
     ],
     "PASSES": [
         {"TARGET": "fluidBuffer", "PERSISTENT": true, "FLOAT": true},
@@ -130,7 +131,11 @@ void main() {
     float t = bangT(phase);
     float expandR = smoothstep(0.0, 1.0, t) * 3.0;
     float crunch = 1.0 - smoothstep(0.0, 0.5, t);
-    float starClock = PHASE_TIME_1 * (0.5 + particle_count * 0.1);
+    // ∫ star_speed·(0.5 + 0.1·particle_count) dt, split over two accumulators
+    // because that integral is linear. Written as one multiply it scaled a
+    // growing phase by a live parameter, so moving the Stars fader teleported
+    // the star animation — see spec/phase-accumulators.md.
+    float starClock = 0.5 * PHASE_TIME_1 + PHASE_TIME_2;
 
     if (PASSINDEX == 0) {
         // ════════════════════════════════════════════════════════════
