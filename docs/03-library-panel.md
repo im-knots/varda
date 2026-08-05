@@ -1,6 +1,6 @@
 # Library Panel
 
-The Library is the left sidebar and the primary content browser. It lists everything you can drop onto a channel to create a deck — shaders, media, cameras, and live network streams. Toggle it with the **`L`** key (or the sidebar button; its hover text reads "Open library (L)" / "Close library (L)").
+The Library is the left sidebar and the primary content browser. It lists everything you can drop onto a channel to create a deck. Toggle it with the **`L`** key (or the sidebar button; its hover text reads "Open library (L)" / "Close library (L)").
 
 ## Sections
 
@@ -60,7 +60,7 @@ Each entry has a small **✕** button to remove it from the list.
 
 ## HTML Sources
 
-The **🌐 HTML Sources** section holds web pages — any URL or local HTML file — rendered live by the embedded [Servo](https://servo.org) browser engine and usable as a deck.
+The **🌐 HTML Sources** section holds web pages rendered live by the embedded [Servo](https://servo.org) browser engine and usable as a deck.
 
 - Click **+ Add HTML**, type a URL into the **URL:** field (default `https://example.com/visuals.html`), then **✓ Add**.
 - Each entry shows a colored bullet (`●`): **green** when a deck is actively rendering it, **gray** otherwise. The **✕** button removes it from the list.

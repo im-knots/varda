@@ -120,10 +120,15 @@ make -j"$NPROC"
 make install
 
 # --- FFmpeg ---
+# Must track the major that Homebrew provides for the arm64 slice: the two
+# slices are lipo'd into one binary, and `build-macos.sh` bundles dylibs by the
+# soname recorded in the load commands (libavcodec.63.dylib for FFmpeg 9). A
+# mismatched major leaves the x86_64 slice pointing at a soname that was never
+# bundled.
 echo "==> [6/6] Building FFmpeg (x86_64)..."
 cd "$BUILDDIR"
-curl -sL https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.gz | tar xz
-cd ffmpeg-7.1.1
+curl -sL https://ffmpeg.org/releases/ffmpeg-9.0.tar.gz | tar xz
+cd ffmpeg-9.0
 ./configure \
   --prefix="$PREFIX" \
   --enable-cross-compile \

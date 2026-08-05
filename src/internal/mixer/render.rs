@@ -297,7 +297,7 @@ impl Mixer {
         // If no channel consumed the video upload prefix (all channels faded
         // out or errored), submit it now so video players still advance.
         if !prefix_cmds.is_empty() {
-            context.queue.submit(prefix_cmds);
+            context.submit(prefix_cmds);
         }
 
         // Request re-mapping of staging buffers AFTER the submit that
@@ -377,7 +377,7 @@ impl Mixer {
                             0,
                             byte_count,
                         );
-                        context.queue.submit(std::iter::once(enc.finish()));
+                        context.submit(std::iter::once(enc.finish()));
 
                         // Map the staging buffer for reading next frame.
                         // The callback stores the buffer index so the read
@@ -913,7 +913,7 @@ impl Mixer {
         }
 
         if !cmd_buffers.is_empty() {
-            context.queue.submit(cmd_buffers);
+            context.submit(cmd_buffers);
         }
     }
 
@@ -944,7 +944,7 @@ impl Mixer {
     ) -> Result<()> {
         if self.master_effects.is_empty() {
             if !cmd_buffers.is_empty() {
-                context.queue.submit(cmd_buffers);
+                context.submit(cmd_buffers);
             }
             return Ok(());
         }
@@ -1007,7 +1007,7 @@ impl Mixer {
         }
 
         if !cmd_buffers.is_empty() {
-            context.queue.submit(cmd_buffers);
+            context.submit(cmd_buffers);
         }
 
         Ok(())
@@ -1082,7 +1082,7 @@ impl Mixer {
                     });
             self.tonemap_pipeline
                 .render(&context.device, &mut encoder, ch_view, tonemap_target);
-            context.queue.submit(Some(encoder.finish()));
+            context.submit(Some(encoder.finish()));
 
             // Apply LUT to the tonemapped channel copy
             if let Some(lut) = &self.active_lut {
@@ -1106,7 +1106,7 @@ impl Mixer {
                     cache_view,
                     lut,
                 );
-                context.queue.submit(Some(lut_encoder.finish()));
+                context.submit(Some(lut_encoder.finish()));
             }
         }
     }
@@ -1143,7 +1143,7 @@ fn tonemap_in_place(
     );
 
     pipeline.render(&context.device, &mut encoder, scratch_view, target_view);
-    context.queue.submit(Some(encoder.finish()));
+    context.submit(Some(encoder.finish()));
 }
 
 /// Apply a LUT to a texture in-place using a scratch texture.
@@ -1181,5 +1181,5 @@ fn apply_lut_in_place(
         target_view,
         lut,
     );
-    context.queue.submit(Some(encoder.finish()));
+    context.submit(Some(encoder.finish()));
 }

@@ -168,7 +168,7 @@ impl PreviewEncoder {
             });
             self.pipeline.render(&mut pass, &bind_group);
         }
-        context.queue.submit(std::iter::once(encoder.finish()));
+        context.submit(std::iter::once(encoder.finish()));
     }
 
     /// Drop cached targets whose key is no longer live (removed decks/outputs).

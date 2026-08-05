@@ -285,6 +285,6 @@ impl TransitionPipeline {
             uniforms,
             user_params_buffer,
         );
-        context.queue.submit(std::iter::once(cmd));
+        context.submit(std::iter::once(cmd));
     }
 }

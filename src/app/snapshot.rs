@@ -40,7 +40,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         .effects
                         .iter()
                         .map(|e| EffectSnapshot {
-                            uuid: e.uuid.clone(),
+                            uuid: e.uuid().to_owned(),
                             name: e.shader.name(),
                             enabled: e.enabled,
                             params: build_shader_params(&e.shader.name(), &e.params),
@@ -183,7 +183,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                 .effects
                 .iter()
                 .map(|e| EffectSnapshot {
-                    uuid: e.uuid.clone(),
+                    uuid: e.uuid().to_owned(),
                     name: e.shader.name(),
                     enabled: e.enabled,
                     params: build_shader_params(&e.shader.name(), &e.params),
@@ -208,7 +208,7 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
         .master_effects()
         .iter()
         .map(|e| EffectSnapshot {
-            uuid: e.uuid.clone(),
+            uuid: e.uuid().to_owned(),
             name: e.shader.name(),
             enabled: e.enabled,
             params: build_shader_params(&e.shader.name(), &e.params),

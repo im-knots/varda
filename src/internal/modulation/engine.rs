@@ -446,7 +446,9 @@ impl ModulationEngine {
                     }
                 };
                 if idx < self.current_values.len() {
-                    total += self.current_values[idx] * m.amount;
+                    total += self.current_values[idx]
+                        * m.amount
+                        * self.sources[idx].source.range_scale();
                 }
             }
         }

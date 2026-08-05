@@ -1,6 +1,6 @@
 # Outputs
 
-An **output** renders its assigned surfaces (or the master mix directly) onto a destination — a window, a fullscreen display, a network stream, or a recording file. Varda supports many simultaneous, independent outputs. This page covers creating outputs, choosing where they draw from, rotation, and multi-output recording. For projector alignment (surfaces, warp, edge blending) see [Projection Mapping](08-projection.md); for stream protocol details see [Streaming & I/O](09-streaming-and-io.md).
+An **output** renders its assigned surfaces (or the master mix directly) onto a destination such as a window, a fullscreen display, a network stream, or a recording file. Varda supports many simultaneous, independent outputs. This page covers creating outputs, choosing where they draw from, rotation, and multi-output recording. For projector alignment (surfaces, warp, edge blending) see [Projection Mapping](08-projection.md); for stream protocol details see [Streaming & I/O](09-streaming-and-io.md).
 
 ## Creating an Output
 

@@ -72,6 +72,61 @@ fn default_version() -> u32 {
     3
 }
 
+impl SceneConfig {
+    /// Version written by this build. Bump when adding a migration below.
+    pub const CURRENT_VERSION: u32 = 6;
+
+    /// Bring an older scene up to [`Self::CURRENT_VERSION`] in place.
+    ///
+    /// Runs on load, before validation. Each step is guarded by the version it
+    /// upgrades *from*, so a scene several versions behind walks through them in
+    /// order.
+    pub fn migrate(&mut self) {
+        if self.version < 6 {
+            self.migrate_v5_bipolar_amplitude();
+        }
+        self.version = Self::CURRENT_VERSION;
+    }
+
+    /// v5 → v6: bipolar sources stopped double-sweeping their target's range.
+    ///
+    /// Before v6 a bipolar source's -1..1 output was scaled by the *whole*
+    /// parameter range, giving twice the excursion a fader can hold: the value
+    /// hung against both ends and rushed through the middle. Bipolar
+    /// contributions now carry a 0.5 weight, so a full-amplitude bipolar LFO
+    /// sweeps the range exactly, centred on the base value.
+    ///
+    /// That halves the excursion of existing patches. An LFO can compensate —
+    /// amplitude 0.5 was the only setting that did *not* clip before, and
+    /// doubling it reproduces the old motion exactly. Anything above 0.5 was
+    /// clipping regardless; clamping it to full amplitude gives the whole fader,
+    /// which is the closest thing to what the patch asked for.
+    ///
+    /// Step sequencers have no amplitude control — their steps already span the
+    /// full output range — so they cannot be compensated. They were clipping
+    /// before and are simply correct now.
+    fn migrate_v5_bipolar_amplitude(&mut self) {
+        let mut rescaled = 0;
+        for entry in &mut self.modulation.sources {
+            if let crate::modulation::ModulationSource::LFO {
+                amplitude,
+                bipolar: true,
+                ..
+            } = &mut entry.source
+            {
+                *amplitude = (*amplitude * 2.0).min(1.0);
+                rescaled += 1;
+            }
+        }
+        if rescaled > 0 {
+            log::info!(
+                "Scene migration v5→v6: rescaled amplitude on {rescaled} bipolar LFO(s) \
+                 so they keep their existing sweep depth"
+            );
+        }
+    }
+}
+
 // ── Channel ────────────────────────────────────────────────────────
 
 /// Serializable channel state.
@@ -864,8 +919,9 @@ impl SceneConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read scene file: {}", path.as_ref().display()))?;
-        let scene: SceneConfig = serde_json::from_str(&content)
+        let mut scene: SceneConfig = serde_json::from_str(&content)
             .with_context(|| format!("Failed to parse scene file: {}", path.as_ref().display()))?;
+        scene.migrate();
         let warnings = scene.validate();
         for w in &warnings {
             log::warn!("Scene config {}: {}", path.as_ref().display(), w);
@@ -1076,6 +1132,82 @@ mod tests {
             SourceConfig::Camera { name } => assert_eq!(name, "FaceTime HD"),
             _ => panic!("Expected Camera"),
         }
+    }
+
+    // ── Migration ────────────────────────────────────────────────────
+
+    /// Every `SceneConfig` field carries a serde default, so a version stamp is
+    /// enough to stand up the same shape `load` parses.
+    fn scene_with_sources(
+        version: u32,
+        sources: Vec<crate::modulation::ModulationSource>,
+    ) -> SceneConfig {
+        let mut scene: SceneConfig = serde_json::from_str(&format!("{{\"version\": {version}}}"))
+            .expect("a bare version stamp is a valid scene");
+        for s in sources {
+            scene.modulation.add_source(s);
+        }
+        scene
+    }
+
+    fn bipolar_lfo(amplitude: f32) -> crate::modulation::ModulationSource {
+        crate::modulation::ModulationSource::LFO {
+            waveform: crate::modulation::LFOWaveform::Sine,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude,
+            bipolar: true,
+        }
+    }
+
+    fn amplitude_of(scene: &SceneConfig, idx: usize) -> f32 {
+        match &scene.modulation.sources[idx].source {
+            crate::modulation::ModulationSource::LFO { amplitude, .. } => *amplitude,
+            other => panic!("expected an LFO, got {other:?}"),
+        }
+    }
+
+    /// Amplitude 0.5 was the only pre-v6 setting that did not clip. Doubling it
+    /// preserves the patch's motion exactly under the new 0.5 range weight.
+    #[test]
+    fn migration_v6_doubles_unclipped_bipolar_amplitude() {
+        let mut scene = scene_with_sources(5, vec![bipolar_lfo(0.5)]);
+        scene.migrate();
+        assert!((amplitude_of(&scene, 0) - 1.0).abs() < 1e-6);
+        assert_eq!(scene.version, SceneConfig::CURRENT_VERSION);
+    }
+
+    /// Anything above 0.5 was clipping before. Full amplitude is the closest
+    /// honest reading: the whole fader, without the flat spots.
+    #[test]
+    fn migration_v6_clamps_overdriven_bipolar_amplitude() {
+        let mut scene = scene_with_sources(5, vec![bipolar_lfo(1.0)]);
+        scene.migrate();
+        assert!((amplitude_of(&scene, 0) - 1.0).abs() < 1e-6);
+    }
+
+    /// Unipolar sources never had the doubling problem and must be left alone.
+    #[test]
+    fn migration_v6_leaves_unipolar_sources_untouched() {
+        let unipolar = crate::modulation::ModulationSource::LFO {
+            waveform: crate::modulation::LFOWaveform::Sine,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 0.4,
+            bipolar: false,
+        };
+        let mut scene = scene_with_sources(5, vec![unipolar]);
+        scene.migrate();
+        assert!((amplitude_of(&scene, 0) - 0.4).abs() < 1e-6);
+    }
+
+    /// Migration is idempotent: a scene already at the current version keeps
+    /// its amplitudes, so re-saving and re-loading cannot compound the rescale.
+    #[test]
+    fn migration_v6_does_not_rerun_on_current_scenes() {
+        let mut scene = scene_with_sources(SceneConfig::CURRENT_VERSION, vec![bipolar_lfo(0.25)]);
+        scene.migrate();
+        assert!((amplitude_of(&scene, 0) - 0.25).abs() < 1e-6);
     }
 
     // ── Defaults ─────────────────────────────────────────────────────

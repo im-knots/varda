@@ -874,13 +874,7 @@ mod tests {
         let inputs = vec![make_float_input("speed", 1.0, 0.0, 5.0)];
         let mut params = ShaderParams::from_inputs(&inputs);
         let mut engine = ModulationEngine::new();
-        let uuid = engine.add_source(crate::modulation::ModulationSource::LFO {
-            waveform: crate::modulation::LFOWaveform::Square,
-            frequency: 0.0,
-            phase: 0.0,
-            amplitude: 1.0,
-            bipolar: true,
-        });
+        let uuid = engine.add_source(pinned_source(1.0));
         engine.assign("deck0:speed", &uuid, 0.5, None);
         engine.update(
             0.0,
@@ -901,15 +895,18 @@ mod tests {
     }
 
     /// A modulation source pinned to a constant output, standing in for any
-    /// point along a sweep. A square LFO at frequency 0 and phase 0 sits on its
-    /// high half forever, so its amplitude *is* its output.
+    /// point along a sweep. A step sequencer at rate 0 sits on step 0 forever,
+    /// and a unipolar one passes that step through untouched.
+    ///
+    /// Unipolar deliberately: this stands in for a sweep like
+    /// `AudioReactMode::Increase`, which is unipolar, and bipolar sources carry
+    /// a range-scale weight of 0.5 that would confound the depth being asserted.
     fn pinned_source(value: f32) -> crate::modulation::ModulationSource {
-        crate::modulation::ModulationSource::LFO {
-            waveform: crate::modulation::LFOWaveform::Square,
-            frequency: 0.0,
-            phase: 0.0,
-            amplitude: value,
-            bipolar: true,
+        crate::modulation::ModulationSource::StepSequencer {
+            steps: vec![value; 2],
+            rate: 0.0,
+            interpolation: crate::modulation::StepInterpolation::None,
+            bipolar: false,
         }
     }
 
@@ -958,6 +955,92 @@ mod tests {
         assert!(
             (halved - 2.5).abs() < 1e-5,
             "half depth should cap a full sweep at 2.5, got {halved}"
+        );
+    }
+
+    /// Sample one full LFO cycle over a 0..1 parameter, reporting the fraction
+    /// of it spent pinned against either end plus the extremes it reached.
+    ///
+    /// The extremes matter as much as the pinning: a source that collapsed to a
+    /// constant would never clamp either, and that is not a fix.
+    fn sweep_over_one_cycle(bipolar: bool, base: f64) -> (f32, f32, f32) {
+        const SAMPLES: usize = 720;
+        let inputs = vec![make_float_input("speed", base, 0.0, 1.0)];
+        let mut params = ShaderParams::from_inputs(&inputs);
+        let mut engine = ModulationEngine::new();
+        let uuid = engine.add_source(crate::modulation::ModulationSource::LFO {
+            waveform: crate::modulation::LFOWaveform::Sine,
+            frequency: 1.0,
+            phase: 0.0,
+            amplitude: 1.0,
+            bipolar,
+        });
+        engine.assign("deck0:speed", &uuid, DEFAULT_ASSIGNMENT_AMOUNT, None);
+
+        let mut pinned = 0;
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for i in 0..SAMPLES {
+            // frequency = 1 Hz, so t over 0..1 is exactly one cycle.
+            let t = i as f32 / SAMPLES as f32;
+            engine.update(
+                t,
+                &crate::modulation::AudioValues::default(),
+                &crate::modulation::AnalyzerValues::default(),
+            );
+            let v = params
+                .get_float_modulated("speed", &engine, Some("deck0"))
+                .expect("speed is a float param");
+            if v <= 1e-4 || v >= 1.0 - 1e-4 {
+                pinned += 1;
+            }
+            lo = lo.min(v);
+            hi = hi.max(v);
+        }
+        (pinned as f32 / SAMPLES as f32, lo, hi)
+    }
+
+    /// A bipolar LFO must sweep the fader, not sit against each end and dash
+    /// between them.
+    ///
+    /// Bipolar sources output -1..1 where unipolar output 0..1, but the offset
+    /// is scaled by the *whole* parameter range either way
+    /// (/spec/modulation.md § Range-Scaled Modulation). That gives a bipolar
+    /// source twice the peak-to-peak excursion the fader can hold, so the ends
+    /// of the swing fall outside it and clamp: the value hangs at the top, hangs
+    /// at the bottom, and rushes through the middle where the sine is steepest.
+    ///
+    /// Centred base, full amplitude, full depth — the configuration the UI
+    /// creates by default when you tick "Bipolar".
+    #[test]
+    fn a_bipolar_lfo_sweeps_the_fader_instead_of_pinning_at_both_ends() {
+        let (pinned, lo, hi) = sweep_over_one_cycle(true, 0.5);
+        assert!(
+            pinned < 0.05,
+            "a centred bipolar LFO sits against an end for {:.0}% of its cycle; \
+             it should traverse the fader continuously",
+            pinned * 100.0
+        );
+        // Still a full-depth sweep: it must reach both ends, just not sit there.
+        assert!(
+            lo < 0.01 && hi > 0.99,
+            "a full-amplitude bipolar LFO should span the whole fader, got {lo}..{hi}"
+        );
+    }
+
+    /// The unipolar counterpart, as a control: based at the minimum, a 0..1
+    /// source scaled by the range lands exactly on the fader and never clamps.
+    #[test]
+    fn a_unipolar_lfo_from_the_bottom_of_the_range_never_clamps() {
+        let (pinned, lo, hi) = sweep_over_one_cycle(false, 0.0);
+        assert!(
+            pinned < 0.05,
+            "a unipolar LFO based at the minimum should fit the fader exactly, \
+             but sits against an end for {:.0}% of its cycle",
+            pinned * 100.0
+        );
+        assert!(
+            lo < 0.01 && hi > 0.99,
+            "a full-amplitude unipolar LFO should span the whole fader, got {lo}..{hi}"
         );
     }
 

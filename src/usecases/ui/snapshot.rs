@@ -334,13 +334,13 @@ pub(crate) fn build_ui_data(
                         device: h.target.audio_device().unwrap_or_default().to_string(),
                         frames_written: h
                             .subprocess
-                            .as_ref()
+                            .as_deref()
                             .and_then(crate::internal::renderer::subprocess::FfmpegSubprocess::audio_frames_written)
                             .unwrap_or(0),
                         frames_dropped: p.dropped.load(std::sync::atomic::Ordering::Relaxed),
                         silence_spliced: h
                             .subprocess
-                            .as_ref()
+                            .as_deref()
                             .and_then(crate::internal::renderer::subprocess::FfmpegSubprocess::audio_silence_spliced)
                             .unwrap_or(0),
                     })

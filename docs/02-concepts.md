@@ -14,11 +14,11 @@ Varda routes video through a five-layer hierarchy inspired by broadcast video sw
 [Deck] → [Deck FX] ─┘
 ```
 
-The simplest setup is two channels with a crossfader between them, output going fullscreen to a projector: load sources into decks, crossfade between channels. Add complexity — more channels, surfaces, sub-mixes — only as your use case needs it.
+The simplest setup is two channels with a crossfader between them, output going fullscreen to a projector: load sources into decks, crossfade between channels. Add complexity only as your use case needs it.
 
 ### Deck
 
-A single media source (shader, video, image, solid color, camera, NDI stream, SRT stream, HLS/DASH stream, or RTMP stream) that produces a texture. Each deck has its own opacity, blend mode, effect chain, and auto-transition settings. Decks at zero opacity are culled from the render pass entirely — they cost nothing to render.
+A single media source (shader, video, image, solid color, camera, NDI stream, SRT stream, HLS/DASH stream, or RTMP stream) that produces a texture. Each deck has its own opacity, blend mode, effect chain, and auto-transition settings. Decks at zero opacity are culled from the render pass entirely.
 
 ### Channel
 
@@ -30,15 +30,12 @@ Composites channels into the final output. With 2 channels, an A/B crossfader bl
 
 ### Surface
 
-Surfaces are optional. Each is a named polygon region in the stage editor that pulls content from a configurable source: Master (full mix), a specific Channel, a multi-Channel sub-mix, or the Domemaster output. Surfaces define *what content goes where* spatially — they're how you map content onto physical screens, LED panels, or projection areas. When no surfaces are defined, outputs receive the full main mix directly.
+Surfaces are optional. Each is a named polygon region in the stage editor that pulls content from a configurable source: Master (full mix), a specific Channel, a multi-Channel sub-mix, or the Domemaster output. Surfaces define *what content goes where* spatially. They're how you map content onto physical screens, LED panels, or projection areas. When no surfaces are defined, outputs receive the full main mix directly.
 
 ### Output
 
-Renders assigned surfaces onto a display target — a monitor/projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. Surfaces are assigned to outputs to complete the routing chain. See [Outputs](07-outputs.md).
+Renders assigned surfaces onto a display target such as a monitor/projector window, NDI sender, SRT stream, HLS/DASH stream, or recording file. Each output applies per-surface warp calibration (corner-pin or mesh warp), edge blending, and optional rotation. Surfaces are assigned to outputs to complete the routing chain. See [Outputs](07-outputs.md).
 
-### Routing Flexibility
-
-At every junction you can branch, split, or re-route. Two channels feeding different surfaces on the same output. The main mix on one output, a single channel isolated on another. A sub-mix of specific channels to an NDI stream while the master goes to projection. You only use the complexity you need: simple A/B crossfading between two decks, a multi-channel mixing console with dedicated FX and transitions, or a complex multi-screen setup with individual content routing.
 
 ### Clip Triggering Without Clip Triggering
 
@@ -83,8 +80,6 @@ Each deck composites onto its channel using a blend mode (and the same set is av
 | **Contrast** | Overlay, Soft Light, Hard Light |
 | **Comparative** | Difference, Exclusion, Subtract |
 
-Compositing runs in linear-light HDR, so additive and screen modes can push values above 1.0 — the tonemap stage (below) brings them back into displayable range.
-
 ---
 
 ## Effect Chains
@@ -102,8 +97,7 @@ Effects can be reordered via drag-and-drop and toggled on/off individually.
 ## Tonemapping & Color Grading
 
 Varda works in **linear-light HDR** (`Rgba16Float`) from the moment a source enters a
-deck all the way to the output boundary — deck targets, all three effect tiers, ISF pass
-buffers, and compute shader output are float. 
+deck all the way to the output boundary
 
 Before frames reach outputs, two optional color transforms are applied in order:
 
@@ -129,7 +123,7 @@ Select via the **TM:** label in the top bar or `PUT /api/mixer/tonemap`.
 
 An optional 3D Look-Up Table applied after tonemapping for color grading, gamut transforms, or creative looks. Supports industry-standard `.cube` and `.3dl` files (including 1D shaper LUTs for shadow precision).
 
-Place LUT files in `.varda/luts/` — they appear in the tonemap popover for one-click selection. The active LUT persists across sessions.
+Place LUT files in `.varda/luts/` and they will appear in the tonemap popover for one-click selection. The active LUT persists across sessions.
 
 LUTs are the universal mechanism for importing color transforms from DaVinci Resolve, Photoshop, or any color grading tool. A single `.cube` file can encode tonemapping + color grading + gamut mapping in one pass.
 
@@ -142,7 +136,7 @@ Any numeric parameter in the hierarchy can be automated by modulation sources:
 | Source | Description |
 |--------|-------------|
 | **LFO** | 6 waveforms (sine, triangle, saw, square, random, smooth random), configurable frequency, amplitude, phase |
-| **Audio Band** | Bass, mid, or treble energy from FFT analysis — drives parameters with the music |
+| **Audio Band** | Bass, mid, or treble energy from FFT analysis for driving parameters with the music |
 | **ADSR Envelope** | Attack/Decay/Sustain/Release envelope, triggered manually or via MIDI |
 | **Step Sequencer** | N-step pattern at configurable rate, with interpolation modes |
 | **Analyzer** | Scalar outputs derived from analysis of a deck's input frame (e.g. brightness, contrast) |
@@ -176,7 +170,7 @@ your-show/
 
 Run Varda from different directories to maintain separate workspaces per show, venue, or project. Each workspace has its own scene, stage layout, and MIDI mappings.
 
-Save with **Cmd+S** or auto-save on clean exit. Reload everything at a different venue — the scene (your show) is separate from the stage (the venue's physical layout).
+Save with **Cmd+S** or auto-save on clean exit. Reload everything at a different venue or share your setup with others by copying the entire `.varda/` directory. Note that the scene (your show) is separate from the stage (the venue's physical layout).
 
 ---
 

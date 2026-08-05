@@ -245,6 +245,30 @@ impl ModulationSource {
         }
     }
 
+    /// Weight applied to this source's contribution when it is scaled by a
+    /// target parameter's range.
+    ///
+    /// Range-scaled modulation treats a source's output as "how much of the
+    /// range to traverse", which assumes a peak-to-peak span of 1.0. Unipolar
+    /// sources span 0..1 and satisfy that directly. Bipolar sources span
+    /// -1..1 — twice the span — so without this they would sweep two range
+    /// widths and spend most of a cycle clamped against both ends.
+    ///
+    /// Only applies where a range is involved. Modulator-on-modulator targets
+    /// add the raw contribution to a value that has no range, so they must not
+    /// use this. See /spec/modulation.md § Range-Scaled Modulation.
+    pub fn range_scale(&self) -> f32 {
+        match self {
+            ModulationSource::LFO { bipolar, .. }
+            | ModulationSource::StepSequencer { bipolar, .. }
+                if *bipolar =>
+            {
+                0.5
+            }
+            _ => 1.0,
+        }
+    }
+
     /// Calculate current value of this modulation source.
     /// Returns value in range [-1, 1] for bipolar or [0, 1] for unipolar.
     pub fn calculate(

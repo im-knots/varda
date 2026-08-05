@@ -327,16 +327,13 @@ impl DomemasterRenderer {
     /// the front face and leave other faces black. This gives a simple forward-
     /// facing dome projection that can be enhanced later with full cubemap
     /// rendering when 3D content positioning is added.
-    pub fn render(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        source_view: &wgpu::TextureView,
-    ) {
+    pub fn render(&self, context: &super::context::GpuContext, source_view: &wgpu::TextureView) {
         if !self.enabled {
             return;
         }
 
+        let device = &context.device;
+        let queue = &context.queue;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Domemaster Encoder"),
         });
@@ -437,7 +434,7 @@ impl DomemasterRenderer {
             rp.draw(0..3, 0..1);
         }
 
-        queue.submit(std::iter::once(encoder.finish()));
+        context.submit(std::iter::once(encoder.finish()));
     }
 
     /// Get the output domemaster texture view for downstream sampling.

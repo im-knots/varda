@@ -1,6 +1,6 @@
 # Resolution, Settings & Monitoring
 
-Varda has **no settings menu**. Every configurable aspect of the app is exposed inline in the main UI — the same "see it, click it" philosophy as MIDI/keyboard learn. This page covers the global controls that live in the **top bar**: render resolution, per-deck scaling, and the live performance metrics.
+This page covers the global controls that live in the **top bar**: render resolution, per-deck scaling, and the live performance metrics.
 
 ## Where Settings Live
 
@@ -39,17 +39,15 @@ Set it from the 📐 control in the top bar:
 
 ### Custom Resolution
 
-Choose **Custom…** to enter freeform width × height for LED walls, vertical strips, or unusual aspect ratios — there is no aspect-ratio lock and **no artificial maximum**. The render size is bounded only by your GPU's maximum texture size (commonly 8192² or 16384²), so capable hardware can render at 8K and beyond.
+Choose **Custom…** to enter freeform width × height for LED walls, vertical strips, or unusual aspect ratios. There is no aspect-ratio lock and **no artificial maximum**. The render size is bounded only by your GPU's maximum texture size (commonly 8192² or 16384²), so capable hardware can render at 8K and beyond.
 
 Changes take effect immediately: the engine resizes every render texture and confirms with a toast (e.g. "📐 Resolution changed to 3840×2160"). Scenes saved without these fields default to 1920×1080.
-
-Every preview in the UI follows the resolution you set. Switch to a vertical project and the deck thumbnails, the deck and channel previews and the main output preview all become tall and narrow, as do the stage surface and warp editor canvases — so what you arrange on screen matches what you record.
 
 ### What outputs do when you change resolution
 
 Everything you send out conforms to the resolution you set, not to the shape it happened to have when you created it.
 
-**Recordings, NDI, Syphon and streams** are resized to match. Anything already running through ffmpeg — a recording or a stream — is **stopped**, and a toast names which ones. The encoder's frame size is fixed when it starts, so it can't follow you mid-take; stopping is safer than writing frames it will misread, and safer than restarting, which would reopen the file and wipe the take you already have. Start it again and it comes back at the new size. NDI and Syphon keep publishing across the change without interruption.
+**Recordings, NDI, Syphon and streams** are resized to match. Anything already running through ffmpeg such as a recording or a stream, is **stopped**, and a toast names which ones. The encoder's frame size is fixed when it starts, so it can't follow you mid-take; stopping is safer than writing frames it will misread, and safer than restarting, which would reopen the file and wipe the take you already have. Start it again and it comes back at the new size. NDI and Syphon keep publishing across the change without interruption.
 
 **Output windows** letterbox. The window is whatever size you or the OS made it, so a 9:16 project on a 16:9 projector is centred with black bars rather than stretched. The projector calibration card still covers the full output — it has to, for alignment to mean anything — and surfaces you place on the stage carry their own shape, so neither is letterboxed.
 
@@ -66,8 +64,6 @@ Every deck renders to a texture at the render resolution, regardless of its sour
 
 Because scaling happens once on load rather than every frame, the compositing pipeline and all effect chains operate at a single consistent resolution.
 
-Scaling mode is **MIDI/OSC/keyboard-mappable and modulatable** via `deck/<uuid>/scaling_mode` — a fader sweeps through Fill → Fit → Stretch → Center ([fader bucketing](06-control-surfaces.md#parameter-paths)). The selected mode is **saved in the scene** and restored on reload (older scenes without the field default to Fill).
-
 ## Performance Monitoring
 
 All metrics are displayed inline in the top bar, each with a clickable drill-down popover. Reading left to right:
@@ -76,7 +72,7 @@ All metrics are displayed inline in the top bar, each with a clickable drill-dow
 [Undo] [Redo] [Save] | [📐 Resolution] | [CPU%] [RAM] | [GPU Load%] | [FPS] | [BPM/Clock]
 ```
 
-This order follows a causal chain — *what you set → what it costs → what's producing it → how fast → the music.*
+This order follows a causal chain of: *what you set → what it costs → what's producing it → how fast → the music.*
 
 ### FPS
 

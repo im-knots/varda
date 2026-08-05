@@ -175,6 +175,18 @@ impl VardaApp {
             .duration_since(self.frame_stats.last_frame_instant)
             .as_secs_f32();
         self.frame_stats.last_frame_instant = now;
+        // Sampled here, at the top of the frame, so the tally covers a whole
+        // previous frame — including the output, preview, and present submits
+        // that happen after the mixer is done.
+        self.frame_stats.last_frame_submits = self.context.submits.take();
+        self.frame_stats.frame_count = self.frame_stats.frame_count.wrapping_add(1);
+        if self.frame_stats.frame_count.is_multiple_of(120) {
+            log::debug!(
+                "[PERF] frame | submits={} fps={:.1}",
+                self.frame_stats.last_frame_submits,
+                self.frame_stats.fps_smoothed,
+            );
+        }
         if dt > 0.0 {
             let instant_fps = 1.0 / dt;
             self.frame_stats.fps_history.push_back(instant_fps);
@@ -509,11 +521,7 @@ impl VardaApp {
         let domemaster_view = if let Some(dome) = &self.output.domemaster {
             if dome.enabled {
                 dome.update_params(&self.context.queue);
-                dome.render(
-                    &self.context.device,
-                    &self.context.queue,
-                    mixer.composite_view(),
-                );
+                dome.render(&self.context, mixer.composite_view());
                 Some(dome.output_view())
             } else {
                 None
@@ -919,15 +927,14 @@ impl VardaApp {
                 // Enqueue readback copy from the now-rendered texture
                 h.readback.begin_readback(&mut encoder, &h.texture);
             }
-            context.queue.submit(std::iter::once(encoder.finish()));
+            context.submit(std::iter::once(encoder.finish()));
 
             #[cfg(target_os = "macos")]
             if let crate::renderer::context::OutputTarget::SyphonServer { ref server_name } =
                 h.target
             {
                 sinks.syphon_manager.publish_frame_gpu(
-                    &context.device,
-                    &context.queue,
+                    context,
                     server_name,
                     &h.texture_view,
                     h.width,
@@ -977,7 +984,7 @@ impl VardaApp {
                                 audio_input,
                             ) {
                                 Ok(new_sub) => {
-                                    h.subprocess = Some(new_sub);
+                                    h.subprocess = Some(Box::new(new_sub));
                                     h.audio_pcm = passthrough.map(Box::new);
                                     log::info!("SRT restarted for '{name}'");
                                 }

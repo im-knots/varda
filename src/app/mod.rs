@@ -206,6 +206,10 @@ pub(crate) struct FrameStats {
     pub fps_smoothed: f32,
     pub frame_count: u64,
     pub system_monitor: crate::sysmon::SystemMonitor,
+    /// Command buffer commits issued during the previous frame, sampled once
+    /// per frame in `update_frame_timing`. Commits are not free — see
+    /// `renderer::submit_stats`.
+    pub last_frame_submits: u32,
 }
 
 /// Session persistence: workspace, presets, undo/redo, notifications.
@@ -502,6 +506,7 @@ impl VardaApp {
                 fps_smoothed: 0.0,
                 frame_count: 0,
                 system_monitor: crate::sysmon::SystemMonitor::new(),
+                last_frame_submits: 0,
             },
             session: SessionState {
                 workspace,
@@ -646,6 +651,11 @@ impl VardaApp {
     /// Read-only access to the GPU context.
     pub fn gpu_context(&self) -> &GpuContext {
         &self.context
+    }
+
+    /// Command buffer commits issued during the previous frame.
+    pub fn last_frame_submits(&self) -> u32 {
+        self.frame_stats.last_frame_submits
     }
 
     /// Read-only access to the mixer.

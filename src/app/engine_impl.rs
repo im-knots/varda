@@ -321,7 +321,7 @@ impl MixerCommands for VardaApp {
             .deck
             .effects
             .iter()
-            .map(|e| e.uuid.clone())
+            .map(|e| e.uuid().to_owned())
             .collect();
         ch.remove_deck(deck_idx);
         log::info!("Removed deck {deck_uuid} from channel {channel_idx}");
@@ -478,7 +478,7 @@ impl MixerCommands for VardaApp {
                 };
 
                 let effect = Effect::new(&self.context, shader)?;
-                let uuid = effect.uuid.clone();
+                let uuid = effect.uuid().to_owned();
                 let ch = self
                     .mixer
                     .channel_mut(channel_idx)
@@ -511,7 +511,7 @@ impl MixerCommands for VardaApp {
                     (*shader).clone(),
                     self.context.compositing_format,
                 )?;
-                let uuid = effect.uuid.clone();
+                let uuid = effect.uuid().to_owned();
                 let ch = self
                     .mixer
                     .channel_mut(channel_idx)
@@ -532,7 +532,7 @@ impl MixerCommands for VardaApp {
                     (*shader).clone(),
                     self.context.compositing_format,
                 )?;
-                let uuid = effect.uuid.clone();
+                let uuid = effect.uuid().to_owned();
                 self.mixer.add_master_effect(effect);
                 log::info!("Added master effect {shader_name} ({uuid})");
                 Ok(uuid)
@@ -1095,7 +1095,7 @@ impl OutputQueries for VardaApp {
                                             .to_string(),
                                         frames_written: h
                                             .subprocess
-                                            .as_ref()
+                                            .as_deref()
                                             .and_then(super::super::internal::renderer::subprocess::FfmpegSubprocess::audio_frames_written)
                                             .unwrap_or(0),
                                         frames_dropped: p

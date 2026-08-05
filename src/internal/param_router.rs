@@ -341,7 +341,7 @@ pub fn apply_param_by_path(
             let effects = &mut mixer.channels_mut()[ch].decks[dk].deck.effects;
             let ek = effects
                 .iter()
-                .position(|e| e.uuid == *fx_uuid)
+                .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
             apply_float_param_scaled(&mut effects[ek].params, name, value);
             Ok(())
@@ -360,7 +360,7 @@ pub fn apply_param_by_path(
             let effects = &mut mixer.channels_mut()[ch].effects;
             let ek = effects
                 .iter()
-                .position(|e| e.uuid == *fx_uuid)
+                .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
             apply_float_param_scaled(&mut effects[ek].params, name, value);
             Ok(())
@@ -369,7 +369,7 @@ pub fn apply_param_by_path(
             let effects = mixer.master_effects_mut();
             let ek = effects
                 .iter()
-                .position(|e| e.uuid == *fx_uuid)
+                .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
             apply_float_param_scaled(&mut effects[ek].params, name, value);
             Ok(())
@@ -473,7 +473,7 @@ pub fn apply_typed_param_by_path(
             let effects = &mut mixer.channels_mut()[ch].decks[dk].deck.effects;
             let ek = effects
                 .iter()
-                .position(|e| e.uuid == *fx_uuid)
+                .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
             apply_typed_param(&mut effects[ek].params, name, value);
             Ok(())
@@ -485,7 +485,7 @@ pub fn apply_typed_param_by_path(
             let effects = &mut mixer.channels_mut()[ch].effects;
             let ek = effects
                 .iter()
-                .position(|e| e.uuid == *fx_uuid)
+                .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
             apply_typed_param(&mut effects[ek].params, name, value);
             Ok(())
@@ -494,7 +494,7 @@ pub fn apply_typed_param_by_path(
             let effects = mixer.master_effects_mut();
             let ek = effects
                 .iter()
-                .position(|e| e.uuid == *fx_uuid)
+                .position(|e| e.uuid() == *fx_uuid)
                 .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Effect, fx_uuid))?;
             apply_typed_param(&mut effects[ek].params, name, value);
             Ok(())
