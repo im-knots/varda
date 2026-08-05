@@ -984,7 +984,7 @@ impl VardaApp {
                                 audio_input,
                             ) {
                                 Ok(new_sub) => {
-                                    h.subprocess = Some(new_sub);
+                                    h.subprocess = Some(Box::new(new_sub));
                                     h.audio_pcm = passthrough.map(Box::new);
                                     log::info!("SRT restarted for '{name}'");
                                 }

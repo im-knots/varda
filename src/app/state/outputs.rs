@@ -267,7 +267,7 @@ impl VardaApp {
         match spawn_result {
             Ok(sub) => {
                 if let Some(UnifiedOutput::Headless(h)) = self.output.outputs.get_mut(idx) {
-                    h.subprocess = Some(sub);
+                    h.subprocess = Some(Box::new(sub));
                     h.audio_pcm = passthrough.map(Box::new);
                     h.active = true;
                 }

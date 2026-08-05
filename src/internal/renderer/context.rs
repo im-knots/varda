@@ -1210,8 +1210,11 @@ pub struct HeadlessOutput {
     pub width: u32,
     /// Height of the output
     pub height: u32,
-    /// Active ffmpeg subprocess (for Recording/SRT targets)
-    pub subprocess: Option<super::FfmpegSubprocess>,
+    /// Active ffmpeg subprocess (for Recording/SRT targets). Boxed for the same
+    /// reason as `audio_pcm`, and because its inline size is platform-dependent:
+    /// unboxed it made `HeadlessOutput` 224 bytes larger than `OutputWindow` on
+    /// Windows, tripping `clippy::large_enum_variant` on that platform only.
+    pub subprocess: Option<Box<super::FfmpegSubprocess>>,
     /// Active audio passthrough subscription (None = video-only). Boxed to keep
     /// the rarely-set field off the hot `UnifiedOutput` enum's size.
     pub audio_pcm: Option<Box<AudioPassthrough>>,
@@ -1552,7 +1555,26 @@ impl UnifiedOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::{aspect_fit_rect, OutputRotation};
+    use super::{aspect_fit_rect, HeadlessOutput, OutputRotation, OutputWindow};
+
+    /// `UnifiedOutput` holds both variants inline, and `clippy::large_enum_variant`
+    /// fails the build when one exceeds the other by more than 200 bytes. The two
+    /// stay close only because `HeadlessOutput`'s rarely-set `subprocess` and
+    /// `audio_pcm` fields are boxed. With `subprocess` unboxed the gap was 184
+    /// bytes on macOS but 224 on Windows — under the threshold on the platform
+    /// most of us build on, over it on the one we don't. This catches that in the
+    /// test suite, which runs everywhere, rather than in a per-platform lint job.
+    #[test]
+    fn output_variants_stay_under_the_large_enum_variant_threshold() {
+        let window = std::mem::size_of::<OutputWindow>();
+        let headless = std::mem::size_of::<HeadlessOutput>();
+        let gap = window.abs_diff(headless);
+        assert!(
+            gap <= 200,
+            "UnifiedOutput variants differ by {gap} bytes (OutputWindow {window}, \
+             HeadlessOutput {headless}) — box a rarely-set field on the larger variant"
+        );
+    }
 
     /// Content and canvas agree, so nothing is inset — the case every 16:9
     /// project has always been in, and the one that must not change.

@@ -1095,7 +1095,7 @@ impl OutputQueries for VardaApp {
                                             .to_string(),
                                         frames_written: h
                                             .subprocess
-                                            .as_ref()
+                                            .as_deref()
                                             .and_then(super::super::internal::renderer::subprocess::FfmpegSubprocess::audio_frames_written)
                                             .unwrap_or(0),
                                         frames_dropped: p
