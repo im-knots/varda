@@ -434,14 +434,7 @@ impl UIRunner {
                     .content_elevation_degrees
                     .to_radians();
                 let c_roll = self.layout.dome_geometry.content_roll_degrees.to_radians();
-                renderer.render(
-                    &context.device,
-                    &context.queue,
-                    source_view,
-                    c_az,
-                    c_el,
-                    c_roll,
-                );
+                renderer.render(context, source_view, c_az, c_el, c_roll);
             }
         }
 
@@ -1118,7 +1111,7 @@ impl UIRunner {
             egui_renderer.free_texture(id);
         }
 
-        context.queue.submit(std::iter::once(encoder.finish()));
+        context.submit(std::iter::once(encoder.finish()));
         output.present();
     }
 }

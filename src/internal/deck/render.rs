@@ -749,7 +749,7 @@ impl Deck {
                     }
 
                     // Submit each pass individually for implicit GPU synchronization
-                    context.queue.submit(std::iter::once(encoder.finish()));
+                    context.submit(std::iter::once(encoder.finish()));
                 }
 
                 // Copy final compute output to the generator target texture
@@ -1118,7 +1118,7 @@ impl Deck {
                 // Multipass intermediate passes MUST submit immediately —
                 // update_uniforms() overwrites the same buffer each iteration,
                 // so batching would cause all passes to see the last pass's data.
-                context.queue.submit(std::iter::once(encoder.finish()));
+                context.submit(std::iter::once(encoder.finish()));
 
                 if let Some(pb) = pass_buffers.get_mut(target_name) {
                     pb.swap();
@@ -1449,7 +1449,7 @@ mod tests {
     use super::*;
     use crate::isf::ISFInput;
     use crate::isf::PhaseInput;
-    use crate::modulation::{LFOWaveform, ModulationSource};
+    use crate::modulation::{ModulationSource, StepInterpolation};
     use crate::params::ShaderParams;
 
     /// Empty engine — every parameter reads back its base value.
@@ -1457,16 +1457,18 @@ mod tests {
         ModulationEngine::new()
     }
 
-    /// A square LFO at 0 Hz holds a constant +1.0, so modulation depth is exactly
-    /// `amount` regardless of when the engine is ticked.
+    /// A unipolar step sequencer at 0 Hz holds a constant +1.0, so modulation
+    /// depth is exactly `amount` regardless of when the engine is ticked.
+    ///
+    /// Unipolar matters: bipolar sources carry a range-scale weight of 0.5, so a
+    /// bipolar stand-in would halve the depth under test.
     fn constant_modulation(target: &str, amount: f32) -> ModulationEngine {
         let mut engine = ModulationEngine::new();
-        let uuid = engine.add_source(ModulationSource::LFO {
-            waveform: LFOWaveform::Square,
-            frequency: 0.0,
-            phase: 0.0,
-            amplitude: 1.0,
-            bipolar: true,
+        let uuid = engine.add_source(ModulationSource::StepSequencer {
+            steps: vec![1.0; 2],
+            rate: 0.0,
+            interpolation: StepInterpolation::None,
+            bipolar: false,
         });
         engine.assign(target, &uuid, amount, None);
         engine.update(

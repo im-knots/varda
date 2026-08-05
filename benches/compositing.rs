@@ -45,6 +45,10 @@ const FRAME_BUDGET_US: u128 = 16_670;
 
 const BARS_SHADER: &str = include_str!("../shaders/bars.fs");
 
+/// Generator with one `PERSISTENT` pass — the shape that forces per-iteration
+/// submits in `render_multi_pass`.
+const TURING_SHADER: &str = include_str!("../shaders/turing_patterns.fs");
+
 fn make_context() -> Option<GpuContext> {
     GpuContext::new_headless().ok()
 }
@@ -382,6 +386,108 @@ fn bench_channel_composite_blend(c: &mut Criterion) {
     group.finish();
 }
 
+/// Decks running a shader with a `PERSISTENT` pass.
+///
+/// `render_multi_pass` runs `SIMULATION_ITERATIONS` (4) iterations per
+/// persistent pass and calls `queue.submit()` inside that loop, because
+/// `UnifiedPipeline` owns a single uniform buffer that each iteration
+/// overwrites. So every such deck costs 4 command buffer commits per frame on
+/// top of the batched deck/composite submits. Compare against
+/// `channel_composite_shader` at the same deck count for the delta.
+fn setup_mixer_multipass(context: &GpuContext, n_decks: usize, src: &str) -> Mixer {
+    let mut mixer = Mixer::new(context, WIDTH, HEIGHT).expect("mixer");
+    let ch = mixer.channel_mut(0).expect("channel 0");
+    for _ in 0..n_decks {
+        let shader = ISFShader::from_string(src).expect("multipass shader");
+        let deck = Deck::new(context, shader, WIDTH, HEIGHT).expect("multipass deck");
+        ch.add_deck(deck);
+    }
+    mixer
+}
+
+fn bench_channel_composite_multipass(c: &mut Criterion) {
+    let Some(ctx) = make_context() else {
+        eprintln!("no GPU adapter — skipping");
+        return;
+    };
+
+    let audio = AudioData::default();
+    let audio_values = AudioValues {
+        sources: std::collections::HashMap::default(),
+    };
+    let analyzer_values = AnalyzerValues::default();
+
+    let mut group = c.benchmark_group("channel_composite_multipass");
+    group.sample_size(30);
+
+    for n_decks in [1, 2, 4] {
+        let mut mixer = setup_mixer_multipass(&ctx, n_decks, TURING_SHADER);
+        group.bench_with_input(BenchmarkId::new("decks", n_decks), &n_decks, |b, _| {
+            b.iter(|| {
+                mixer
+                    .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                    .expect("render");
+                poll(&ctx);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Prints command buffer commits per `Mixer::render` for a few configurations.
+///
+/// Mixer scope only — the output, preview, and present submits happen in the
+/// frame loop above the mixer and are not counted here. Read alongside the
+/// `[PERF] frame | submits=` log, which covers a whole frame.
+fn report_submits_per_frame(_c: &mut Criterion) {
+    let Some(ctx) = make_context() else { return };
+    let audio = AudioData::default();
+    let audio_values = AudioValues {
+        sources: std::collections::HashMap::default(),
+    };
+    let analyzer_values = AnalyzerValues::default();
+
+    let measure = |label: &str, mixer: &mut Mixer| {
+        // Warm up: first frames allocate pass buffers and pipelines.
+        for _ in 0..3 {
+            mixer
+                .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+                .expect("warmup");
+            poll(&ctx);
+        }
+        ctx.submits.take();
+        mixer
+            .render(&ctx, &audio, &audio_values, &analyzer_values, 60, &[])
+            .expect("render");
+        poll(&ctx);
+        eprintln!(
+            "submits/frame (mixer scope) — {label}: {}",
+            ctx.submits.take()
+        );
+    };
+
+    measure("1 solid deck", &mut setup_mixer_solid(&ctx, 1));
+    measure("8 solid decks, 1 channel", &mut setup_mixer_solid(&ctx, 8));
+    measure("4 shader decks", &mut setup_mixer_shader(&ctx, 4));
+    measure(
+        "1 multipass deck (turing_patterns)",
+        &mut setup_mixer_multipass(&ctx, 1, TURING_SHADER),
+    );
+    measure(
+        "4 multipass decks (turing_patterns)",
+        &mut setup_mixer_multipass(&ctx, 4, TURING_SHADER),
+    );
+
+    let mut two_ch = setup_mixer_solid(&ctx, 4);
+    for _ in 0..4 {
+        let deck = Deck::new_solid_color(&ctx, [0.0, 1.0, 0.5, 1.0], WIDTH, HEIGHT).expect("deck");
+        two_ch.channel_mut(1).unwrap().add_deck(deck);
+    }
+    two_ch.set_crossfader(0.5);
+    measure("2 channels x 4 solid decks", &mut two_ch);
+}
+
 /// Re-times solid composites at 1 and 8 decks (warmed, median of 11) and
 /// prints the per-deck slope to stderr.
 fn report_per_deck_slope(_c: &mut Criterion) {
@@ -405,7 +511,9 @@ criterion_group!(
     bench_raw_copy_cost,
     bench_channel_composite_shader,
     bench_channel_composite_blend,
+    bench_channel_composite_multipass,
     bench_mixer_crossfade,
+    report_submits_per_frame,
     report_per_deck_slope,
 );
 criterion_main!(benches);

@@ -245,7 +245,13 @@ impl VardaApp {
         let effect_uuids: Vec<String> = mixer
             .channel(channel_idx)
             .and_then(|ch| ch.decks.get(deck_idx))
-            .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
+            .map(|slot| {
+                slot.deck
+                    .effects
+                    .iter()
+                    .map(|e| e.uuid().to_owned())
+                    .collect()
+            })
             .unwrap_or_default();
         let prefix = format!("deck_{deck_uuid}");
         preset_config.modulation =
@@ -310,7 +316,13 @@ impl VardaApp {
             let effect_uuids: Vec<String> = mixer
                 .channel(channel_idx)
                 .and_then(|ch| ch.decks.get(deck_idx))
-                .map(|slot| slot.deck.effects.iter().map(|e| e.uuid.clone()).collect())
+                .map(|slot| {
+                    slot.deck
+                        .effects
+                        .iter()
+                        .map(|e| e.uuid().to_owned())
+                        .collect()
+                })
                 .unwrap_or_default();
             let prefix = format!("deck_{deck_uuid}");
             deck_config.modulation =

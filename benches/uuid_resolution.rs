@@ -106,8 +106,8 @@ fn last_effect_uuid(mixer: &Mixer) -> String {
         .effects
         .last()
         .expect("at least one effect")
-        .uuid
-        .clone()
+        .uuid()
+        .to_owned()
 }
 
 /// Preflight: assert worst-case resolution in a pathological scene is still

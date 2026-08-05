@@ -466,13 +466,13 @@ impl DomePreviewRenderer {
     /// `content_az`, `content_el`, `content_roll` are in radians.
     pub fn render(
         &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        context: &super::context::GpuContext,
         domemaster_view: &wgpu::TextureView,
         content_az: f32,
         content_el: f32,
         content_roll: f32,
     ) {
+        let device = &context.device;
         // Update uniforms
         let view = self.camera.view_matrix();
         let aspect = self.width as f32 / self.height.max(1) as f32;
@@ -482,7 +482,9 @@ impl DomePreviewRenderer {
             mvp,
             content_rotation: [content_az, content_el, content_roll, 0.0],
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        context
+            .queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Dome Preview Bind Group"),
@@ -559,7 +561,7 @@ impl DomePreviewRenderer {
             }
         }
 
-        queue.submit(std::iter::once(encoder.finish()));
+        context.submit(std::iter::once(encoder.finish()));
     }
 
     /// Preview size in pixels (returns width, kept for compatibility).

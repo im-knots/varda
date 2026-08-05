@@ -33,7 +33,7 @@ Define a sub-range of the clip to play:
 
 Click **Clear In/Out** to reset to the full clip duration.
 
-Play/pause, speed, seek, loop mode, in/out points, and clear are all MIDI, OSC, and keyboard mappable — and modulatable. Loop mode uses **fader bucketing**: sweeping a fader/knob steps through Loop → Ping-Pong → One Shot → Hold Last. Enter learn mode and click any of these controls in the deck detail panel to bind it. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
+Play/pause, speed, seek, loop mode, in/out points, and clear are all MIDI, OSC, keyboard mappable and modulatable. Loop mode uses **fader bucketing**: sweeping a fader/knob steps through Loop → Ping-Pong → One Shot → Hold Last. Enter learn mode and click any of these controls in the deck detail panel to bind it. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
 
 ### HAP Hardware Codecs
 
@@ -52,7 +52,7 @@ During forward playback, Ping-Pong mode caches decoded frames so it can replay t
 
 > Deck '<name>': reverse playback truncated (cache full). Transcode to HAP for full-length reverse.
 
-As the message suggests, transcoding the clip to a **HAP** codec removes the limit — HAP frames decode cheaply enough to play in reverse directly, without relying on the frame cache.
+As the message suggests, transcoding the clip to a **HAP** codec removes the limit as HAP frames decode cheaply enough to play in reverse directly, without relying on the frame cache.
 
 ---
 
@@ -124,7 +124,7 @@ All durations support: **seconds**, **minutes**, **hours**, and **beats** (resol
 
 ### Simultaneous Sequences
 
-Multiple named sequences can play at the same time. This is essential for multi-surface setups where different channel pairs need independent automation — for example, one sequence cycling the main screen (channels A↔B) while another cycles the side panels (channels C↔D).
+Multiple named sequences can play at the same time. This is essential for multi-surface setups where different channel pairs need independent automation. For example: one sequence cycling the main screen (channels A↔B) while another cycles the side panels (channels C↔D).
 
 ### Easing Curves
 
@@ -190,7 +190,7 @@ A deck preset captures everything about a single deck:
 
 **Save**: select a deck → click **"Save Preset"** in the deck detail panel. Name it.
 
-**Load**: drag a deck preset from the **Library** panel into a channel. A new deck is created with all settings restored. Modulation sources are deduplicated — if an identical source already exists, it's reused.
+**Load**: drag a deck preset from the **Library** panel into a channel. A new deck is created with all settings restored. Modulation sources are deduplicated so if an identical source already exists, it's reused.
 
 ### Channel Presets
 

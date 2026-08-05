@@ -412,10 +412,17 @@ pub struct PreprocessorSlot {
 
 /// An effect in the deck's effect chain (ISF filter)
 pub struct Effect {
-    /// Stable UUID for this effect (8-char hex)
-    pub uuid: String,
+    /// Stable UUID for this effect (8-char hex).
+    ///
+    /// Private, with [`Effect::set_uuid`] as the only way to change it, because
+    /// `param_prefix` is derived from it and the two must never disagree. Scene
+    /// restore used to assign the field directly, leaving the prefix pointing at
+    /// the throwaway UUID minted by `Effect::new`; modulation assignments are
+    /// keyed on the prefix, so every effect modulation silently stopped applying
+    /// after a reload while the UI still showed it attached.
+    uuid: String,
     /// Cached "fx_{uuid}" prefix for modulation key lookups (avoids per-frame format!)
-    pub param_prefix: String,
+    param_prefix: String,
     pub shader: ISFShader,
     pub pipeline: UnifiedPipeline,
     pub enabled: bool,

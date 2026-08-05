@@ -575,7 +575,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                         .effects
                         .iter()
                         .map(|eff| EffectConfig {
-                            uuid: eff.uuid.clone(),
+                            uuid: eff.uuid().to_owned(),
                             path: eff.shader.file_path.clone().unwrap_or_default(),
                             enabled: eff.enabled,
                             params: eff.params.values.clone(),
@@ -625,7 +625,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                 .effects
                 .iter()
                 .map(|eff| EffectConfig {
-                    uuid: eff.uuid.clone(),
+                    uuid: eff.uuid().to_owned(),
                     path: eff.shader.file_path.clone().unwrap_or_default(),
                     enabled: eff.enabled,
                     params: eff.params.values.clone(),
@@ -647,7 +647,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
         .master_effects()
         .iter()
         .map(|eff| EffectConfig {
-            uuid: eff.uuid.clone(),
+            uuid: eff.uuid().to_owned(),
             path: eff.shader.file_path.clone().unwrap_or_default(),
             enabled: eff.enabled,
             params: eff.params.values.clone(),
@@ -698,7 +698,7 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
         .collect();
 
     SceneConfig {
-        version: 5,
+        version: SceneConfig::CURRENT_VERSION,
         channels,
         crossfader: mixer.crossfader(),
         active_transition,
@@ -1664,7 +1664,7 @@ pub(crate) fn restore_effect(
     let shader = ISFShader::from_file(&config.path)
         .with_context(|| format!("Failed to load effect shader: {}", config.path))?;
     let mut effect = Effect::new_with_format(context, shader, target_format)?;
-    effect.uuid.clone_from(&config.uuid);
+    effect.set_uuid(config.uuid.clone());
     effect.enabled = config.enabled;
     // Restore parameter values
     for (name, value) in &config.params {
@@ -1715,6 +1715,53 @@ mod tests {
 
     fn headless_gpu() -> GpuContext {
         GpuContext::new_headless().expect("headless GPU required for tests")
+    }
+
+    /// A restored effect must answer to the UUID it was saved under.
+    ///
+    /// Modulation targets an effect parameter by the key `fx_{uuid}:{param}`,
+    /// and the render path looks that key up through the effect's cached
+    /// `param_prefix`. Restore used to write `uuid` directly, leaving the prefix
+    /// built from the throwaway UUID `Effect::new` mints. Everything that keys
+    /// off `uuid` — the UI, assignment, removal — agreed with the saved scene,
+    /// so the modulation still looked attached, while the one consumer that used
+    /// the prefix silently found nothing. Effect modulation therefore worked
+    /// until you reloaded, and never again after.
+    #[test]
+    fn restored_effect_keeps_the_uuid_its_modulation_is_keyed_on() {
+        let gpu = headless_gpu();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/invert.fs");
+        assert!(path.exists(), "shaders/invert.fs missing");
+
+        let cfg = EffectConfig {
+            uuid: "fxsaved1".to_string(),
+            path: path.to_string_lossy().into_owned(),
+            enabled: true,
+            params: HashMap::new(),
+        };
+        let effect = restore_effect(&cfg, &gpu, crate::renderer::COLOR_PATH_FORMAT)
+            .expect("invert.fs restores");
+
+        assert_eq!(effect.uuid(), "fxsaved1");
+        assert_eq!(
+            effect.param_prefix(),
+            "fx_fxsaved1",
+            "the prefix modulation is looked up under must follow the restored UUID"
+        );
+    }
+
+    /// `set_uuid` is the only way to move an effect's identity, so it has to
+    /// carry the derived prefix with it.
+    #[test]
+    fn setting_an_effect_uuid_moves_its_modulation_prefix() {
+        let gpu = headless_gpu();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/invert.fs");
+        let shader = crate::isf::ISFShader::from_file(&path).expect("parse invert.fs");
+        let mut effect = Effect::new(&gpu, shader).expect("build effect");
+
+        effect.set_uuid("abcd1234".to_string());
+        assert_eq!(effect.uuid(), "abcd1234");
+        assert_eq!(effect.param_prefix(), "fx_abcd1234");
     }
 
     #[test]

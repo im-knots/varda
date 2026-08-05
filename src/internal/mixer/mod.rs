@@ -565,7 +565,7 @@ impl Mixer {
     pub fn find_effect_by_uuid(&self, uuid: &str) -> Option<EffectLocation> {
         for (ch_idx, ch) in self.channels.iter().enumerate() {
             for (dk_idx, slot) in ch.decks.iter().enumerate() {
-                if let Some(fx_idx) = slot.deck.effects.iter().position(|e| e.uuid == uuid) {
+                if let Some(fx_idx) = slot.deck.effects.iter().position(|e| e.uuid() == uuid) {
                     return Some(EffectLocation::Deck {
                         channel_idx: ch_idx,
                         deck_idx: dk_idx,
@@ -573,7 +573,7 @@ impl Mixer {
                     });
                 }
             }
-            if let Some(fx_idx) = ch.effects.iter().position(|e| e.uuid == uuid) {
+            if let Some(fx_idx) = ch.effects.iter().position(|e| e.uuid() == uuid) {
                 return Some(EffectLocation::Channel {
                     channel_idx: ch_idx,
                     effect_idx: fx_idx,
@@ -582,7 +582,7 @@ impl Mixer {
         }
         self.master_effects
             .iter()
-            .position(|e| e.uuid == uuid)
+            .position(|e| e.uuid() == uuid)
             .map(|effect_idx| EffectLocation::Master { effect_idx })
     }
 

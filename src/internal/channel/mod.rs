@@ -700,9 +700,9 @@ impl Channel {
         if !prefix_cmds.is_empty() {
             let mut all_cmds: Vec<wgpu::CommandBuffer> = std::mem::take(prefix_cmds);
             all_cmds.extend(cmd_buffers);
-            context.queue.submit(all_cmds);
+            context.submit(all_cmds);
         } else if !cmd_buffers.is_empty() {
-            context.queue.submit(cmd_buffers);
+            context.submit(cmd_buffers);
         }
         let deck_submit_us = t_deck_submit.elapsed().as_micros();
 
@@ -764,6 +764,12 @@ impl Channel {
         let width = self.composite_texture.width();
         let height = self.composite_texture.height();
         let mut composite_cmds: Vec<wgpu::CommandBuffer> = Vec::new();
+        // One params slot per compositing deck. Sized up front, not per draw:
+        // growing mid-loop would strand bind groups on the previous buffer.
+        self.blit_pipeline
+            .ensure_ring_slots(&context.device, ordered.len());
+        self.composite_pipeline
+            .ensure_ring_slots(&context.device, ordered.len());
         let mut copy_count: u32 = 0;
         let mut bind_group_count: u32 = 0;
         let mut copy_encode_us: u128 = 0;
@@ -1045,7 +1051,7 @@ impl Channel {
         // Batch submit all channel composite commands at once
         let t_composite_submit = std::time::Instant::now();
         if !composite_cmds.is_empty() {
-            context.queue.submit(composite_cmds);
+            context.submit(composite_cmds);
         }
         let composite_submit_us = t_composite_submit.elapsed().as_micros();
 
@@ -1075,7 +1081,7 @@ impl Channel {
                     multiview_mask: None,
                 });
             }
-            context.queue.submit(std::iter::once(encoder.finish()));
+            context.submit(std::iter::once(encoder.finish()));
         }
 
         // Apply channel effect chain (if any)
@@ -1148,7 +1154,7 @@ impl Channel {
 
             // Batch submit all channel effects
             if !fx_cmd_buffers.is_empty() {
-                context.queue.submit(fx_cmd_buffers);
+                context.submit(fx_cmd_buffers);
             }
         }
         let effects_us = t_effects.elapsed().as_micros();

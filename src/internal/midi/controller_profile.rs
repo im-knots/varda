@@ -615,19 +615,19 @@ fn read_param_value(mixer: &Mixer, path: &str) -> f32 {
             .and_then(|d| d.deck.generator_params.get_float(name))
             .unwrap_or(-1.0),
         ["deck", uuid, "effect", fx_uuid, "param", name] => deck_slot_by_uuid(mixer, uuid)
-            .and_then(|d| d.deck.effects.iter().find(|e| e.uuid == *fx_uuid))
+            .and_then(|d| d.deck.effects.iter().find(|e| e.uuid() == *fx_uuid))
             .and_then(|e| e.params.get_float(name))
             .unwrap_or(-1.0),
         ["ch", ch_uuid, "effect", fx_uuid, "param", name] => mixer
             .find_channel_by_uuid(ch_uuid)
             .and_then(|ch| mixer.channel(ch))
-            .and_then(|c| c.effects.iter().find(|e| e.uuid == *fx_uuid))
+            .and_then(|c| c.effects.iter().find(|e| e.uuid() == *fx_uuid))
             .and_then(|e| e.params.get_float(name))
             .unwrap_or(-1.0),
         ["master", "effect", fx_uuid, "param", name] => mixer
             .master_effects()
             .iter()
-            .find(|e| e.uuid == *fx_uuid)
+            .find(|e| e.uuid() == *fx_uuid)
             .and_then(|e| e.params.get_float(name))
             .unwrap_or(-1.0),
         _ => -1.0,

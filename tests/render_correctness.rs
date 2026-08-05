@@ -173,6 +173,52 @@ fn assert_near(v: f32, target: f32, tol: f32, label: &str) {
     );
 }
 
+// ── Compositing capacity ─────────────────────────────────────────────
+
+/// The channel compositor writes one params ring-buffer slot per compositing
+/// deck (`write_params_slot(.., i, ..)` in `channel/mod.rs`), and the ring is
+/// allocated at a fixed `MAX_DRAW_SLOTS` = 16 in `renderer/blit.rs`. Nothing
+/// clamps or grows it — `PolygonBlitPipeline` has `ensure_ring_slots`, the blit
+/// and composite pipelines do not — so deck 17 addresses past the end of the
+/// buffer.
+///
+/// Stacked opaque Normal decks mean the topmost is the only visible one, so a
+/// correct run shows the last deck's colour and raises no GPU fault.
+#[test]
+fn channel_composites_more_decks_than_ring_slots() {
+    const DECKS: usize = 20;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = new_mixer(&ctx);
+    let ch = mixer.channel_mut(0).unwrap();
+    for i in 0..DECKS {
+        // Every deck below the top is red; the top deck is green, so the
+        // assertion below distinguishes "deck 20 drew" from "deck 16 drew".
+        let color = if i == DECKS - 1 {
+            [0.0, 1.0, 0.0, 1.0]
+        } else {
+            [1.0, 0.0, 0.0, 1.0]
+        };
+        let deck = Deck::new_solid_color(&ctx, color, W, H).expect("deck");
+        ch.add_deck(deck);
+    }
+
+    let faults_before = ctx.errors.fault_count();
+    let px = center(&render_and_read(&ctx, &mut mixer));
+    let faults = ctx.errors.take_faults();
+
+    assert_eq!(
+        ctx.errors.fault_count(),
+        faults_before,
+        "compositing {DECKS} decks raised GPU faults (ring buffer holds 16 slots): {:?}",
+        faults.iter().map(|f| &f.message).collect::<Vec<_>>()
+    );
+    assert_hi(px[1], "top-deck.G");
+    assert_lo(px[0], "top-deck.R");
+}
+
 // ── Passthrough / opacity ────────────────────────────────────────────
 
 #[test]
@@ -1123,5 +1169,642 @@ fn additive_filter_emits_above_display_white() {
         px[0] > 1.3,
         "additive bloom over white should exceed display white, got {px:?} \
          — a terminal clamp has come back somewhere in the chain"
+    );
+}
+
+/// An effect fed smoothly changing input must change smoothly.
+///
+/// `chroma_flow` grades every pixel against a palette of anchor colours and
+/// gives each colour group its own flow direction, so the anchors decide how the
+/// whole frame moves. In auto mode those anchors were re-derived every frame by
+/// greedy farthest-point selection over a grid of samples. Selection is
+/// discontinuous: when two candidates are near-tied, a change in the picture too
+/// small to see swaps which one wins, and that slot's anchor jumps to an
+/// unrelated colour. Because every pixel is graded against it, one jump
+/// re-groups the entire frame at once and the image lurches — the "jitters every
+/// so often" report, against a source that is itself perfectly smooth.
+///
+/// Measured as the worst single-frame change over the median one, which is what
+/// separates an occasional lurch from ordinary motion. A fixed palette is the
+/// control: it holds the anchors still, so whatever it scores is the harness and
+/// the content rather than the effect. Auto has to stay near it.
+///
+/// Persisting the palette fixed most of it. Two further faults surfaced later,
+/// both of them in the machinery meant to keep the palette calm. Slots were
+/// matched to fresh anchors in slot-index order, so slot 0 took whichever anchor
+/// it liked and the last slot was left with whatever remained — possibly nothing
+/// like where it sat. And the settle was easing the anchors so far behind the
+/// picture that a lagging anchor would eventually sweep a whole flat region
+/// across a decision boundary in one frame, which meant turning Palette
+/// Stability *up* made the picture measurably less stable. Matching the closest
+/// available pair each round and shortening the settle fixed both.
+///
+/// | source          | original | palette persisted | + ordered matching, short settle |
+/// |-----------------|----------|-------------------|----------------------------------|
+/// | `dull_skull`    | 7.44x    | 5.77x             | 1.16x                            |
+/// | `liquid_light`  | 5.84x    | 1.10x             | 1.10x                            |
+///
+/// Auto now scores at or below the fixed-palette control. The middle column was
+/// read against a different transport model, so it is indicative rather than
+/// directly comparable; the outer two were measured on the current one.
+#[test]
+fn chroma_flow_auto_palette_does_not_lurch_on_smooth_input() {
+    const SW: u32 = 128;
+    const SH: u32 = 128;
+    const WARMUP: usize = 30;
+    const MEASURE: usize = 90;
+    /// How much worse than the fixed-palette control the automatic one is
+    /// allowed to be.
+    ///
+    /// Graded against the control rather than against an absolute number,
+    /// because the absolute figure measures the effect and the source as much as
+    /// the palette: a warp with a hard grade on the way out produces spiky frame
+    /// deltas by design, and a fixed threshold set against one transport model
+    /// silently becomes a different test under the next. The control holds the
+    /// anchors still and is otherwise identical, so it isolates the one thing
+    /// this is about. Auto currently runs at or just under it.
+    const MAX_SPIKE_RATIO: f32 = 1.4;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let fx_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/chroma_flow.fs");
+    let fx_shader = varda::isf::ISFShader::from_file(&fx_path).expect("parse chroma_flow.fs");
+
+    let luminance = |ctx: &GpuContext, mixer: &Mixer| -> Vec<f32> {
+        read_back(ctx, mixer, SW, SH)
+            .iter()
+            .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+            .collect()
+    };
+    let mean_delta = |a: &[f32], b: &[f32]| -> f32 {
+        a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
+    };
+
+    // Worst-frame-over-median change for one configuration.
+    let spike_ratio = |src_name: &str, manual: bool, stability: f32| -> f32 {
+        let src =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("shaders/{src_name}"));
+        let src_shader = varda::isf::ISFShader::from_file(&src).expect("parse source");
+        let mut mixer = Mixer::new(&ctx, SW, SH).expect("mixer");
+        mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
+        let deck = Deck::new(&ctx, src_shader, SW, SH).expect("deck");
+        let ch = mixer.channel_mut(0).unwrap();
+        ch.add_deck(deck);
+        let mut fx = varda::deck::Effect::new(&ctx, fx_shader.clone()).expect("deck effect");
+        fx.params.set_bool("palette_mode", manual);
+        fx.params.set_float("palette_stability", stability);
+        ch.decks[0].deck.add_effect(fx);
+        // Decks default to adaptive skipping keyed on wall-clock render cost. A
+        // skipped frame repeats the previous picture, which lands in the metric
+        // as a near-zero delta or a doubled one, so the measurement would partly
+        // grade the scheduler and vary with machine load.
+        ch.decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
+
+        for _ in 0..WARMUP {
+            render_once(&ctx, &mut mixer);
+        }
+        let mut prev = luminance(&ctx, &mixer);
+        let mut deltas = Vec::with_capacity(MEASURE);
+        for _ in 0..MEASURE {
+            render_once(&ctx, &mut mixer);
+            let cur = luminance(&ctx, &mixer);
+            deltas.push(mean_delta(&prev, &cur));
+            prev = cur;
+        }
+        deltas.sort_by(|a, b| a.partial_cmp(b).expect("no NaN frames"));
+        let median = deltas[deltas.len() / 2];
+        assert!(
+            median > 0.0,
+            "{src_name} is animated, so frames must differ; got a static image"
+        );
+        deltas.last().expect("measured frames") / median
+    };
+
+    for src in ["dull_skull.fs", "liquid_light.fs", "taste_of_noise.fs"] {
+        // Across the whole of Palette Stability, not just its default. Turning
+        // that control up used to make the picture measurably *less* steady,
+        // which is the opposite of what it promises, and a single reading at the
+        // default would not have caught it.
+        let auto = [0.0f32, 0.5, 1.0]
+            .into_iter()
+            .map(|stability| spike_ratio(src, false, stability))
+            .fold(0.0f32, f32::max);
+        let manual = spike_ratio(src, true, 0.5);
+        assert!(
+            auto < manual * MAX_SPIKE_RATIO,
+            "{src}: auto palette lurched — worst frame changed {auto:.2}x the \
+             median, against {manual:.2}x with the palette held fixed. An anchor jumped \
+             and regraded the whole frame at once."
+        );
+    }
+}
+
+/// Render `source`, optionally through Chroma Flow, capturing the luminance
+/// field after each of `capture_at` frame counts. `configure` receives the
+/// effect before it is attached.
+fn chroma_flow_frames(
+    ctx: &GpuContext,
+    source: &str,
+    size: (u32, u32),
+    capture_at: &[usize],
+    configure: Option<&dyn Fn(&mut varda::params::ShaderParams)>,
+) -> Vec<Vec<f32>> {
+    let (w, h) = size;
+    let fx_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/chroma_flow.fs");
+    let src_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("shaders")
+        .join(source);
+    let src_shader = varda::isf::ISFShader::from_file(&src_path).expect("parse source shader");
+
+    let mut mixer = Mixer::new(ctx, w, h).expect("mixer");
+    mixer.set_tonemap_mode(&ctx.queue, TonemapMode::Bypass);
+    let deck = Deck::new(ctx, src_shader, w, h).expect("deck");
+    {
+        let ch = mixer.channel_mut(0).expect("channel 0");
+        ch.add_deck(deck);
+        if let Some(configure) = configure {
+            let fx_shader = varda::isf::ISFShader::from_file(&fx_path).expect("parse chroma_flow");
+            let mut fx = varda::deck::Effect::new(ctx, fx_shader).expect("deck effect");
+            configure(&mut fx.params);
+            ch.decks[0].deck.add_effect(fx);
+        }
+        // Adaptive skipping keys on wall-clock render cost, so the number of
+        // rendered frames would otherwise vary between runs that must line up.
+        ch.decks[0].render_fps = varda::channel::DeckRenderFps::Fixed(0);
+    }
+
+    let last = capture_at.iter().copied().max().unwrap_or(0);
+    let mut out = Vec::with_capacity(capture_at.len());
+    for frame in 1..=last {
+        render_once(ctx, &mut mixer);
+        if capture_at.contains(&frame) {
+            out.push(
+                read_back(ctx, &mixer, w, h)
+                    .iter()
+                    .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
+                    .collect(),
+            );
+        }
+    }
+    out
+}
+
+/// The luminance field after `frames` frames.
+fn chroma_flow_run(
+    ctx: &GpuContext,
+    source: &str,
+    size: (u32, u32),
+    frames: usize,
+    configure: Option<&dyn Fn(&mut varda::params::ShaderParams)>,
+) -> Vec<f32> {
+    chroma_flow_frames(ctx, source, size, &[frames], configure)
+        .pop()
+        .expect("one capture")
+}
+
+/// Mean absolute difference between horizontally adjacent pixels.
+fn edge_energy(img: &[f32], width: usize) -> f32 {
+    let mut sum = 0.0;
+    let mut n = 0usize;
+    for row in img.chunks_exact(width) {
+        for x in 1..width {
+            sum += (row[x] - row[x - 1]).abs();
+            n += 1;
+        }
+    }
+    sum / n as f32
+}
+
+/// Colour must never cross into darkness.
+///
+/// A layer travels over whatever it is sitting on, and dark ground is not
+/// something to travel over — it is floor. Without the rule every region expands
+/// into whatever is next to it, the frame fills in, and the result reads as
+/// smoke; with it, shapes are held to the lit parts of the picture and crawl
+/// around the dark ones.
+///
+/// Dark ground is also kept distinct from ground a layer has *vacated*. Vacated
+/// ground is repainted from the refill cycle, and repainting the shadows would
+/// turn the darkest parts of the frame into the loudest. Barrier ground shows
+/// the brightness it seeded with instead, and is never repainted.
+///
+/// The comparison is against the same source with no effect, so "dark" means
+/// dark in the real picture rather than wherever the test guessed. It takes the
+/// brightest each pixel ever gets across the whole run: a pixel dark only at the
+/// final frame may legitimately have seeded as a layer while it was lit, and
+/// carries that colour until its memory runs out. Only a pixel that is dark for
+/// the entire run can never have been anything but barrier.
+#[test]
+fn chroma_flow_never_flows_into_darkness() {
+    const SW: u32 = 128;
+    const SH: u32 = 128;
+    const FRAMES: usize = 90;
+    /// Readback is f16 and the barrier path passes its seeded brightness
+    /// through, so anything above rounding is colour that genuinely arrived
+    /// where it was forbidden.
+    const TOLERANCE: f32 = 4e-3;
+    /// Needs a source with genuine shadow in it: the skull and liquid shaders
+    /// used elsewhere never fall below the barrier at all, so they would prove
+    /// nothing.
+    const SOURCE: &str = "taste_of_noise.fs";
+    /// Raised well above its default. The shader classifies against the deck's
+    /// own output while this test reads the composited frame, and the two do not
+    /// agree closely enough to call a pixel sitting near the threshold. Lifting
+    /// the barrier far above anything the test calls dark makes the subset
+    /// unambiguous in either space, at no cost to what is being checked — the
+    /// rule under test is that layers cannot enter barrier ground, not where the
+    /// barrier happens to sit.
+    const BARRIER: f32 = 0.6;
+    /// Comfortably below `BARRIER` however the two spaces relate.
+    const CALLED_DARK: f32 = 0.15;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let every_frame: Vec<usize> = (1..=FRAMES).collect();
+    let plain = chroma_flow_frames(&ctx, SOURCE, (SW, SH), &every_frame, None);
+    let mut brightest = vec![0.0f32; (SW * SH) as usize];
+    for frame in &plain {
+        for (peak, v) in brightest.iter_mut().zip(frame) {
+            *peak = peak.max(*v);
+        }
+    }
+
+    let flowed = chroma_flow_run(
+        &ctx,
+        SOURCE,
+        (SW, SH),
+        FRAMES,
+        Some(&|p: &mut varda::params::ShaderParams| {
+            // Push hard: fast warp and a large palette give the motion every
+            // opportunity to spill somewhere it should not reach.
+            p.set_float("zoom", 1.6);
+            p.set_float("rotate", 90.0);
+            p.set_float("warp_amount", 1.5);
+            p.set_float("palette_size", 6.0);
+            p.set_float("barrier_level", BARRIER);
+            // Softening happens on the way out and would blur a lit pixel a
+            // fraction of a texel into the dark. Off, so this grades transport.
+            p.set_float("edge_blend_width", 0.0);
+        }),
+    );
+
+    let dark: Vec<f32> = brightest
+        .iter()
+        .zip(&flowed)
+        .filter(|(peak, _)| **peak < CALLED_DARK)
+        .map(|(peak, f)| f - peak)
+        .collect();
+
+    assert!(
+        dark.len() > 500,
+        "the source has almost no permanently dark area ({} of {} pixels), so \
+         this proves nothing — pick a source with real shadow in it",
+        dark.len(),
+        brightest.len()
+    );
+
+    let worst = dark.iter().copied().fold(f32::MIN, f32::max);
+    let leaked = dark.iter().filter(|d| **d > TOLERANCE).count();
+    assert!(
+        leaked == 0,
+        "colour flowed into darkness: {leaked} of {} barrier pixels brightened, \
+         the worst by {worst:.3}. Dark ground is floor — a layer must not be able \
+         to enter it, nor to crawl out of it, nor to have it repainted.",
+        dark.len()
+    );
+}
+
+/// Hardness must be able to open the boundary.
+///
+/// The guard above proves the barrier holds; on its own that is also satisfied
+/// by a barrier welded shut. This is the other half: wound down, colour is
+/// supposed to burst its banks and run into the dark, which is the whole point
+/// of having the control on a modulator for a drop.
+///
+/// Graded against the same effect with hardness closed, not against the source.
+/// Measuring the open run against the source directly does not work: the
+/// reference is the brightest each pixel ever gets across the run while the
+/// reading is the final frame, so on an animated source the two differ by a
+/// wide margin whatever the barrier does. That version passed with hardness
+/// wired out of the calculation entirely. Two runs of the same effect at the
+/// same frame share all of that, and differ only in the one control.
+#[test]
+fn chroma_flow_barrier_hardness_opens_the_boundary() {
+    const SW: u32 = 128;
+    const SH: u32 = 128;
+    const FRAMES: usize = 90;
+    const SOURCE: &str = "taste_of_noise.fs";
+    const BARRIER: f32 = 0.6;
+    const CALLED_DARK: f32 = 0.15;
+    /// Softened all the way, the flow should be well into the dark rather than
+    /// just brushing the boundary.
+    const MIN_SPILL: f32 = 0.02;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let every_frame: Vec<usize> = (1..=FRAMES).collect();
+    let plain = chroma_flow_frames(&ctx, SOURCE, (SW, SH), &every_frame, None);
+    let mut brightest = vec![0.0f32; (SW * SH) as usize];
+    for frame in &plain {
+        for (peak, v) in brightest.iter_mut().zip(frame) {
+            *peak = peak.max(*v);
+        }
+    }
+
+    let run = |hardness: f32| -> Vec<f32> {
+        chroma_flow_run(
+            &ctx,
+            SOURCE,
+            (SW, SH),
+            FRAMES,
+            Some(&move |p: &mut varda::params::ShaderParams| {
+                p.set_float("zoom", 1.6);
+                p.set_float("rotate", 90.0);
+                p.set_float("warp_amount", 1.5);
+                p.set_float("palette_size", 6.0);
+                p.set_float("barrier_level", BARRIER);
+                p.set_float("barrier_hardness", hardness);
+            }),
+        )
+    };
+
+    let closed = run(1.0);
+    let open = run(0.0);
+
+    let spill: Vec<f32> = brightest
+        .iter()
+        .zip(closed.iter().zip(&open))
+        .filter(|(peak, _)| **peak < CALLED_DARK)
+        .map(|(_, (shut, wide))| (wide - shut).abs())
+        .collect();
+
+    assert!(
+        spill.len() > 500,
+        "the source has almost no permanently dark area ({} of {} pixels), so \
+         this proves nothing",
+        spill.len(),
+        brightest.len()
+    );
+
+    let mean = spill.iter().sum::<f32>() / spill.len() as f32;
+    assert!(
+        mean > MIN_SPILL,
+        "the barrier will not open: with hardness at zero the dark ground still \
+         only moved by {mean:.4}. Nothing can flow past the boundary, so the \
+         control is inert and there is no drop to play."
+    );
+}
+
+/// The picture must not dissolve into itself.
+///
+/// Feeding a picture back through a warp and blending, however lightly, is a
+/// diffusion: run it back through itself sixty times a second and every boundary
+/// in the frame washes out within seconds. That is what turns this kind of
+/// effect into smoke, and it is why the field is stored as flat stack heights
+/// and moved by a hard hand-off rather than a blend.
+///
+/// Edge energy is the direct measure. Diffusion drives it toward zero; transport
+/// leaves it alone, because a region that moves as a body keeps the boundary it
+/// started with. Measured against the untouched source, so a quiet passage in
+/// the source does not read as a failure.
+#[test]
+fn chroma_flow_regions_keep_their_edges() {
+    const SW: u32 = 128;
+    const SH: u32 = 128;
+    /// Long enough that a per-frame blend would have compounded away. A 5% blend
+    /// leaves under a thousandth of any boundary after this many frames.
+    const FRAMES: usize = 180;
+    /// Grouping flattens the interior of each region, so some loss against the
+    /// source is expected and correct. Total collapse is not.
+    const MIN_EDGE_FRACTION: f32 = 0.35;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let plain = chroma_flow_run(&ctx, "dull_skull.fs", (SW, SH), FRAMES, None);
+    let flowed = chroma_flow_run(&ctx, "dull_skull.fs", (SW, SH), FRAMES, Some(&|_| {}));
+
+    let source_edges = edge_energy(&plain, SW as usize);
+    let flowed_edges = edge_energy(&flowed, SW as usize);
+    assert!(
+        source_edges > 0.0,
+        "the source is a flat field, so there are no edges to preserve"
+    );
+
+    let fraction = flowed_edges / source_edges;
+    assert!(
+        fraction > MIN_EDGE_FRACTION,
+        "the picture dissolved: after {FRAMES} frames its edge energy is \
+         {flowed_edges:.4} against the source's {source_edges:.4}, a fraction of \
+         {fraction:.2}. The field is being blended somewhere instead of handed \
+         over whole, and the boundaries are washing out."
+    );
+}
+
+/// The picture has to actually travel.
+///
+/// This is the failure that produced three rebuilds. Each one moved its material
+/// correctly and none of it showed, because the vacated space was refilled from
+/// the live frame — so what was carried away was instantly replaced by the
+/// picture that had been there all along. All that appeared was churn in the
+/// thin band where the moved material and the source disagreed, which reads as
+/// flicker rather than flow.
+///
+/// A still camera is the control. It exercises the identical path — same warp
+/// pass, same regeneration, same grading — with only the motion removed, so
+/// anything the two runs share is not travel. A build that merely re-grades its
+/// source in place scores near zero here no matter how busy it looks.
+#[test]
+fn chroma_flow_actually_travels() {
+    const SW: u32 = 128;
+    const SH: u32 = 128;
+    const FRAMES: usize = 120;
+    /// Well clear of the boundary-band churn a static build produces, and far
+    /// under what real travel gives.
+    const MIN_TRAVEL: f32 = 0.02;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let run = |moving: bool| -> Vec<f32> {
+        chroma_flow_run(
+            &ctx,
+            "dull_skull.fs",
+            (SW, SH),
+            FRAMES,
+            Some(&move |p: &mut varda::params::ShaderParams| {
+                p.set_float("zoom", if moving { 1.3 } else { 1.0 });
+                p.set_float("rotate", if moving { 30.0 } else { 0.0 });
+                p.set_float("warp_amount", if moving { 0.8 } else { 0.0 });
+            }),
+        )
+    };
+
+    let still = run(false);
+    let moving = run(true);
+    let travel = still
+        .iter()
+        .zip(&moving)
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f32>()
+        / still.len() as f32;
+
+    assert!(
+        travel > MIN_TRAVEL,
+        "the picture is not going anywhere: after {FRAMES} frames, a zooming, \
+         rotating, warping camera differs from a still one by only {travel:.4} \
+         mean luminance. The effect is re-grading its source in place instead of \
+         carrying it."
+    );
+}
+
+/// The mask must hold its circle still and let the rest move.
+///
+/// The hold is applied twice, in the warp buffer and again on the way out, and
+/// only the second is checked here. Fading back to the source at the end is what
+/// makes held ground read as untouched picture rather than as a posterised,
+/// frozen version of the effect, and that is what this measures. Holding it in
+/// the buffer as well matters for a reason a still mask cannot show: without it
+/// the warp keeps running underneath the held area, and the moment the mask is
+/// moved — which is the whole point of putting it on a modulator — everything
+/// that accumulated under there surfaces at once.
+///
+/// Measured against the bare deck. An earlier version of this used the effect
+/// itself in a hold-everything configuration, which looked tidier and was very
+/// nearly vacuous: any break shared by both runs cancels out, and removing
+/// either half of the mask still passed.
+#[test]
+fn chroma_flow_mask_holds_its_circle_still() {
+    const SW: u32 = 128;
+    const SH: u32 = 128;
+    const FRAMES: usize = 120;
+    const RADIUS: f32 = 0.3;
+    /// Held ground is a fade back to the source, so it should match to rounding.
+    const MAX_HELD_DRIFT: f32 = 6e-3;
+    /// Outside has a warp and a hard grade on it, so it should differ by far
+    /// more than this. Set low enough to stay clear of quiet passages in the
+    /// source.
+    const MIN_FLOW: f32 = 0.02;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let plain = chroma_flow_run(&ctx, "dull_skull.fs", (SW, SH), FRAMES, None);
+    let masked = chroma_flow_run(
+        &ctx,
+        "dull_skull.fs",
+        (SW, SH),
+        FRAMES,
+        Some(&|p: &mut varda::params::ShaderParams| {
+            p.set_float("mask_radius", RADIUS);
+            p.set_float("mask_softness", 0.0);
+            p.set_float("zoom", 1.3);
+            p.set_float("rotate", 40.0);
+            p.set_float("warp_amount", 1.0);
+            p.set_float("edge_blend_width", 0.0);
+        }),
+    );
+
+    let mut held = Vec::new();
+    let mut flowing = Vec::new();
+    for (i, (p, m)) in plain.iter().zip(&masked).enumerate() {
+        let x = (i % SW as usize) as f32 / SW as f32 - 0.5;
+        let y = (i / SW as usize) as f32 / SH as f32 - 0.5;
+        let r = (x * x + y * y).sqrt();
+        // Skip an annulus around the boundary: the edge lands between texels and
+        // grading either side of it is a coin toss.
+        if r < RADIUS * 0.8 {
+            held.push((p - m).abs());
+        } else if r > RADIUS * 1.25 {
+            flowing.push((p - m).abs());
+        }
+    }
+
+    assert!(
+        held.len() > 500 && flowing.len() > 500,
+        "the sample is too small to mean anything: {} held, {} flowing",
+        held.len(),
+        flowing.len()
+    );
+
+    let worst_held = held.iter().copied().fold(0.0f32, f32::max);
+    assert!(
+        worst_held < MAX_HELD_DRIFT,
+        "the mask is not holding: inside a radius of {RADIUS} the picture moved \
+         by up to {worst_held:.4} against the untouched source. Held ground is \
+         supposed to be the source, unwarped and ungraded."
+    );
+
+    let mean_flow = flowing.iter().sum::<f32>() / flowing.len() as f32;
+    assert!(
+        mean_flow > MIN_FLOW,
+        "the mask is holding everything: outside a radius of {RADIUS} the picture \
+         differs from the untouched source by only {mean_flow:.4}, so the effect \
+         is suppressed where it should be running at full strength."
+    );
+}
+
+/// The source must keep bleeding back into the field.
+///
+/// A warp can only move and stretch what is already in the buffer, so a field
+/// left to warp alone drifts away from its input and eventually shows nothing
+/// but its own smeared history. Letting the source reassert itself at a
+/// controlled rate is Deforum's strength schedule, and it is what keeps the
+/// picture tied to the material it is supposed to be transforming.
+///
+/// Guarded as "Regen changes the picture", because the failure it catches is
+/// exact: if the source is never mixed back in, the setting is inert and runs at
+/// different values come back bit for bit identical.
+#[test]
+fn chroma_flow_regenerates_from_the_source() {
+    const SW: u32 = 128;
+    const SH: u32 = 128;
+    const FRAMES: usize = 300;
+    /// The failure this catches is exact equality, so the bar only has to sit
+    /// clear of readback rounding. It is set well above that anyway, since two
+    /// genuinely different regeneration rates diverge across the whole frame.
+    const MIN_DIFFERENCE: f32 = 5e-3;
+
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+
+    let run = |regen: f32| -> Vec<f32> {
+        chroma_flow_run(
+            &ctx,
+            "dull_skull.fs",
+            (SW, SH),
+            FRAMES,
+            Some(&move |p: &mut varda::params::ShaderParams| {
+                p.set_float("regen_seconds", regen);
+                p.set_float("zoom", 1.2);
+            }),
+        )
+    };
+
+    let brief = run(0.05);
+    let long = run(4.0);
+    let difference = brief
+        .iter()
+        .zip(&long)
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f32>()
+        / brief.len() as f32;
+
+    assert!(
+        difference > MIN_DIFFERENCE,
+        "Regen is inert: after {FRAMES} frames, letting the source back in every \
+         0.05s differs from every 4s by only {difference:.5} mean luminance. \
+         Nothing is being drawn back from the source, so the field is warping \
+         alone and will smear itself away."
     );
 }

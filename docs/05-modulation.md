@@ -13,7 +13,7 @@ The modulation panel (right sidebar) has a row of buttons that add a new source 
 
 Each new source appears as a card in the list below, named by type and index (e.g. **LFO 1**, **Audio 1**), with a live value readout in the header and an **x** button to delete it. Adjust the source's parameters directly on its card. (The **Analyzer** source is added from a deck's analyzer setup rather than this button row — see [Analyzer](#analyzer).)
 
-Each source is automatically assigned a **color** from a fixed palette (cyan, magenta, yellow, lime, orange, pink, sky blue, coral). That color identifies the source everywhere it is used — including the ghost indicator on modulated sliders.
+Each source is automatically assigned a **color** from a fixed palette (cyan, magenta, yellow, lime, orange, pink, sky blue, coral). That color identifies the source everywhere it is used.
 
 ## Modulation Sources
 
@@ -29,7 +29,9 @@ A low-frequency oscillator that cycles through a waveform continuously.
 | **Phase** | 0.0–1.0 | Offset in the cycle (0.5 = start halfway through) |
 | **Bipolar** | on/off | Off: output 0–1 (unipolar). On: output -1 to +1 (bipolar) |
 
-**Random** waveform produces sample-and-hold noise — a new random value each quarter-cycle, held constant until the next. **Smooth Random** interpolates between random values for organic, non-repeating motion.
+**Random** waveform produces sample-and-hold noise (a new random value each quarter-cycle, held constant until the next). **Smooth Random** interpolates between random values for organic, non-repeating motion.
+
+**Unipolar vs. bipolar** changes where the sweep sits, not how far it travels. Unipolar sweeps upward from the slider's current position; bipolar sweeps symmetrically around it, half above and half below. At the same amplitude both cover the same distance, so switching polarity re-centres the motion without making it wider or narrower. Park the slider at the bottom for a unipolar sweep, and in the middle for a bipolar one.
 
 ### Audio
 
@@ -58,7 +60,7 @@ Drives a parameter from frequency-band energy in the audio input. Connects visua
 - **Increase** — audio energy accumulates the value upward (wraps at 1.0). Creates ratcheting effects.
 - **Decrease** — audio energy accumulates the value downward (wraps at 0.0). Inverse ratchet.
 
-**Audio Device**: each Audio source has a **device dropdown** to select which audio input to analyze. Different sources can use different devices — for example, one tracking the DJ mixer's bass and another tracking a microphone's treble.
+**Audio Device**: each Audio source has a **device dropdown** to select which audio input to analyze. Different sources can use different devices. for example: one tracking the DJ mixer's bass and another tracking a microphone's treble.
 
 ### ADSR Envelope
 
@@ -104,7 +106,7 @@ Individual step values are addressable via MIDI at `mod/<idx>/step/<step_idx>`.
 
 ### Analyzer
 
-Drives a parameter from **analysis of a deck's live input frame**. Instead of a synthetic or audio-derived signal, the source value comes from measuring the picture itself — its brightness, contrast, or color balance — turning the visuals into a controller for other parameters.
+Drives a parameter from **analysis of a deck's live input frame**. Instead of a synthetic or audio-derived signal, the source value comes from measuring the picture itself (ie. its brightness, contrast, or color balance) turning the visuals into a controller for other parameters.
 
 An analyzer runs on a background thread at its own cadence (it never blocks the render loop) and publishes normalized scalar outputs (0.0–1.0) that feed the modulation engine like any other source.
 
@@ -123,7 +125,7 @@ An analyzer runs on a background thread at its own cadence (it never blocks the 
 | `contrast` | Standard deviation of luminance |
 | `red` / `green` / `blue` | Average per-channel value |
 
-**Optional analyzer: `face_detect`** — available in builds compiled with the `face-detection` feature. It exposes `face_x`, `face_y`, `face_size`, `face_rotation`, and `face_count`. When the feature isn't compiled in, only `brightness` appears in the picker.
+**Optional analyzer: `face_detect`** is available in builds compiled with the `face-detection` feature. It exposes `face_x`, `face_y`, `face_size`, `face_rotation`, and `face_count`. When the feature isn't compiled in, only `brightness` appears in the picker.
 
 Multiple modulation sources can share one running analyzer on a deck (it is reference-counted), so mapping several outputs costs only one analysis pass.
 
@@ -135,7 +137,7 @@ Multiple modulation sources can share one running analyzer on a deck (it is refe
 
 ### Assigning a Source to a Parameter
 
-Every modulatable parameter slider — deck/generator parameters, effect parameters, and even another source's parameters — has a small **`〰`** button beside it. To wire up modulation:
+Every modulatable parameter slider has a small **`〰`** button beside it. To wire up modulation:
 
 1. Click the **`〰`** button. A dropdown headed **"Assign Modulation"** opens.
 2. Pick a source from the list. Each entry is labeled by type and index and shown in the source's color — for example **LFO 1**, **Audio 20-250Hz**, **ADSR 1**, **StepSeq 1**, **Analyzer brightness 1**.
@@ -145,7 +147,7 @@ To **remove** an assignment, open the same `〰` dropdown and click **Clear**.
 
 #### Live Ghost Indicator
 
-Once a parameter is modulated, a thin **vertical line in the source's color** is drawn across the slider. It marks the *effective* value (base value + combined modulation offset) and moves in real time as the modulation evolves — so you can see exactly where a parameter is being driven without watching the number. With several sources on one parameter, the line shows their combined effect.
+Once a parameter is modulated, a thin **vertical line in the source's color** is drawn across the slider. It marks the *effective* value (base value + combined modulation offset) and moves in real time as the modulation evolves. With several sources on one parameter, the line shows their combined effect.
 
 > Behind the scenes, assignments map to the same parameter paths as MIDI/OSC (`deck/<uuid>/param/<name>`, `crossfader`, `ch/<uuid>/opacity`, `fx/<uuid>/param/<name>`, etc. — see [Parameter Paths](06-control-surfaces.md#parameter-paths)). The UI assigns each modulation at a sensible default depth; fine-grained per-assignment **amount** (a signed scale where negative inverts) is exposed through the [HTTP API](13-api.md) rather than the slider dropdown.
 
@@ -187,7 +189,7 @@ To wire one source into another, use the **`〰`** button on the target source's
 
 ### Depth Limit
 
-Mod-on-mod chains are limited to **4 levels deep** to prevent infinite loops. The engine evaluates sources in topological dependency order — sources with no inputs first, then those that depend on them, and so on. Chains deeper than the limit (or accidental cycles) are evaluated safely on a fallback pass rather than crashing or hanging.
+Mod-on-mod chains are limited to **4 levels deep** to prevent infinite loops. The engine evaluates sources in topological dependency order. Ie. sources with no inputs first, then those that depend on them, and so on. Chains deeper than the limit (or accidental cycles) are evaluated safely on a fallback pass rather than crashing or hanging.
 
 ### Examples
 

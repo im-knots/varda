@@ -1,6 +1,6 @@
 # Shader Library
 
-Varda ships with a catalog of ISF shaders, ready to drag from the **Library** panel into any deck (generators), onto a deck/channel/master (filters), or into a transition slot. All of them live in the `shaders/` directory and can be opened, edited, and hot-reloaded — see [ISF Shader Authoring](12-isf-authoring.md).
+Varda ships with a catalog of ISF shaders, ready to drag from the **Library** panel into any deck (generators), onto a deck/channel/master (filters), or into a transition slot. All of them live in the `shaders/` directory and can be opened, edited, and hot-reloaded. See [ISF Shader Authoring](12-isf-authoring.md).
 
 Shaders are classified automatically by type:
 
@@ -79,7 +79,7 @@ Shaders are classified automatically by type:
 | `blur.fs` | Gaussian blur |
 | `brightness_contrast.fs` | Brightness and contrast adjustment |
 | `channel_mixer.fs` | Reroute and mix RGB channels |
-| `chroma_flow.fs` | Color-grouped displacement that makes similar-color regions flow apart |
+| `chroma_flow.fs` | Warps the previous frame through a drifting camera and grades the result into flat color groups, so the groups slither and morph like a Deforum animation. Dark ground acts as a boundary the flow crawls around, with an adjustable hardness that lets it burst its banks. A circular mask can hold part of the frame still while the rest flows |
 | `chroma_key.fs` | Keys a target color to a given opacity |
 | `color_balance.fs` | Adjust shadows, midtones, highlights independently |
 | `color_correction.fs` | Brightness, contrast, saturation, hue shift grading |
@@ -162,7 +162,7 @@ Shaders are classified automatically by type:
 | `compute_gradient.comp` | Simple animated gradient (compute shader) |
 | `cosmic_web.comp` | Dark matter cosmic web via the Zel'dovich approximation — analytic Fourier mode synthesis from a CDM power spectrum, cloud-in-cell density deposit, growth-factor collapse |
 
-> The catalog grows over time. The authoritative list is whatever sits in your workspace `shaders/` directory — open the Library panel to see exactly what's available in your build.
+> The catalog grows over time. The authoritative list is whatever sits in your workspace `shaders/` directory.
 
 ---
 

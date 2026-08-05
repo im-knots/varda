@@ -491,8 +491,7 @@ impl SyphonManager {
     /// this call populated it, which cannot happen.
     pub fn publish_frame_gpu(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        context: &crate::renderer::context::GpuContext,
         server_name: &str,
         src_view: &wgpu::TextureView,
         width: u32,
@@ -501,6 +500,8 @@ impl SyphonManager {
         if !self.available || width == 0 || height == 0 {
             return;
         }
+
+        let device = &context.device;
 
         // 1. wgpu's MTLDevice — unify so the imported textures, the server, and
         //    the publish queue all live on one device.
@@ -641,8 +642,10 @@ impl SyphonManager {
             }
             let flag = handle.slots[w].write_done.clone();
             flag.store(false, Ordering::SeqCst);
-            queue.submit(std::iter::once(encoder.finish()));
-            queue.on_submitted_work_done(move || flag.store(true, Ordering::SeqCst));
+            context.submit(std::iter::once(encoder.finish()));
+            context
+                .queue
+                .on_submitted_work_done(move || flag.store(true, Ordering::SeqCst));
             handle.sched.mark_written(w);
         }
     }

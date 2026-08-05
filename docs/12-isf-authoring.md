@@ -2,7 +2,7 @@
 
 Varda shaders are **GLSL 450 (Vulkan)** with an [ISF](https://isf.video)-style JSON metadata header that declares parameters, inputs, and passes.
 
-> **Read this first if you have existing ISF shaders.** Varda uses ISF's *metadata format*, not its *shader language*. A shader downloaded from isf.video, VDMX, or the ISF Editor will **not** load as-is — real ISF is GLSL ES with implicitly injected uniforms, and Varda needs explicit Vulkan declarations. Porting is mechanical and usually takes a few minutes. See [Porting an ISF Shader](#porting-an-isf-shader).
+> **Read this first if you have existing ISF shaders.** Varda uses ISF's *metadata format*, not its *shader language*. A shader downloaded from isf.video, VDMX, or the ISF Editor will **not** load as-is. OG ISF is GLSL ES with implicitly injected uniforms, and Varda needs explicit Vulkan declarations. Porting is mechanical and usually takes a few minutes. See [Porting an ISF Shader](#porting-an-isf-shader).
 
 In exchange for not being drop-in ISF, the dialect gets you things ISF can't express: [compute shaders](#compute-shaders) with persistent storage buffers, [analyzer preprocessors](#analyzer-preprocessors) that inject ML/sensor data as textures, and [phase accumulators](#phase-accumulators) for jump-free speed changes.
 
@@ -14,7 +14,7 @@ In exchange for not being drop-in ISF, the dialect gets you things ISF can't exp
 | **Filter** | Has at least one `image` input | Processes an input image (blur, color grade, distort) |
 | **Transition** | Has `Transition` category + image inputs | Blends two images via a `progress` parameter (dissolve, wipe, push) |
 
-Varda classifies shaders automatically from their metadata — no manual type annotation needed.
+Varda classifies shaders automatically from their metadata.
 
 ## Metadata Format
 
@@ -95,11 +95,11 @@ Declare them in the metadata:
 
 Then use in the shader: `float angle = PHASE_TIME_0 * 6.28318;` for smooth rotation that doesn't jump when the user adjusts speed.
 
-The value integrated is the parameter's **modulated** value — the same one the shader reads from the user-parameter buffer. Routing an audio band or LFO at `rotation_speed` therefore changes how fast the phase advances, and because integration is continuous the animation speeds up and slows down without ever jumping. A shader should read `PHASE_TIME_N` rather than the raw parameter for anything that advances over time; reading the raw parameter and multiplying by `TIME` reintroduces the jump.
+The value integrated is the parameter's **modulated** value, its the same one the shader reads from the user-parameter buffer. Routing an audio band or LFO at `rotation_speed` therefore changes how fast the phase advances, and because integration is continuous the animation speeds up and slows down without ever jumping. A shader should read `PHASE_TIME_N` rather than the raw parameter for anything that advances over time; reading the raw parameter and multiplying by `TIME` reintroduces the jump.
 
 #### Combining two rates
 
-Multiplying an accumulator by a parameter — `PHASE_TIME_0 * rot_speed` — reintroduces the same jump, because it scales an ever-growing phase by a live value. When a per-element rate should ride on top of a master speed, fold both into one accumulator with `MULTIPLY_BY`:
+Multiplying an accumulator by a parameter like `PHASE_TIME_0 * rot_speed` reintroduces the same jump, because it scales an ever-growing phase by a live value. When a per-element rate should ride on top of a master speed, fold both into one accumulator with `MULTIPLY_BY`:
 
 ```json
 "PHASE_INPUTS": [
@@ -110,7 +110,7 @@ Multiplying an accumulator by a parameter — `PHASE_TIME_0 * rot_speed` — rei
 
 `PHASE_TIME_1` now accumulates `dt × speed × rot_speed × 0.2`, so the shader writes `float rotAngle = PHASE_TIME_1;` and both parameters stay smooth and modulatable. `MULTIPLY_BY` also takes an array when a rate depends on three parameters: `"MULTIPLY_BY": ["time_scale", "flow_speed"]`.
 
-Two rules follow from this. Never multiply `PHASE_TIME_N` by a user parameter, and never apply a parameter that already drives an accumulator a second time in the shader body — the phase already contains it, so applying it again makes the response quadratic in that parameter.
+Two rules follow from this. Never multiply `PHASE_TIME_N` by a user parameter, and never apply a parameter that already drives an accumulator a second time in the shader body. Since the phase already contains it, applying it again makes the response quadratic in that parameter.
 
 The first rule catches you out most often when you never wrote the multiply. Adding phase into a coordinate that something else scales later is the same thing:
 
@@ -127,11 +127,11 @@ float pattern = fract(coord * line_count + PHASE_TIME_1);   // MULTIPLY_BY: line
 
 The lines then travel at the same screen speed however many of them there are, which is what the original multiply gave you, without the jump. `bars.fs`, `lines.fs` and `scanlines.fs` all shipped the broken form.
 
-`tests/shader_param_contract_guard.rs` fails the build on all of these. It walks the whole multiplicative chain, so a parameter hiding behind a constant (`PHASE_TIME_0 * 0.5 * look_speed`) is caught, and it follows local aliases within a function, so `float t = PHASE_TIME_0;` buys you nothing. It stops at function calls, because `sin(PHASE_TIME_0) * amount` is legitimate — that scales an amplitude, not a phase. What it cannot see is a phase passed into a function as an argument and scaled in the callee.
+`tests/shader_param_contract_guard.rs` fails the build on all of these. It walks the whole multiplicative chain, so a parameter hiding behind a constant (`PHASE_TIME_0 * 0.5 * look_speed`) is caught, and it follows local aliases within a function, so `float t = PHASE_TIME_0;` buys you nothing. It stops at function calls, because `sin(PHASE_TIME_0) * amount` is legitimate. What it cannot see is a phase passed into a function as an argument and scaled in the callee.
 
 #### Rates that are affine, not products
 
-`MULTIPLY_BY` covers `speed × amount`. It does not cover `speed × (1 + k · amount)`, the shape you want when `amount` at zero should still leave the base motion running — the product form would stop the animation dead there.
+`MULTIPLY_BY` covers `speed × amount`. It does not cover `speed × (1 + k · amount)`, the shape you want when `amount` at zero should still leave the base motion running since the product form would stop the animation dead there.
 
 Integration is linear, so split the term across two accumulators and add them in the shader:
 
@@ -148,13 +148,13 @@ float t = PHASE_TIME_0 + PHASE_TIME_1;   // = ∫ flow_speed·(1 + 0.8·agitatio
 
 That is exact, and continuous in both parameters. `big_bang.fs` does this.
 
-A factor that varies across the image but not over time — a per-cell hash, say — stays *outside* the integral, because only the parameter needs to be inside it. `char_cycle.fs` gives every cell its own rate with `PHASE_TIME_0 + h * PHASE_TIME_1`.
+A factor that varies across the image but not over time such as a per-cell hash stays *outside* the integral, because only the parameter needs to be inside it. `char_cycle.fs` gives every cell its own rate with `PHASE_TIME_0 + h * PHASE_TIME_1`.
 
 The cost is one slot per affine term, and there are only four.
 
 #### Bounding an accumulator
 
-An accumulator grows without limit, which is correct for anything that should cycle forever — a hue, a scroll offset, an angle that wraps. It is wrong for anything that must stay within a range. Feeding an unbounded phase straight into a camera angle is how `dull_skull` used to orbit off behind its own backdrop and render black for a third of every cycle.
+An accumulator grows without limit, which is correct for anything that should cycle forever such as a hue, a scroll offset, or an angle that wraps. It is wrong for anything that must stay within a range. Feeding an unbounded phase straight into a camera angle is how `dull_skull` used to orbit off behind its own backdrop and render black for a third of every cycle.
 
 Wrap the phase in a periodic function and scale *that* by the amplitude parameter:
 
@@ -166,7 +166,7 @@ This is not the forbidden `PHASE_TIME_N * param`: the sine is already bounded, s
 
 #### Prefer a rate to an amplitude for anything that will be automated
 
-Passing the guard is not the same as feeling right under an LFO. An amplitude parameter sets *where* something is; automating it moves that thing out and back at the LFO's rate, which reads as sloshing or stutter. A rate parameter can only make motion faster or slower, so no automation of it — however fast, however often reversed — can relocate anything.
+Passing the guard is not the same as feeling right under an LFO. An amplitude parameter sets *where* something is; automating it moves that thing out and back at the LFO's rate, which reads as sloshing or stutter. A rate parameter can only make motion faster or slower, so no automation of it now matter how fast, or however often reversed, can relocate anything.
 
 `liquid_light.fs`'s Agitation was built both ways. As an amplitude on the domain-warp gain it was continuous and passed every guard, but a 1 Hz triangle LFO drove per-frame change to 13.5× the parked-fader baseline. Rebuilt as a mixing *rate* on accumulator slot 1 — advancing the inner warp stages against the outer one, so the fine structure keeps reorganising — the same LFO measures 0.97×, indistinguishable from leaving the fader alone, while still spanning a 10.5× range in mixing speed.
 

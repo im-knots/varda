@@ -194,7 +194,7 @@ impl InteractiveWindow {
             });
             self.blit_pipeline.render(&mut pass, &bind_group);
         }
-        context.queue.submit(std::iter::once(encoder.finish()));
+        context.submit(std::iter::once(encoder.finish()));
         frame.present();
         self.window.request_redraw();
     }

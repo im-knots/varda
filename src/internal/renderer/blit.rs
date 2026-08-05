@@ -36,7 +36,10 @@ pub struct BlitPipeline {
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
     /// Pre-allocated ring buffer for per-draw params (avoids per-frame allocation).
-    ring_buffer: wgpu::Buffer,
+    /// Grows on demand via [`Self::ensure_ring_slots`].
+    ring_buffer: RefCell<wgpu::Buffer>,
+    /// Slots currently allocated in `ring_buffer`.
+    ring_slots: Cell<usize>,
     /// Byte stride between slots (aligned to device minimum).
     ring_stride: u64,
 }
@@ -199,7 +202,8 @@ impl BlitPipeline {
             bind_group_layout,
             sampler,
             params_buffer,
-            ring_buffer,
+            ring_buffer: RefCell::new(ring_buffer),
+            ring_slots: Cell::new(MAX_DRAW_SLOTS as usize),
             ring_stride,
         })
     }
@@ -343,6 +347,24 @@ impl BlitPipeline {
         self.render(render_pass, bind_group);
     }
 
+    /// Grow the params ring buffer so it holds at least `needed` slots.
+    ///
+    /// Call once before a batch, not per draw: growing mid-batch would leave
+    /// already-created bind groups pointing at the old buffer.
+    pub fn ensure_ring_slots(&self, device: &wgpu::Device, needed: usize) {
+        if needed <= self.ring_slots.get() {
+            return;
+        }
+        let new_slots = needed.next_power_of_two().max(MAX_DRAW_SLOTS as usize);
+        *self.ring_buffer.borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Blit Params Ring Buffer"),
+            size: new_slots as u64 * self.ring_stride,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.ring_slots.set(new_slots);
+    }
+
     /// Write blit params into a slot of the pre-allocated ring buffer.
     /// Call once per draw before `create_bind_group_for_slot`.
     pub fn write_params_slot(
@@ -355,7 +377,7 @@ impl BlitPipeline {
         premultiplied: bool,
     ) {
         queue.write_buffer(
-            &self.ring_buffer,
+            &self.ring_buffer.borrow(),
             slot as u64 * self.ring_stride,
             bytemuck::cast_slice(&[BlitParams {
                 opacity,
@@ -383,6 +405,7 @@ impl BlitPipeline {
     ) -> wgpu::BindGroup {
         let param_size = std::mem::size_of::<BlitParams>() as u64;
         let offset = slot as u64 * self.ring_stride;
+        let ring = self.ring_buffer.borrow();
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blit Bind Group (ring)"),
             layout: &self.bind_group_layout,
@@ -398,7 +421,7 @@ impl BlitPipeline {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.ring_buffer,
+                        buffer: &ring,
                         offset,
                         size: Some(NonZeroU64::new(param_size).unwrap()),
                     }),
@@ -446,7 +469,10 @@ pub struct CompositeBlitPipeline {
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
     /// Pre-allocated ring buffer for per-draw params (avoids per-frame allocation).
-    ring_buffer: wgpu::Buffer,
+    /// Grows on demand via [`Self::ensure_ring_slots`].
+    ring_buffer: RefCell<wgpu::Buffer>,
+    /// Slots currently allocated in `ring_buffer`.
+    ring_slots: Cell<usize>,
     /// Byte stride between slots (aligned to device minimum).
     ring_stride: u64,
 }
@@ -603,7 +629,8 @@ impl CompositeBlitPipeline {
             bind_group_layout,
             sampler,
             params_buffer,
-            ring_buffer,
+            ring_buffer: RefCell::new(ring_buffer),
+            ring_slots: Cell::new(MAX_DRAW_SLOTS as usize),
             ring_stride,
         })
     }
@@ -683,6 +710,24 @@ impl CompositeBlitPipeline {
         render_pass.draw(0..3, 0..1);
     }
 
+    /// Grow the params ring buffer so it holds at least `needed` slots.
+    ///
+    /// Call once before a batch, not per draw: growing mid-batch would leave
+    /// already-created bind groups pointing at the old buffer.
+    pub fn ensure_ring_slots(&self, device: &wgpu::Device, needed: usize) {
+        if needed <= self.ring_slots.get() {
+            return;
+        }
+        let new_slots = needed.next_power_of_two().max(MAX_DRAW_SLOTS as usize);
+        *self.ring_buffer.borrow_mut() = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Composite Params Ring Buffer"),
+            size: new_slots as u64 * self.ring_stride,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.ring_slots.set(new_slots);
+    }
+
     /// Write composite params into a slot of the pre-allocated ring buffer.
     /// Call once per draw before `create_bind_group_for_slot`.
     #[allow(clippy::too_many_arguments)]
@@ -697,7 +742,7 @@ impl CompositeBlitPipeline {
         premultiplied: bool,
     ) {
         queue.write_buffer(
-            &self.ring_buffer,
+            &self.ring_buffer.borrow(),
             slot as u64 * self.ring_stride,
             bytemuck::cast_slice(&[CompositeParams {
                 opacity,
@@ -726,6 +771,7 @@ impl CompositeBlitPipeline {
     ) -> wgpu::BindGroup {
         let param_size = std::mem::size_of::<CompositeParams>() as u64;
         let offset = slot as u64 * self.ring_stride;
+        let ring = self.ring_buffer.borrow();
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Composite Bind Group (ring)"),
             layout: &self.bind_group_layout,
@@ -745,7 +791,7 @@ impl CompositeBlitPipeline {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.ring_buffer,
+                        buffer: &ring,
                         offset,
                         size: Some(NonZeroU64::new(param_size).unwrap()),
                     }),

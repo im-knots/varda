@@ -189,6 +189,26 @@ impl Effect {
         })
     }
 
+    /// This effect's stable UUID.
+    pub fn uuid(&self) -> &str {
+        &self.uuid
+    }
+
+    /// The cached `fx_{uuid}` prefix modulation targets are keyed under.
+    pub fn param_prefix(&self) -> &str {
+        &self.param_prefix
+    }
+
+    /// Set the UUID, used during scene restore to preserve identity.
+    ///
+    /// Rebuilds the modulation prefix in step. Assignments are stored as
+    /// `fx_{uuid}:{param}`, so an effect that comes back under a different
+    /// prefix than it was saved with loses every modulation routed at it.
+    pub fn set_uuid(&mut self, uuid: String) {
+        self.param_prefix = format!("fx_{uuid}");
+        self.uuid = uuid;
+    }
+
     /// Apply this effect to an input texture, outputting to target texture
     /// Optionally applies modulation to effect parameters using the given prefix
     ///
@@ -338,7 +358,7 @@ impl Effect {
                     // Multipass intermediate passes MUST submit immediately —
                     // update_uniforms() overwrites the same buffer each iteration,
                     // so batching would cause all passes to see the last pass's data.
-                    context.queue.submit(std::iter::once(encoder.finish()));
+                    context.submit(std::iter::once(encoder.finish()));
 
                     if let Some(pb) = self.pass_buffers.get_mut(&target_name) {
                         pb.swap();

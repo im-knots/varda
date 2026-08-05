@@ -66,13 +66,13 @@ Bezier edits work in raw, un-snapped coordinates so handles move with full sub-g
 
 ### Combining Surfaces (Multi-Contour)
 
-Select two or more surfaces and click **🔗 Combine** (G) to merge them into a single surface. Varda computes a polygon union: overlapping regions fuse into one outline, while disjoint regions are kept as **extra contours** on the combined surface. All contours share one content source and color, and every contour shows the slice of that source falling over its area (a bounding-box UV fill across the combined bounds) — useful for treating several separate shapes (e.g. the arms of a mandala, or a row of panels) as one routing target.
+Select two or more surfaces and click **🔗 Combine** (G) to merge them into a single surface. Varda computes a polygon union: overlapping regions fuse into one outline, while disjoint regions are kept as **extra contours** on the combined surface. All contours share one content source and color, and every contour shows the slice of that source falling over its area (a bounding-box UV fill across the combined bounds) this is useful for treating several separate shapes (e.g. the arms of a mandala, or a row of panels) as one routing target.
 
 A combined (multi-contour) surface does **not** carry a per-surface warp: a single warp mesh can't describe disjoint contours, so warp controls are unavailable while a surface has extra contours. To warp individual pieces, keep them as separate surfaces.
 
 ### Stacking Order (Layers)
 
-When surfaces overlap, their **stacking order** decides which draws on top. The order is **global** — identical across the stage canvas and every output — so what you arrange in the editor is exactly what projects. Surfaces draw bottom-to-top.
+When surfaces overlap, their **stacking order** decides which draws on top. The order is **global** so what you arrange in the editor is exactly what projects. Surfaces draw bottom-to-top.
 
 - In the surface list, use the per-row **▲ / ▼** buttons to nudge a surface toward the **front** (top) or **back** (bottom) one step at a time (disabled at the extremes).
 - With a surface selected, use **⤒ Front** / **⤓ Back** in the toolbar to jump it to the top or bottom of the stack.
@@ -81,13 +81,13 @@ The surface list is ordered bottom-layer first. Stacking order is saved with the
 
 ### Warp Calibration
 
-Warp is a property of the **surface** — one surface owns one warp. Edit it in the
+Warp is a property of the **surface**. Edit it in the
 **stage editor's bottom detail bar**: open the Stage Editor and select a single
 surface; the bottom bar shows that surface's warp editor.
 
 By default the warp is **🔗 bound to the surface shape** (auto-warp): the grid
 conforms to the surface's polygon or circle outline and follows it as you edit
-the shape. Uncheck **🔗 Bind to shape** to unbind — this freezes the current
+the shape. Uncheck **🔗 Bind to shape** to unbind. This freezes the current
 shape-conforming grid as an editable starting point and unlocks the manual
 controls below for fine-tuning. Re-checking it re-derives the grid from the
 shape (discarding manual edits).
@@ -110,7 +110,7 @@ To align the projectors themselves, use the per-output **🔧 Calibrate** select
 
 #### Mesh warp (interior control points)
 
-A 4-corner pin is linear — it can keystone a flat surface but cannot correct a
+A 4-corner pin is linear. It can keystone a flat surface but cannot correct a
 bulge in the middle (a cylinder, a bowed wall, a draped cloth). For that, raise
 the surface's grid resolution above 2×2 using the **grid − / +** steppers in the
 bottom-bar warp editor. This promotes the corner-pin into an N×M mesh, preserving
@@ -127,7 +127,7 @@ the current shape, and adds draggable interior points:
 A straight mesh grid approximates a curve with many small facets. For genuinely
 smooth deformation (a cylinder, a bowed wall, a draped cloth) click **〰 Curve**
 in the bottom-bar warp editor (available while unbound). This converts the warp
-into a **bezier patch grid** — the same control layout, but each cell edge is a
+into a **bezier patch grid**. Each cell edge is a
 cubic bezier with tangent handles:
 
 1. Click **〰 Curve** — the current warp becomes a bezier cage of the same shape
@@ -177,11 +177,11 @@ Different surfaces can show different content simultaneously:
 - Surface "Logo" → **Deck** (a specific deck with your logo shader)
 - Surface "Dome" → **Domemaster** (fisheye projection)
 
-This enables independent visual zones — a club might have a main screen, side panels, and a ceiling projection each showing different content from the same engine.
+This enables independent visual zones. For example a club might have a main screen, side panels, and a ceiling projection each showing different content from the same engine.
 
 ### Mesh Warp
 
-For complex surface geometry beyond 4-point corner-pin, surfaces support **arbitrary UV mesh warp** — a dense grid of XY+UV control points with GPU hardware interpolation. Mesh warp is a strict superset of corner-pin (corner-pin is a 2×2 mesh).
+For complex surface geometry beyond 4-point corner-pin, surfaces support **arbitrary UV mesh warp** as a dense grid of XY+UV control points with GPU hardware interpolation. Mesh warp is a strict superset of corner-pin (corner-pin is a 2×2 mesh).
 
 Mesh warp can be hand-edited on-canvas in the stage editor's bottom-bar warp editor (see [Mesh warp](#mesh-warp-interior-control-points) above), is used automatically by the dome slicer, and can be loaded from external calibration tools.
 
@@ -195,7 +195,7 @@ Varda includes built-in dome projection: a domemaster renderer, an auto-slicer f
 
 ### Domemaster Format
 
-A domemaster is a circular fisheye image using **equidistant azimuthal projection** — the standard for planetarium and dome content. The center maps to the dome's zenith, the edge to the horizon.
+A domemaster is a circular fisheye image using **equidistant azimuthal projection**. The center maps to the dome's zenith, the edge to the horizon.
 
 | Parameter | Description |
 |-----------|-------------|
@@ -242,7 +242,7 @@ When a projector preset is active, each projector's coverage is drawn as a semi-
 
 ### Content Rotation
 
-Real-time rotation applied in the GPU shader — does not recompute meshes:
+Real-time rotation applied in the GPU shader, it does not recompute meshes:
 
 | Control | Description |
 |---------|-------------|
@@ -256,7 +256,7 @@ All three axes are **MIDI-mappable** for live performance. Rotation order: Roll 
 
 > **🧪 Experimental.** Auto-detection (both file import and live camera) is under active development. Detection results vary with lighting and source quality — review and refine detected surfaces manually before going live.
 
-Instead of drawing surfaces by hand, Varda can detect them automatically — either from an imported file or from a live camera pointed at the stage.
+Instead of drawing surfaces by hand, Varda can detect them automatically from an imported file or from a live camera pointed at the stage.
 
 #### From a File
 

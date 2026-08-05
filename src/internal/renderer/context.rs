@@ -47,6 +47,8 @@ pub struct GpuContext {
     /// Catches GPU errors that would otherwise abort the process, and attributes
     /// them to whatever was being drawn. See spec/error-handling.md.
     pub errors: super::gpu_guard::GpuErrorGuard,
+    /// Counts command buffer commits. Read once per frame by the frame loop.
+    pub submits: super::submit_stats::SubmitCounter,
 }
 
 /// Window surface for presentation — surface, swapchain config, and size.
@@ -203,6 +205,7 @@ impl GpuContext {
             compositing_format: COLOR_PATH_FORMAT,
             timestamp_supported,
             errors,
+            submits: super::submit_stats::SubmitCounter::new(),
         };
         let win_surface = WindowSurface {
             surface,
@@ -306,7 +309,20 @@ impl GpuContext {
             compositing_format: COLOR_PATH_FORMAT,
             timestamp_supported,
             errors,
+            submits: super::submit_stats::SubmitCounter::new(),
         })
+    }
+
+    /// Submit command buffers, counting the commit.
+    ///
+    /// Prefer this over `context.queue.submit()` anywhere on the per-frame path
+    /// so the submit tally stays accurate. See `submit_stats`.
+    pub fn submit<I>(&self, command_buffers: I) -> wgpu::SubmissionIndex
+    where
+        I: IntoIterator<Item = wgpu::CommandBuffer>,
+    {
+        self.submits.record();
+        self.queue.submit(command_buffers)
     }
 
     /// Create a texture for rendering
@@ -895,7 +911,7 @@ impl OutputWindow {
             self.blit_pipeline.render(&mut pass, &blit_bg);
         }
 
-        context.queue.submit(std::iter::once(encoder.finish()));
+        context.submit(std::iter::once(encoder.finish()));
         output.present();
     }
 

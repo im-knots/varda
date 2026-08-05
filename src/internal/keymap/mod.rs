@@ -644,7 +644,7 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
         ["deck", uuid, "effect", fx_uuid, "param", name] => {
             if let Some((ch, dk)) = mixer.find_deck_by_uuid(uuid) {
                 let slot = &mut mixer.channels_mut()[ch].decks[dk];
-                if let Some(ek) = slot.deck.effects.iter().position(|e| e.uuid == *fx_uuid) {
+                if let Some(ek) = slot.deck.effects.iter().position(|e| e.uuid() == *fx_uuid) {
                     if let Some(val) = slot.deck.effects[ek].params.values.get_mut(*name) {
                         toggle_param_value(val);
                         return true;
@@ -659,7 +659,7 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
                 if let Some(ek) = mixer.channels_mut()[ch]
                     .effects
                     .iter()
-                    .position(|e| e.uuid == *fx_uuid)
+                    .position(|e| e.uuid() == *fx_uuid)
                 {
                     if let Some(val) = mixer.channels_mut()[ch].effects[ek]
                         .params
@@ -676,7 +676,7 @@ pub fn apply_keyboard_toggle_param(mixer: &mut crate::mixer::Mixer, path: &str) 
         // master/effect/<effect_uuid>/param/<name>
         ["master", "effect", fx_uuid, "param", name] => {
             let effects = mixer.master_effects_mut();
-            if let Some(ek) = effects.iter().position(|e| e.uuid == *fx_uuid) {
+            if let Some(ek) = effects.iter().position(|e| e.uuid() == *fx_uuid) {
                 if let Some(val) = effects[ek].params.values.get_mut(*name) {
                     toggle_param_value(val);
                     return true;

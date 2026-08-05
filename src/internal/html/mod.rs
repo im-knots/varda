@@ -448,7 +448,7 @@ mod smoke_tests {
                 depth_or_array_layers: 1,
             },
         );
-        gpu.queue.submit(Some(encoder.finish()));
+        gpu.submit(Some(encoder.finish()));
 
         let (tx, rx) = std::sync::mpsc::channel();
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
