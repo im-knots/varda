@@ -302,16 +302,29 @@ fn render_capture_controls(
         );
     });
 
+    // Crop is a sub-section of its own: the params column is only 200–280px, too
+    // narrow to hold four sliders side by side, so they get a row each. Labels stay
+    // single-character so every slider starts at the same x.
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Crop").strong());
+        if ui.small_button("Reset").clicked() {
+            send(actions, "crop_x", 0.0);
+            send(actions, "crop_y", 0.0);
+            send(actions, "crop_w", 1.0);
+            send(actions, "crop_h", 1.0);
+        }
+    });
+
     let crop_sliders: [(&str, &str, f32); 4] = [
         ("X", "crop_x", capture.crop[0]),
         ("Y", "crop_y", capture.crop[1]),
         ("W", "crop_w", capture.crop[2]),
         ("H", "crop_h", capture.crop[3]),
     ];
-    ui.horizontal(|ui| {
-        ui.label("Crop:");
-        for (label, name, current) in crop_sliders {
-            let mut v = current;
+    for (label, name, current) in crop_sliders {
+        let mut v = current;
+        ui.horizontal(|ui| {
             ui.label(label);
             let resp = ui.add(
                 egui::Slider::new(&mut v, 0.0..=1.0)
@@ -328,15 +341,10 @@ fn render_capture_controls(
                 data,
                 actions,
             );
-        }
-        if ui.small_button("Reset").clicked() {
-            send(actions, "crop_x", 0.0);
-            send(actions, "crop_y", 0.0);
-            send(actions, "crop_w", 1.0);
-            send(actions, "crop_h", 1.0);
-        }
-    });
+        });
+    }
 
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
         let mut cursor = capture.show_cursor;
         let resp = ui.checkbox(&mut cursor, "Cursor");
