@@ -1,6 +1,6 @@
 # Varda
 
-Varda is a free, open-source live visual mixer and broadcast router for Linux, macOS, and Windows, written in Rust. It routes video sources like shaders, video files, cameras, NDI, SRT, HLS/DASH streams, and HTML/web pages through a broadcast-style signal matrix (Deck → Channel → Mixer → Surface → Output), composites them with per-parameter modulation and ISF effect chains, and delivers the result to projectors, network streams, recordings, and the web.
+Varda is a free, open-source live visual mixer and broadcast router for Linux, macOS, and Windows, written in Rust. It routes video sources like shaders, video files, cameras, NDI, SRT, HLS/DASH streams, screen and window captures, and HTML/web pages through a broadcast-style signal matrix (Deck → Channel → Mixer → Surface → Output), composites them with per-parameter modulation and ISF effect chains, and delivers the result to projectors, network streams, recordings, and the web.
 
 Varda is built for live VJ performance, dome projection, multi-projector installations, and headless media serving and is controlled via MIDI, OSC, keyboard shortcuts, or a full REST/WebSocket API.
 
@@ -33,11 +33,13 @@ Here you will find everything you need to start throwing those pixels.
 ### Part II — Performing
 
 - **3. [Library Panel](03-library-panel.md)** — content browser
-  - [Sections](03-library-panel.md#sections) — generators, effects, images, video, cameras, streams, HTML, presets
+  - [Sections](03-library-panel.md#sections) — generators, effects, images, video, cameras, screen capture, taps, streams, HTML, presets
   - [Drag-and-Drop](03-library-panel.md#drag-and-drop) — drop onto a channel to create a deck
   - [Stream Sources](03-library-panel.md#stream-sources) — NDI/SRT/HLS/DASH/RTMP grouping, status indicators
   - [HTML Sources](03-library-panel.md#html-sources) — add web page URLs, drag-to-channel
   - [Cameras](03-library-panel.md#cameras) — rescan, resolution selector
+  - [Screen Capture](03-library-panel.md#screen-capture) — displays and windows, rescan, permission prompt
+  - [Taps](03-library-panel.md#taps) — Varda's own master program and channels as sources
 - **4. [Performance & Automation](04-performance.md)**
   - [Video Playback](04-performance.md#video-playback) — loop modes, speed, scrub, HAP codecs, ping-pong cache
   - [Deck Auto-Transitions](04-performance.md#deck-auto-transitions) — timed/clip-end triggers, transition shaders
@@ -84,6 +86,8 @@ Here you will find everything you need to start throwing those pixels.
   - [Stream Input Reliability](09-streaming-and-io.md#stream-input-reliability) — dedup, stall detection, reconnect
   - [HTML / Web Content](09-streaming-and-io.md#html--web-content)
   - [Syphon](09-streaming-and-io.md#syphon-macos)
+  - [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture) — displays and windows as decks, permissions, crop and rate, capturing Varda itself
+  - [Program Tap](09-streaming-and-io.md#program-tap) — Varda's own output as a source, one frame behind, feedback loops
 - **10. [Resolution, Settings & Monitoring](10-resolution-and-monitoring.md)**
   - [Render Resolution](10-resolution-and-monitoring.md#render-resolution) — presets, custom sizes
   - [Per-Deck Scaling](10-resolution-and-monitoring.md#per-deck-scaling) — fill, fit, stretch, center

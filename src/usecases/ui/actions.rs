@@ -80,6 +80,11 @@ pub enum LibraryDrag {
     Camera(crate::camera::CameraId),
     /// Depth sensor from library (`DepthSensorId`)
     DepthSensor(crate::depth::DepthSensorId),
+    /// Screen or window capture target, addressed by name rather than by
+    /// platform handle so the payload stays valid across a rescan.
+    ScreenCapture(crate::scene::CaptureTargetConfig),
+    /// Varda's own program or a channel composite. See spec/program-tap.md.
+    Tap(crate::scene::TapSourceConfig),
     /// NDI network source (source name)
     Ndi(String),
     /// Syphon server (server name)

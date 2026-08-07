@@ -189,6 +189,8 @@ pub(crate) mod tests {
                         point_cloud_params: None,
                         has_depth_prepro: false,
                         depth_prepro_params: None,
+                        screen_capture: None,
+                        tap: None,
                         opacity: 1.0,
                         effective_opacity: 1.0,
                         blend_mode: BlendMode::Normal,
@@ -293,6 +295,7 @@ pub(crate) mod tests {
                 devices: vec![("FaceTime".into(), 0u32)],
             },
             depth_sensors: crate::engine::DepthSensorSnapshot { devices: vec![] },
+            screen_capture: crate::engine::types::ScreenCaptureSnapshot::default(),
             clock: ClockSnapshot {
                 bpm: Some(120.0),
                 beat_phase: 0.0,

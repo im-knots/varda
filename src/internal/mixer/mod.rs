@@ -125,6 +125,12 @@ pub struct Mixer {
     effect_ping_texture: wgpu::Texture,
     effect_ping_view: wgpu::TextureView,
 
+    /// Holds the master program *before* tonemap and LUT, kept only while some
+    /// deck taps it. Every deck renders before the master composite, so a
+    /// single buffer already gives uniform N-1 semantics with no copy.
+    /// See spec/program-tap.md.
+    master_tap: Option<(wgpu::Texture, wgpu::TextureView)>,
+
     /// Master effect chain (applied to final composite)
     master_effects: Vec<Effect>,
 
@@ -254,6 +260,7 @@ impl Mixer {
             composite_view,
             effect_ping_texture,
             effect_ping_view,
+            master_tap: None,
             master_effects: Vec::new(),
             frame_count: 0,
             gpu_load_ratio: 1.0,
@@ -332,11 +339,116 @@ impl Mixer {
             .effect_ping_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Tap targets are dropped rather than resized; `sync_tap_targets`
+        // reallocates them at the new size on the next frame.
+        self.master_tap = None;
         for channel in &mut self.channels {
             channel.resize(context, width, height);
         }
         self.sub_mix_cache.clear();
         self.tonemapped_channel_cache.clear();
+    }
+
+    /// Resolve every tap deck for this frame.
+    ///
+    /// Allocates the targets that are actually read, exchanges each one with
+    /// the live composite so reads and writes never collide, and binds the
+    /// resulting views onto the tapping decks. Must run before any deck
+    /// renders — that ordering is what makes a tap uniformly one frame old
+    /// instead of depending on where the tapping deck sits.
+    /// See spec/program-tap.md.
+    pub fn prepare_taps(&mut self, context: &GpuContext) {
+        let mut master_tapped = false;
+        let mut tapped_channels = std::collections::HashSet::new();
+        for channel in &self.channels {
+            for slot in &channel.decks {
+                match slot.deck.tap.as_ref().map(|t| &t.source) {
+                    Some(crate::deck::TapSource::MasterProgram) => master_tapped = true,
+                    Some(crate::deck::TapSource::Channel(uuid)) => {
+                        tapped_channels.insert(uuid.clone());
+                    }
+                    None => {}
+                }
+            }
+        }
+
+        self.sync_tap_targets(context, master_tapped, &tapped_channels);
+        for channel in &mut self.channels {
+            channel.swap_tap();
+        }
+
+        // Cloned up front because binding borrows the channels mutably and so
+        // cannot also read the channel that is being tapped.
+        let master_view = self.master_tap.as_ref().map(|(_, v)| v.clone());
+        let channel_views: std::collections::HashMap<String, wgpu::TextureView> = self
+            .channels
+            .iter()
+            .filter_map(|ch| Some((ch.uuid().to_string(), ch.tap_view()?.clone())))
+            .collect();
+        let labels: Vec<(String, String)> = self
+            .channels
+            .iter()
+            .map(|ch| (ch.uuid().to_string(), ch.name.clone()))
+            .collect();
+
+        for channel in &mut self.channels {
+            for slot in &mut channel.decks {
+                let Some(tap) = slot.deck.tap.as_ref() else {
+                    continue;
+                };
+                let (view, label) = match &tap.source {
+                    crate::deck::TapSource::MasterProgram => {
+                        (master_view.clone(), "Master Program".to_string())
+                    }
+                    crate::deck::TapSource::Channel(uuid) => {
+                        (channel_views.get(uuid).cloned(), tap.source.label(&labels))
+                    }
+                };
+                slot.deck.external_source_view = view;
+                // Renaming a channel has to move the tap deck's label with it,
+                // and this is the only place that sees both.
+                let name = format!("🔁 {label}");
+                if slot.deck.source_name() != name {
+                    slot.deck.set_source_name(name);
+                }
+            }
+        }
+    }
+
+    /// Allocate tap targets for exactly the sources some deck is tapping, and
+    /// release the rest. A scene with no taps therefore allocates nothing.
+    fn sync_tap_targets(
+        &mut self,
+        context: &GpuContext,
+        master_tapped: bool,
+        tapped_channels: &std::collections::HashSet<String>,
+    ) {
+        let width = self.composite_texture.width();
+        let height = self.composite_texture.height();
+
+        if master_tapped {
+            if self.master_tap.is_none() {
+                let tex = context.create_compositing_texture(width, height);
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                self.master_tap = Some((tex, view));
+            }
+        } else {
+            self.master_tap = None;
+        }
+
+        for channel in &mut self.channels {
+            if tapped_channels.contains(channel.uuid()) {
+                channel.ensure_tap(context, width, height);
+            } else {
+                channel.clear_tap();
+            }
+        }
+    }
+
+    /// True when no tap target is allocated anywhere. Used by tests to pin the
+    /// "free when unused" guarantee.
+    pub fn has_no_tap_targets(&self) -> bool {
+        self.master_tap.is_none() && self.channels.iter().all(|c| c.tap_view().is_none())
     }
 
     /// Clear the sub-mix texture cache (e.g. after resolution change).

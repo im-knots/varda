@@ -60,11 +60,7 @@ pub(super) fn render_notifications(
         );
 
         // Message text (truncated)
-        let msg = if notif.message.len() > 60 {
-            format!("{}…", &notif.message[..59])
-        } else {
-            notif.message.clone()
-        };
+        let msg = super::utils::truncate_chars(&notif.message, 60);
         painter.text(
             egui::pos2(toast_rect.left() + 12.0, toast_rect.top() + 22.0),
             egui::Align2::LEFT_TOP,

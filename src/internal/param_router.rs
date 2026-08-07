@@ -302,6 +302,19 @@ pub fn apply_param_by_path(
                 .set_scaling_mode(scaling_mode_from_value(value));
             Ok(())
         }
+        // Screen/window capture params. The deck holds the desired config and
+        // the render loop pushes it to the capture manager, so every path here
+        // is MIDI-learnable, OSC-addressable, and modulatable for free.
+        // See spec/screen-capture.md § Parameters and Router Paths.
+        ["deck", uuid, "capture", name] => {
+            let (ch, dk) = mixer
+                .find_deck_by_uuid(uuid)
+                .ok_or_else(|| ParamRouteError::unknown_entity(EntityKind::Deck, uuid))?;
+            let applied = mixer.channels_mut()[ch].decks[dk]
+                .deck
+                .set_capture_param(name, clamp_norm(value));
+            ok_or_state(applied, path, "deck is not a screen capture source")
+        }
         ["deck", uuid, "depth", name] => {
             let (ch, dk) = mixer
                 .find_deck_by_uuid(uuid)

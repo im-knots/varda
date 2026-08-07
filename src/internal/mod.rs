@@ -23,6 +23,7 @@ pub mod recording;
 pub mod registry;
 pub mod renderer;
 pub mod scene;
+pub mod screen_capture;
 pub mod stream;
 pub mod surface;
 #[cfg(target_os = "macos")]

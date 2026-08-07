@@ -171,6 +171,37 @@ pub(super) fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &m
                     });
                 }
 
+                let capture_key = egui::Id::new(super::library::CAPTURE_DND_KEY);
+                let capture_target: Option<crate::scene::CaptureTargetConfig> =
+                    ctx.memory(|mem| mem.data.get_temp(capture_key));
+                if let Some(target) = capture_target {
+                    log::info!(
+                        "Library drop (deferred): capture '{}' -> ch {channel_uuid}",
+                        target.label()
+                    );
+                    actions.commands.push(EngineCommand::AddScreenCaptureDeck {
+                        channel_uuid: channel_uuid.clone(),
+                        target,
+                        rate: None,
+                        crop: None,
+                        show_cursor: None,
+                        // Per-target default resolved engine-side: displays
+                        // exclude Varda, windows do not.
+                        exclude_varda: None,
+                    });
+                }
+
+                let tap_key = egui::Id::new(super::library::TAP_DND_KEY);
+                let tap_source: Option<crate::scene::TapSourceConfig> =
+                    ctx.memory(|mem| mem.data.get_temp(tap_key));
+                if let Some(source) = tap_source {
+                    log::info!("Library drop (deferred): tap -> ch {channel_uuid}");
+                    actions.commands.push(EngineCommand::AddTapDeck {
+                        channel_uuid: channel_uuid.clone(),
+                        source,
+                    });
+                }
+
                 let ndi_key = egui::Id::new("__lib_dnd_ndi_name");
                 let ndi_name: Option<String> = ctx.memory(|mem| mem.data.get_temp(ndi_key));
                 if let Some(ndi_name) = ndi_name {
@@ -317,6 +348,14 @@ pub(super) fn handle_library_dnd(ctx: &egui::Context, data: &UIData, actions: &m
                 mem.data.remove::<usize>(egui::Id::new("__lib_dnd_fx_idx"));
                 mem.data
                     .remove::<crate::camera::CameraId>(egui::Id::new("__lib_dnd_cam_id"));
+                mem.data
+                    .remove::<crate::scene::CaptureTargetConfig>(egui::Id::new(
+                        super::library::CAPTURE_DND_KEY,
+                    ));
+                mem.data
+                    .remove::<crate::scene::TapSourceConfig>(egui::Id::new(
+                        super::library::TAP_DND_KEY,
+                    ));
                 mem.data
                     .remove::<String>(egui::Id::new("__lib_dnd_ndi_name"));
                 mem.data

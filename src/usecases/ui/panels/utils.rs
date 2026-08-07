@@ -2,6 +2,19 @@
 
 use super::super::{ChannelUIInfo, EffectDrag};
 
+/// Shorten `s` to at most `max` characters, ending in an ellipsis when cut.
+///
+/// Counts characters, not bytes. Source names carry em dashes and emoji (a
+/// window capture is labelled `🖥 Firefox — Title`), and byte-slicing one of
+/// those panics on a char boundary rather than merely rendering oddly.
+pub(super) fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{head}…")
+}
+
 /// Format seconds as MM:SS
 pub(super) fn format_time(secs: f64) -> String {
     let m = (secs / 60.0).floor() as u32;
@@ -430,6 +443,38 @@ mod tests {
                 prev = frac;
             }
         }
+    }
+
+    // ── truncate_chars ──────────────────────────────────────────────
+
+    #[test]
+    fn truncate_chars_leaves_short_strings_alone() {
+        assert_eq!(truncate_chars("Deck 1", 16), "Deck 1");
+        // Exactly at the limit is not a cut.
+        assert_eq!(truncate_chars("abcd", 4), "abcd");
+    }
+
+    #[test]
+    fn truncate_chars_cuts_to_the_limit_with_an_ellipsis() {
+        assert_eq!(truncate_chars("abcdefgh", 4), "abc…");
+        assert_eq!(truncate_chars("abcdefgh", 4).chars().count(), 4);
+    }
+
+    /// The crash this replaces: a window-capture deck is named
+    /// `🖥 Firefox — Title`, and byte-slicing it panicked mid-em-dash.
+    #[test]
+    fn truncate_chars_never_splits_a_multibyte_character() {
+        let name = "🖥 Firefox — + ##sre | Libera.Chat";
+        for max in 0..=name.chars().count() + 2 {
+            let out = truncate_chars(name, max);
+            assert!(out.chars().count() <= max.max(1));
+            assert!(name.starts_with(out.trim_end_matches('…')));
+        }
+    }
+
+    #[test]
+    fn truncate_chars_handles_a_zero_limit() {
+        assert_eq!(truncate_chars("abc", 0), "…");
     }
 
     fn approx(a: (f32, f32, f32), b: (f32, f32, f32)) {

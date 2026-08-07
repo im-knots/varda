@@ -15,13 +15,15 @@ use crate::engine::types::{
     AutoTransitionSnapshot, CameraSnapshot, ChannelSnapshot, ClockSnapshot, DeckSnapshot,
     DepthPreproParamsSnapshot, EffectSnapshot, EngineState, MidiDeviceSnapshot,
     MidiMappingSnapshot, MidiSnapshot, MixerSnapshot, ParamSnapshot, PointCloudParamsSnapshot,
-    RegistrySnapshot, RunningAnalyzerSnapshot, SequenceSnapshot, SequenceStepKindSnapshot,
-    SequenceStepSnapshot, ShaderParamsSnapshot, VideoPlaybackSnapshot,
+    RegistrySnapshot, RunningAnalyzerSnapshot, ScreenCaptureDeckSnapshot, SequenceSnapshot,
+    SequenceStepKindSnapshot, SequenceStepSnapshot, ShaderParamsSnapshot, TapDeckSnapshot,
+    VideoPlaybackSnapshot,
 };
 
 /// Build a `MixerSnapshot` from the current `VardaApp` state.
 pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
     let mixer = &app.mixer;
+    let channel_labels = app.channel_labels();
 
     let channels = mixer
         .channels()
@@ -116,6 +118,55 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                                 mirror: s.params.mirror,
                             });
 
+                    let screen_capture = slot.deck.screen_capture.as_ref().map(|s| {
+                        use crate::screen_capture::backend::{MAX_CAPTURE_RATE, MIN_CAPTURE_RATE};
+                        ScreenCaptureDeckSnapshot {
+                            target_label: crate::scene::CaptureTargetConfig::from(&s.identity)
+                                .label(),
+                            is_display: matches!(
+                                s.identity,
+                                crate::screen_capture::backend::TargetIdentity::Display { .. }
+                            ),
+                            // Normalized so the UI slider and the MIDI router
+                            // speak the same units on the same path.
+                            rate_norm: ((s.config.rate - MIN_CAPTURE_RATE)
+                                / (MAX_CAPTURE_RATE - MIN_CAPTURE_RATE))
+                                .clamp(0.0, 1.0),
+                            rate_fps: s.config.rate,
+                            crop: [
+                                s.config.crop.x,
+                                s.config.crop.y,
+                                s.config.crop.w,
+                                s.config.crop.h,
+                            ],
+                            show_cursor: s.config.show_cursor,
+                            exclude_varda: s.config.exclude_varda,
+                            bound: s.capture_id != crate::screen_capture::UNBOUND_CAPTURE_ID,
+                            connected: app.screen_capture_manager().is_connected(s.capture_id),
+                        }
+                    });
+
+                    let tap = slot.deck.tap.as_ref().map(|t| {
+                        use crate::deck::TapSource;
+                        TapDeckSnapshot {
+                            kind: match t.source {
+                                TapSource::MasterProgram => "master_program".into(),
+                                TapSource::Channel(_) => "channel".into(),
+                            },
+                            channel_uuid: match &t.source {
+                                TapSource::MasterProgram => None,
+                                TapSource::Channel(uuid) => Some(uuid.clone()),
+                            },
+                            label: t.source.label(&channel_labels),
+                            bound: match &t.source {
+                                TapSource::MasterProgram => true,
+                                TapSource::Channel(uuid) => {
+                                    channel_labels.iter().any(|(u, _)| u == uuid)
+                                }
+                            },
+                        }
+                    });
+
                     let effective_opacity = match slot.transition_phase() {
                         DeckTransitionPhase::Transitioning { progress } => {
                             slot.opacity * (1.0 - progress as f32)
@@ -138,6 +189,8 @@ pub(crate) fn build_mixer_snapshot(app: &VardaApp) -> MixerSnapshot {
                         point_cloud_params,
                         has_depth_prepro: slot.deck.depth_prepro.is_some(),
                         depth_prepro_params,
+                        screen_capture,
+                        tap,
                         is_html_interactive: {
                             #[cfg(feature = "html")]
                             {
@@ -462,6 +515,32 @@ pub(crate) fn build_depth_sensor_snapshot(app: &VardaApp) -> crate::engine::Dept
     }
 }
 
+/// Build a `ScreenCaptureSnapshot` from the current `VardaApp` state.
+pub(crate) fn build_screen_capture_snapshot(
+    app: &VardaApp,
+) -> crate::engine::ScreenCaptureSnapshot {
+    let mgr = app.screen_capture_manager();
+    crate::engine::ScreenCaptureSnapshot {
+        targets: mgr
+            .targets()
+            .iter()
+            .map(|t| crate::engine::CaptureTargetSnapshot {
+                kind: t.kind.as_str().to_string(),
+                label: t.label.clone(),
+                app: t.app.clone(),
+                title: t.title.clone(),
+                width: t.width,
+                height: t.height,
+                is_varda: t.is_varda,
+            })
+            .collect(),
+        permission: mgr.permission_state().as_str().to_string(),
+        available: mgr.is_available(),
+        backend: mgr.backend_name().to_string(),
+        active_captures: mgr.active_ids().len(),
+    }
+}
+
 /// Build a `ClockSnapshot` from the current clock manager state.
 pub(crate) fn build_clock_snapshot(app: &VardaApp) -> ClockSnapshot {
     use crate::engine::types::DetectedClockSourceSnapshot;
@@ -533,6 +612,7 @@ pub(crate) fn build_engine_state(app: &VardaApp) -> EngineState {
         midi: build_midi_snapshot(app),
         cameras: build_camera_snapshot(app),
         depth_sensors: build_depth_sensor_snapshot(app),
+        screen_capture: build_screen_capture_snapshot(app),
         clock: build_clock_snapshot(app),
         fps: app.frame_stats.fps_smoothed,
         frame_count: app.frame_stats.frame_count,

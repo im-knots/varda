@@ -63,6 +63,8 @@ This is how broadcast video works. A switcher doesn't start and stop cameras. Ev
 | RTMP | RTMP/RTMPS stream receive |
 | Compute Shader | GLSL compute shader (`.comp`) — particle systems, simulations, GPU-native generators |
 | Syphon | macOS inter-app texture sharing (receive from other apps) |
+| Screen Capture | An OS display or a single application window, captured live (macOS) |
+| Program Tap | Varda's own master program or a channel composite, one frame behind |
 | HTML | Web page (HTML/CSS/JS) rendered by the embedded Servo browser engine |
 | Solid Color | Flat RGBA color |
 

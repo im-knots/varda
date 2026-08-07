@@ -105,6 +105,12 @@ state_route!(
     |s: &crate::engine::EngineState| s.depth_sensors.clone()
 );
 state_route!(
+    screen_capture,
+    "/api/state/screen_capture",
+    "Screen capture state: enumerated targets, permission state, backend, and active session count.",
+    |s: &crate::engine::EngineState| s.screen_capture.clone()
+);
+state_route!(
     clock,
     "/api/state/clock",
     "Clock state: resolved BPM, beat phase, active source, and detected clock sources.",

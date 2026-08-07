@@ -125,6 +125,20 @@ pub async fn depth(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
+/// Displays and windows found by the last capture scan.
+///
+/// The list is only refreshed by `POST /api/devices/screen/scan` — window lists
+/// churn constantly, so it is never polled. See spec/screen-capture.md.
+#[utoipa::path(get, path = "/api/library/screen",
+    responses((status = 200, body = Vec<crate::engine::CaptureTargetSnapshot>), (status = 503, description = "Engine not yet initialized")),
+    tag = "Screen Capture")]
+pub async fn screen_capture(State(state): State<SharedState>) -> impl IntoResponse {
+    match read_or_error(&state) {
+        Ok(s) => Json(s.screen_capture.targets.clone()).into_response(),
+        Err((status, msg)) => (status, msg).into_response(),
+    }
+}
+
 /// Names of the NDI sources discovered by the last scan.
 #[utoipa::path(get, path = "/api/library/ndi",
     responses((status = 200, body = Vec<NdiSourceEntry>), (status = 503, description = "Engine not yet initialized")),

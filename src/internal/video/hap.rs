@@ -340,86 +340,103 @@ impl HapPlayer {
         // Decode frames, skipping intermediate ones for speed > 1
         let target_frames = result.frames_to_decode.max(1);
         let mut decoded_count = 0u32;
+        // End-of-stream wraps taken while looking for this one frame. A wrap
+        // that yields no packet means the demuxer is not producing anything,
+        // so wrapping again would spin this thread at 100% CPU forever.
+        let mut wraps = 0u32;
         loop {
-            match self.ictx.packets().next() {
-                Some((stream, packet)) => {
-                    if stream.index() == self.video_stream_index {
-                        if let Some(data) = packet.data() {
-                            decoded_count += 1;
-                            if decoded_count >= target_frames {
-                                let frame = decode_hap_frame(
-                                    data,
-                                    &mut self.frame_data,
-                                    &mut self.alpha_data,
-                                )?;
-                                match frame {
-                                    HapFrame::Single { format } => {
-                                        self.texture_format = format;
-                                        self.is_dual_plane = false;
-                                        return Ok(Some(HapFrameResult {
-                                            color_data: &self.frame_data,
-                                            color_format: format,
-                                            alpha_data: None,
-                                            alpha_format: None,
-                                        }));
-                                    }
-                                    HapFrame::DualPlane {
-                                        color_format,
-                                        alpha_format,
-                                    } => {
-                                        self.texture_format = color_format;
-                                        self.is_dual_plane = true;
-                                        return Ok(Some(HapFrameResult {
-                                            color_data: &self.frame_data,
-                                            color_format,
-                                            alpha_data: Some(&self.alpha_data),
-                                            alpha_format: Some(alpha_format),
-                                        }));
-                                    }
-                                }
-                            }
-                            // Skip intermediate frames for speed > 1
+            let Some((stream, packet)) = self.ictx.packets().next() else {
+                // `packets()` reports `None` for a hard read error as well as
+                // for a clean end of stream, and an I/O error latched into the
+                // demuxer makes every later read report it again. Give up on
+                // this tick rather than seek-and-retry forever; the caller
+                // holds the current frame and we try again on the next one, so
+                // a transient fault recovers by itself.
+                wraps += 1;
+                if wraps > 1 {
+                    log::warn!(
+                        "HAP demuxer produced no packets after wrapping to {:.3}s — \
+                         holding the current frame",
+                        self.playback.position
+                    );
+                    return Ok(None);
+                }
+                // End of stream — handle loop modes inline
+                match self.playback.loop_mode {
+                    LoopMode::Loop => {
+                        self.playback.position = self.playback.in_point;
+                        self.seek(self.playback.position)?;
+                    }
+                    LoopMode::PingPong => {
+                        // EOS: flip direction and seek to the opposite boundary.
+                        // advance_frame() may have already flipped `reverse`,
+                        // so we set it explicitly based on which boundary we hit.
+                        // Forward EOS (at end) → go reverse from out-point.
+                        // Reverse EOS (at start) → go forward from in-point.
+                        // Use position to determine which boundary we're near.
+                        let out_pt = self.playback.effective_out();
+                        let in_pt = self.playback.in_point;
+                        let mid = f64::midpoint(in_pt, out_pt);
+                        if self.playback.position >= mid {
+                            // Near end → reverse
+                            self.playback.reverse = true;
+                            self.playback.position = out_pt - (1.0 / self.playback.frame_rate);
+                        } else {
+                            // Near start → forward
+                            self.playback.reverse = false;
+                            self.playback.position = in_pt;
                         }
+                        self.seek(self.playback.position)?;
+                    }
+                    LoopMode::OneShot => {
+                        self.playback.playing = false;
+                        return Ok(None);
+                    }
+                    LoopMode::HoldLast => {
+                        return Ok(None);
                     }
                 }
-                None => {
-                    // End of stream — handle loop modes inline
-                    match self.playback.loop_mode {
-                        LoopMode::Loop => {
-                            self.playback.position = self.playback.in_point;
-                            self.seek(self.playback.position)?;
-                        }
-                        LoopMode::PingPong => {
-                            // EOS: flip direction and seek to the opposite boundary.
-                            // advance_frame() may have already flipped `reverse`,
-                            // so we set it explicitly based on which boundary we hit.
-                            // Forward EOS (at end) → go reverse from out-point.
-                            // Reverse EOS (at start) → go forward from in-point.
-                            // Use position to determine which boundary we're near.
-                            let out_pt = self.playback.effective_out();
-                            let in_pt = self.playback.in_point;
-                            let mid = f64::midpoint(in_pt, out_pt);
-                            if self.playback.position >= mid {
-                                // Near end → reverse
-                                self.playback.reverse = true;
-                                self.playback.position = out_pt - (1.0 / self.playback.frame_rate);
-                            } else {
-                                // Near start → forward
-                                self.playback.reverse = false;
-                                self.playback.position = in_pt;
-                            }
-                            self.seek(self.playback.position)?;
-                        }
-                        LoopMode::OneShot => {
-                            self.playback.playing = false;
-                            return Ok(None);
-                        }
-                        LoopMode::HoldLast => {
-                            return Ok(None);
-                        }
-                    }
-                }
+                continue;
+            };
+
+            if stream.index() != self.video_stream_index {
+                continue;
             }
+            let Some(data) = packet.data() else {
+                continue;
+            };
+            decoded_count += 1;
+            // Skip intermediate frames for speed > 1
+            if decoded_count < target_frames {
+                continue;
+            }
+
+            let frame = decode_hap_frame(data, &mut self.frame_data, &mut self.alpha_data)?;
+            return Ok(Some(match frame {
+                HapFrame::Single { format } => {
+                    self.texture_format = format;
+                    self.is_dual_plane = false;
+                    HapFrameResult {
+                        color_data: &self.frame_data,
+                        color_format: format,
+                        alpha_data: None,
+                        alpha_format: None,
+                    }
+                }
+                HapFrame::DualPlane {
+                    color_format,
+                    alpha_format,
+                } => {
+                    self.texture_format = color_format;
+                    self.is_dual_plane = true;
+                    HapFrameResult {
+                        color_data: &self.frame_data,
+                        color_format,
+                        alpha_data: Some(&self.alpha_data),
+                        alpha_format: Some(alpha_format),
+                    }
+                }
+            }));
         }
     }
 
@@ -430,6 +447,11 @@ impl HapPlayer {
     /// Returns an error if the underlying FFmpeg seek fails.
     pub fn seek(&mut self, time_secs: f64) -> Result<()> {
         let ts = (time_secs * f64::from(ffmpeg::ffi::AV_TIME_BASE)) as i64;
+        // Every seek here means "resume decoding from this point". Without
+        // clearing it, an end-of-file or I/O error latched into the demuxer is
+        // replayed on every subsequent read, so the loop wrap would never
+        // produce another packet.
+        self.ictx.clear_eof();
         self.ictx.seek(ts, ..ts)?;
         self.playback.position = time_secs;
         Ok(())

@@ -230,7 +230,7 @@ impl Mixer {
                     label: Some("Video Upload Encoder"),
                 });
         for channel in &mut self.channels {
-            channel.tick_video_frames(&mut video_encoder);
+            channel.tick_video_frames(&mut video_encoder, target_fps);
         }
         let mut prefix_cmds = vec![video_encoder.finish()];
         let video_tick_us = t_video_tick.elapsed().as_micros();
@@ -257,7 +257,12 @@ impl Mixer {
             let culled = effective_opacities.get(ch_idx).copied().unwrap_or(0.0) < 0.001;
             // Cued channels are force-rendered so their off-air previews update
             // live; the compositor stays opacity-gated so they never leak to output.
-            if culled && !preview_channels.contains(&ch_idx) {
+            // A tapped channel is force-rendered for a stronger reason: some
+            // visible deck reads its composite, so its own opacity says nothing
+            // about whether it reaches the program. Culling it would show that
+            // deck black. See spec/program-tap.md.
+            let spared = preview_channels.contains(&ch_idx) || channel.tap_view().is_some();
+            if culled && !spared {
                 // Reset stats so culled channels don't show stale render metrics
                 channel.render_time_ms = 0.0;
                 channel.active_deck_count = 0;
@@ -321,13 +326,21 @@ impl Mixer {
         };
 
         self.sync_transition_progress();
+        // With a master tap the composite and master FX write into the tap
+        // target instead, so the pre-tonemap program survives into next frame
+        // without a copy. Swapping the fields keeps those two passes unaware.
+        self.swap_master_tap();
         let t_mixer_composite = std::time::Instant::now();
         let composite_cmds = self.composite_channels(context);
         let mixer_composite_us = t_mixer_composite.elapsed().as_micros();
 
         let t_master_fx = std::time::Instant::now();
-        self.apply_master_effects(context, audio_data, time, composite_cmds)?;
+        let master_fx = self.apply_master_effects(context, audio_data, time, composite_cmds);
         let master_fx_us = t_master_fx.elapsed().as_micros();
+        // Unconditional, so a failed effect chain cannot leave the composite
+        // and tap fields permanently transposed.
+        self.swap_master_tap();
+        master_fx?;
 
         // Tonemap pass: compress HDR composite into displayable [0,1] range.
         // Bypass mode is a no-op (values clamp at the output boundary anyway).
@@ -409,26 +422,26 @@ impl Mixer {
         self.frame_count += 1;
 
         // Update GPU load ratio: how much CPU-measured render cost underestimates
-        // true GPU cost. Only meaningful when we're actually GPU-bound (missing target).
-        // When meeting target, dt includes vsync idle wait which would inflate the ratio.
-        let cpu_render_us = channels_us + mixer_composite_us + master_fx_us;
+        // true GPU cost.
         let frame_budget_us = if target_fps > 0 {
             1_000_000.0 / target_fps as f32
         } else {
             f32::MAX
         };
         let actual_frame_us = dt * 1_000_000.0;
-        if cpu_render_us > 100 && dt > 0.0 {
-            let raw_ratio = if actual_frame_us > frame_budget_us * 1.05 {
-                // GPU-bound: frame time exceeds budget, ratio captures real pressure
-                actual_frame_us / cpu_render_us as f32
-            } else {
-                // Meeting target: decay toward 1.0 (no GPU pressure)
-                1.0
-            };
-            let clamped = raw_ratio.clamp(1.0, 200.0);
-            // EMA smoothing (α = 0.15) — responsive but not jittery
-            self.gpu_load_ratio = 0.15 * clamped + 0.85 * self.gpu_load_ratio;
+        // A frame that encoded essentially nothing carries no evidence either
+        // way, and its `dt` is whatever wall-clock gap preceded it — a paused or
+        // hidden window would otherwise drive the ratio up and leave decks
+        // skipping for the first moments after they come back.
+        let mixer_cpu_us = channels_us + mixer_composite_us + master_fx_us;
+        let (deck_gpu_us, deck_encode_us) = self.active_deck_costs();
+        if mixer_cpu_us > 100 {
+            if let Some(raw_ratio) =
+                raw_gpu_load_ratio(deck_gpu_us, deck_encode_us, actual_frame_us, frame_budget_us)
+            {
+                // EMA smoothing (α = 0.15) — responsive but not jittery
+                self.gpu_load_ratio = 0.15 * raw_ratio + 0.85 * self.gpu_load_ratio;
+            }
         }
 
         // Update GPU utilization %: sum of per-deck GPU costs / frame budget.
@@ -1013,17 +1026,56 @@ impl Mixer {
         Ok(())
     }
 
-    /// Apply tonemap to the main composite texture in-place.
+    /// Exchange `composite_*` with the master tap target, when one exists.
+    /// Called in pairs around the composite and master-FX passes.
+    fn swap_master_tap(&mut self) {
+        if let Some((mut tex, mut view)) = self.master_tap.take() {
+            std::mem::swap(&mut self.composite_texture, &mut tex);
+            std::mem::swap(&mut self.composite_view, &mut view);
+            self.master_tap = Some((tex, view));
+        }
+    }
+
+    /// Tonemap the master program.
+    ///
+    /// Without a tap this is in-place on the composite. With one, the
+    /// pre-tonemap program is already in a separate target, so the pass reads
+    /// straight from it and the in-place scratch copy disappears. Bypass still
+    /// has to move the pixels across, which is the one case a tap costs a copy.
     fn apply_tonemap(&self, context: &GpuContext) {
-        tonemap_in_place(
-            self.tonemap_mode,
-            &self.tonemap_pipeline,
-            &self.composite_texture,
-            &self.composite_view,
-            &self.effect_ping_texture,
-            &self.effect_ping_view,
-            context,
-        );
+        let Some((tap_texture, tap_view)) = &self.master_tap else {
+            tonemap_in_place(
+                self.tonemap_mode,
+                &self.tonemap_pipeline,
+                &self.composite_texture,
+                &self.composite_view,
+                &self.effect_ping_texture,
+                &self.effect_ping_view,
+                context,
+            );
+            return;
+        };
+
+        let mut encoder = context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Master Tap Tonemap Encoder"),
+            });
+        if self.tonemap_mode == crate::renderer::tonemap::TonemapMode::Bypass {
+            encoder.copy_texture_to_texture(
+                tap_texture.as_image_copy(),
+                self.composite_texture.as_image_copy(),
+                self.composite_texture.size(),
+            );
+        } else {
+            self.tonemap_pipeline.render(
+                &context.device,
+                &mut encoder,
+                tap_view,
+                &self.composite_view,
+            );
+        }
+        context.submit(Some(encoder.finish()));
     }
 
     /// Apply LUT to the main composite texture in-place.
@@ -1110,6 +1162,67 @@ impl Mixer {
             }
         }
     }
+
+    /// Summed GPU and CPU render costs over the decks that are actually drawing
+    /// *and* have GPU timing for this frame.
+    ///
+    /// Both sums come from the same set of decks so their quotient stays a
+    /// like-for-like comparison; a deck still waiting on its first timestamp
+    /// would otherwise contribute CPU cost with no GPU cost and understate the
+    /// ratio. Returns `(0.0, 0.0)` when no deck has timing yet, which is what
+    /// puts [`raw_gpu_load_ratio`] onto its fallback.
+    fn active_deck_costs(&self) -> (f32, f32) {
+        self.channels
+            .iter()
+            .flat_map(|ch| ch.decks.iter())
+            .filter(|s| !s.mute && s.opacity > 0.0 && s.gpu_render_cost_us > 0.0)
+            .fold((0.0, 0.0), |(gpu, cpu), s| {
+                (gpu + s.gpu_render_cost_us, cpu + s.render_cost_us)
+            })
+    }
+}
+
+/// Ceiling on the load ratio. Generous enough to express a genuinely
+/// GPU-bound shader — a 10 ms pass encoded in 200 µs really is 50× — while
+/// still bounding how far one bad frame can push every deck toward skipping.
+const MAX_GPU_LOAD_RATIO: f32 = 64.0;
+
+/// How much to scale CPU-measured deck cost to estimate true GPU cost.
+///
+/// `None` means the frame carried no usable signal, leaving the smoothed ratio
+/// untouched rather than dragging it toward an invented value.
+///
+/// GPU timestamps are the honest answer: they time the same work the CPU figure
+/// times, so their quotient is the underestimation factor and nothing else.
+/// Without them, how far the frame overran its budget is a coarser stand-in,
+/// but it is proportionate and bounded by construction.
+///
+/// What this must not be is whole-frame wall time over the mixer's encode time.
+/// That quotient is roughly `frame_budget / encode_time` — around 20× on a
+/// perfectly healthy frame — so any render-thread work outside the mixer (a
+/// screen-capture upload, say) that pushes one frame past budget made every
+/// deck look twentyfold more expensive than it is, ratcheting the smoothed
+/// ratio up until unrelated shader decks started skipping while the frame loop
+/// still reported its target rate.
+fn raw_gpu_load_ratio(
+    deck_gpu_us: f32,
+    deck_encode_us: f32,
+    actual_frame_us: f32,
+    frame_budget_us: f32,
+) -> Option<f32> {
+    if deck_gpu_us > 0.0 && deck_encode_us > 0.0 {
+        return Some((deck_gpu_us / deck_encode_us).clamp(1.0, MAX_GPU_LOAD_RATIO));
+    }
+    if frame_budget_us >= f32::MAX || actual_frame_us <= 0.0 {
+        return None;
+    }
+    // `dt` includes the vsync idle wait, so a frame at or under budget is
+    // evidence of no GPU pressure rather than evidence of none being measurable.
+    Some(if actual_frame_us > frame_budget_us * 1.05 {
+        (actual_frame_us / frame_budget_us).clamp(1.0, MAX_GPU_LOAD_RATIO)
+    } else {
+        1.0
+    })
 }
 
 /// Tonemap a texture in-place using a scratch texture for the copy.
@@ -1182,4 +1295,75 @@ fn apply_lut_in_place(
         lut,
     );
     context.submit(Some(encoder.finish()));
+}
+
+#[cfg(test)]
+mod gpu_load_ratio_tests {
+    use super::{raw_gpu_load_ratio, MAX_GPU_LOAD_RATIO};
+
+    const BUDGET_60FPS: f32 = 1_000_000.0 / 60.0;
+
+    #[test]
+    fn timestamps_give_the_plain_gpu_over_cpu_underestimation_factor() {
+        // 4 ms of GPU work encoded in 500 us: deck cost is understated 8x.
+        let ratio = raw_gpu_load_ratio(4000.0, 500.0, BUDGET_60FPS, BUDGET_60FPS)
+            .expect("timing present");
+        assert!((ratio - 8.0).abs() < 1e-3, "expected 8x, got {ratio}");
+    }
+
+    #[test]
+    fn timestamps_never_report_less_than_parity() {
+        // Encoding can cost more than execution for a trivial pass; that is not
+        // evidence decks are cheaper than measured, so the floor is 1.0.
+        let ratio = raw_gpu_load_ratio(100.0, 900.0, BUDGET_60FPS, BUDGET_60FPS).expect("timing");
+        assert!((ratio - 1.0).abs() < f32::EPSILON, "got {ratio}");
+    }
+
+    /// The regression this pins. A screen-capture upload costs ~1 ms of
+    /// render-thread time outside the mixer, which pushes the frame a little
+    /// over budget. The old formula divided whole-frame wall time by the
+    /// mixer's encode time and called the result GPU pressure, yielding ~24x
+    /// for a frame only 1.14x over — enough, once smoothed, to force unrelated
+    /// shader decks into skipping while the loop still hit 60 fps.
+    #[test]
+    fn an_over_budget_frame_caused_by_non_mixer_work_stays_proportionate() {
+        let actual = BUDGET_60FPS + 2425.0; // ~19.1 ms, as measured on an M2 Max
+        let mixer_encode_us = 800.0;
+
+        let old = actual / mixer_encode_us;
+        assert!(
+            old > 20.0,
+            "precondition: the old formula really did explode ({old}x)"
+        );
+
+        // No GPU timing available, so this is the fallback path.
+        let ratio = raw_gpu_load_ratio(0.0, 0.0, actual, BUDGET_60FPS).expect("over budget");
+        assert!(
+            (ratio - actual / BUDGET_60FPS).abs() < 1e-3,
+            "overage should be reported as itself, got {ratio}"
+        );
+        assert!(ratio < 1.2, "a 14% overrun must not read as {ratio}x");
+    }
+
+    #[test]
+    fn meeting_target_decays_toward_parity() {
+        // dt includes vsync idle, so an on-time frame carries no GPU pressure.
+        let ratio = raw_gpu_load_ratio(0.0, 0.0, BUDGET_60FPS, BUDGET_60FPS).expect("on time");
+        assert!((ratio - 1.0).abs() < f32::EPSILON, "got {ratio}");
+    }
+
+    #[test]
+    fn ratio_is_bounded_even_for_a_pathological_frame() {
+        let stalled = raw_gpu_load_ratio(0.0, 0.0, 5_000_000.0, BUDGET_60FPS).expect("stalled");
+        assert!((stalled - MAX_GPU_LOAD_RATIO).abs() < f32::EPSILON);
+        let lopsided = raw_gpu_load_ratio(1_000_000.0, 1.0, BUDGET_60FPS, BUDGET_60FPS)
+            .expect("timing present");
+        assert!((lopsided - MAX_GPU_LOAD_RATIO).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn an_uncapped_target_with_no_timing_yields_no_signal() {
+        assert!(raw_gpu_load_ratio(0.0, 0.0, BUDGET_60FPS, f32::MAX).is_none());
+        assert!(raw_gpu_load_ratio(0.0, 0.0, 0.0, BUDGET_60FPS).is_none());
+    }
 }

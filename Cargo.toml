@@ -86,7 +86,10 @@ midir = "0.11"
 yuvutils-rs = "0.8.3"
 geo = "0.33.1"
 sysinfo = "0.38.4"
-tokio = { version = "1.52.2", features = ["rt-multi-thread", "macros", "net", "sync"] }
+# `time` is here for the Linux screen-cast portal: zbus arms timeouts on the
+# runtime that drives it, and without the time driver those panic at runtime
+# rather than failing to compile. See spec/screen-capture.md § Platform Support.
+tokio = { version = "1.52.2", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 axum = { version = "0.8.9", features = ["ws"] }
 tower-http = { version = "0.6.10", features = ["cors", "fs"] }
 futures-util = "0.3.32"
@@ -130,8 +133,52 @@ objc2            = "0.6"
 objc2-foundation = "0.3"
 objc2-metal      = "0.3"
 
+# ScreenCaptureKit for the macOS screen/window capture backend (spec/screen-capture.md).
+# These are objc2-family crates from the same maintainer as the three above, so
+# they unify on objc2 0.6 / objc2-foundation 0.3 with no duplicate tree — the
+# same version alignment external-io.md verified for the wgpu-hal Metal interop.
+objc2-screen-capture-kit = { version = "0.3", optional = true }
+objc2-core-media         = { version = "0.3", optional = true }
+objc2-core-video         = { version = "0.3", optional = true }
+objc2-core-graphics      = { version = "0.3", optional = true }
+objc2-core-foundation    = { version = "0.3", optional = true }
+dispatch2                = { version = "0.3", optional = true }
+block2                   = { version = "0.6", optional = true }
+
+# Windows Graphics Capture for the Windows screen/window capture backend
+# (spec/screen-capture.md). Microsoft-maintained, so no third-party binding.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Linux screen/window capture (spec/screen-capture.md). Two stacks in one
+# binary, chosen at runtime: the XDG portal + PipeWire under Wayland, X11
+# otherwise. A distro package is built once and has to serve both sessions.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.14", optional = true, features = ["randr"] }
+ashpd = { version = "0.13", optional = true, default-features = false, features = ["tokio"] }
+pipewire = { version = "0.10", optional = true }
+
 [features]
-default = ["face-detection", "html", "depth"]
+default = ["face-detection", "html", "depth", "screen-capture"]
 # ML-backed analyzers (ONNX Runtime + ndarray). Disabled for the x86_64 macOS
 # slice to keep the Intel build ort-free. See spec/plugin-architecture.md (decision 5).
 face-detection = ["dep:ort", "dep:ndarray"]
@@ -155,6 +202,15 @@ html = ["dep:servo", "dep:url", "dep:euclid", "dep:keyboard-types"]
 # persistence, API, UI, tests) always compiles via a mock backend when the
 # feature is off. See spec/depth-sensors.md.
 depth = ["dep:freenectrs"]
+# Screen / window capture deck source. Default-on: only the platform backend
+# internals are gated — the ScreenCaptureManager integration surface (manager,
+# deck integration, persistence, API, UI, tests) always compiles via the mock
+# backend when the feature is off, mirroring `depth`. macOS uses
+# ScreenCaptureKit, Windows uses Windows.Graphics.Capture, and Linux uses the
+# XDG portal + PipeWire on Wayland or GetImage on X11. The `dep:` entries below
+# are target-scoped, so each platform pulls only its own bindings.
+# See spec/screen-capture.md.
+screen-capture = ["dep:objc2-screen-capture-kit", "dep:objc2-core-media", "dep:objc2-core-video", "dep:objc2-core-graphics", "dep:objc2-core-foundation", "dep:dispatch2", "dep:block2", "dep:windows", "dep:x11rb", "dep:ashpd", "dep:pipewire"]
 test-fixtures = ["dep:tempfile"]
 url = ["dep:url"]
 euclid = ["dep:euclid"]

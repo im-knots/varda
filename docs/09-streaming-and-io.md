@@ -255,6 +255,153 @@ Pass `--no-syphon` to disable Syphon explicitly even when the framework is insta
 
 ---
 
+## Screen & Window Capture
+
+Capture an OS display or a single application window as a live deck source. Anything on screen can become a layer: a browser, a game, a DAW, a slide deck, another VJ app, or Varda itself. Unlike Syphon, the source application needs no support for it and no plugin.
+
+### Platform support
+
+| Platform | How it works | What to know |
+|---|---|---|
+| **macOS** 12.3+ | [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit) | Needs the Screen Recording permission, see below. Varda excludes its own windows from a display capture, and the display is scaled down before it leaves the system, so a 4K screen costs no more than a 1080p one |
+| **Windows** 10 (1903+) | [Windows.Graphics.Capture](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture) | No permission prompt. Windows draws a yellow capture border around the captured surface on some builds, which Varda suppresses where the OS allows it |
+| **Linux, Wayland** | XDG Desktop Portal plus PipeWire | Your compositor owns the picker. See the note below |
+| **Linux, X11** | `GetImage` polling | Works everywhere, but Varda cannot exclude itself from a display capture, and the cursor is never included |
+
+Varda picks the Linux backend at startup based on the session you are logged into, so one build serves both. A session running under XWayland uses the portal, not X11, because X11 can only see other XWayland clients there.
+
+**On Wayland the Library shows a single entry, "Pick a window or display…", instead of a list.** Drag it onto a channel and your desktop's own share dialog opens so you can choose what to capture. On Wayland the compositor decides what an application may see. Each new capture opens the dialog again, including when you load a scene that contains one.
+
+### Usage
+
+1. In the Library, open the **🖥 Screen Capture** section and click **🔄 Rescan**
+2. Targets are grouped under **Displays** and **Windows**. Hovering a row shows its pixel size
+3. **Drag** a target onto a channel to create a live capture deck
+
+The list is only refreshed when you press Rescan. Window lists churn constantly as you switch apps, so Varda never polls them in the background.
+
+Varda's own windows are labeled `(Varda)` and tinted, so capturing yourself is an informed choice rather than an accidental mirror.
+
+### Permissions (macOS)
+
+Screen capture is gated by the system Screen Recording privacy control. The Library section reflects the current state:
+
+- **Not yet determined.** A **Grant Screen Recording access** button appears. Clicking it asks macOS to prompt you.
+- **Denied.** The panel points you at **System Settings → Privacy & Security → Screen Recording**.
+
+In both cases **you must restart Varda after granting**. macOS does not apply a new grant to an already running process, so a user who approves the prompt and sees nothing change would otherwise conclude the feature is broken. Varda never requests the permission at startup, and never requests it at all when capture is disabled.
+
+Windows and Linux have no equivalent gate, so the Library shows no permission banner there. On Wayland the portal dialog is the gate, and it appears when you drag a capture onto a channel rather than ahead of time.
+
+### Deck controls
+
+Select a capture deck to get its controls in the deck detail panel (bottom bar):
+
+| Control | Parameter path | Notes |
+|---|---|---|
+| **Rate** | `deck/<deck_uuid>/capture/rate` | 1 to 120 fps. Defaults to 30 |
+| **Crop** X / Y / W / H | `deck/<deck_uuid>/capture/crop_x` (`_y`, `_w`, `_h`) | Normalized 0 to 1 within the target, with a **Reset** button |
+| **Cursor** | `deck/<deck_uuid>/capture/cursor` | Include the mouse pointer. Fixed when the capture opens on Wayland, and not available on X11 |
+| **Exclude Varda** | `deck/<deck_uuid>/capture/exclude_varda` | Omit Varda's own windows. Offered for display targets only, since for a window target it would do nothing. macOS only, see below |
+
+Every one of these is a real parameter path, so all of them are MIDI-learnable, OSC-addressable, and modulatable like any shader input. See [Parameter Paths](06-control-surfaces.md#parameter-paths).
+
+### Capturing Varda itself
+
+Pointing a capture at one of Varda's own windows is supported, and is the straightforward way to record Varda for content. Be aware of what it implies: Varda's UI window contains deck and channel previews, so a capture of that window contains a preview of itself, nested. That is a genuine video feedback loop, and it is often the effect you want.
+
+If you want a clean recording of the program without the interface nested inside it, you have better options than capturing the UI window. Use a [Program Tap](#program-tap) to read the program directly, capture a windowed [output](07-outputs.md) rather than the main window, or use a [recording output](#recording).
+
+For a full-display capture, **Exclude Varda** is on by default so that pointing a deck at your main monitor does not produce an infinite mirror.
+
+**On Linux under X11 this cannot be honoured.** X11 offers no way to leave one application out of a screen capture, so a display capture always includes Varda. The mirror stays stable rather than running away, because the capture rate sits below the render rate, but if you want a clean desktop capture on X11 you need to move Varda to another monitor or capture individual windows instead. Wayland does not have this problem, because you pick the target in your compositor's dialog.
+
+### Persistence
+
+Capture decks are saved in `scene.json` by **name**: a display's name, or a window's application and title. Platform handles such as CoreGraphics display ids and window numbers are ephemeral across reboots and are never written to disk.
+
+If the target is missing when a scene loads, the deck is **restored unbound** rather than dropped. It renders black and logs a warning, and the deck detail panel tells you so. Losing a deck along with its effect chain, opacity, and MIDI mappings because an app happened to be closed would be a bad way to start a show, so the deck survives and you repoint it.
+
+### API
+
+```sh
+# Refresh the target list, then read it
+curl -X POST http://localhost:8080/api/devices/screen/scan
+curl http://localhost:8080/api/library/screen
+
+# Capture a whole display
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/screen \
+  -H "Content-Type: application/json" \
+  -d '{"target": {"kind": "display", "name": "Built-in Retina Display"}}'
+
+# Capture one window, cropped to its top-left quadrant at 24 fps
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/screen \
+  -H "Content-Type: application/json" \
+  -d '{"target": {"kind": "window", "app": "Safari", "title": "Dashboard"},
+       "rate": 24,
+       "crop": {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5},
+       "show_cursor": true}'
+```
+
+`GET /api/state/screen_capture` reports the permission state, the backend in use, whether capture is available at all, and the number of live sessions.
+
+> **Feature flag.** Screen capture requires the `screen-capture` build feature, which is **on by default**. Disable it for a session with `--no-screen-capture`, which skips OS capture entirely so no Screen Recording permission is ever requested, or build without it via `--no-default-features`.
+
+---
+
+## Program Tap
+
+A **tap** re-enters Varda's own output as a deck source. The deck reads the program out of GPU memory. This is how you build video feedback, picture-in-picture of the program, and effect chains that process the whole mix.
+
+There are two tap points:
+
+| Tap | Reads |
+|---|---|
+| **Master Program** | The full mix, **before** tonemap and LUT |
+| **Channel** | One channel's composite, after its own effect chain |
+
+### One frame behind
+
+A tap always shows the **previous** frame, never the current one. It means a tap can never read a texture that is still being written, and it means the delay does not depend on where the tapping deck sits in the mixer. Move the deck to another channel, reorder the channels, add more taps, and the latency stays at exactly one frame.
+
+Master taps read before tonemapping on purpose. A feedback loop that read the tonemapped output and fed it back into the linear pipeline would apply the transfer curve again on every trip around the loop, and the image would crush toward the roll-off within a second or two.
+
+### Usage
+
+1. In the Library, open the **🔁 Taps** section
+2. **Drag** either **Master Program** or a channel onto a channel to create a tap deck
+
+The list is built from the live channel list rather than a device scan, so there is nothing to rescan. Select a tap deck to get a **Source** dropdown in the deck detail panel, which repoints it between Master Program and any channel without recreating the deck.
+
+### Feedback
+
+Tapping the master from a deck that is itself part of the master is a deliberate feedback loop, and the one frame of delay is what keeps it stable rather than deadlocked. Two things are worth knowing before you turn one up:
+
+- **Gain above unity grows without bound.** A tap deck at opacity above 1.0 on an additive blend multiplies its own output every frame. The tonemap rolls the result off, it does not clamp it, so the image will bloom to white and stay there.
+- **Add a transform to see anything interesting.** A tap composited exactly over its own source just reproduces the image. Scale, rotate, offset, or run it through an effect chain, and you get the tunnels and trails that make the technique worth using.
+
+
+### API
+
+```sh
+# Tap the master program
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/tap \
+  -H "Content-Type: application/json" \
+  -d '{"source": {"kind": "master_program"}}'
+
+# Tap another channel
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/tap \
+  -H "Content-Type: application/json" \
+  -d '{"source": {"kind": "channel", "uuid": "<other_ch_uuid>"}}'
+
+# Repoint an existing tap deck
+curl -X PUT http://localhost:8080/api/decks/<deck_uuid>/tap/source \
+  -H "Content-Type: application/json" \
+  -d '{"source": {"kind": "master_program"}}'
+```
+
+---
+
 ## Stream Input Reliability
 
 All stream **input** protocols (SRT, HLS, DASH, and RTMP) share the same resilience layer:

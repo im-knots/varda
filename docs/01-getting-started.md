@@ -2,7 +2,7 @@
 
 ## Install
 
-Download the latest release from the [Releases page](https://github.com/im-knots/varda/releases). All releases bundle FFmpeg and NDI — no extra dependencies needed.
+Download the latest release from the [Releases page](https://github.com/im-knots/varda/releases). All releases bundle FFmpeg and NDI.
 
 ### macOS (Universal DMG)
 
@@ -58,7 +58,7 @@ Shaders in `shaders/` appear automatically in the Library panel under **Generato
 | **HAP Video** | MOV with HAP, HAP Alpha, HAP Q, HAP Q Alpha, HAP R — GPU-native decode, no CPU overhead |
 | **Images** | PNG, JPG/JPEG |
 
-The table above covers local file content. Varda can also route live and network inputs — cameras, NDI, SRT, HLS, DASH, RTMP, compute shaders, and more. See [Source Types](02-concepts.md#source-types) for the complete list.
+The table above covers local file content. Varda can also route live and network inputs like cameras, NDI, SRT, HLS, DASH, RTMP, screen and window captures, compute shaders, and more. See [Source Types](02-concepts.md#source-types) for the complete list.
 
 ## Build from Source
 
@@ -115,7 +115,7 @@ cargo run --release
 
 ![Varda UI](img/screenshot.png)
 
-- **Library** (left, toggle with **L**) — content browser: shaders, video, images, cameras, NDI, SRT, HLS/DASH sources, and presets. See [Library Panel](03-library-panel.md).
+- **Library** (left, toggle with **L**) — content browser: shaders, video, images, cameras, screen capture targets, taps, NDI, SRT, HLS/DASH sources, and presets. See [Library Panel](03-library-panel.md).
 - **Center** — channel/deck grid with mixer crossfader. Toggle to **Stage Editor** for surface drawing.
 - **Right** — main output preview (always visible), output list, modulation panel, MIDI device list
 - **Bottom** (resizable) — context-sensitive: shows the selected deck's parameters, effect chains, or sequence editor
@@ -207,6 +207,8 @@ varda [OPTIONS]
     --no-ndi                Disable NDI discovery and sending
     --no-syphon             Disable Syphon (macOS only)
     --no-html               Disable HTML deck sources (skips Servo rendering)
+    --no-screen-capture     Disable screen / window capture deck sources
+                            (no Screen Recording permission is ever requested)
 ```
 
 CLI flags override persisted config for that session without modifying the saved files.

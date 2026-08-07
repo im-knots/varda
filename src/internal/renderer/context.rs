@@ -237,15 +237,17 @@ impl GpuContext {
         let mut timestamp_supported = false;
         if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             required_features |= wgpu::Features::TIMESTAMP_QUERY;
-            if adapter
+            if !adapter
                 .features()
                 .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
             {
+                log::warn!("GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled");
+            } else if encoder_timestamps_are_trustworthy(adapter) {
                 required_features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
                 timestamp_supported = true;
                 log::info!("GPU supports timestamp queries inside encoders (GPU timing enabled)");
             } else {
-                log::warn!("GPU supports TIMESTAMP_QUERY but not TIMESTAMP_QUERY_INSIDE_ENCODERS — GPU timing disabled");
+                log::warn!("Apple GPU: encoder timestamps are not implementable on this hardware — GPU timing disabled");
             }
         }
 
@@ -383,6 +385,26 @@ impl GpuContext {
         self.queue
             .write_buffer(buffer, 0, bytemuck::cast_slice(&[*data]));
     }
+}
+
+/// Whether `CommandEncoder::write_timestamp` produces usable results here.
+///
+/// Apple GPUs are tile-based deferred renderers: Metal only permits counter
+/// sampling at stage boundaries (via a pass descriptor's
+/// `sampleBufferAttachments`), so there is no `sampleCountersInBuffer` for an
+/// encoder-level timestamp to lower to. wgpu 29 still advertises
+/// `TIMESTAMP_QUERY_INSIDE_ENCODERS` on this hardware and emulates it with a
+/// dummy blit pass, but that emulation drops the render work submitted
+/// alongside it — decks composite from never-written textures and the frame
+/// fills with NaN. Upstream has since stopped advertising the feature here
+/// (gfx-rs/wgpu ef9974f); until we take that release, refuse it ourselves.
+fn encoder_timestamps_are_trustworthy(adapter: &wgpu::Adapter) -> bool {
+    /// Apple's PCI vendor ID, as reported for Metal adapters.
+    const APPLE_VENDOR: u32 = 0x106B;
+
+    let info = adapter.get_info();
+    !(info.backend == wgpu::Backend::Metal
+        && (info.vendor == APPLE_VENDOR || info.name.starts_with("Apple")))
 }
 
 impl WindowSurface {

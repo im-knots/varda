@@ -91,6 +91,11 @@ pub struct AppConfig {
     #[arg(long = "no-html")]
     pub html_disabled: bool,
 
+    /// Disable screen / window capture deck sources (skips OS capture entirely,
+    /// so no Screen Recording permission is ever requested)
+    #[arg(long = "no-screen-capture")]
+    pub screen_capture_disabled: bool,
+
     /// Additional shader library directory (repeatable). Scanned and
     /// hot-reloaded alongside the built-in locations. Added last, so a
     /// shader here overrides a built-in shader of the same name — useful
@@ -148,6 +153,7 @@ use crate::osc::{OscConfig, OscFeedbackSender, OscReceiver};
 use crate::persistence::Workspace;
 use crate::registry::ShaderRegistry;
 use crate::renderer::context::{GpuContext, UnifiedOutput};
+use crate::screen_capture::ScreenCaptureManager;
 use crate::surface::SurfaceManager;
 
 use crate::engine::{CommandEnvelope, CommandResult, EngineState, ErrorCode};
@@ -248,6 +254,8 @@ pub struct VardaApp {
     camera_manager: CameraManager,
     /// Depth-sensor capture manager (Kinect/LIDAR point-cloud sources).
     depth_manager: DepthSensorManager,
+    /// Screen / window capture manager. See spec/screen-capture.md.
+    screen_capture_manager: ScreenCaptureManager,
     registry: ShaderRegistry,
     analyzer_registry: crate::analyzer::AnalyzerRegistry,
     context: GpuContext,
@@ -448,6 +456,13 @@ impl VardaApp {
             audio_manager,
             camera_manager: CameraManager::new(),
             depth_manager: DepthSensorManager::new(),
+            // Constructed disabled rather than merely inert, so `--no-screen-capture`
+            // never triggers the macOS TCC prompt.
+            screen_capture_manager: if config.screen_capture_disabled {
+                ScreenCaptureManager::new_disabled()
+            } else {
+                ScreenCaptureManager::new()
+            },
             registry,
             analyzer_registry: crate::analyzer::default_registry(),
             context: gpu,
@@ -681,6 +696,26 @@ impl VardaApp {
     /// access to the device, or if its GPU textures cannot be allocated.
     pub fn open_camera(&mut self, id: crate::camera::CameraId) -> anyhow::Result<(u32, u32)> {
         self.camera_manager.open_camera(id, &self.context.device)
+    }
+
+    /// Read-only access to the screen-capture manager.
+    /// `(uuid, name)` for every channel, which is what resolves a tap's
+    /// channel UUID to something a performer can read.
+    pub fn channel_labels(&self) -> Vec<(String, String)> {
+        self.mixer
+            .channels()
+            .iter()
+            .map(|ch| (ch.uuid().to_string(), ch.name.clone()))
+            .collect()
+    }
+
+    pub fn screen_capture_manager(&self) -> &ScreenCaptureManager {
+        &self.screen_capture_manager
+    }
+
+    /// Mutable access to the screen-capture manager (scan/open/release captures).
+    pub fn screen_capture_manager_mut(&mut self) -> &mut ScreenCaptureManager {
+        &mut self.screen_capture_manager
     }
 
     /// Read-only access to the depth-sensor manager.

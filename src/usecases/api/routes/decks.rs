@@ -244,6 +244,78 @@ pub struct AddDepthSensorDeckBody {
     pub depth_sensor_id: u32,
 }
 
+/// Capture target in handle-free form. Either `{"kind":"display","name":"..."}`
+/// or `{"kind":"window","app":"...","title":"..."}` — matched against the last
+/// enumeration, so call `POST /api/devices/screen/scan` first if unsure.
+#[derive(Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScreenCaptureTargetBody {
+    Display {
+        name: String,
+    },
+    Window {
+        app: String,
+        #[serde(default)]
+        title: String,
+    },
+}
+
+impl From<ScreenCaptureTargetBody> for crate::scene::CaptureTargetConfig {
+    fn from(b: ScreenCaptureTargetBody) -> Self {
+        match b {
+            ScreenCaptureTargetBody::Display { name } => Self::Display { name },
+            ScreenCaptureTargetBody::Window { app, title } => Self::Window { app, title },
+        }
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct ScreenCaptureCropBody {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct AddScreenCaptureDeckBody {
+    pub target: ScreenCaptureTargetBody,
+    /// Capture frames per second, 1–120. Defaults to 30.
+    #[serde(default)]
+    pub rate: Option<f32>,
+    /// Normalized crop within the target. Omit for the full frame.
+    #[serde(default)]
+    pub crop: Option<ScreenCaptureCropBody>,
+    #[serde(default)]
+    pub show_cursor: Option<bool>,
+    /// Exclude Varda's own windows. Defaults to `true` for displays (so a
+    /// full-display capture is not an infinite mirror) and `false` for windows.
+    #[serde(default)]
+    pub exclude_varda: Option<bool>,
+}
+
+/// Which Varda-internal output a tap deck reads. See spec/program-tap.md.
+#[derive(Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TapSourceBody {
+    MasterProgram,
+    Channel { uuid: String },
+}
+
+impl From<TapSourceBody> for crate::scene::TapSourceConfig {
+    fn from(b: TapSourceBody) -> Self {
+        match b {
+            TapSourceBody::MasterProgram => Self::MasterProgram,
+            TapSourceBody::Channel { uuid } => Self::Channel { uuid },
+        }
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct TapSourceRequestBody {
+    pub source: TapSourceBody,
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct MoveDeckBody {
     /// UUID of the channel to move the deck into.
@@ -356,6 +428,69 @@ pub async fn add_depth_sensor_deck(
         .send_command(EngineCommand::AddDepthSensorDeck {
             channel_uuid,
             depth_sensor_id: body.depth_sensor_id,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/screen", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = AddScreenCaptureDeckBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel or capture target not found")), tag = "Screen Capture")]
+pub async fn add_screen_capture_deck(
+    State(state): State<SharedState>,
+    Path(channel_uuid): Path<String>,
+    Json(body): Json<AddScreenCaptureDeckBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::AddScreenCaptureDeck {
+            channel_uuid,
+            target: body.target.into(),
+            rate: body.rate,
+            crop: body.crop.map(|c| crate::scene::CaptureCropConfig {
+                x: c.x,
+                y: c.y,
+                w: c.w,
+                h: c.h,
+            }),
+            show_cursor: body.show_cursor,
+            exclude_varda: body.exclude_varda,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(post, path = "/api/channels/{channel_uuid}/decks/tap", params(("channel_uuid" = String, Path, description = "Channel UUID")), request_body = TapSourceRequestBody, responses((status = 200, body = CommandResult), (status = 404, description = "Channel not found")), tag = "Decks")]
+pub async fn add_tap_deck(
+    State(state): State<SharedState>,
+    Path(channel_uuid): Path<String>,
+    Json(body): Json<TapSourceRequestBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::AddTapDeck {
+            channel_uuid,
+            source: body.source.into(),
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+    }
+}
+
+#[utoipa::path(put, path = "/api/decks/{deck_uuid}/tap/source", params(("deck_uuid" = String, Path, description = "Deck UUID")), request_body = TapSourceRequestBody, responses((status = 200, body = CommandResult), (status = 404, description = "Deck not found or is not a tap")), tag = "Decks")]
+pub async fn set_tap_source(
+    State(state): State<SharedState>,
+    Path(deck_uuid): Path<String>,
+    Json(body): Json<TapSourceRequestBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetTapSource {
+            deck_uuid,
+            source: body.source.into(),
         })
         .await
     {

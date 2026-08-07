@@ -219,6 +219,33 @@ pub async fn scan_depth_sensors(State(state): State<SharedState>) -> impl IntoRe
         Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
     }
 }
+#[utoipa::path(post, path = "/api/devices/screen/scan", responses((status = 200, body = CommandResult)), tag = "Screen Capture")]
+pub async fn scan_capture_targets(State(state): State<SharedState>) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RescanCaptureTargets)
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+/// Trigger the platform screen-recording permission request.
+///
+/// On macOS the grant does **not** apply to the running process — the user must
+/// approve in System Settings and restart Varda. The response only reports that
+/// the request was issued, not that capture now works.
+#[utoipa::path(post, path = "/api/devices/screen/permission", responses((status = 200, body = CommandResult)), tag = "Screen Capture")]
+pub async fn request_screen_capture_permission(
+    State(state): State<SharedState>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::RequestScreenCapturePermission)
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
 #[utoipa::path(post, path = "/api/devices/midi/scan", responses((status = 200, body = CommandResult)), tag = "Devices")]
 pub async fn scan_midi(State(state): State<SharedState>) -> impl IntoResponse {
     match state.send_command(EngineCommand::RescanMidi).await {

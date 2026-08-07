@@ -212,6 +212,33 @@ impl VardaApp {
                 channel_uuid,
                 depth_sensor_id,
             } => wire_id(self.add_depth_sensor_deck(&channel_uuid, depth_sensor_id)),
+            EngineCommand::AddScreenCaptureDeck {
+                channel_uuid,
+                target,
+                rate,
+                crop,
+                show_cursor,
+                exclude_varda,
+            } => {
+                let options = crate::screen_capture::backend::CaptureConfig {
+                    rate: rate.unwrap_or(crate::screen_capture::backend::DEFAULT_CAPTURE_RATE),
+                    crop: crop.map(Into::into).unwrap_or_default(),
+                    show_cursor: show_cursor.unwrap_or(false),
+                    // Displays default to excluding Varda so a full-display
+                    // capture is not an accidental infinite mirror; picking a
+                    // Varda window is an explicit request, so it does not.
+                    exclude_varda: exclude_varda.unwrap_or_else(|| target.is_display()),
+                    scale_to: None,
+                };
+                wire_id(self.add_screen_capture_deck(&channel_uuid, &target, options))
+            }
+            EngineCommand::AddTapDeck {
+                channel_uuid,
+                source,
+            } => wire_id(self.add_tap_deck(&channel_uuid, &source)),
+            EngineCommand::SetTapSource { deck_uuid, source } => {
+                wire(self.set_tap_source(&deck_uuid, &source))
+            }
             EngineCommand::RemoveDeck { deck_uuid } => wire(self.remove_deck(&deck_uuid)),
             EngineCommand::MoveDeck {
                 deck_uuid,
@@ -1333,6 +1360,14 @@ impl VardaApp {
                 self.depth_manager.scan_devices();
                 CommandResult::Ok
             }
+            EngineCommand::RescanCaptureTargets => {
+                self.screen_capture_manager.scan_targets();
+                CommandResult::Ok
+            }
+            EngineCommand::RequestScreenCapturePermission => {
+                self.screen_capture_manager.request_permission();
+                CommandResult::Ok
+            }
             EngineCommand::RescanMidi => {
                 if let Some(ref mut midi) = self.input.midi_devices {
                     midi.load_user_profiles(&self.session.workspace.controller_profiles_dir());
@@ -1600,6 +1635,8 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::RescanNdi
             | C::RescanSyphon
             | C::RescanCameras
+            | C::RescanCaptureTargets
+            | C::RequestScreenCapturePermission
             | C::RescanMidi
             | C::SetMidiDeviceEnabled { .. }
             | C::ClearMidiMappings

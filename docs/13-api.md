@@ -109,6 +109,34 @@ curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/html \
   -d '{"url": "https://example.com/overlay.html"}'
 ```
 
+### Capture a display or window as a deck
+
+Targets are addressed by name, never by platform handle, and are matched against the last enumeration. Scan first if you are not sure what is available. See [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture).
+
+```sh
+curl -X POST http://localhost:8080/api/devices/screen/scan
+curl http://localhost:8080/api/library/screen
+
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/screen \
+  -H "Content-Type: application/json" \
+  -d '{"target": {"kind": "window", "app": "Safari", "title": "Dashboard"}, "rate": 24}'
+
+# Capture settings are ordinary parameter paths
+curl -X PUT http://localhost:8080/api/params \
+  -H "Content-Type: application/json" \
+  -d '{"path": "deck/<deck_uuid>/capture/rate", "value": {"Float": 0.5}}'
+```
+
+### Feed Varda's own output back in
+
+```sh
+curl -X POST http://localhost:8080/api/channels/<ch_uuid>/decks/tap \
+  -H "Content-Type: application/json" \
+  -d '{"source": {"kind": "master_program"}}'
+```
+
+A tap shows the previous frame. See [Program Tap](09-streaming-and-io.md#program-tap).
+
 ### Add an effect, then tweak it
 
 `POST` returns the new effect's UUID in `{"status": "ok", "uuid": "..."}`. Every
@@ -437,6 +465,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `POST` | `/api/channels/{channel_uuid}/decks/solid` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/srt` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/syphon` |  |
+| `POST` | `/api/channels/{channel_uuid}/decks/tap` |  |
 | `POST` | `/api/channels/{channel_uuid}/decks/video` |  |
 | `DELETE` | `/api/decks/{deck_uuid}` |  |
 | `PUT` | `/api/decks/{deck_uuid}/blend-mode` |  |
@@ -448,6 +477,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/decks/{deck_uuid}/render-fps` |  |
 | `PUT` | `/api/decks/{deck_uuid}/scaling-mode` |  |
 | `PUT` | `/api/decks/{deck_uuid}/solo` |  |
+| `PUT` | `/api/decks/{deck_uuid}/tap/source` |  |
 | `PUT` | `/api/decks/{deck_uuid}/transparent` |  |
 
 ### Depth Sensors
@@ -605,6 +635,15 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/scene/sequences` | Every transition sequence with its steps and playback state. |
 | `GET` | `/api/scene/streams` | Active stream receivers with their URL, mode, and connection status. |
 
+### Screen Capture
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/channels/{channel_uuid}/decks/screen` |  |
+| `POST` | `/api/devices/screen/permission` | Trigger the platform screen-recording permission request. |
+| `POST` | `/api/devices/screen/scan` |  |
+| `GET` | `/api/library/screen` | Displays and windows found by the last capture scan. |
+
 ### Sequences
 
 | Method | Path | Description |
@@ -657,6 +696,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `GET` | `/api/state/outputs` | Output state: output windows, surfaces, and connected monitors. |
 | `GET` | `/api/state/performance` | Render loop counters: measured FPS, total frames rendered, and the configured target FPS. |
 | `GET` | `/api/state/registry` | Shader registry: generator and filter shader names with their indices. |
+| `GET` | `/api/state/screen_capture` | Screen capture state: enumerated targets, permission state, backend, and active session count. |
 | `GET` | `/api/state/streams` | Active stream receivers with their URL, mode, and connection status. |
 | `GET` | `/api/state/surfaces` | Every surface with its geometry, warp, and source assignment. |
 | `GET` | `/api/state/syphon` | Syphon framework availability and the server names found by the last scan. |

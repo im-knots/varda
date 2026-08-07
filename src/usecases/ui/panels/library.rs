@@ -3,6 +3,99 @@
 use super::super::{LibraryDrag, UIActions, UIData};
 use crate::engine::EngineCommand;
 
+/// egui memory key carrying the dragged capture target from the library panel
+/// to the deferred drop handler in `panels/dnd.rs`.
+pub(crate) const CAPTURE_DND_KEY: &str = "__lib_dnd_capture_target";
+
+/// egui memory key carrying the dragged tap source to the deferred drop handler.
+pub(crate) const TAP_DND_KEY: &str = "__lib_dnd_tap_source";
+
+/// One draggable tap row.
+fn tap_row(ui: &mut egui::Ui, label: &str, payload: crate::scene::TapSourceConfig) {
+    let item_id = egui::Id::new(("lib_tap", label));
+    ui.dnd_drag_source(item_id, LibraryDrag::Tap(payload.clone()), |ui| {
+        ui.label(egui::RichText::new(format!("  🔁 {label}")).size(12.0));
+    });
+    if ui.ctx().is_being_dragged(item_id) {
+        ui.ctx().memory_mut(|mem| {
+            mem.data.insert_temp(egui::Id::new(TAP_DND_KEY), payload);
+        });
+    }
+}
+
+/// Render the screen-recording permission state and its call to action.
+///
+/// macOS grants do not apply to the running process, so the copy says so — a
+/// user who grants access and sees nothing change would otherwise conclude the
+/// feature is broken. See spec/screen-capture.md § Permissions.
+fn render_capture_permission(ui: &mut egui::Ui, actions: &mut UIActions, permission: &str) {
+    match permission {
+        "granted" | "not_required" => {}
+        "denied" => {
+            ui.label(
+                egui::RichText::new("Screen Recording access denied")
+                    .small()
+                    .color(egui::Color32::from_rgb(220, 120, 120)),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Enable Varda under System Settings → Privacy & Security → \
+                     Screen Recording, then restart Varda.",
+                )
+                .small()
+                .weak(),
+            );
+        }
+        _ => {
+            ui.label(
+                egui::RichText::new("Screen Recording access not granted")
+                    .small()
+                    .color(egui::Color32::from_rgb(220, 180, 120)),
+            );
+            if ui.small_button("Grant Screen Recording access").clicked() {
+                actions
+                    .commands
+                    .push(EngineCommand::RequestScreenCapturePermission);
+            }
+            ui.label(
+                egui::RichText::new("Varda must be restarted after granting.")
+                    .small()
+                    .weak(),
+            );
+        }
+    }
+}
+
+/// One draggable capture target row.
+fn capture_target_row(
+    ui: &mut egui::Ui,
+    target: &crate::engine::CaptureTargetSnapshot,
+    payload: crate::scene::CaptureTargetConfig,
+) {
+    let item_id = egui::Id::new(("lib_capture", &target.kind, &target.label));
+    let text = if target.is_varda {
+        // Marking our own windows is what turns an accidental feedback loop
+        // into a deliberate one.
+        format!("  🖥 {} (Varda)", target.label)
+    } else {
+        format!("  🖥 {}", target.label)
+    };
+    ui.dnd_drag_source(item_id, LibraryDrag::ScreenCapture(payload.clone()), |ui| {
+        let mut rich = egui::RichText::new(text).size(12.0);
+        if target.is_varda {
+            rich = rich.color(egui::Color32::from_rgb(200, 170, 240));
+        }
+        ui.label(rich)
+            .on_hover_text(format!("{}×{}", target.width, target.height));
+    });
+    if ui.ctx().is_being_dragged(item_id) {
+        ui.ctx().memory_mut(|mem| {
+            mem.data
+                .insert_temp(egui::Id::new(CAPTURE_DND_KEY), payload);
+        });
+    }
+}
+
 /// Render a stream/URL library entry as a single row.
 ///
 /// The remove button is reserved on the right (via a right-to-left layout) and
@@ -216,6 +309,108 @@ pub(super) fn render_library_panel(ui: &mut egui::Ui, data: &UIData, actions: &m
                                 );
                             });
                         }
+                    }
+                });
+
+            ui.add_space(4.0);
+
+            // === SCREEN CAPTURE ===
+            // Targets are split into Displays and Windows, and Varda's own
+            // windows are marked so self-capture is an informed choice rather
+            // than an accidental mirror. See spec/screen-capture.md § UI.
+            let capture_header =
+                egui::RichText::new(format!("🖥 Screen Capture ({})", data.capture_targets.len()))
+                    .strong();
+            egui::CollapsingHeader::new(capture_header)
+                .id_salt("lib_screen_capture")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if !data.screen_capture_available {
+                        ui.label(
+                            egui::RichText::new("Screen capture is disabled in this build")
+                                .small()
+                                .weak(),
+                        );
+                        return;
+                    }
+
+                    if ui.small_button("🔄 Rescan").clicked() {
+                        actions.commands.push(EngineCommand::RescanCaptureTargets);
+                    }
+
+                    render_capture_permission(ui, actions, &data.screen_capture_permission);
+
+                    let (displays, windows): (Vec<_>, Vec<_>) = data
+                        .capture_targets
+                        .iter()
+                        .partition(|t| t.kind == "display");
+
+                    if displays.is_empty() && windows.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No capture targets — press Rescan")
+                                .small()
+                                .weak(),
+                        );
+                    }
+
+                    if !displays.is_empty() {
+                        ui.label(egui::RichText::new("Displays").small().weak());
+                        for t in &displays {
+                            capture_target_row(
+                                ui,
+                                t,
+                                crate::scene::CaptureTargetConfig::Display {
+                                    name: t.label.clone(),
+                                },
+                            );
+                        }
+                    }
+
+                    if !windows.is_empty() {
+                        ui.add_space(2.0);
+                        ui.label(egui::RichText::new("Windows").small().weak());
+                        for t in &windows {
+                            capture_target_row(
+                                ui,
+                                t,
+                                crate::scene::CaptureTargetConfig::Window {
+                                    app: t.app.clone().unwrap_or_default(),
+                                    title: t.title.clone().unwrap_or_default(),
+                                },
+                            );
+                        }
+                    }
+                });
+
+            ui.add_space(4.0);
+
+            // === TAPS ===
+            // Built from the live channel list rather than a device scan, so
+            // there is nothing to rescan. See spec/program-tap.md § UI.
+            let tap_header =
+                egui::RichText::new(format!("🔁 Taps ({})", data.channels.len() + 1)).strong();
+            egui::CollapsingHeader::new(tap_header)
+                .id_salt("lib_taps")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("Varda's own output, one frame behind.")
+                            .small()
+                            .weak(),
+                    );
+                    tap_row(
+                        ui,
+                        "Master Program",
+                        crate::scene::TapSourceConfig::MasterProgram,
+                    );
+                    for ch in &data.channels {
+                        tap_row(
+                            ui,
+                            &ch.name,
+                            crate::scene::TapSourceConfig::Channel {
+                                uuid: ch.uuid.clone(),
+                            },
+                        );
                     }
                 });
 

@@ -66,6 +66,7 @@ pub struct EngineState {
     pub midi: MidiSnapshot,
     pub cameras: CameraSnapshot,
     pub depth_sensors: DepthSensorSnapshot,
+    pub screen_capture: ScreenCaptureSnapshot,
     pub clock: ClockSnapshot,
     pub fps: f32,
     pub frame_count: u64,
@@ -199,6 +200,10 @@ pub struct DeckSnapshot {
     pub has_depth_prepro: bool,
     /// Depth-preprocessor controls (None = no preprocessor attached).
     pub depth_prepro_params: Option<DepthPreproParamsSnapshot>,
+    /// Screen-capture controls (None = not a screen-capture source).
+    pub screen_capture: Option<ScreenCaptureDeckSnapshot>,
+    /// Tap controls (None = not a tap source).
+    pub tap: Option<TapDeckSnapshot>,
     pub opacity: f32,
     pub effective_opacity: f32,
     pub blend_mode: BlendMode,
@@ -548,6 +553,101 @@ pub struct DepthSensorSnapshot {
     pub devices: Vec<(String, DepthSensorId)>,
 }
 
+/// Per-deck screen-capture controls, for the deck detail panel and the API.
+// The flags are independent facts about one capture, not a state machine:
+// cursor and Varda-exclusion are user settings, bound and connected are two
+// distinct failure modes a performer needs told apart.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Serialize, utoipa::ToSchema)]
+pub struct ScreenCaptureDeckSnapshot {
+    /// The target this deck captures, in its persisted display form.
+    pub target_label: String,
+    /// Display targets get the `exclude_varda` toggle; window targets do not.
+    pub is_display: bool,
+    /// Capture rate as a 0–1 fraction of the 1–120 fps range, matching what
+    /// `deck/<uuid>/capture/rate` accepts.
+    pub rate_norm: f32,
+    /// The same rate in fps, for display.
+    pub rate_fps: f32,
+    /// Normalized crop as `[x, y, w, h]`.
+    pub crop: [f32; 4],
+    pub show_cursor: bool,
+    pub exclude_varda: bool,
+    /// False when a restored scene named a target that is not currently on
+    /// screen. The deck keeps its effects and mappings and renders black.
+    pub bound: bool,
+    /// Whether frames are currently arriving.
+    pub connected: bool,
+}
+
+/// Per-deck tap controls, for the deck detail panel and the API.
+/// See spec/program-tap.md.
+#[derive(Clone, Serialize, utoipa::ToSchema)]
+pub struct TapDeckSnapshot {
+    /// `"master_program"` or `"channel"`.
+    pub kind: String,
+    /// Channel UUID when `kind` is `"channel"`.
+    pub channel_uuid: Option<String>,
+    /// Resolved display name for the tap point.
+    pub label: String,
+    /// False when the tapped channel no longer exists. The deck keeps its
+    /// effects and mappings and renders black.
+    pub bound: bool,
+}
+
+// ── Screen Capture Snapshot ─────────────────────────────────────────
+
+/// One capturable display or window, for the Library panel and the API.
+/// Plain data — no platform handles, since the UI addresses targets by name.
+/// See spec/screen-capture.md.
+#[derive(Clone, Serialize, utoipa::ToSchema)]
+pub struct CaptureTargetSnapshot {
+    /// `"display"` or `"window"`.
+    pub kind: String,
+    /// Human-readable name, e.g. `"Display 1"` or `"Ableton Live — Set 3"`.
+    pub label: String,
+    /// Owning application bundle id or process name. Windows only.
+    pub app: Option<String>,
+    /// Window title at enumeration time. Windows only.
+    pub title: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    /// This target is one of Varda's own windows — capturing it is a deliberate
+    /// self-capture, which the UI marks so it is an informed choice.
+    pub is_varda: bool,
+}
+
+/// Screen-capture subsystem state for GUI/API/WS consumers.
+#[derive(Clone, Serialize, utoipa::ToSchema)]
+pub struct ScreenCaptureSnapshot {
+    /// Targets found by the last scan. Manual — never polled.
+    pub targets: Vec<CaptureTargetSnapshot>,
+    /// `granted` / `denied` / `not_determined` / `not_required`. This is why a
+    /// capture deck can be black, so it is reported rather than inferred.
+    pub permission: String,
+    /// False when built without the `screen-capture` feature or started with
+    /// `--no-screen-capture`.
+    pub available: bool,
+    /// Platform backend in use, e.g. `"ScreenCaptureKit"`.
+    pub backend: String,
+    /// Number of live capture sessions (one per target, shared by N decks).
+    pub active_captures: usize,
+}
+
+impl Default for ScreenCaptureSnapshot {
+    /// The state a build without a capture backend reports: nothing to scan,
+    /// and no permission to ask for.
+    fn default() -> Self {
+        Self {
+            targets: vec![],
+            permission: "not_required".into(),
+            available: false,
+            backend: "none".into(),
+            active_captures: 0,
+        }
+    }
+}
+
 // ── Analyzer Snapshot ──────────────────────────────────────────────
 
 /// Info about an available analyzer type (for UI discovery).
@@ -674,6 +774,7 @@ mod tests {
             },
             cameras: CameraSnapshot { devices: vec![] },
             depth_sensors: DepthSensorSnapshot { devices: vec![] },
+            screen_capture: ScreenCaptureSnapshot::default(),
             clock: ClockSnapshot {
                 bpm: None,
                 beat_phase: 0.0,
@@ -755,6 +856,7 @@ mod tests {
             },
             cameras: CameraSnapshot { devices: vec![] },
             depth_sensors: DepthSensorSnapshot { devices: vec![] },
+            screen_capture: ScreenCaptureSnapshot::default(),
             clock: ClockSnapshot {
                 bpm: Some(120.0),
                 beat_phase: 0.0,
@@ -887,6 +989,8 @@ mod tests {
                 motion_gain: 0.4,
                 mirror: true,
             }),
+            screen_capture: None,
+            tap: None,
             opacity: 1.0,
             effective_opacity: 0.5,
             blend_mode: BlendMode::Normal,
