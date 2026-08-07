@@ -54,7 +54,7 @@ This is how broadcast video works. A switcher doesn't start and stop cameras. Ev
 | ISF Shader | GLSL generator with typed parameters, hot-reload on save |
 | Video | ffmpeg decode with loop/ping-pong/one-shot, speed, scrub, in/out points |
 | HAP Video | GPU-native codec (BC1/BC3/BC7/YCoCg), direct GPU upload |
-| Image | PNG or JPG still |
+| Image | Still image — PNG, JPG, BMP, TIFF, TGA, WebP, or SVG vector art |
 | Camera | Live webcam input, shared across multiple decks |
 | NDI | Network video receive via NDI SDK |
 | SRT | Secure Reliable Transport stream receive |

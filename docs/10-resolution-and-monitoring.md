@@ -74,6 +74,8 @@ Every deck renders to a texture at the render resolution, regardless of its sour
 
 Because scaling happens once on load rather than every frame, the compositing pipeline and all effect chains operate at a single consistent resolution.
 
+**SVG is the exception, and deliberately so.** Vector art has no native pixel size, so instead of being decoded once and scaled, it is *redrawn* to fit the deck — and redrawn again whenever you change the render resolution. A logo that looks crisp while you build the set at 720p is re-rendered at 4K when you switch the master up for the show, rather than being magnified. The drawing's own proportions are preserved, so the scaling mode above applies to an SVG exactly as it does to a photograph.
+
 ## Performance Monitoring
 
 All metrics are displayed inline in the top bar, each with a clickable drill-down popover. Reading left to right:

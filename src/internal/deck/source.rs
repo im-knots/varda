@@ -1,7 +1,7 @@
 //! Deck constructors — creating decks from shaders, videos, images, cameras, and solid colors.
 
 use super::{
-    Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, ScalingMode, VideoStagingBuffers,
+    svg, Deck, DeckSource, Effect, ExternalSourceKind, PassBuffer, ScalingMode, VideoStagingBuffers,
 };
 use crate::isf::{compile_glsl_compute_to_spirv, compile_glsl_to_spirv, ISFMetadata, ISFShader};
 use crate::params::ShaderParams;
@@ -27,6 +27,54 @@ fn external_blit_pipelines(context: &GpuContext) -> Result<(BlitPipeline, BlitPi
         wgpu::BlendState::ALPHA_BLENDING,
     )?;
     Ok((replace, over_black))
+}
+
+/// Upload straight-alpha RGBA pixels as an image deck's source texture.
+///
+/// Shared with the SVG re-rasterization path, which replaces this texture
+/// whenever the master resolution changes.
+pub(super) fn upload_image_texture(
+    context: &GpuContext,
+    rgba: &image::RgbaImage,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let (img_w, img_h) = rgba.dimensions();
+    let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Image Source Texture"),
+        size: wgpu::Extent3d {
+            width: img_w,
+            height: img_h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    context.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * img_w),
+            rows_per_image: Some(img_h),
+        },
+        wgpu::Extent3d {
+            width: img_w,
+            height: img_h,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 /// Load ISF IMPORTED images from metadata and create GPU textures.
@@ -636,85 +684,72 @@ impl Deck {
         ))
     }
 
-    /// Create a new deck from an image file (PNG, JPG, BMP, etc.)
+    /// Create a new deck from an image file (PNG, JPG, BMP, SVG, etc.)
+    ///
+    /// SVG is rasterized rather than decoded: it has no native pixel size, so
+    /// it is rendered to fill a `width × height` deck and re-rendered if that
+    /// changes. See [`svg`](crate::deck::svg).
     ///
     /// # Errors
     ///
-    /// Returns an error if the image cannot be opened or decoded, or if the
-    /// blit pipeline cannot be created.
+    /// Returns an error if the image cannot be opened, decoded or rasterized,
+    /// or if the blit pipeline cannot be created.
     pub fn new_from_image<P: AsRef<Path>>(
         context: &GpuContext,
         path: P,
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let source_path_str = path.as_ref().to_string_lossy().to_string();
-        let img = image::open(&path)
-            .with_context(|| format!("Failed to load image: {}", path.as_ref().display()))?;
-        let rgba = img.to_rgba8();
-
+        let path = path.as_ref();
+        let source_path_str = path.to_string_lossy().to_string();
         let source_name = path
-            .as_ref()
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or("image")
             .to_string();
 
-        Self::new_from_rgba(context, &rgba, source_name, source_path_str, width, height)
+        if svg::is_svg_path(path) {
+            let tree = svg::parse_file(path)?;
+            let rgba = svg::rasterize(&tree, width, height)?;
+            return Self::new_image_deck(
+                context,
+                &rgba,
+                Some(tree),
+                source_name,
+                source_path_str,
+                width,
+                height,
+            );
+        }
+
+        let img = image::open(path)
+            .with_context(|| format!("Failed to load image: {}", path.display()))?;
+        let rgba = img.to_rgba8();
+        Self::new_image_deck(
+            context,
+            &rgba,
+            None,
+            source_name,
+            source_path_str,
+            width,
+            height,
+        )
     }
 
-    /// Create a new deck from pre-decoded RGBA image data.
-    /// Used by parallel image loading to separate CPU decode from GPU upload.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the blit pipeline cannot be created.
-    pub fn new_from_rgba(
+    /// Create a new deck from decoded pixels. `tree` is carried by SVG decks so
+    /// a later resolution change can re-render the artwork instead of scaling
+    /// up the pixels it happened to be rasterized at first.
+    fn new_image_deck(
         context: &GpuContext,
         rgba: &image::RgbaImage,
+        tree: Option<usvg::Tree>,
         source_name: String,
         source_path_str: String,
         width: u32,
         height: u32,
     ) -> Result<Self> {
         let (img_w, img_h) = rgba.dimensions();
-
-        let img_texture = context.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Image Source Texture"),
-            size: wgpu::Extent3d {
-                width: img_w,
-                height: img_h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        context.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &img_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * img_w),
-                rows_per_image: Some(img_h),
-            },
-            wgpu::Extent3d {
-                width: img_w,
-                height: img_h,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        let img_texture_view = img_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (img_texture, img_texture_view) = upload_image_texture(context, rgba);
         let blit_pipeline = BlitPipeline::new(&context.device, context.compositing_format)?;
 
         let source = DeckSource::Image {
@@ -724,6 +759,7 @@ impl Deck {
             source_width: img_w,
             source_height: img_h,
             scaling_mode: ScalingMode::default(),
+            svg: tree.map(Box::new),
         };
 
         Ok(Self::build_media_deck(

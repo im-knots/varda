@@ -195,6 +195,49 @@ fn save_load_multiple_channels() {
 }
 
 #[test]
+fn save_load_svg_image_deck() {
+    // SVG rides the existing image source config — no new scene.json shape —
+    // so the roundtrip has to prove the restored deck comes back rasterized
+    // rather than failing the way an unknown format would.
+    let tmp = TempDir::new().unwrap();
+    let art = tmp.path().join("logo.svg");
+    std::fs::write(
+        &art,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50"
+            width="200" height="50"><rect width="200" height="50" fill="#20c0a0"/></svg>"##,
+    )
+    .unwrap();
+
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let ch = channel_uuid(&mut app, 0);
+    let result = send_cmd(
+        &mut app,
+        EngineCommand::AddImageDeck {
+            channel_uuid: ch,
+            path: art.clone(),
+        },
+    );
+    assert!(
+        matches!(result, CommandResult::OkWithId { .. }),
+        "adding an SVG deck should succeed, got {result:?}"
+    );
+    app.save_workspace(&UILayoutState::default());
+
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    let state = app2.build_engine_state();
+    assert_eq!(
+        state.mixer.channels[0].decks.len(),
+        1,
+        "the SVG deck must survive the roundtrip"
+    );
+}
+
+#[test]
 fn load_missing_assets_graceful() {
     let tmp = TempDir::new().unwrap();
     let Some(mut app) = headless_app_in(tmp.path()) else {

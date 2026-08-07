@@ -1077,7 +1077,9 @@ impl VardaApp {
             let dialog = match kind {
                 FileDialogKind::Image => rfd::FileDialog::new().add_filter(
                     "Images",
-                    &["png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp"],
+                    &[
+                        "png", "jpg", "jpeg", "bmp", "tiff", "tga", "webp", "svg", "svgz",
+                    ],
                 ),
                 FileDialogKind::Video => rfd::FileDialog::new()
                     .add_filter("Video", &["mov", "mp4", "avi", "mkv", "webm", "gif"]),
