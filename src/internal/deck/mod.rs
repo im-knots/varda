@@ -1,6 +1,7 @@
 mod effect;
 mod render;
 mod source;
+pub mod svg;
 
 pub use render::get_current_date;
 
@@ -275,6 +276,11 @@ pub enum DeckSource {
         source_width: u32,
         source_height: u32,
         scaling_mode: ScalingMode,
+        /// Vector artwork this texture was rendered from, kept so a resolution
+        /// change can re-render it at the new size rather than magnifying
+        /// pixels. `None` for raster images, which have nothing to re-render.
+        /// Boxed to keep the enum's other variants from paying for the tree.
+        svg: Option<Box<usvg::Tree>>,
     },
     /// Solid color fill
     SolidColor { color: [f64; 4] },

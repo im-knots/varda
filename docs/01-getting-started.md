@@ -56,7 +56,8 @@ Shaders in `shaders/` appear automatically in the Library panel under **Generato
 | **Shaders** | `.fs` (ISF GLSL 450) |
 | **Video** | Any ffmpeg-supported container/codec — MP4, MOV, MKV, AVI, WebM (H.264, H.265, ProRes, VP9, etc.) |
 | **HAP Video** | MOV with HAP, HAP Alpha, HAP Q, HAP Q Alpha, HAP R — GPU-native decode, no CPU overhead |
-| **Images** | PNG, JPG/JPEG |
+| **Images** | PNG, JPG/JPEG, BMP, TIFF, TGA, WebP |
+| **Vector** | SVG/SVGZ — redrawn at your render resolution, so it stays sharp at any size |
 
 The table above covers local file content. Varda can also route live and network inputs like cameras, NDI, SRT, HLS, DASH, RTMP, screen and window captures, compute shaders, and more. See [Source Types](02-concepts.md#source-types) for the complete list.
 

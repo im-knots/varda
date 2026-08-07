@@ -39,7 +39,7 @@ The Library is built around drag-and-drop. The core gesture is **drag an item on
 | **Deck Preset** | — | Drag onto a channel (or double-click → Channel 0) to load it. |
 | **Channel Preset** | — | Drag (or double-click) to add a channel to the mixer. |
 
-Images and video are loaded via their section's **📁 Load to [Channel]** button rather than by dragging.
+Images and video are loaded via their section's **📁 Load to [Channel]** button rather than by dragging. The image dialog accepts SVG alongside the usual raster formats — see [Per-Deck Scaling](10-resolution-and-monitoring.md#per-deck-scaling) for how vector art is redrawn to match your render resolution.
 
 Effects in a chain can also be reordered by drag-and-drop, and toggled on/off individually (see [Effect Chains](02-concepts.md#effect-chains)).
 

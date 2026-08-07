@@ -7909,9 +7909,26 @@ dependencies = [
  "pico-args",
  "rgb",
  "svgtypes 0.15.3",
- "tiny-skia",
+ "tiny-skia 0.11.4",
  "usvg 0.45.1",
  "zune-jpeg 0.4.21",
+]
+
+[[package]]
+name = "resvg"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9be183ad6a216aa96f33e4c8033b0988b8b3ea6fd2359d19af5bac4643fd8e81"
+dependencies = [
+ "gif 0.14.1",
+ "image-webp",
+ "log",
+ "pico-args",
+ "rgb",
+ "svgtypes 0.16.1",
+ "tiny-skia 0.12.0",
+ "usvg 0.47.0",
+ "zune-jpeg 0.5.14",
 ]
 
 [[package]]
@@ -8342,7 +8359,7 @@ dependencies = [
  "log",
  "memmap2",
  "smithay-client-toolkit 0.19.2",
- "tiny-skia",
+ "tiny-skia 0.11.4",
 ]
 
 [[package]]
@@ -9167,7 +9184,7 @@ dependencies = [
  "markup5ever",
  "mime",
  "parking_lot",
- "resvg",
+ "resvg 0.45.1",
  "servo-allocator",
  "servo_arc",
  "smallvec",
@@ -9373,7 +9390,7 @@ dependencies = [
  "parking_lot",
  "quick_cache",
  "regex",
- "resvg",
+ "resvg 0.45.1",
  "rustc-hash 2.1.2",
  "rustls",
  "rustls-pki-types",
@@ -10902,6 +10919,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tiny-skia"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47ffee5eaaf5527f630fb0e356b90ebdec84d5d18d937c5e440350f88c5a91ea"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "bytemuck",
+ "cfg-if 1.0.4",
+ "log",
+ "png 0.18.1",
+ "tiny-skia-path 0.12.0",
+]
+
+[[package]]
 name = "tiny-skia-path"
 version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11719,6 +11751,7 @@ dependencies = [
  "pipewire",
  "pollster",
  "proptest",
+ "resvg 0.47.0",
  "rfd",
  "rosc",
  "rustfft",

@@ -1416,6 +1416,48 @@ impl Deck {
         self.texture_b_view = self
             .texture_b
             .create_view(&wgpu::TextureViewDescriptor::default());
+        self.rerasterize_svg(context, width, height);
+    }
+
+    /// Re-render an SVG image source for a `width × height` deck.
+    ///
+    /// This is what makes vector art resolution-independent in practice: the
+    /// same file that was rasterized for a 720p stage is redrawn at 4K when the
+    /// master resolution goes up, instead of the blit magnifying the pixels it
+    /// was first rendered at. Raster images and every other source are skipped.
+    /// A failed re-render keeps the existing texture, so the deck goes soft
+    /// rather than black.
+    fn rerasterize_svg(&mut self, context: &GpuContext, width: u32, height: u32) {
+        let DeckSource::Image {
+            texture,
+            texture_view,
+            source_width,
+            source_height,
+            svg: Some(tree),
+            ..
+        } = &mut self.source
+        else {
+            return;
+        };
+        let (raster_w, raster_h) = crate::deck::svg::raster_size(tree, width, height);
+        if (raster_w, raster_h) == (*source_width, *source_height) {
+            return;
+        }
+        let rgba = match crate::deck::svg::rasterize(tree, width, height) {
+            Ok(rgba) => rgba,
+            Err(e) => {
+                log::warn!(
+                    "Could not re-rasterize SVG deck '{}': {e}",
+                    self.source_name
+                );
+                return;
+            }
+        };
+        let (new_texture, new_view) = super::source::upload_image_texture(context, &rgba);
+        *texture = new_texture;
+        *texture_view = new_view;
+        *source_width = raster_w;
+        *source_height = raster_h;
     }
 
     /// Get the final output texture view (after effect chain)
@@ -1917,5 +1959,81 @@ mod tests {
 
         // Normal resize still works
         deck.resize(&gpu, 128, 128);
+    }
+
+    // ── SVG image decks rasterize against the master resolution ──────
+
+    /// A 4:1 drawing, so a stretched rasterization is distinguishable from a
+    /// fitted one and the deck's own scaling mode has something to work with.
+    const WIDE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 200 50" width="200" height="50">
+        <rect width="200" height="50" fill="#3050ff"/></svg>"##;
+
+    fn image_source_size(deck: &crate::deck::Deck) -> (u32, u32) {
+        match &deck.source {
+            DeckSource::Image {
+                source_width,
+                source_height,
+                ..
+            } => (*source_width, *source_height),
+            _ => panic!("expected an image deck"),
+        }
+    }
+
+    #[test]
+    fn an_svg_deck_is_drawn_at_the_deck_size_not_the_files_own_size() {
+        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+            eprintln!("Skipping: no headless GPU available");
+            return;
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("art.svg");
+        std::fs::write(&path, WIDE_SVG).expect("write svg");
+
+        let deck = crate::deck::Deck::new_from_image(&gpu, &path, 1920, 1080).expect("svg deck");
+        // Not (200, 50): vector art is drawn for the stage it lands on, and it
+        // fills the width without being stretched to the deck's 16:9.
+        assert_eq!(image_source_size(&deck), (1920, 480));
+    }
+
+    #[test]
+    fn changing_the_master_resolution_redraws_the_svg() {
+        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+            eprintln!("Skipping: no headless GPU available");
+            return;
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("art.svg");
+        std::fs::write(&path, WIDE_SVG).expect("write svg");
+
+        let mut deck = crate::deck::Deck::new_from_image(&gpu, &path, 640, 360).expect("svg deck");
+        assert_eq!(image_source_size(&deck), (640, 160));
+
+        // Going up to 4K must redraw rather than magnify the 640 px raster.
+        deck.resize(&gpu, 3840, 2160);
+        assert_eq!(image_source_size(&deck), (3840, 960));
+
+        deck.resize(&gpu, 1280, 720);
+        assert_eq!(image_source_size(&deck), (1280, 320));
+    }
+
+    #[test]
+    fn a_raster_image_keeps_its_own_pixels_across_a_resize() {
+        // The counterpart to the SVG behaviour: a PNG has real pixels and there
+        // is nothing to redraw, so resizing must leave the source alone.
+        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+            eprintln!("Skipping: no headless GPU available");
+            return;
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("art.png");
+        image::RgbaImage::from_pixel(80, 40, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .expect("write png");
+
+        let mut deck = crate::deck::Deck::new_from_image(&gpu, &path, 640, 360).expect("png deck");
+        assert_eq!(image_source_size(&deck), (80, 40));
+        deck.resize(&gpu, 3840, 2160);
+        assert_eq!(image_source_size(&deck), (80, 40));
     }
 }
