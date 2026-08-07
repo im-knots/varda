@@ -563,6 +563,7 @@ pub(crate) fn build_ui_data(
         dome_mode_active: layout.dome_mode_active,
         dome_preset: layout.dome_preset,
         dome_geometry: layout.dome_geometry,
+        domemaster_resolution: app.domemaster_resolution(),
         camera_detect_texture: None, // populated by UIRunner
         camera_detect_mode: crate::usecases::ui::CameraDetectMode::Off, // populated by UIRunner
         camera_detect_contours: vec![], // populated by UIRunner

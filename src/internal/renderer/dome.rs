@@ -8,19 +8,12 @@
 use anyhow::Result;
 use wgpu::util::DeviceExt;
 
-/// Domemaster resolution presets.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, Default)]
-pub enum DomemasterResolution {
-    /// 1024×1024
-    R1K,
-    /// 2048×2048
-    #[default]
-    R2K,
-    /// 4096×4096
-    R4K,
-}
+pub use crate::engine::value::dome::DomemasterResolution;
 
 impl DomemasterResolution {
+    /// Every preset, in ascending order, for building selectors.
+    pub const ALL: [Self; 3] = [Self::R1K, Self::R2K, Self::R4K];
+
     pub fn pixels(self) -> u32 {
         match self {
             Self::R1K => 1024,
@@ -467,6 +460,26 @@ mod tests {
     #[test]
     fn resolution_default_is_2k() {
         assert_eq!(DomemasterResolution::default(), DomemasterResolution::R2K);
+    }
+
+    #[test]
+    fn all_lists_every_preset_ascending() {
+        // Selectors are built from ALL, so a preset missing here is a preset the
+        // operator cannot reach.
+        assert_eq!(
+            DomemasterResolution::ALL,
+            [
+                DomemasterResolution::R1K,
+                DomemasterResolution::R2K,
+                DomemasterResolution::R4K,
+            ]
+        );
+        assert!(
+            DomemasterResolution::ALL
+                .windows(2)
+                .all(|w| w[0].pixels() < w[1].pixels()),
+            "ALL must stay in ascending order for the dropdown to read sensibly"
+        );
     }
 
     #[test]

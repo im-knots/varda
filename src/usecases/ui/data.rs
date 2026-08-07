@@ -427,6 +427,8 @@ pub struct UIData {
     pub dome_preset: DomePreset,
     /// Active dome geometry (radius, truncation, tilt)
     pub dome_geometry: DomeGeometry,
+    /// Size the domemaster is rendered at (square)
+    pub domemaster_resolution: crate::renderer::dome::DomemasterResolution,
     /// Camera detection mode texture (live camera feed registered with egui)
     pub camera_detect_texture: Option<egui::TextureId>,
     /// Current camera detection mode state

@@ -1963,6 +1963,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_set_domemaster_resolution() {
+        let (status, json) = put_json(
+            router_with_mock_engine(),
+            "/api/domemaster/resolution",
+            serde_json::json!({"resolution": "R4K"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
     async fn test_set_clock_preference() {
         let (status, json) = put_json(
             router_with_mock_engine(),

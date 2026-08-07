@@ -58,6 +58,10 @@ pub struct StagePrefs {
     /// Active dome geometry
     #[serde(default)]
     pub dome_geometry: crate::renderer::slicer::DomeGeometry,
+    /// Size the domemaster is rendered at. Stage-level because it belongs to the
+    /// dome being projected onto, not to the scene playing on it.
+    #[serde(default)]
+    pub domemaster_resolution: crate::renderer::dome::DomemasterResolution,
     /// 2D stage surface layout
     #[serde(default)]
     pub surfaces: crate::surface::SurfaceManager,
@@ -88,6 +92,7 @@ impl Default for StagePrefs {
             dome_mode_active: false,
             dome_preset: crate::renderer::slicer::DomePreset::Quad,
             dome_geometry: crate::renderer::slicer::DomeGeometry::default(),
+            domemaster_resolution: crate::renderer::dome::DomemasterResolution::default(),
             surfaces: crate::surface::SurfaceManager::default(),
             outputs: Vec::new(),
         }
@@ -914,6 +919,7 @@ pub fn snapshot_stage(
     dome_mode_active: bool,
     dome_preset: crate::renderer::slicer::DomePreset,
     dome_geometry: crate::renderer::slicer::DomeGeometry,
+    domemaster_resolution: crate::renderer::dome::DomemasterResolution,
 ) -> StagePrefs {
     let outputs = outputs_list
         .iter()
@@ -987,6 +993,7 @@ pub fn snapshot_stage(
         dome_mode_active,
         dome_preset,
         dome_geometry,
+        domemaster_resolution,
         surfaces: surface_manager.clone(),
         outputs,
     }
@@ -1470,12 +1477,28 @@ pub(crate) fn restore_deck(
             scaling_mode,
         } => {
             let identity = crate::screen_capture::backend::TargetIdentity::from(target);
+            let found = screen_capture_manager.find_target(&identity).cloned();
             let config = crate::screen_capture::backend::CaptureConfig {
                 rate: *rate,
                 crop: crop.map(Into::into).unwrap_or_default(),
                 show_cursor: *show_cursor,
                 exclude_varda: exclude_varda.unwrap_or_else(|| target.is_display()),
-                scale_to: Some((render_width, render_height)),
+                // Capped to the deck but kept in the target's own shape, so the
+                // deck's scaling mode still has an aspect mismatch to resolve.
+                // Falls back to the deck box when the target is missing; the
+                // real size is picked up if it comes back and rebinds.
+                scale_to: Some(
+                    found
+                        .as_ref()
+                        .map_or((render_width, render_height), |info| {
+                            crate::screen_capture::resample::fit_within(
+                                info.width,
+                                info.height,
+                                render_width,
+                                render_height,
+                            )
+                        }),
+                ),
             }
             .sanitized();
 
@@ -1486,21 +1509,18 @@ pub(crate) fn restore_deck(
             // restored unbound and renders black until the target reappears or
             // the user repoints it.
             // See spec/screen-capture.md § Configuration and Persistence.
-            let opened = screen_capture_manager
-                .find_target(&identity)
-                .cloned()
-                .and_then(|info| {
-                    match screen_capture_manager.open(&info, config.clone(), &context.device) {
-                        Ok(bound) => Some((info.label.clone(), bound)),
-                        Err(e) => {
-                            log::warn!(
-                                "Capture target '{}' found but could not be opened: {e}",
-                                info.label
-                            );
-                            None
-                        }
+            let opened = found.and_then(|info| {
+                match screen_capture_manager.open(&info, config.clone(), &context.device) {
+                    Ok(bound) => Some((info.label.clone(), bound)),
+                    Err(e) => {
+                        log::warn!(
+                            "Capture target '{}' found but could not be opened: {e}",
+                            info.label
+                        );
+                        None
                     }
-                });
+                }
+            });
 
             let (label, capture_id, src_w, src_h) = opened.map_or_else(
                 || {

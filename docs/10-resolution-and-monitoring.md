@@ -49,7 +49,17 @@ Everything you send out conforms to the resolution you set, not to the shape it 
 
 **Recordings, NDI, Syphon and streams** are resized to match. Anything already running through ffmpeg such as a recording or a stream, is **stopped**, and a toast names which ones. The encoder's frame size is fixed when it starts, so it can't follow you mid-take; stopping is safer than writing frames it will misread, and safer than restarting, which would reopen the file and wipe the take you already have. Start it again and it comes back at the new size. NDI and Syphon keep publishing across the change without interruption.
 
-**Output windows** letterbox. The window is whatever size you or the OS made it, so a 9:16 project on a 16:9 projector is centred with black bars rather than stretched. The projector calibration card still covers the full output — it has to, for alignment to mean anything — and surfaces you place on the stage carry their own shape, so neither is letterboxed.
+**Output windows** letterbox. The window is whatever size you or the OS made it, so a 9:16 project on a 16:9 projector is centred with black bars rather than stretched. The projector calibration card still covers the full output — it has to, for alignment to mean anything — and surfaces you place on the stage carry their own shape, so neither is letterboxed. A brand-new output window opens at the master's aspect ratio, so a vertical or square project doesn't start life in a 16:9 window you have to drag into shape. Once you have resized it, that size is saved with the stage and used from then on.
+
+**The dome is the one exception.** A domemaster is square by definition, so it has its own size setting (1K/2K/4K) in the Stage Editor's dome toolbar rather than following the master. See [Projection Mapping](08-projection.md).
+
+### What outputs do with frame rate
+
+Everything runs at the **Target FPS** you set in the top bar — there are no per-output frame-rate settings and nothing runs on its own clock. Recordings and streams declare that rate to their encoder, and NDI advertises it to receivers, so a Varda running at 60 shows up as 60 in OBS or Studio Monitor rather than claiming some fixed number.
+
+**Uncapped** is the one case where a real number has to be invented, because a file or a stream has to state a frame rate and "as fast as possible" isn't one. Outputs declare 60 in that mode. If you are recording or streaming and you care about exact timing, set an explicit target rather than leaving it uncapped.
+
+When the renderer misses a frame, recordings repeat the previous one to keep the file's running time honest, rather than producing a file that plays back faster than the session really ran.
 
 ## Per-Deck Scaling
 

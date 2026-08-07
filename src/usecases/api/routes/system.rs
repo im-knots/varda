@@ -94,6 +94,28 @@ pub async fn set_resolution(
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct DomemasterResolutionBody {
+    /// Domemaster output size. Square, so it is a preset rather than a width
+    /// and height: `R1K` (1024²), `R2K` (2048²), or `R4K` (4096²).
+    pub resolution: crate::renderer::dome::DomemasterResolution,
+}
+#[utoipa::path(put, path = "/api/domemaster/resolution", request_body = DomemasterResolutionBody, responses((status = 200, body = CommandResult)), tag = "System")]
+pub async fn set_domemaster_resolution(
+    State(state): State<SharedState>,
+    Json(b): Json<DomemasterResolutionBody>,
+) -> impl IntoResponse {
+    match state
+        .send_command(EngineCommand::SetDomemasterResolution {
+            resolution: b.resolution,
+        })
+        .await
+    {
+        Ok(r) => command_response(r),
+        Err(m) => (StatusCode::INTERNAL_SERVER_ERROR, m).into_response(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct TargetFpsBody {
     /// Target FPS (0 = uncapped).
     pub fps: u32,

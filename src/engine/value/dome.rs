@@ -5,6 +5,32 @@
 //! equidistant-azimuthal projection) stays in `renderer::slicer` as
 //! functions/inherent impls over these re-exported types.
 
+/// Domemaster resolution presets.
+///
+/// Square by definition: a domemaster is a circular fisheye image inscribed in a
+/// square, so it is sized by the dome's projectors rather than by the master
+/// render resolution it samples from.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+    Default,
+)]
+pub enum DomemasterResolution {
+    /// 1024×1024
+    R1K,
+    /// 2048×2048
+    #[default]
+    R2K,
+    /// 4096×4096
+    R4K,
+}
+
 /// Dome hemisphere geometry.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DomeGeometry {

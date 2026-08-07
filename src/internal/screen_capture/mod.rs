@@ -849,6 +849,43 @@ mod tests {
     }
 
     #[test]
+    fn a_window_shaped_unlike_the_deck_leaves_the_scaling_mode_something_to_do() {
+        // Regression: the deck size was passed straight through as scale_to, so
+        // a 4:3 window arrived as a 16:9 texture (letterboxed by the OS) and the
+        // deck's Scale control did nothing — source and target dimensions were
+        // identical, which every mode resolves to identity UVs.
+        let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
+            return;
+        };
+        let mut mgr = ScreenCaptureManager::new_disabled();
+        let target = mock_targets().remove(2); // 800x600 window
+        let (deck_w, deck_h) = (1920, 1080);
+        let cfg = CaptureConfig {
+            scale_to: Some(crate::screen_capture::resample::fit_within(
+                target.width,
+                target.height,
+                deck_w,
+                deck_h,
+            )),
+            ..Default::default()
+        };
+        let (id, w, h) = mgr.open_mock(&target, cfg, &gpu.device).expect("mock open");
+        assert_eq!((w, h), (800, 600), "a small window must not be blown up");
+
+        let (fill, _) = crate::deck::ScalingMode::Fill.compute_uv_transform(w, h, deck_w, deck_h);
+        let (fit, _) = crate::deck::ScalingMode::Fit.compute_uv_transform(w, h, deck_w, deck_h);
+        assert!(
+            (fill[1] - 1.0).abs() > 0.01,
+            "Fill must crop vertically, got {fill:?}"
+        );
+        assert!(
+            (fit[0] - 1.0).abs() > 0.01,
+            "Fit must pillarbox, got {fit:?}"
+        );
+        mgr.release(id);
+    }
+
+    #[test]
     fn update_selective_skips_captures_not_in_the_needed_set() {
         let Ok(gpu) = crate::renderer::GpuContext::new_headless() else {
             return;

@@ -312,6 +312,7 @@ impl UIData {
             dome_mode_active: false,
             dome_preset: DomePreset::Quad,
             dome_geometry: DomeGeometry::default(),
+            domemaster_resolution: crate::renderer::dome::DomemasterResolution::default(),
             camera_detect_texture: None,
             camera_detect_mode: CameraDetectMode::Off,
             camera_detect_contours: vec![],

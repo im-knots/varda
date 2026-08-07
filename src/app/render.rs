@@ -53,9 +53,11 @@ struct HeadlessDeliverySinks<'a> {
     syphon_manager: &'a mut crate::syphon::SyphonManager,
     audio_manager: &'a mut crate::audio::AudioManager,
     notifications: &'a mut crate::notifications::NotificationSystem,
-    /// Rate to reopen an ffmpeg output at, for the SRT reconnect path. Must
-    /// match what `cmd_start_output` uses, or a reconnected stream would be
-    /// timed differently from the one it replaced.
+    /// Master render rate, resolved through `encoder_fps` so an uncapped stage
+    /// still names a real number. Used to reopen an ffmpeg output on the SRT
+    /// reconnect path — it must match what `cmd_start_output` used, or a
+    /// reconnected stream would be timed differently from the one it replaced —
+    /// and to declare the NDI sender's frame rate.
     encoder_fps: u32,
 }
 
@@ -1000,7 +1002,7 @@ impl VardaApp {
             // Deliver previous frame's readback data to target
             if !is_syphon {
                 if let Some(frame_data) = h.readback.try_read(&context.device) {
-                    match h.deliver_frame(&frame_data, sinks.ndi_manager) {
+                    match h.deliver_frame(&frame_data, sinks.ndi_manager, sinks.encoder_fps) {
                         crate::renderer::context::DeliveryResult::Failed(msg) => {
                             log::error!("{msg}");
                             h.active = false;

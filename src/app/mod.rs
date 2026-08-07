@@ -179,6 +179,11 @@ pub(crate) struct OutputSubsystem {
     pub surface_manager: SurfaceManager,
     pub calibration_textures: Vec<(wgpu::Texture, wgpu::TextureView)>,
     pub domemaster: Option<crate::renderer::dome::DomemasterRenderer>,
+    /// Size the domemaster renderer is built at. Held alongside the renderer
+    /// rather than inside it because it outlives it: the setting is restored
+    /// from the stage before any dome surface exists, and `ensure_domemaster`
+    /// builds at whatever it says at the time.
+    pub domemaster_resolution: crate::renderer::dome::DomemasterResolution,
     pub pending_output_creates: Vec<crate::scene::OutputConfig>,
     pub cached_monitors: Vec<(String, winit::monitor::MonitorHandle)>,
 }
@@ -482,6 +487,7 @@ impl VardaApp {
                 surface_manager: SurfaceManager::new(),
                 calibration_textures,
                 domemaster: None,
+                domemaster_resolution: crate::renderer::dome::DomemasterResolution::default(),
                 pending_output_creates: Vec::new(),
                 cached_monitors: Vec::new(),
             },
@@ -746,13 +752,26 @@ impl VardaApp {
             .map(super::internal::renderer::dome::DomemasterRenderer::output_view)
     }
 
+    /// Edge length of the live domemaster texture, or `None` when no renderer
+    /// has been built. Reports what the GPU actually holds, which can lag
+    /// [`Self::domemaster_resolution`] if a rebuild failed.
+    pub fn domemaster_output_size(&self) -> Option<u32> {
+        self.output
+            .domemaster
+            .as_ref()
+            .map(super::internal::renderer::dome::DomemasterRenderer::output_size)
+    }
+
     /// Ensure the domemaster renderer exists and is enabled.
     /// Creates it lazily on first call; subsequent calls just ensure `enabled = true`.
     pub fn ensure_domemaster(&mut self) {
         if let Some(dome) = &mut self.output.domemaster {
             dome.enabled = true;
         } else {
-            let config = crate::renderer::dome::DomemasterConfig::default();
+            let config = crate::renderer::dome::DomemasterConfig {
+                resolution: self.output.domemaster_resolution,
+                ..crate::renderer::dome::DomemasterConfig::default()
+            };
             match crate::renderer::dome::DomemasterRenderer::new(
                 &self.context.device,
                 self.context.compositing_format,
@@ -766,6 +785,58 @@ impl VardaApp {
                 Err(e) => {
                     log::error!("Failed to create domemaster renderer: {e}");
                 }
+            }
+        }
+    }
+
+    /// Size the domemaster is rendered at.
+    pub fn domemaster_resolution(&self) -> crate::renderer::dome::DomemasterResolution {
+        self.output.domemaster_resolution
+    }
+
+    /// Set the domemaster output size, rebuilding the renderer if one is live.
+    ///
+    /// Every texture in the renderer is sized at construction, so there is no
+    /// resize path — the old renderer is dropped and a new one built in its
+    /// place. A failed rebuild leaves no renderer rather than one at the old
+    /// size, so the dome goes black instead of silently ignoring the setting.
+    pub fn set_domemaster_resolution(
+        &mut self,
+        resolution: crate::renderer::dome::DomemasterResolution,
+    ) {
+        if resolution == self.output.domemaster_resolution {
+            return;
+        }
+        log::info!(
+            "Domemaster resolution: {} → {}",
+            self.output.domemaster_resolution,
+            resolution
+        );
+        self.output.domemaster_resolution = resolution;
+
+        let Some(existing) = self.output.domemaster.take() else {
+            return;
+        };
+        let config = crate::renderer::dome::DomemasterConfig {
+            resolution,
+            ..existing.config.clone()
+        };
+        let was_enabled = existing.enabled;
+        let content_rotation = existing.content_rotation;
+        drop(existing);
+
+        match crate::renderer::dome::DomemasterRenderer::new(
+            &self.context.device,
+            self.context.compositing_format,
+            config,
+        ) {
+            Ok(mut dome) => {
+                dome.enabled = was_enabled;
+                dome.content_rotation = content_rotation;
+                self.output.domemaster = Some(dome);
+            }
+            Err(e) => {
+                log::error!("Failed to rebuild domemaster renderer at {resolution}: {e}");
             }
         }
     }
