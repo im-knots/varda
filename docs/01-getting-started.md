@@ -67,8 +67,15 @@ Requires [Rust](https://rustup.rs/) (stable) and a GPU with Metal (macOS), Vulka
 ### Ubuntu / Debian
 
 ```bash
-sudo apt install build-essential cmake pkg-config libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavdevice-dev libsrt-gnutls-dev libasound2-dev libv4l-dev libshaderc-dev libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
+sudo apt install build-essential cmake pkg-config libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavdevice-dev libsrt-gnutls-dev libasound2-dev libv4l-dev libfreenect-dev libpipewire-0.3-dev libshaderc-dev libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libgtk-3-dev
 ```
+
+Two of those back default-on features and are easy to miss, because leaving them
+out fails the build rather than disabling the feature: `libpipewire-0.3-dev` is
+resolved through `pkg-config` by the `screen-capture` Wayland backend, and
+`libfreenect-dev` provides the `-lfreenect` the `depth` feature links against.
+Both live in Ubuntu's `universe` component — run `sudo add-apt-repository
+universe` first if `apt` cannot find them.
 
 ```bash
 cargo build --release

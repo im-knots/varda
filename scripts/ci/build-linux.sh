@@ -41,6 +41,8 @@ if [ "$SKIP_DEPS" = false ]; then
     libsrt-gnutls-dev \
     libasound2-dev \
     libv4l-dev \
+    libfreenect-dev \
+    libpipewire-0.3-dev \
     libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev \
     libgtk-3-dev
 fi
