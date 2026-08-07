@@ -265,13 +265,21 @@ impl MixerCommands for VardaApp {
                 )
             })?;
 
-        // Default the capture-time downscale to the deck render resolution.
-        // Without this a 4K display would move 33 MB per frame only to be
-        // scaled down immediately after. See spec/screen-capture.md § Performance.
+        // Default the capture-time downscale to the largest deck-sized frame
+        // that keeps the target's own shape. Without a cap a 4K display would
+        // move 33 MB per frame only to be scaled down immediately after; without
+        // the shape, a window narrower than the stage would arrive pre-squashed
+        // and the deck's scaling mode would have nothing left to do.
+        // See spec/screen-capture.md § Performance.
         let config = crate::screen_capture::backend::CaptureConfig {
-            scale_to: options
-                .scale_to
-                .or(Some((self.render_width, self.render_height))),
+            scale_to: options.scale_to.or_else(|| {
+                Some(crate::screen_capture::resample::fit_within(
+                    info.width,
+                    info.height,
+                    self.render_width,
+                    self.render_height,
+                ))
+            }),
             ..options
         };
         let (capture_id, src_w, src_h) = self

@@ -19,6 +19,7 @@ pub(super) use warp_editor::{render_stage_bottom_bar, stage_selection_id};
 
 use super::super::{CameraDetectMode, DomeAction, UIActions, UIData};
 use crate::engine::EngineCommand;
+use crate::renderer::dome::DomemasterResolution;
 use crate::renderer::slicer::DomePreset;
 use hit_test::CanvasGeometry;
 use state::{StageEditorMode, StageEditorState};
@@ -196,6 +197,34 @@ pub(super) fn render_stage_editor(ui: &mut egui::Ui, data: &UIData, actions: &mu
                     .dome_actions
                     .push(DomeAction::SetContentRoll(c_roll));
             }
+
+            ui.separator();
+
+            // Domemaster output size. Square by definition, so it does not
+            // follow the master render resolution — it is sized by the dome's
+            // projectors. Goes straight to the engine rather than through a
+            // DomeAction because it rebuilds GPU textures.
+            ui.label("Res:");
+            let mut current_res = data.domemaster_resolution;
+            egui::ComboBox::from_id_salt("domemaster_resolution")
+                .selected_text(format!("{current_res}"))
+                .width(60.0)
+                .show_ui(ui, |ui| {
+                    for resolution in DomemasterResolution::ALL {
+                        if ui
+                            .selectable_value(
+                                &mut current_res,
+                                resolution,
+                                format!("{resolution} ({0}×{0})", resolution.pixels()),
+                            )
+                            .clicked()
+                        {
+                            actions
+                                .commands
+                                .push(EngineCommand::SetDomemasterResolution { resolution });
+                        }
+                    }
+                });
 
             ui.separator();
 

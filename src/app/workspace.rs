@@ -64,6 +64,7 @@ impl VardaApp {
             layout.dome_mode_active,
             layout.dome_preset,
             layout.dome_geometry,
+            self.output.domemaster_resolution,
         );
         match stage.save(self.session.workspace.stage_path()) {
             Ok(()) => log::info!(
@@ -123,6 +124,9 @@ impl VardaApp {
                         ..UILayoutState::default()
                     });
                     self.output.surface_manager = prefs.surfaces;
+                    // Set before `ensure_domemaster` below, which builds at
+                    // whatever this says.
+                    self.output.domemaster_resolution = prefs.domemaster_resolution;
                     for output_config in &prefs.outputs {
                         // Migrate legacy target_display field to new target config
                         let mut config = output_config.clone();
@@ -603,6 +607,7 @@ impl VardaApp {
             d.dome_mode_active,
             d.dome_preset,
             d.dome_geometry,
+            self.output.domemaster_resolution,
         );
         super::history::HistorySnapshot { scene, stage }
     }
@@ -625,6 +630,7 @@ impl VardaApp {
             layout.dome_mode_active,
             layout.dome_preset,
             layout.dome_geometry,
+            self.output.domemaster_resolution,
         );
         super::history::HistorySnapshot { scene, stage }
     }

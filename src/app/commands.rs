@@ -1474,6 +1474,11 @@ impl VardaApp {
                 CommandResult::Ok
             }
 
+            EngineCommand::SetDomemasterResolution { resolution } => {
+                self.set_domemaster_resolution(resolution);
+                CommandResult::Ok
+            }
+
             EngineCommand::SetTargetFps { fps } => {
                 self.set_target_fps(fps);
                 CommandResult::Ok
@@ -1646,6 +1651,7 @@ pub(crate) fn command_is_undoable(cmd: &EngineCommand) -> bool {
             | C::SetManualBpm { .. }
             // Global engine settings / profiling.
             | C::SetRenderResolution { .. }
+            | C::SetDomemasterResolution { .. }
             | C::SetTargetFps { .. }
             | C::StartPerfProfile { .. }
             // Param toggle is a live keyboard/shortcut affordance (SetParam edits
@@ -1718,6 +1724,9 @@ mod tests {
         assert!(!command_is_undoable(&C::SetRenderResolution {
             width: 1280,
             height: 720,
+        }));
+        assert!(!command_is_undoable(&C::SetDomemasterResolution {
+            resolution: crate::renderer::dome::DomemasterResolution::R4K,
         }));
         assert!(!command_is_undoable(&C::SetTargetFps { fps: 30 }));
         // Saving a preset writes to disk; it is not undoable (loading is).

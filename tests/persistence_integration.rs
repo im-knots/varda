@@ -155,6 +155,30 @@ fn save_load_render_resolution() {
 }
 
 #[test]
+fn save_load_domemaster_resolution() {
+    let tmp = TempDir::new().unwrap();
+    let Some(mut app) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    fire(
+        &mut app,
+        EngineCommand::SetDomemasterResolution {
+            resolution: varda::renderer::dome::DomemasterResolution::R4K,
+        },
+    );
+    app.save_workspace(&UILayoutState::default());
+    let Some(mut app2) = headless_app_in(tmp.path()) else {
+        return;
+    };
+    let _ = app2.load_workspace();
+    assert_eq!(
+        app2.domemaster_resolution(),
+        varda::renderer::dome::DomemasterResolution::R4K,
+        "the dome belongs to the venue, so its size must come back with the stage"
+    );
+}
+
+#[test]
 fn save_load_multiple_channels() {
     let tmp = TempDir::new().unwrap();
     let Some(mut app) = headless_app_in(tmp.path()) else {

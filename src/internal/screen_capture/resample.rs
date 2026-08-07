@@ -38,17 +38,9 @@ impl Geometry {
             (((nw as f32) * crop.w).round() as u32).clamp(1, nw.saturating_sub(src_x).max(1));
         let src_h =
             (((nh as f32) * crop.h).round() as u32).clamp(1, nh.saturating_sub(src_y).max(1));
-        let (out_w, out_h) = config.scale_to.map_or((src_w, src_h), |(w, h)| {
-            let scale = (w as f32 / src_w as f32).min(h as f32 / src_h as f32);
-            if scale >= 1.0 {
-                (src_w, src_h)
-            } else {
-                (
-                    (((src_w as f32) * scale).round() as u32).max(1),
-                    (((src_h as f32) * scale).round() as u32).max(1),
-                )
-            }
-        });
+        let (out_w, out_h) = config
+            .scale_to
+            .map_or((src_w, src_h), |(w, h)| fit_within(src_w, src_h, w, h));
         Self {
             src_x,
             src_y,
@@ -64,6 +56,31 @@ impl Geometry {
     pub fn is_identity_scale(self) -> bool {
         self.out_w == self.src_w && self.out_h == self.src_h
     }
+}
+
+/// Largest size with `w:h`'s aspect ratio that fits inside `max_w × max_h`,
+/// never enlarging.
+///
+/// Also the right value to put in [`CaptureConfig::scale_to`] when opening a
+/// capture for a deck: pass the target's native size and the deck's size. The
+/// deck's size alone would be wrong, because backends treat `scale_to` as the
+/// delivered extent — a window shaped differently from the stage would arrive
+/// already fitted to the deck's aspect (letterboxed by `ScreenCaptureKit`, which
+/// bakes the bars into the pixels), leaving the deck's own scaling mode with
+/// identical source and target dimensions and therefore nothing to do.
+pub fn fit_within(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    let (w, h) = (w.max(1), h.max(1));
+    if max_w == 0 || max_h == 0 {
+        return (w, h);
+    }
+    let scale = (max_w as f32 / w as f32).min(max_h as f32 / h as f32);
+    if scale >= 1.0 {
+        return (w, h);
+    }
+    (
+        (((w as f32) * scale).round() as u32).max(1),
+        (((h as f32) * scale).round() as u32).max(1),
+    )
 }
 
 /// Box-filter downscale of a tightly-packed 4-bytes-per-pixel image.
@@ -197,6 +214,42 @@ mod tests {
             (src_aspect - out_aspect).abs() < 0.01,
             "aspect drifted: {src_aspect} vs {out_aspect}"
         );
+    }
+
+    #[test]
+    fn fit_within_keeps_a_windows_shape_instead_of_the_decks() {
+        // The bug this guards: opening a 1000×800 window for a 16:9 deck used to
+        // pass the deck size straight through as scale_to, so the capture came
+        // back already fitted to 16:9 and the deck's scaling mode had identical
+        // source and target dimensions — every mode collapsed to identity.
+        let (w, h) = fit_within(1000, 800, 1920, 1080);
+        let native_aspect = 1000.0 / 800.0;
+        let capped_aspect = w as f32 / h as f32;
+        assert!(
+            (native_aspect - capped_aspect).abs() < 0.01,
+            "capture must keep the window's shape, got {w}×{h}"
+        );
+        assert_ne!(
+            (w, h),
+            (1920, 1080),
+            "a smaller window must not be blown up to the deck size"
+        );
+    }
+
+    #[test]
+    fn fit_within_caps_a_larger_target_to_the_deck() {
+        // The bandwidth argument still has to hold: 4K must not arrive at 4K.
+        assert_eq!(fit_within(3840, 2160, 1920, 1080), (1920, 1080));
+        // An ultrawide is bounded by width and keeps its shape rather than
+        // being squashed into the deck's 16:9.
+        assert_eq!(fit_within(3440, 1440, 1920, 1080), (1920, 804));
+    }
+
+    #[test]
+    fn fit_within_never_upscales_or_divides_by_zero() {
+        assert_eq!(fit_within(640, 480, 4096, 4096), (640, 480));
+        assert_eq!(fit_within(640, 480, 0, 0), (640, 480));
+        assert_eq!(fit_within(0, 0, 1920, 1080), (1, 1));
     }
 
     #[test]

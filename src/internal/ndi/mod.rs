@@ -14,6 +14,11 @@ use std::sync::{
     Arc, Mutex,
 };
 
+/// Frame rate declared to receivers when the caller's rate will not fit the
+/// SDK's signed field. Only reachable for absurd rates; NDI has no way to say
+/// "unspecified", so it needs some honest-looking number.
+const DEFAULT_NDI_FPS: i32 = 60;
+
 /// Discovered NDI source on the network.
 #[derive(Debug, Clone)]
 pub struct NdiSource {
@@ -380,7 +385,18 @@ impl NdiManager {
 
     /// Send a frame via NDI for a specific sender name.
     /// Creates the sender instance on first call for a given name.
-    pub fn send_frame(&mut self, sender_name: &str, rgba: &[u8], width: u32, height: u32) {
+    ///
+    /// `fps` is the master render rate, declared to receivers as this sender's
+    /// frame rate. Pass it already resolved (see `app::state::encoder_fps`), so
+    /// an uncapped stage still declares a real rate rather than zero.
+    pub fn send_frame(
+        &mut self,
+        sender_name: &str,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        fps: u32,
+    ) {
         let Some(sdk) = &self.sdk else {
             return;
         };
@@ -390,10 +406,15 @@ impl NdiManager {
             let Ok(name_c) = std::ffi::CString::new(sender_name) else {
                 return;
             };
+            // Varda's render loop is the clock. A clocked sender blocks
+            // `send_send_video_v2` until the next frame is due at the rate in the
+            // frame struct, and that call runs on the render thread — so clocking
+            // here would throttle the whole stage, every output and the UI with
+            // it, to the NDI rate.
             let settings = ffi::NDIlib_send_create_t {
                 p_ndi_name: name_c.as_ptr(),
                 p_groups: std::ptr::null(),
-                clock_video: true,
+                clock_video: false,
                 clock_audio: false,
             };
             let instance = unsafe { (sdk.send_create)(&raw const settings) };
@@ -431,7 +452,7 @@ impl NdiManager {
             xres: i32::try_from(width).unwrap_or(i32::MAX),
             yres: i32::try_from(height).unwrap_or(i32::MAX),
             FourCC: ffi::NDIlib_FourCC_video_type_e::UYVY,
-            frame_rate_N: 30,
+            frame_rate_N: i32::try_from(fps).unwrap_or(DEFAULT_NDI_FPS).max(1),
             frame_rate_D: 1,
             picture_aspect_ratio: 0.0,
             frame_format_type: 1, // progressive

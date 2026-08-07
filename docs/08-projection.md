@@ -203,12 +203,15 @@ A domemaster is a circular fisheye image using **equidistant azimuthal projectio
 | **Tilt** | Dome tilt angle — shifts the horizon line |
 | **Truncation** | Cut-off angle for truncated domes |
 | **Radius** | Dome radius — affects projector coverage calculations |
+| **Res** | Domemaster render size — 1K, 2K (default) or 4K, always square |
 
 ### Setup Workflow
 
 **1. Switch to Dome 3D mode** — toggle the Stage Editor between **⬡ 2D** and **🔮 3D Dome** at the top of the panel. In 3D mode an interactive hemisphere appears with the domemaster texture mapped onto it.
 
 **2. Configure dome geometry** — **R** (radius, 0.5–5.0), **Trunc** (truncation angle, 30°–90°), and **Tilt** (0°–45°).
+
+**Res** sets the size the domemaster itself is rendered at: **1K** (1024×1024), **2K** (2048×2048, the default) or **4K** (4096×4096). It is square and deliberately independent of the master render resolution, because a domemaster is sized by the projectors reading it rather than by the canvas it samples from. Pick the tier that matches your projector array. Changing it rebuilds the dome's textures immediately, and the choice is saved with the stage, since it describes the venue rather than the scene.
 
 **3. Choose a projector preset:**
 

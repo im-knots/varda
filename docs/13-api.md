@@ -763,6 +763,7 @@ ordinals and sequence step indices — see [/spec/api-addressing.md].
 | `PUT` | `/api/clock/manual-bpm` |  |
 | `PUT` | `/api/clock/preference` |  |
 | `POST` | `/api/command` | Applies any `EngineCommand` sent as JSON and returns its `CommandResult`. |
+| `PUT` | `/api/domemaster/resolution` |  |
 | `GET` | `/api/health` |  |
 | `POST` | `/api/perf-profile` |  |
 | `POST` | `/api/redo` |  |

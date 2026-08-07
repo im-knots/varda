@@ -502,6 +502,45 @@ fn set_render_resolution_and_verify() {
 }
 
 #[test]
+fn set_domemaster_resolution_rebuilds_the_renderer() {
+    use varda::renderer::dome::DomemasterResolution;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    // Nothing built yet: the setting still takes, so a stage restored before any
+    // dome surface exists comes up at the right size.
+    fire(
+        &mut app,
+        EngineCommand::SetDomemasterResolution {
+            resolution: DomemasterResolution::R1K,
+        },
+    );
+    assert_eq!(app.domemaster_resolution(), DomemasterResolution::R1K);
+
+    app.ensure_domemaster();
+    assert_eq!(
+        app.domemaster_output_size(),
+        Some(1024),
+        "the renderer must be built at the configured size, not the default"
+    );
+
+    // Changing it with a renderer live rebuilds in place rather than being
+    // silently ignored until the next restart.
+    fire(
+        &mut app,
+        EngineCommand::SetDomemasterResolution {
+            resolution: DomemasterResolution::R4K,
+        },
+    );
+    assert_eq!(app.domemaster_resolution(), DomemasterResolution::R4K);
+    assert_eq!(app.domemaster_output_size(), Some(4096));
+
+    app.update_frame_timing();
+    app.render_mixer_frame();
+}
+
+#[test]
 fn publish_state_reflects_mutations() {
     let Some(mut app) = headless_app() else {
         return;

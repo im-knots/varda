@@ -515,10 +515,17 @@ fn build_filter(
 
 /// Output size after `scale_to` and crop. Crop shrinks the delivered frame so
 /// the uploaded bytes shrink with it, rather than cropping after the upload.
+///
+/// `scale_to` is a bound rather than an exact extent, matching what
+/// [`Geometry::resolve`](super::super::resample::Geometry::resolve) does on the
+/// other platforms. Using it verbatim would hand `setScalesToFit` a differently
+/// shaped box, and it would letterbox the target into it — baking bars into the
+/// pixels and leaving the deck's scaling mode with nothing to do.
 fn output_size(target: &CaptureTargetInfo, config: &CaptureConfig) -> (u32, u32) {
-    let (base_w, base_h) = config
-        .scale_to
-        .unwrap_or((target.width.max(1), target.height.max(1)));
+    let (native_w, native_h) = (target.width.max(1), target.height.max(1));
+    let (base_w, base_h) = config.scale_to.map_or((native_w, native_h), |(w, h)| {
+        super::super::resample::fit_within(native_w, native_h, w, h)
+    });
     scaled_crop_size(base_w, base_h, config)
 }
 
@@ -728,6 +735,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(output_size(&target(3840, 2160), &cfg), (960, 540));
+    }
+
+    #[test]
+    fn output_size_keeps_the_targets_shape_rather_than_the_requested_box() {
+        // A 4:3 window asked to fill a 16:9 deck must come back 4:3. Obeying the
+        // box literally is what made the deck's Scale control a no-op: the
+        // capture already matched the deck, so no mode had anything to change.
+        let cfg = CaptureConfig {
+            scale_to: Some((1920, 1080)),
+            ..Default::default()
+        };
+        assert_eq!(output_size(&target(1000, 800), &cfg), (1000, 800));
     }
 
     #[test]

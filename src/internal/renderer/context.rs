@@ -1280,10 +1280,14 @@ impl HeadlessOutput {
     /// For subprocess targets (Recording, SRT, HLS, DASH, RTMP), feeds the frame to ffmpeg.
     /// For NDI/Syphon, publishes directly through the respective manager.
     /// Returns a `DeliveryResult` indicating what happened.
+    ///
+    /// `fps` is the master render rate, used by NDI to declare its frame rate.
+    /// ffmpeg targets already fixed theirs at spawn.
     pub fn deliver_frame(
         &mut self,
         frame_data: &[u8],
         ndi_manager: &mut crate::ndi::NdiManager,
+        fps: u32,
     ) -> DeliveryResult {
         match &mut self.target {
             OutputTarget::Recording { .. }
@@ -1318,7 +1322,7 @@ impl HeadlessOutput {
                 DeliveryResult::Ok
             }
             OutputTarget::NdiSend { ref sender_name } => {
-                ndi_manager.send_frame(sender_name, frame_data, self.width, self.height);
+                ndi_manager.send_frame(sender_name, frame_data, self.width, self.height, fps);
                 DeliveryResult::Ok
             }
             // Syphon output is published GPU-side (zero-copy) in the headless

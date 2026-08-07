@@ -23,7 +23,8 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::system::health, routes::system::get_state,
         routes::system::shutdown, routes::system::undo, routes::system::redo,
         routes::decks::generic_command,
-        routes::system::set_resolution, routes::system::set_target_fps, routes::system::start_perf_profile,
+        routes::system::set_resolution, routes::system::set_domemaster_resolution,
+        routes::system::set_target_fps, routes::system::start_perf_profile,
         routes::system::set_clock_preference,
         routes::system::set_manual_bpm, routes::system::save_workspace,
         routes::system::load_workspace,
@@ -1041,6 +1042,10 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/resolution",
             axum::routing::put(routes::system::set_resolution),
+        )
+        .route(
+            "/api/domemaster/resolution",
+            axum::routing::put(routes::system::set_domemaster_resolution),
         )
         .route(
             "/api/target-fps",

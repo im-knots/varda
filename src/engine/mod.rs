@@ -1022,6 +1022,13 @@ pub enum EngineCommand {
         height: u32,
     },
 
+    /// Set the domemaster output size. Separate from the render resolution
+    /// because a domemaster image is square by definition — it is sized by the
+    /// dome's projector, not by the master canvas it samples from.
+    SetDomemasterResolution {
+        resolution: crate::engine::value::dome::DomemasterResolution,
+    },
+
     // ── Frame pacing ─────────────────────────────────────────
     SetTargetFps {
         fps: u32,
