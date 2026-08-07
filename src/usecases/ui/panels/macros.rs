@@ -136,7 +136,8 @@ fn render_macro_compact(
     } else {
         header_ui.style().visuals.text_color()
     };
-    header_ui.label(egui::RichText::new(truncate(&m.name, 12)).color(name_color));
+    header_ui
+        .label(egui::RichText::new(super::utils::truncate_chars(&m.name, 12)).color(name_color));
     // Delete button, right-aligned in the header (mirrors sequence cards).
     header_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui
@@ -856,16 +857,6 @@ fn collect_target_paths(data: &UIData) -> Vec<(String, String)> {
 
 fn param_label(p: &super::super::ParamUIInfo) -> String {
     p.label.clone().unwrap_or_else(|| p.name.clone())
-}
-
-/// Truncate a label to `max` chars with an ellipsis, for the narrow column.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let head: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{head}…")
-    }
 }
 
 /// Shorten a router path for compact display (keeps the last two segments).

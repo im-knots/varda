@@ -124,6 +124,30 @@ pub enum EngineCommand {
         channel_uuid: String,
         depth_sensor_id: DepthSensorId,
     },
+    /// Add a screen / window capture deck. The target is named, not handled, so
+    /// the same payload works from the UI, HTTP, and a restored scene.
+    AddScreenCaptureDeck {
+        channel_uuid: String,
+        target: crate::scene::CaptureTargetConfig,
+        #[serde(default)]
+        rate: Option<f32>,
+        #[serde(default)]
+        crop: Option<crate::scene::CaptureCropConfig>,
+        #[serde(default)]
+        show_cursor: Option<bool>,
+        #[serde(default)]
+        exclude_varda: Option<bool>,
+    },
+    /// Add a deck that re-enters Varda's own output. See spec/program-tap.md.
+    AddTapDeck {
+        channel_uuid: String,
+        source: crate::scene::TapSourceConfig,
+    },
+    /// Repoint an existing tap deck at a different source.
+    SetTapSource {
+        deck_uuid: String,
+        source: crate::scene::TapSourceConfig,
+    },
     RemoveDeck {
         deck_uuid: String,
     },
@@ -945,6 +969,11 @@ pub enum EngineCommand {
     RescanSyphon,
     RescanCameras,
     RescanDepthSensors,
+    /// Re-enumerate displays and windows. Manual: window lists churn constantly
+    /// and polling them would thrash the library panel.
+    RescanCaptureTargets,
+    /// Trigger the platform screen-recording permission request.
+    RequestScreenCapturePermission,
     RescanMidi,
     RescanAudio,
     ToggleAudioSource {

@@ -246,6 +246,109 @@ impl MixerCommands for VardaApp {
         Ok(uuid)
     }
 
+    fn add_screen_capture_deck(
+        &mut self,
+        channel_uuid: &str,
+        target: &crate::scene::CaptureTargetConfig,
+        options: crate::screen_capture::backend::CaptureConfig,
+    ) -> Result<String> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
+        let identity = crate::screen_capture::backend::TargetIdentity::from(target);
+        let info = self
+            .screen_capture_manager
+            .find_target(&identity)
+            .cloned()
+            .with_context(|| {
+                format!(
+                    "No capture target matches '{}' — rescan and try again",
+                    target.label()
+                )
+            })?;
+
+        // Default the capture-time downscale to the deck render resolution.
+        // Without this a 4K display would move 33 MB per frame only to be
+        // scaled down immediately after. See spec/screen-capture.md § Performance.
+        let config = crate::screen_capture::backend::CaptureConfig {
+            scale_to: options
+                .scale_to
+                .or(Some((self.render_width, self.render_height))),
+            ..options
+        };
+        let (capture_id, src_w, src_h) = self
+            .screen_capture_manager
+            .open(&info, config.clone(), &self.context.device)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let deck = Deck::new_from_screen_capture(
+            &self.context,
+            crate::deck::ScreenCaptureState {
+                capture_id,
+                identity,
+                config,
+                config_dirty: false,
+            },
+            &info.label,
+            src_w,
+            src_h,
+            self.render_width,
+            self.render_height,
+        )
+        .inspect_err(|_| self.screen_capture_manager.release(capture_id))?;
+        let uuid = deck.uuid().to_string();
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
+        let idx = ch.add_deck(deck);
+        log::info!(
+            "Added screen capture deck {idx} to channel {channel_idx}: {}",
+            info.label
+        );
+        Ok(uuid)
+    }
+
+    fn add_tap_deck(
+        &mut self,
+        channel_uuid: &str,
+        source: &crate::scene::TapSourceConfig,
+    ) -> Result<String> {
+        let channel_idx = self.resolve_channel(channel_uuid)?;
+        let tap_source = crate::deck::TapSource::from(source);
+        let label = tap_source.label(&self.channel_labels());
+        let deck = Deck::new_from_tap(
+            &self.context,
+            tap_source,
+            &label,
+            self.render_width,
+            self.render_height,
+        )?;
+        let uuid = deck.uuid().to_string();
+        let ch = self
+            .mixer
+            .channel_mut(channel_idx)
+            .context("Invalid channel")?;
+        let idx = ch.add_deck(deck);
+        log::info!("Added tap deck {idx} to channel {channel_idx}: {label}");
+        Ok(uuid)
+    }
+
+    fn set_tap_source(
+        &mut self,
+        deck_uuid: &str,
+        source: &crate::scene::TapSourceConfig,
+    ) -> Result<()> {
+        let (ch, dk) = self.resolve_deck(deck_uuid)?;
+        let labels = self.channel_labels();
+        let deck = &mut self.mixer.channels_mut()[ch].decks[dk].deck;
+        let state = deck
+            .tap
+            .as_mut()
+            .context("Deck is not a tap and has no source to repoint")?;
+        state.source = crate::deck::TapSource::from(source);
+        let label = state.source.label(&labels);
+        deck.set_source_name(format!("🔁 {label}"));
+        Ok(())
+    }
+
     fn add_depth_sensor_deck(
         &mut self,
         channel_uuid: &str,
@@ -299,6 +402,9 @@ impl MixerCommands for VardaApp {
                 // See spec/depth-sensors.md § Known defect.
                 for sensor_id in slot.deck.held_depth_sensors() {
                     self.depth_manager.release(sensor_id);
+                }
+                if let Some(capture_id) = slot.deck.screen_capture_id() {
+                    self.screen_capture_manager.release(capture_id);
                 }
                 if let Some(idx) = slot.deck.srt_receiver_idx() {
                     self.external_io.stream_manager.stop_receive(idx);

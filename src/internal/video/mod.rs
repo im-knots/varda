@@ -9,7 +9,7 @@ pub mod hap;
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 extern crate ffmpeg_next as ffmpeg;
@@ -298,6 +298,10 @@ pub struct VideoDecodeHandle {
     /// [`Self::recycle`] and reused by the decode thread (avoids a fresh ~4 MB
     /// allocation per frame — issue #42).
     frame_pool: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Rate the renderer can actually present at, in whole frames per second
+    /// (0 = uncapped). Written by the render thread every frame and read by the
+    /// decode thread to bound its own rate — see [`Self::set_output_fps`].
+    output_fps: Arc<AtomicU32>,
     thread: Option<std::thread::JoinHandle<()>>,
     pub width: u32,
     pub height: u32,
@@ -323,16 +327,18 @@ impl VideoDecodeHandle {
         let stop_flag = Arc::new(AtomicBool::new(false));
 
         let frame_pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let output_fps = Arc::new(AtomicU32::new(0));
 
         let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
         let fp = frame_pool.clone();
+        let ofps = output_fps.clone();
 
         let thread = std::thread::Builder::new()
             .name("video-decode".into())
             .spawn(move || {
-                video_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps);
+                video_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps, &ofps);
             })
             .expect("failed to spawn video decode thread");
 
@@ -342,6 +348,7 @@ impl VideoDecodeHandle {
             snapshot,
             stop_flag,
             frame_pool,
+            output_fps,
             thread: Some(thread),
             width,
             height,
@@ -367,16 +374,18 @@ impl VideoDecodeHandle {
         let stop_flag = Arc::new(AtomicBool::new(false));
 
         let frame_pool: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let output_fps = Arc::new(AtomicU32::new(0));
 
         let fd = frame_data.clone();
         let ss = snapshot.clone();
         let sf = stop_flag.clone();
         let fp = frame_pool.clone();
+        let ofps = output_fps.clone();
 
         let thread = std::thread::Builder::new()
             .name("hap-decode".into())
             .spawn(move || {
-                hap_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps);
+                hap_decode_thread(player, &cmd_rx, &fd, &ss, &sf, &fp, fps, &ofps);
             })
             .expect("failed to spawn hap decode thread");
 
@@ -386,11 +395,25 @@ impl VideoDecodeHandle {
             snapshot,
             stop_flag,
             frame_pool,
+            output_fps,
             thread: Some(thread),
             width,
             height,
             is_dual_plane,
         }
+    }
+
+    /// Tell the decode thread how fast the renderer can actually present, so a
+    /// source faster than the output does not decode frames that can never be
+    /// shown. Pass 0 to leave the source uncapped.
+    ///
+    /// The renderer takes at most one frame per rendered frame and the decode
+    /// thread's mailbox holds one, so everything a faster source produces in
+    /// between is overwritten. Decoding it anyway spends CPU and disk bandwidth
+    /// for nothing, and leaves the surviving frames landing on an irregular
+    /// beat against the render clock, which reads as judder.
+    pub fn set_output_fps(&self, fps: u32) {
+        self.output_fps.store(fps, Ordering::Relaxed);
     }
 
     /// Take the latest decoded frame (returns None if no new frame available).
@@ -487,6 +510,51 @@ fn pool_return(pool: &Mutex<Vec<Vec<u8>>>, buf: Vec<u8>) {
     }
 }
 
+/// Advance a fixed-rate frame schedule and return how long to wait for the
+/// next frame to fall due.
+///
+/// The deadline moves in fixed `interval` steps so the time spent decoding is
+/// absorbed by the wait instead of being added to it. Waiting a whole interval
+/// *after* each decode paces frames at `1/(interval + decode)`, which silently
+/// drops frames on every source — the shortfall grows with decode cost and is
+/// worst on high frame-rate or high-resolution media.
+///
+/// If a decode overruns its slot the schedule restarts from now rather than
+/// accumulating a backlog of already-late deadlines, which would burn through
+/// several frames at full speed to "catch up".
+/// The interval a decode thread should run at: the source's own rate, bounded
+/// by the rate the renderer can present (0 = uncapped).
+///
+/// Decoding faster than the output can present buys nothing — the extra frames
+/// are overwritten in the mailbox before anyone reads them — while costing CPU
+/// and disk bandwidth that the rest of the frame needs, and scattering the
+/// frames that do survive across an irregular beat.
+fn decode_interval(video_fps: f64, output_fps: &AtomicU32) -> std::time::Duration {
+    let cap = output_fps.load(Ordering::Relaxed);
+    let rate = if cap > 0 {
+        video_fps.min(f64::from(cap))
+    } else {
+        video_fps
+    };
+    std::time::Duration::from_secs_f64((1.0 / rate).max(0.001))
+}
+
+fn wait_for_next_frame(
+    next_frame_at: &mut std::time::Instant,
+    interval: std::time::Duration,
+) -> std::time::Duration {
+    let now = std::time::Instant::now();
+    let wait = next_frame_at.saturating_duration_since(now);
+    *next_frame_at += interval;
+    if *next_frame_at <= now {
+        *next_frame_at = now + interval;
+    }
+    wait
+}
+
+// Decode-thread plumbing: each arg is a distinct channel to the render thread,
+// with no shared invariant that a struct would express.
+#[allow(clippy::too_many_arguments)]
 fn video_decode_thread(
     mut player: VideoPlayer,
     cmd_rx: &mpsc::Receiver<VideoCommand>,
@@ -495,8 +563,10 @@ fn video_decode_thread(
     stop_flag: &AtomicBool,
     frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
+    output_fps: &AtomicU32,
 ) {
-    let interval = std::time::Duration::from_secs_f64((1.0 / fps).max(0.001));
+    let mut interval = decode_interval(fps, output_fps);
+    let mut next_frame_at = std::time::Instant::now() + interval;
 
     while !stop_flag.load(Ordering::Acquire) {
         // Drain all pending commands
@@ -556,8 +626,9 @@ fn video_decode_thread(
             *ss = snap;
         }
 
-        // Sleep until next frame or wake on command
-        match cmd_rx.recv_timeout(interval) {
+        // Sleep until the next frame falls due, or wake early on a command.
+        interval = decode_interval(fps, output_fps);
+        match cmd_rx.recv_timeout(wait_for_next_frame(&mut next_frame_at, interval)) {
             Ok(cmd) => {
                 if let VideoCommand::Stop = &cmd {
                     return;
@@ -577,6 +648,9 @@ fn video_decode_thread(
 }
 
 /// Background decode loop for HAP video.
+// Decode-thread plumbing: each arg is a distinct channel to the render thread,
+// with no shared invariant that a struct would express.
+#[allow(clippy::too_many_arguments)]
 fn hap_decode_thread(
     mut player: hap::HapPlayer,
     cmd_rx: &mpsc::Receiver<VideoCommand>,
@@ -585,8 +659,10 @@ fn hap_decode_thread(
     stop_flag: &AtomicBool,
     frame_pool: &Mutex<Vec<Vec<u8>>>,
     fps: f64,
+    output_fps: &AtomicU32,
 ) {
-    let interval = std::time::Duration::from_secs_f64((1.0 / fps).max(0.001));
+    let mut interval = decode_interval(fps, output_fps);
+    let mut next_frame_at = std::time::Instant::now() + interval;
 
     while !stop_flag.load(Ordering::Acquire) {
         // Drain all pending commands
@@ -647,8 +723,9 @@ fn hap_decode_thread(
             *ss = PlaybackSnapshot::from_state(&player.playback);
         }
 
-        // Sleep until next frame or wake on command
-        match cmd_rx.recv_timeout(interval) {
+        // Sleep until the next frame falls due, or wake early on a command.
+        interval = decode_interval(fps, output_fps);
+        match cmd_rx.recv_timeout(wait_for_next_frame(&mut next_frame_at, interval)) {
             Ok(cmd) => {
                 if let VideoCommand::Stop = &cmd {
                     return;
@@ -1056,6 +1133,97 @@ impl VideoPlayer {
 mod tests {
     use super::*;
 
+    /// Decode time must come out of the wait, not be added to it. Waiting a
+    /// full interval after each decode paced frames at `1/(interval + decode)`,
+    /// which lost 4-18% of the frames of every source.
+    #[test]
+    fn frame_schedule_absorbs_decode_time_instead_of_adding_to_it() {
+        let interval = std::time::Duration::from_millis(10);
+        let decode = std::time::Duration::from_millis(4);
+        let start = std::time::Instant::now();
+        let mut next_frame_at = start + interval;
+
+        // Three frames, each costing `decode` before the wait.
+        let mut elapsed = decode;
+        let mut waits = Vec::new();
+        for _ in 0..3 {
+            let mut at = start + elapsed;
+            let wait = {
+                // Same arithmetic as `wait_for_next_frame`, driven off a
+                // simulated clock so the test does not have to sleep.
+                let w = next_frame_at.saturating_duration_since(at);
+                next_frame_at += interval;
+                if next_frame_at <= at {
+                    next_frame_at = at + interval;
+                }
+                at += w;
+                w
+            };
+            waits.push(wait);
+            elapsed = at.duration_since(start) + decode;
+        }
+
+        // Each wait covers the interval minus the decode that preceded it, so
+        // the frame period stays at `interval`.
+        for wait in &waits {
+            assert_eq!(
+                *wait,
+                interval.checked_sub(decode).unwrap(),
+                "wait must absorb the decode time"
+            );
+        }
+    }
+
+    /// A source faster than the renderer must decode at the renderer's rate:
+    /// the mailbox holds one frame and the renderer takes one per rendered
+    /// frame, so the surplus is decoded only to be overwritten.
+    #[test]
+    fn decode_rate_is_bounded_by_what_the_renderer_can_present() {
+        let cap = AtomicU32::new(60);
+        assert_eq!(
+            decode_interval(75.0, &cap),
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+            "a 75 fps source on a 60 fps output must decode at 60"
+        );
+
+        // A source slower than the output keeps its own rate — capping there
+        // would slow the video down rather than save work.
+        assert_eq!(
+            decode_interval(15.0, &cap),
+            std::time::Duration::from_secs_f64(1.0 / 15.0),
+            "a 15 fps source must not be sped up to the output rate"
+        );
+
+        // Uncapped output (offline render, no target) leaves the source alone.
+        let uncapped = AtomicU32::new(0);
+        assert_eq!(
+            decode_interval(75.0, &uncapped),
+            std::time::Duration::from_secs_f64(1.0 / 75.0),
+            "an uncapped output must not bound the source"
+        );
+    }
+
+    /// A decode that overruns its slot must not build a backlog of already-late
+    /// deadlines, or the next frames would fire back-to-back at full speed.
+    #[test]
+    fn frame_schedule_resyncs_after_an_overrun_instead_of_bursting() {
+        let interval = std::time::Duration::from_millis(10);
+        let mut next_frame_at = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let wait = wait_for_next_frame(&mut next_frame_at, interval);
+        assert_eq!(
+            wait,
+            std::time::Duration::ZERO,
+            "a late frame waits not at all"
+        );
+        assert!(
+            next_frame_at > std::time::Instant::now(),
+            "the schedule must restart in the future, not replay a backlog"
+        );
+    }
+
     /// Regression: the birds HAP fixture is Hap1/BC1, not Bc7. `detect_hap_codec`
     /// must report the real format so the deck sizes its texture/staging
     /// correctly (a wrong format overran the staging copy and panicked).
@@ -1071,6 +1239,54 @@ mod tests {
             detect_hap_codec(path).unwrap(),
             Some(HapTextureFormat::Bc1),
             "Hap1 fixture must be detected as BC1, not the old hardcoded Bc7"
+        );
+    }
+
+    /// The demux loop must actually yield decoded frames, and must keep
+    /// yielding them across the loop wrap at end of stream.
+    /// Skips when the local-only fixture is absent (tests/media/ is gitignored).
+    #[test]
+    fn hap_player_decodes_frames_and_survives_the_loop_wrap() {
+        let path = "tests/media/birds_combined_hap.mov";
+        if !std::path::Path::new(path).exists() {
+            eprintln!("skipping: {path} not present (local-only fixture)");
+            return;
+        }
+        let fmt = detect_hap_codec(path).unwrap().expect("fixture is HAP");
+        let mut player = hap::HapPlayer::new(path, fmt).expect("open fixture");
+        let expected = fmt.frame_byte_size(player.width(), player.height());
+
+        // Drive the player from a simulated clock instead of real time so the
+        // test neither sleeps nor depends on how fast the machine decodes.
+        let mut decoded = 0;
+        for _ in 0..200 {
+            player.playback.frame_accumulator = 1.0 / player.playback.frame_rate;
+            if let Some(frame) = player.next_frame().expect("decode") {
+                assert_eq!(
+                    frame.color_data.len(),
+                    expected,
+                    "decoded frame must fill the plane the deck sized its texture for"
+                );
+                decoded += 1;
+            }
+        }
+        assert!(decoded > 100, "expected a frame per tick, got {decoded}");
+
+        // Wrap past the end and confirm the demuxer still produces frames
+        // rather than reporting a permanent end of stream.
+        player.playback.position = player.playback.effective_out() + 1.0;
+        player.playback.frame_accumulator = 1.0 / player.playback.frame_rate;
+        player.next_frame().expect("wrap");
+        let mut after_wrap = 0;
+        for _ in 0..10 {
+            player.playback.frame_accumulator = 1.0 / player.playback.frame_rate;
+            if player.next_frame().expect("decode after wrap").is_some() {
+                after_wrap += 1;
+            }
+        }
+        assert!(
+            after_wrap > 5,
+            "playback must resume after the loop wrap, got {after_wrap} frames"
         );
     }
 

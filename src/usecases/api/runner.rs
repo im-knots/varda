@@ -32,6 +32,12 @@ use utoipa_swagger_ui::SwaggerUi;
         routes::system::scan_cameras, routes::system::scan_midi,
         // Depth Sensors
         routes::system::scan_depth_sensors, routes::decks::add_depth_sensor_deck,
+        // Screen Capture
+        routes::system::scan_capture_targets, routes::system::request_screen_capture_permission,
+        routes::decks::add_screen_capture_deck, routes::library::screen_capture,
+        routes::state::screen_capture,
+        // Program / channel tap
+        routes::decks::add_tap_deck, routes::decks::set_tap_source,
         routes::system::scan_audio, routes::system::set_audio_source_enabled,
         routes::system::set_midi_device_enabled, routes::system::clear_midi_mappings,
         routes::system::remove_midi_mapping,
@@ -365,6 +371,34 @@ pub fn build_router(shared: SharedState) -> Router {
         .route(
             "/api/channels/{channel_uuid}/decks/depth",
             axum::routing::post(routes::decks::add_depth_sensor_deck),
+        )
+        .route(
+            "/api/channels/{channel_uuid}/decks/screen",
+            axum::routing::post(routes::decks::add_screen_capture_deck),
+        )
+        .route(
+            "/api/channels/{channel_uuid}/decks/tap",
+            axum::routing::post(routes::decks::add_tap_deck),
+        )
+        .route(
+            "/api/decks/{deck_uuid}/tap/source",
+            axum::routing::put(routes::decks::set_tap_source),
+        )
+        .route(
+            "/api/devices/screen/scan",
+            axum::routing::post(routes::system::scan_capture_targets),
+        )
+        .route(
+            "/api/devices/screen/permission",
+            axum::routing::post(routes::system::request_screen_capture_permission),
+        )
+        .route(
+            "/api/library/screen",
+            axum::routing::get(routes::library::screen_capture),
+        )
+        .route(
+            "/api/state/screen_capture",
+            axum::routing::get(routes::state::screen_capture),
         )
         .route(
             "/api/channels/{channel_uuid}/decks/reorder",

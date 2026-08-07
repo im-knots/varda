@@ -314,6 +314,12 @@ pub enum ExternalSourceKind {
     /// reprojected as a point cloud into the deck texture rather than blitted.
     /// See spec/depth-sensors.md.
     DepthSensor(crate::depth::DepthSensorId),
+    /// OS display or application window. See spec/screen-capture.md.
+    ScreenCapture(crate::screen_capture::CaptureId),
+    /// Varda's own master program or a channel composite, from the previous
+    /// frame. The source it points at lives in `Deck::tap`, because a channel
+    /// UUID is not `Copy`. See spec/program-tap.md.
+    Tap,
 }
 
 impl ExternalSourceKind {
@@ -329,6 +335,8 @@ impl ExternalSourceKind {
             Self::Rtmp(_) => "rtmp",
             Self::Html(_) => "html",
             Self::DepthSensor(_) => "depth_sensor",
+            Self::ScreenCapture(_) => "screen_capture",
+            Self::Tap => "tap",
         }
     }
 
@@ -341,6 +349,8 @@ impl ExternalSourceKind {
             Self::Srt(_) | Self::Hls(_) | Self::Dash(_) | Self::Rtmp(_) => "Stream",
             Self::Html(_) => "HTML",
             Self::DepthSensor(_) => "Depth Sensor",
+            Self::ScreenCapture(_) => "Screen Capture",
+            Self::Tap => "Tap",
         }
     }
 
@@ -351,6 +361,64 @@ impl ExternalSourceKind {
             _ => None,
         }
     }
+
+    /// Screen-capture id if this is a capture source.
+    pub fn screen_capture_id(&self) -> Option<crate::screen_capture::CaptureId> {
+        match self {
+            Self::ScreenCapture(id) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
+/// Live binding for a screen-capture deck.
+///
+/// The `CaptureId` is a runtime handle and is never persisted; `identity` is the
+/// handle-free name a scene stores and rebinds by. See spec/screen-capture.md.
+#[derive(Debug, Clone)]
+pub struct ScreenCaptureState {
+    pub capture_id: crate::screen_capture::CaptureId,
+    pub identity: crate::screen_capture::backend::TargetIdentity,
+    pub config: crate::screen_capture::backend::CaptureConfig,
+    /// Set when the router or UI edits `config`; the render loop pushes the new
+    /// config to the manager and clears it. The deck layer never reaches up into
+    /// a device, so the change travels down rather than sideways.
+    pub config_dirty: bool,
+}
+
+/// What a tap deck reads. See spec/program-tap.md.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TapSource {
+    /// The master program, tapped before tonemap and LUT so the whole feedback
+    /// path stays in linear light and tonemaps exactly once.
+    MasterProgram,
+    /// A channel composite, addressed by the channel's stable UUID so a tap
+    /// survives reordering. See spec/entity-identity.md.
+    Channel(String),
+}
+
+impl TapSource {
+    /// Display name. Channels are resolved through the `(uuid, name)` list the
+    /// caller holds; an unresolvable UUID falls back to the UUID itself, and
+    /// whether it is genuinely missing is reported separately so a stale label
+    /// never masquerades as an error.
+    pub fn label(&self, channels: &[(String, String)]) -> String {
+        match self {
+            Self::MasterProgram => "Master Program".to_string(),
+            Self::Channel(uuid) => channels
+                .iter()
+                .find(|(u, _)| u == uuid)
+                .map_or_else(|| format!("Channel {uuid}"), |(_, n)| n.clone()),
+        }
+    }
+}
+
+/// Live binding for a tap deck. There is no runtime handle to hold: the tap
+/// resolves to a mixer-owned texture view every frame, so an unresolvable
+/// source simply renders black until the channel comes back.
+#[derive(Debug, Clone)]
+pub struct TapState {
+    pub source: TapSource,
 }
 
 /// Live state for a deck's `depth_sensor` shader preprocessor.
@@ -542,6 +610,15 @@ pub struct Deck {
     /// successfully acquired. See spec/depth-sensor-preprocessor.md.
     pub depth_prepro: Option<DepthPreprocessState>,
 
+    /// Screen-capture binding, present only on `ScreenCapture` decks. Held on
+    /// the deck rather than looked up in the manager so `snapshot_scene` can
+    /// serialize the target and settings from the mixer alone.
+    /// See spec/screen-capture.md § Configuration and Persistence.
+    pub screen_capture: Option<ScreenCaptureState>,
+
+    /// Tap binding, present only on `Tap` decks. See spec/program-tap.md.
+    pub tap: Option<TapState>,
+
     /// Smoothed FPS derived from actual render pipeline timing (EMA of `1/time_delta`)
     fps_smoothed: f32,
 
@@ -614,6 +691,17 @@ impl Deck {
                 Some(handle.playback_snapshot())
             }
             _ => None,
+        }
+    }
+
+    /// Bound this deck's decode rate to what the renderer can present
+    /// (0 = uncapped). No-op for non-video decks.
+    pub fn set_video_output_fps(&self, fps: u32) {
+        match &self.source {
+            DeckSource::Video { handle, .. } | DeckSource::HapVideo { handle, .. } => {
+                handle.set_output_fps(fps);
+            }
+            _ => {}
         }
     }
 
@@ -725,6 +813,33 @@ impl Deck {
             | DeckSource::ExternalSource { scaling_mode, .. } => *scaling_mode = mode,
             _ => {}
         }
+    }
+
+    /// Set a screen-capture parameter from a normalized value (0.0–1.0).
+    /// Returns `false` if this deck is not a screen-capture source or `name` is
+    /// not a capture parameter. See spec/screen-capture.md § Parameters.
+    pub fn set_capture_param(&mut self, name: &str, value: f32) -> bool {
+        use crate::screen_capture::backend::{MAX_CAPTURE_RATE, MIN_CAPTURE_RATE};
+        let Some(state) = &mut self.screen_capture else {
+            return false;
+        };
+        let v = value.clamp(0.0, 1.0);
+        match name {
+            "rate" => {
+                state.config.rate = MIN_CAPTURE_RATE + v * (MAX_CAPTURE_RATE - MIN_CAPTURE_RATE);
+            }
+            "crop_x" => state.config.crop.x = v,
+            "crop_y" => state.config.crop.y = v,
+            "crop_w" => state.config.crop.w = v,
+            "crop_h" => state.config.crop.h = v,
+            // Bucketed so a MIDI fader can drive it like every other toggle.
+            "cursor" => state.config.show_cursor = v > 0.5,
+            "exclude_varda" => state.config.exclude_varda = v > 0.5,
+            _ => return false,
+        }
+        state.config = state.config.clone().sanitized();
+        state.config_dirty = true;
+        true
     }
 
     /// Set a depth point-cloud parameter from a normalized value (0.0–1.0).
@@ -982,6 +1097,33 @@ impl Deck {
                 ..
             } => Some(*id),
             _ => None,
+        }
+    }
+
+    /// Get the screen-capture ID (if source is a screen capture)
+    pub fn screen_capture_id(&self) -> Option<crate::screen_capture::CaptureId> {
+        match &self.source {
+            DeckSource::ExternalSource {
+                kind: ExternalSourceKind::ScreenCapture(id),
+                ..
+            } => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// Push the live source dimensions of an external source down from its
+    /// manager. Sources whose resolution can change mid-session (a screen
+    /// capture being cropped, a stream reconnecting at a new size) need this or
+    /// the blit keeps letterboxing to a stale aspect ratio.
+    pub fn set_external_source_size(&mut self, width: u32, height: u32) {
+        if let DeckSource::ExternalSource {
+            source_width,
+            source_height,
+            ..
+        } = &mut self.source
+        {
+            *source_width = width;
+            *source_height = height;
         }
     }
 

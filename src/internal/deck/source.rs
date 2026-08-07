@@ -377,6 +377,8 @@ impl Deck {
             point_cloud_params: crate::depth::point_cloud::PointCloudParams::default(),
             point_cloud_pipeline: None,
             depth_prepro: None,
+            screen_capture: None,
+            tap: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,
@@ -809,6 +811,75 @@ impl Deck {
         ))
     }
 
+    /// Create a new deck from a screen or window capture.
+    /// The capture is managed by `ScreenCaptureManager` — this deck reads from
+    /// the shared texture. See spec/screen-capture.md.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the external-source blit pipelines cannot be created.
+    pub fn new_from_screen_capture(
+        context: &GpuContext,
+        state: crate::deck::ScreenCaptureState,
+        target_label: &str,
+        source_width: u32,
+        source_height: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name = format!("🖥 {target_label}");
+        let (blit_pipeline, blit_pipeline_over_black) = external_blit_pipelines(context)?;
+
+        let source = DeckSource::ExternalSource {
+            kind: ExternalSourceKind::ScreenCapture(state.capture_id),
+            blit_pipeline,
+            blit_pipeline_over_black,
+            source_width,
+            source_height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        let mut deck = Self::build_media_deck(context, source_name, None, source, width, height);
+        deck.screen_capture = Some(state);
+        Ok(deck)
+    }
+
+    /// Create a new deck that re-enters Varda's own output as a source.
+    ///
+    /// The tap owns no device and holds no handle: the mixer supplies a texture
+    /// view each frame, and a source that cannot be resolved renders black.
+    /// See spec/program-tap.md.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the external-source blit pipelines cannot be created.
+    pub fn new_from_tap(
+        context: &GpuContext,
+        source: crate::deck::TapSource,
+        label: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let source_name = format!("🔁 {label}");
+        let (blit_pipeline, blit_pipeline_over_black) = external_blit_pipelines(context)?;
+
+        let deck_source = DeckSource::ExternalSource {
+            kind: ExternalSourceKind::Tap,
+            blit_pipeline,
+            blit_pipeline_over_black,
+            // A tap always matches the render resolution, so the default
+            // scaling mode is an exact 1:1 blit until the user changes it.
+            source_width: width,
+            source_height: height,
+            scaling_mode: ScalingMode::default(),
+        };
+
+        let mut deck =
+            Self::build_media_deck(context, source_name, None, deck_source, width, height);
+        deck.tap = Some(crate::deck::TapState { source });
+        Ok(deck)
+    }
+
     /// Create a new deck from a depth sensor (Kinect/LIDAR point cloud).
     /// The sensor is managed by `DepthSensorManager`; this deck reprojects the
     /// shared depth texture as a point cloud. See spec/depth-sensors.md.
@@ -923,6 +994,8 @@ impl Deck {
             point_cloud_params: crate::depth::point_cloud::PointCloudParams::default(),
             point_cloud_pipeline: None,
             depth_prepro: None,
+            screen_capture: None,
+            tap: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs: None,
@@ -1264,6 +1337,8 @@ impl Deck {
             point_cloud_params: crate::depth::point_cloud::PointCloudParams::default(),
             point_cloud_pipeline: None,
             depth_prepro: None,
+            screen_capture: None,
+            tap: None,
             fps_smoothed: 0.0,
             phase_accumulators: [0.0; 4],
             generator_phase_inputs,

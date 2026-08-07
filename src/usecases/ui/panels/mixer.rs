@@ -1173,11 +1173,7 @@ pub(super) fn render_deck_thumbnail(
 
         // Row 2: Deck name
         let name_y = card_rect.min.y + padding + preview_height + spacing;
-        let display_name = if deck.name.len() > 16 {
-            format!("{}…", &deck.name[..15])
-        } else {
-            deck.name.clone()
-        };
+        let display_name = super::utils::truncate_chars(&deck.name, 16);
         ui.painter().text(
             egui::pos2(card_rect.min.x + padding, name_y),
             egui::Align2::LEFT_TOP,

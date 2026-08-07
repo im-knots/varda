@@ -469,6 +469,148 @@ pub enum SourceConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         params: Option<DepthParamsConfig>,
     },
+    /// OS display or application window capture. The target is matched by
+    /// **name** on restore, never by platform handle — display ids and window
+    /// numbers are ephemeral across reboots. See spec/screen-capture.md.
+    ScreenCapture {
+        target: CaptureTargetConfig,
+        /// Capture frames per second (1–120).
+        #[serde(default = "default_capture_rate")]
+        rate: f32,
+        /// Normalized crop within the target. Absent means the full frame.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crop: Option<CaptureCropConfig>,
+        #[serde(default)]
+        show_cursor: bool,
+        /// `None` means "use the per-target default": exclude Varda from a
+        /// display capture, include it when the target *is* a Varda window.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exclude_varda: Option<bool>,
+        #[serde(default)]
+        scaling_mode: crate::deck::ScalingMode,
+    },
+    /// Varda's own program or a channel composite, re-entered as a source.
+    /// See spec/program-tap.md.
+    Tap {
+        source: TapSourceConfig,
+        #[serde(default)]
+        scaling_mode: crate::deck::ScalingMode,
+    },
+}
+
+/// The tap point a scene records. Channels are referenced by UUID so a tap
+/// survives reordering, which already carries semantic weight in the mixer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TapSourceConfig {
+    MasterProgram,
+    Channel { uuid: String },
+}
+
+impl From<&crate::deck::TapSource> for TapSourceConfig {
+    fn from(source: &crate::deck::TapSource) -> Self {
+        match source {
+            crate::deck::TapSource::MasterProgram => Self::MasterProgram,
+            crate::deck::TapSource::Channel(uuid) => Self::Channel { uuid: uuid.clone() },
+        }
+    }
+}
+
+impl From<&TapSourceConfig> for crate::deck::TapSource {
+    fn from(cfg: &TapSourceConfig) -> Self {
+        match cfg {
+            TapSourceConfig::MasterProgram => Self::MasterProgram,
+            TapSourceConfig::Channel { uuid } => Self::Channel(uuid.clone()),
+        }
+    }
+}
+
+fn default_capture_rate() -> f32 {
+    crate::screen_capture::backend::DEFAULT_CAPTURE_RATE
+}
+
+/// A capture target in handle-free form, so a scene survives a reboot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CaptureTargetConfig {
+    Display { name: String },
+    Window { app: String, title: String },
+}
+
+impl CaptureTargetConfig {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Display { name } => name.clone(),
+            Self::Window { app, title } if title.is_empty() => app.clone(),
+            Self::Window { app, title } => format!("{app} — {title}"),
+        }
+    }
+
+    /// Whether this target is a display, which is what decides the
+    /// `exclude_varda` default when the scene did not record one.
+    pub fn is_display(&self) -> bool {
+        matches!(self, Self::Display { .. })
+    }
+}
+
+impl From<&crate::screen_capture::backend::TargetIdentity> for CaptureTargetConfig {
+    fn from(id: &crate::screen_capture::backend::TargetIdentity) -> Self {
+        use crate::screen_capture::backend::TargetIdentity;
+        match id {
+            TargetIdentity::Display { label } => Self::Display {
+                name: label.clone(),
+            },
+            TargetIdentity::Window { app, title } => Self::Window {
+                app: app.clone(),
+                title: title.clone(),
+            },
+        }
+    }
+}
+
+impl From<&CaptureTargetConfig> for crate::screen_capture::backend::TargetIdentity {
+    fn from(cfg: &CaptureTargetConfig) -> Self {
+        match cfg {
+            CaptureTargetConfig::Display { name } => Self::Display {
+                label: name.clone(),
+            },
+            CaptureTargetConfig::Window { app, title } => Self::Window {
+                app: app.clone(),
+                title: title.clone(),
+            },
+        }
+    }
+}
+
+/// Normalized crop rectangle (0.0–1.0) within a capture target.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CaptureCropConfig {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl From<crate::screen_capture::backend::CropRect> for CaptureCropConfig {
+    fn from(c: crate::screen_capture::backend::CropRect) -> Self {
+        Self {
+            x: c.x,
+            y: c.y,
+            w: c.w,
+            h: c.h,
+        }
+    }
+}
+
+impl From<CaptureCropConfig> for crate::screen_capture::backend::CropRect {
+    fn from(c: CaptureCropConfig) -> Self {
+        Self {
+            x: c.x,
+            y: c.y,
+            w: c.w,
+            h: c.h,
+        }
+    }
 }
 
 /// Serializable depth-sensor preprocessor binding for shader decks.
@@ -822,6 +964,50 @@ impl SourceConfig {
                     errors.push(format!("{prefix}: depth sensor name is empty"));
                 }
             }
+            SourceConfig::ScreenCapture {
+                target, rate, crop, ..
+            } => {
+                match target {
+                    CaptureTargetConfig::Display { name } if name.trim().is_empty() => {
+                        errors.push(format!("{prefix}: capture display name is empty"));
+                    }
+                    CaptureTargetConfig::Window { app, title } => {
+                        // A window with neither an app nor a title can never be
+                        // matched back to a live target, so it is unrecoverable
+                        // rather than merely stale.
+                        if app.trim().is_empty() && title.trim().is_empty() {
+                            errors.push(format!("{prefix}: capture window has no app or title"));
+                        }
+                    }
+                    CaptureTargetConfig::Display { .. } => {}
+                }
+                if !rate.is_finite()
+                    || *rate < crate::screen_capture::backend::MIN_CAPTURE_RATE
+                    || *rate > crate::screen_capture::backend::MAX_CAPTURE_RATE
+                {
+                    errors.push(format!(
+                        "{prefix}: capture rate {rate} is outside {}–{}",
+                        crate::screen_capture::backend::MIN_CAPTURE_RATE,
+                        crate::screen_capture::backend::MAX_CAPTURE_RATE
+                    ));
+                }
+                if let Some(c) = crop {
+                    if !(c.x.is_finite() && c.y.is_finite() && c.w.is_finite() && c.h.is_finite()) {
+                        errors.push(format!("{prefix}: capture crop is not finite"));
+                    } else if c.x + c.w > 1.0 + f32::EPSILON || c.y + c.h > 1.0 + f32::EPSILON {
+                        errors.push(format!("{prefix}: capture crop extends outside the target"));
+                    }
+                }
+            }
+            SourceConfig::Tap { source, .. } => {
+                if let TapSourceConfig::Channel { uuid } = source {
+                    // A missing channel is a restore-time warning, not a
+                    // validation error; an empty UUID can never match anything.
+                    if uuid.trim().is_empty() {
+                        errors.push(format!("{prefix}: tap channel uuid is empty"));
+                    }
+                }
+            }
         }
         errors
     }
@@ -949,6 +1135,75 @@ impl SceneConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Program / channel tap ────────────────────────────────────────
+
+    /// Both tap variants have to survive a save/load cycle unchanged, since a
+    /// scene is the only record of what a tap deck was pointed at.
+    #[test]
+    fn tap_source_roundtrips_through_json() {
+        for source in [
+            TapSourceConfig::MasterProgram,
+            TapSourceConfig::Channel {
+                uuid: "a1b2c3d4".into(),
+            },
+        ] {
+            let cfg = SourceConfig::Tap {
+                source: source.clone(),
+                scaling_mode: crate::deck::ScalingMode::Fit,
+            };
+            let json = serde_json::to_string(&cfg).expect("serialize");
+            let back: SourceConfig = serde_json::from_str(&json).expect("deserialize");
+            match back {
+                SourceConfig::Tap {
+                    source: got,
+                    scaling_mode,
+                } => {
+                    assert_eq!(got, source);
+                    assert_eq!(scaling_mode, crate::deck::ScalingMode::Fit);
+                }
+                other => panic!("expected a tap, got {other:?}"),
+            }
+        }
+    }
+
+    /// `scaling_mode` is `#[serde(default)]`, so a scene written before the
+    /// field existed still loads.
+    #[test]
+    fn tap_source_loads_without_a_scaling_mode() {
+        let json = r#"{"type":"Tap","source":{"kind":"master_program"}}"#;
+        let cfg: SourceConfig = serde_json::from_str(json).expect("deserialize");
+        assert!(matches!(
+            cfg,
+            SourceConfig::Tap {
+                source: TapSourceConfig::MasterProgram,
+                ..
+            }
+        ));
+    }
+
+    /// A channel UUID that cannot match anything is a config error; a UUID that
+    /// merely names a deleted channel is not, because the deck is meant to
+    /// survive unbound. See spec/program-tap.md.
+    #[test]
+    fn tap_validation_rejects_only_an_empty_channel_uuid() {
+        let empty = SourceConfig::Tap {
+            source: TapSourceConfig::Channel { uuid: "  ".into() },
+            scaling_mode: crate::deck::ScalingMode::default(),
+        };
+        assert!(!empty.validate("d").is_empty());
+
+        let absent = SourceConfig::Tap {
+            source: TapSourceConfig::Channel {
+                uuid: "deadbeef".into(),
+            },
+            scaling_mode: crate::deck::ScalingMode::default(),
+        };
+        assert!(
+            absent.validate("d").is_empty(),
+            "a tap naming a channel that is not in this scene must load unbound, not fail"
+        );
+    }
 
     // ── Round-trip serialization ─────────────────────────────────────
 

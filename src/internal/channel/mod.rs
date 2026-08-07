@@ -417,6 +417,12 @@ pub struct Channel {
     pub effect_ping_texture: wgpu::Texture,
     pub effect_ping_view: wgpu::TextureView,
 
+    /// Previous frame's composite, kept only while some deck taps this channel.
+    /// Swapped with `composite_texture` at the top of each frame, so reading it
+    /// costs no copy and always yields frame N-1 regardless of channel order.
+    /// See spec/program-tap.md.
+    tap_prev: Option<(wgpu::Texture, wgpu::TextureView)>,
+
     /// Frame counter for uniforms
     frame_count: u32,
 
@@ -475,12 +481,45 @@ impl Channel {
             composite_view,
             effect_ping_texture,
             effect_ping_view,
+            tap_prev: None,
             frame_count: 0,
             composite_pipeline,
             blit_pipeline,
             render_time_ms: 0.0,
             active_deck_count: 0,
         })
+    }
+
+    /// Previous frame's composite, or `None` when nothing taps this channel.
+    pub fn tap_view(&self) -> Option<&wgpu::TextureView> {
+        self.tap_prev.as_ref().map(|(_, v)| v)
+    }
+
+    /// Allocate the tap target if it does not exist yet. Idempotent, so the
+    /// per-frame sync can call it unconditionally for every tapped channel.
+    pub fn ensure_tap(&mut self, context: &GpuContext, width: u32, height: u32) {
+        if self.tap_prev.is_some() {
+            return;
+        }
+        let tex = context.create_compositing_texture(width, height);
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        self.tap_prev = Some((tex, view));
+    }
+
+    /// Release the tap target so an untapped channel costs no extra memory.
+    pub fn clear_tap(&mut self) {
+        self.tap_prev = None;
+    }
+
+    /// Exchange the composite and tap targets. Called once per frame before
+    /// any deck renders, which is what makes the tap uniformly one frame old
+    /// no matter where the tapping deck sits in the channel order.
+    pub(crate) fn swap_tap(&mut self) {
+        if let Some((mut tex, mut view)) = self.tap_prev.take() {
+            std::mem::swap(&mut self.composite_texture, &mut tex);
+            std::mem::swap(&mut self.composite_view, &mut view);
+            self.tap_prev = Some((tex, view));
+        }
     }
 
     /// Add a deck to this channel
@@ -523,8 +562,11 @@ impl Channel {
     /// Tick video frames for all decks without doing a full render.
     /// Call this every frame even for off-screen channels so video players
     /// stay in sync and don't show stale/black frames when faded back in.
-    pub fn tick_video_frames(&mut self, encoder: &mut wgpu::CommandEncoder) {
+    /// `target_fps` is the rate the renderer presents at (0 = uncapped); decode
+    /// threads use it to avoid producing frames that can never be shown.
+    pub fn tick_video_frames(&mut self, encoder: &mut wgpu::CommandEncoder, target_fps: u32) {
         for slot in &mut self.decks {
+            slot.deck.set_video_output_fps(target_fps);
             if let Err(e) = slot.deck.update_video_frame(encoder) {
                 log::warn!("Video frame update failed: {e}");
             }
@@ -1218,6 +1260,9 @@ impl Channel {
         self.effect_ping_view = self
             .effect_ping_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // Dropped rather than resized; the per-frame sync reallocates it at the
+        // new size, costing one black frame for any deck tapping this channel.
+        self.tap_prev = None;
 
         for slot in &mut self.decks {
             slot.deck.resize(context, width, height);

@@ -567,6 +567,35 @@ pub fn snapshot_scene(mixer: &Mixer, render_width: u32, render_height: u32) -> S
                             });
                             SourceConfig::DepthSensor { name, params }
                         }
+                        "screen_capture" => {
+                            // The live binding is held on the deck, so the target
+                            // and settings serialize without reaching into the
+                            // capture manager. A capture deck can only exist with
+                            // this state set, so its absence is unrecoverable.
+                            let state = slot.deck.screen_capture.as_ref()?;
+                            let crop = state.config.crop;
+                            SourceConfig::ScreenCapture {
+                                target: crate::scene::CaptureTargetConfig::from(&state.identity),
+                                rate: state.config.rate,
+                                crop: if crop.is_full_frame() {
+                                    None
+                                } else {
+                                    Some(crop.into())
+                                },
+                                show_cursor: state.config.show_cursor,
+                                exclude_varda: Some(state.config.exclude_varda),
+                                scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
+                            }
+                        }
+                        "tap" => {
+                            // As with screen capture, the binding lives on the
+                            // deck, so no mixer lookup is needed here.
+                            let state = slot.deck.tap.as_ref()?;
+                            SourceConfig::Tap {
+                                source: crate::scene::TapSourceConfig::from(&state.source),
+                                scaling_mode: slot.deck.scaling_mode().unwrap_or_default(),
+                            }
+                        }
                         _ => return None,
                     };
 
@@ -1011,6 +1040,7 @@ pub fn restore_scene(
     context: &GpuContext,
     registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    screen_capture_manager: &mut crate::screen_capture::ScreenCaptureManager,
     depth_manager: &mut crate::depth::DepthSensorManager,
     ndi_manager: &mut crate::ndi::NdiManager,
     stream_manager: &mut crate::stream::StreamManager,
@@ -1073,6 +1103,7 @@ pub fn restore_scene(
                 context,
                 registry,
                 camera_manager,
+                screen_capture_manager,
                 depth_manager,
                 ndi_manager,
                 stream_manager,
@@ -1342,6 +1373,7 @@ pub(crate) fn restore_deck(
     context: &GpuContext,
     _registry: &crate::registry::ShaderRegistry,
     camera_manager: &mut crate::camera::CameraManager,
+    screen_capture_manager: &mut crate::screen_capture::ScreenCaptureManager,
     depth_manager: &mut crate::depth::DepthSensorManager,
     ndi_manager: &mut crate::ndi::NdiManager,
     stream_manager: &mut crate::stream::StreamManager,
@@ -1428,6 +1460,94 @@ pub(crate) fn restore_deck(
                 render_width,
                 render_height,
             )?
+        }
+        SourceConfig::ScreenCapture {
+            target,
+            rate,
+            crop,
+            show_cursor,
+            exclude_varda,
+            scaling_mode,
+        } => {
+            let identity = crate::screen_capture::backend::TargetIdentity::from(target);
+            let config = crate::screen_capture::backend::CaptureConfig {
+                rate: *rate,
+                crop: crop.map(Into::into).unwrap_or_default(),
+                show_cursor: *show_cursor,
+                exclude_varda: exclude_varda.unwrap_or_else(|| target.is_display()),
+                scale_to: Some((render_width, render_height)),
+            }
+            .sanitized();
+
+            // Unlike a camera, a missing capture target does **not** drop the
+            // deck. Windows come and go constantly, and silently losing a deck
+            // (with its effect chain, opacity, and MIDI mappings) because an app
+            // was closed would be a bad live-performance failure. The deck is
+            // restored unbound and renders black until the target reappears or
+            // the user repoints it.
+            // See spec/screen-capture.md § Configuration and Persistence.
+            let opened = screen_capture_manager
+                .find_target(&identity)
+                .cloned()
+                .and_then(|info| {
+                    match screen_capture_manager.open(&info, config.clone(), &context.device) {
+                        Ok(bound) => Some((info.label.clone(), bound)),
+                        Err(e) => {
+                            log::warn!(
+                                "Capture target '{}' found but could not be opened: {e}",
+                                info.label
+                            );
+                            None
+                        }
+                    }
+                });
+
+            let (label, capture_id, src_w, src_h) = opened.map_or_else(
+                || {
+                    log::warn!(
+                        "Capture target '{}' not available — deck restored unbound",
+                        target.label()
+                    );
+                    (
+                        target.label(),
+                        crate::screen_capture::UNBOUND_CAPTURE_ID,
+                        render_width,
+                        render_height,
+                    )
+                },
+                |(label, (id, w, h))| (label, id, w, h),
+            );
+
+            let mut deck = Deck::new_from_screen_capture(
+                context,
+                crate::deck::ScreenCaptureState {
+                    capture_id,
+                    identity,
+                    config,
+                    config_dirty: false,
+                },
+                &label,
+                src_w,
+                src_h,
+                render_width,
+                render_height,
+            )?;
+            deck.set_scaling_mode(*scaling_mode);
+            deck
+        }
+        SourceConfig::Tap {
+            source,
+            scaling_mode,
+        } => {
+            // A tap holds no handle and acquires nothing, so restore cannot
+            // fail. A source that no longer exists simply renders black until
+            // the channel returns. See spec/program-tap.md.
+            let tap_source = crate::deck::TapSource::from(source);
+            let label = tap_source.label(&[]);
+            let mut deck =
+                Deck::new_from_tap(context, tap_source, &label, render_width, render_height)?;
+            deck.set_scaling_mode(*scaling_mode);
+            deck
         }
         SourceConfig::Ndi { name } => match ndi_manager.start_receive(name, &context.device) {
             Some(receiver_idx) => {
@@ -1703,6 +1823,19 @@ pub(crate) fn source_configs_match(deck: &Deck, config: &SourceConfig) -> bool {
         ("depth_sensor", SourceConfig::DepthSensor { name, .. }) => {
             deck.source_name().trim_start_matches("🛰 ") == name
         }
+        // Compare the stored identity rather than the display label: a window
+        // whose title changed is still the same source and must be patched in
+        // place, not torn down and rebuilt mid-show.
+        ("screen_capture", SourceConfig::ScreenCapture { target, .. }) => deck
+            .screen_capture
+            .as_ref()
+            .is_some_and(|s| crate::scene::CaptureTargetConfig::from(&s.identity) == *target),
+        // Compared by tap point, not by label: renaming a channel must patch
+        // the deck in place rather than rebuild it.
+        ("tap", SourceConfig::Tap { source, .. }) => deck
+            .tap
+            .as_ref()
+            .is_some_and(|t| crate::scene::TapSourceConfig::from(&t.source) == *source),
         _ => false,
     }
 }

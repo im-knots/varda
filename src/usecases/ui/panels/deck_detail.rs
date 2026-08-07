@@ -1,7 +1,8 @@
 //! Deck detail: the bottom-bar mode shown when a deck is selected.
 
 use super::super::{
-    widgets, DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, PointCloudUI, UIActions, UIData,
+    widgets, DeckUIInfo, DepthPreproUI, EffectDrag, LibraryDrag, PointCloudUI, ScreenCaptureUI,
+    TapUI, UIActions, UIData,
 };
 use super::utils::{
     channel_color, format_time, render_collapsed_column, render_effect_drag_ghost,
@@ -183,6 +184,199 @@ fn render_depth_prepro_controls(
             data,
             actions,
         );
+    });
+}
+
+/// Tap controls for the selected deck: which internal output it re-enters,
+/// plus the two things a performer has to know about feedback.
+/// See spec/program-tap.md.
+fn render_tap_controls(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    tap: &TapUI,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    ui.separator();
+    ui.label(egui::RichText::new("🔁 Tap").strong().size(12.0));
+
+    ui.horizontal(|ui| {
+        ui.label("Source:");
+        let selected = if tap.bound {
+            tap.label.clone()
+        } else {
+            format!("{} (missing)", tap.label)
+        };
+        let mut chosen: Option<crate::scene::TapSourceConfig> = None;
+        egui::ComboBox::from_id_salt("sel_deck_tap_source")
+            .selected_text(selected)
+            .width(160.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(tap.kind == "master_program", "Master Program")
+                    .clicked()
+                {
+                    chosen = Some(crate::scene::TapSourceConfig::MasterProgram);
+                }
+                for ch in &data.channels {
+                    let is_current = tap.channel_uuid.as_deref() == Some(ch.uuid.as_str());
+                    if ui
+                        .selectable_label(is_current, format!("{} ({})", ch.name, ch.uuid))
+                        .clicked()
+                    {
+                        chosen = Some(crate::scene::TapSourceConfig::Channel {
+                            uuid: ch.uuid.clone(),
+                        });
+                    }
+                }
+            });
+        if let Some(source) = chosen {
+            actions.commands.push(EngineCommand::SetTapSource {
+                deck_uuid: deck.uuid.clone(),
+                source,
+            });
+        }
+    });
+
+    if !tap.bound {
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 160, 60),
+            "Tapped channel no longer exists — showing black.",
+        );
+    }
+    ui.label(
+        egui::RichText::new(
+            "Shows the previous frame. Feedback above 1.0 opacity on an additive \
+             blend grows without limit — the tonemap rolls it off, it is not clamped.",
+        )
+        .small()
+        .weak(),
+    );
+}
+
+/// Screen-capture controls for the selected deck: rate, crop, cursor, and
+/// (for display targets) Varda-window exclusion. See spec/screen-capture.md.
+fn render_capture_controls(
+    ui: &mut egui::Ui,
+    deck: &DeckUIInfo,
+    capture: &ScreenCaptureUI,
+    data: &UIData,
+    actions: &mut UIActions,
+) {
+    let send = |actions: &mut UIActions, name: &str, value: f32| {
+        actions.commands.push(EngineCommand::SetParam {
+            path: format!("deck/{}/capture/{}", deck.uuid, name),
+            value: ParamValue::Float(value),
+        });
+    };
+
+    ui.separator();
+    ui.label(
+        egui::RichText::new(format!("🖥 Screen Capture — {}", capture.target_label))
+            .strong()
+            .size(12.0),
+    );
+    if !capture.bound {
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 160, 60),
+            "Target not found — showing black. Reopen the target and rescan.",
+        );
+    } else if !capture.connected {
+        ui.colored_label(egui::Color32::GRAY, "Waiting for frames…");
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Rate:");
+        let mut rate = capture.rate;
+        let resp = ui.add(egui::Slider::new(&mut rate, 0.0..=1.0).show_value(false));
+        if resp.changed() {
+            send(actions, "rate", rate);
+        }
+        ui.label(format!("{:.0} fps", capture.rate_fps));
+        learn_overlay(
+            ui,
+            resp.rect,
+            format!("deck/{}/capture/rate", deck.uuid),
+            data,
+            actions,
+        );
+    });
+
+    // Crop is a sub-section of its own: the params column is only 200–280px, too
+    // narrow to hold four sliders side by side, so they get a row each. Labels stay
+    // single-character so every slider starts at the same x.
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Crop").strong());
+        if ui.small_button("Reset").clicked() {
+            send(actions, "crop_x", 0.0);
+            send(actions, "crop_y", 0.0);
+            send(actions, "crop_w", 1.0);
+            send(actions, "crop_h", 1.0);
+        }
+    });
+
+    let crop_sliders: [(&str, &str, f32); 4] = [
+        ("X", "crop_x", capture.crop[0]),
+        ("Y", "crop_y", capture.crop[1]),
+        ("W", "crop_w", capture.crop[2]),
+        ("H", "crop_h", capture.crop[3]),
+    ];
+    for (label, name, current) in crop_sliders {
+        let mut v = current;
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let resp = ui.add(
+                egui::Slider::new(&mut v, 0.0..=1.0)
+                    .show_value(false)
+                    .fixed_decimals(2),
+            );
+            if resp.changed() {
+                send(actions, name, v);
+            }
+            learn_overlay(
+                ui,
+                resp.rect,
+                format!("deck/{}/capture/{}", deck.uuid, name),
+                data,
+                actions,
+            );
+        });
+    }
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let mut cursor = capture.show_cursor;
+        let resp = ui.checkbox(&mut cursor, "Cursor");
+        if resp.changed() {
+            send(actions, "cursor", f32::from(u8::from(cursor)));
+        }
+        learn_overlay(
+            ui,
+            resp.rect,
+            format!("deck/{}/capture/cursor", deck.uuid),
+            data,
+            actions,
+        );
+
+        // Only displays can contain Varda's own windows; for a window target
+        // the toggle would be a no-op, so it is not offered.
+        if capture.is_display {
+            let mut exclude = capture.exclude_varda;
+            let resp = ui
+                .checkbox(&mut exclude, "Exclude Varda")
+                .on_hover_text("Omit Varda's own windows from this display capture");
+            if resp.changed() {
+                send(actions, "exclude_varda", f32::from(u8::from(exclude)));
+            }
+            learn_overlay(
+                ui,
+                resp.rect,
+                format!("deck/{}/capture/exclude_varda", deck.uuid),
+                data,
+                actions,
+            );
+        }
     });
 }
 
@@ -761,6 +955,16 @@ pub(super) fn render_selected_deck_detail(
                                     render_depth_prepro_controls(
                                         ui, deck, prepro, data, actions,
                                     );
+                                }
+
+                                // Screen-capture controls
+                                if let Some(capture) = &deck.screen_capture {
+                                    render_capture_controls(ui, deck, capture, data, actions);
+                                }
+
+                                // Tap controls
+                                if let Some(tap) = &deck.tap {
+                                    render_tap_controls(ui, deck, tap, data, actions);
                                 }
 
                                 // Render FPS

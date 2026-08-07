@@ -13,6 +13,8 @@ The panel is a stack of collapsible sections, in this order:
 | **🖼 Images** | Per-channel **📁 Load to [Channel]** button (opens a file dialog). |
 | **🎬 Video** | Per-channel **📁 Load to [Channel]** button (opens a file dialog). |
 | **📹 Cameras** | Detected camera devices, with a **🔄 Rescan** button. |
+| **🖥 Screen Capture** | Capturable displays and windows, with a **🔄 Rescan** button (see below). |
+| **🔁 Taps** | Varda's own master program and each channel, as sources (see below). |
 | **📡 Stream Sources** | NDI, SRT, HLS, DASH, and RTMP sources (see below). |
 | **🌐 HTML Sources** | Web pages (HTML/CSS/JS) rendered by Servo (see below). |
 | **💾 Deck Presets** | Saved deck presets (shown only when presets exist). |
@@ -29,6 +31,8 @@ The Library is built around drag-and-drop. The core gesture is **drag an item on
 | **Generator** | `◆` | Drag onto a channel → new shader deck. Double-click adds it to Channel 0. |
 | **Effect** | `◇` | Drag onto a deck/channel/master **effect chain** → appends the effect. |
 | **Camera** | `📹` | Drag onto a channel → new camera deck. |
+| **Capture target** | `🖥` | Drag onto a channel → new screen or window capture deck. |
+| **Tap** | `🔁` | Drag onto a channel → new deck reading Varda's own output. |
 | **NDI** | `📡` | Drag onto a channel → new NDI deck. |
 | **SRT / HLS / DASH / RTMP** | `📺` / `📡` | Drag onto a channel → new stream deck. |
 | **HTML** | `🌐` | Drag onto a channel → new HTML deck. |
@@ -78,6 +82,27 @@ Camera devices are enumerated automatically at startup (AVFoundation on macOS, V
 ### Resolution
 
 The **resolution selector** is not in the Library — it lives in the **deck detail panel** (bottom bar) when a camera deck is selected. It is a dropdown of the device's supported resolutions (default = the device's native default), alongside the standard scaling mode (Fill / Fit / Stretch / Center). See [Per-Deck Scaling](10-resolution-and-monitoring.md#per-deck-scaling).
+
+## Screen Capture
+
+The **🖥 Screen Capture** section lists capturable displays and windows, split into **Displays** and **Windows** groups. Drag either onto a channel to create a live capture deck. Hovering a row shows the target's pixel size.
+
+- **🔄 Rescan** re-enumerates targets. The list is never polled in the background, because window lists change every time you switch apps, so press Rescan after opening or closing the app you want.
+- Varda's own windows are labeled `(Varda)` and tinted, so self-capture is deliberate rather than accidental.
+- On macOS the section also shows the Screen Recording permission state and, when access has not been granted, a **Grant Screen Recording access** button. Varda must be restarted after granting.
+- Capture decks are persisted in `scene.json` by display name or by application and window title. If the target is gone at load time the deck is kept and renders black rather than being dropped.
+
+Rate, crop, cursor, and Varda-exclusion controls live in the **deck detail panel** (bottom bar) when a capture deck is selected. See [Screen & Window Capture](09-streaming-and-io.md#screen--window-capture) for those controls, the permission flow, and performance notes.
+
+## Taps
+
+The **🔁 Taps** section feeds Varda's own output back in as a deck source. It lists **Master Program** plus every channel, and is built from the live mixer rather than a device scan, so there is nothing to rescan.
+
+- Drag an entry onto a channel to create a tap deck.
+- A tap always shows the **previous** frame, which is what keeps feedback loops stable and makes the delay independent of deck ordering.
+- A selected tap deck gets a **Source** dropdown in the deck detail panel for repointing it without recreating it.
+
+See [Program Tap](09-streaming-and-io.md#program-tap) for frame semantics, feedback behavior, and the API.
 
 ## Presets
 

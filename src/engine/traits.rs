@@ -55,6 +55,41 @@ pub trait MixerCommands {
         channel_uuid: &str,
         depth_sensor_id: DepthSensorId,
     ) -> Result<String>;
+    /// Add a screen / window capture deck. `target` is matched by name against
+    /// the last enumeration; pass `None` for any option to take its default.
+    ///
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel, if no enumerated
+    /// target matches, if the OS refuses capture, or if the deck's GPU
+    /// resources cannot be allocated.
+    fn add_screen_capture_deck(
+        &mut self,
+        channel_uuid: &str,
+        target: &crate::scene::CaptureTargetConfig,
+        options: crate::screen_capture::backend::CaptureConfig,
+    ) -> Result<String>;
+    /// Add a deck that re-enters Varda's own program or a channel composite.
+    /// Returns the new deck's UUID. See spec/program-tap.md.
+    ///
+    /// # Errors
+    /// Returns an error if `channel_uuid` names no channel or if the deck's GPU
+    /// resources cannot be allocated. A tap source that does not resolve is
+    /// **not** an error: the deck renders black until it does.
+    fn add_tap_deck(
+        &mut self,
+        channel_uuid: &str,
+        source: &crate::scene::TapSourceConfig,
+    ) -> Result<String>;
+    /// Repoint an existing tap deck.
+    ///
+    /// # Errors
+    /// Returns an error if `deck_uuid` names no deck or names a deck that is
+    /// not a tap.
+    fn set_tap_source(
+        &mut self,
+        deck_uuid: &str,
+        source: &crate::scene::TapSourceConfig,
+    ) -> Result<()>;
     /// # Errors
     /// Returns an error if `deck_uuid` names no deck.
     fn remove_deck(&mut self, deck_uuid: &str) -> Result<()>;

@@ -176,6 +176,34 @@ pub struct DepthPreproUI {
     pub mirror: bool,
 }
 
+/// Screen-capture controls for the deck detail panel.
+/// See spec/screen-capture.md.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone)]
+pub struct ScreenCaptureUI {
+    pub target_label: String,
+    pub is_display: bool,
+    /// Normalized rate, matching `deck/<uuid>/capture/rate`.
+    pub rate: f32,
+    pub rate_fps: f32,
+    /// `[x, y, w, h]`, normalized.
+    pub crop: [f32; 4],
+    pub show_cursor: bool,
+    pub exclude_varda: bool,
+    pub bound: bool,
+    pub connected: bool,
+}
+
+/// Tap controls for the deck detail panel. See spec/program-tap.md.
+#[derive(Clone)]
+pub struct TapUI {
+    /// `"master_program"` or `"channel"`.
+    pub kind: String,
+    pub channel_uuid: Option<String>,
+    pub label: String,
+    pub bound: bool,
+}
+
 /// Deck info for UI display
 // Flat projection of independent deck flags (solo/mute/transparent/source kind).
 #[allow(clippy::struct_excessive_bools)]
@@ -192,6 +220,10 @@ pub struct DeckUIInfo {
     pub point_cloud: Option<PointCloudUI>,
     /// Depth-preprocessor controls (None = no `depth_sensor` preprocessor).
     pub depth_prepro: Option<DepthPreproUI>,
+    /// Screen-capture controls (None = not a screen-capture source).
+    pub screen_capture: Option<ScreenCaptureUI>,
+    /// Tap controls (None = not a tap source).
+    pub tap: Option<TapUI>,
     /// True when the interactive window is currently open for this deck.
     pub is_html_interactive: bool,
     pub opacity: f32,
@@ -419,6 +451,14 @@ pub struct UIData {
     pub cameras: Vec<(String, crate::camera::CameraId)>,
     /// Detected depth sensors (name, id)
     pub depth_sensors: Vec<(String, crate::depth::DepthSensorId)>,
+    /// Capture targets found by the last screen-capture scan.
+    pub capture_targets: Vec<crate::engine::CaptureTargetSnapshot>,
+    /// Screen-recording permission state (`granted` / `denied` / …). Rendered
+    /// inline in the library panel, because it is the reason a capture deck can
+    /// be black. See spec/screen-capture.md § Permissions.
+    pub screen_capture_permission: String,
+    /// Whether screen capture is compiled in and not disabled by CLI flag.
+    pub screen_capture_available: bool,
     /// Discovered NDI sources (name)
     pub ndi_sources: Vec<String>,
     /// Whether NDI runtime is available

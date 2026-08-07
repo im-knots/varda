@@ -275,21 +275,50 @@ impl VardaApp {
         // channels are included even at zero opacity so their live camera inputs
         // keep advancing while off-air. See /spec/channel-preview.md.
         let mut needed_camera_ids = std::collections::HashSet::new();
+        let mut needed_capture_ids = std::collections::HashSet::new();
+        // Counted over every deck, not just the visible ones: this is what the
+        // capture manager reconciles its sessions against, so an off-air deck
+        // must still count as a holder.
+        let mut capture_holders: std::collections::HashMap<crate::screen_capture::CaptureId, u32> =
+            std::collections::HashMap::new();
         for (ch_idx, channel) in self.mixer.channels().iter().enumerate() {
             let visible = effective_opacities.get(ch_idx).copied().unwrap_or(0.0) > 0.0;
-            if !visible && !self.preview_channels.contains(&ch_idx) {
-                continue;
-            }
+            let wanted = visible || self.preview_channels.contains(&ch_idx);
             for slot in &channel.decks {
+                if let Some(cap_id) = slot.deck.screen_capture_id() {
+                    *capture_holders.entry(cap_id).or_default() += 1;
+                }
+                if !wanted {
+                    continue;
+                }
                 if let Some(cam_id) = slot.deck.camera_id() {
                     needed_camera_ids.insert(cam_id);
+                }
+                if let Some(cap_id) = slot.deck.screen_capture_id() {
+                    needed_capture_ids.insert(cap_id);
                 }
             }
         }
 
+        // Stop any capture whose last deck is gone. A deck dropped outside
+        // `remove_deck` — scene diff, undo, truncated or removed channel —
+        // never released its session, leaving the capture thread grabbing and
+        // downscaling frames for the rest of the session.
+        self.screen_capture_manager
+            .reconcile_holders(&capture_holders);
+
         // Update only needed camera frames
         self.camera_manager
             .update_selective(&self.context.queue, &needed_camera_ids);
+
+        // Upload screen-capture frames for visible/cued decks only. An
+        // invisible capture deck costs nothing, which is what makes a
+        // self-capture deck safe to leave in a scene.
+        self.screen_capture_manager.update_selective(
+            &self.context.device,
+            &self.context.queue,
+            &needed_capture_ids,
+        );
 
         // Update NDI receiver frames
         self.external_io
@@ -346,6 +375,27 @@ impl VardaApp {
                         ExternalSourceKind::Html(idx) => {
                             self.external_io.html_manager.texture_view(idx).cloned()
                         }
+                        ExternalSourceKind::ScreenCapture(id) => {
+                            // Router/UI edits land on the deck; push them down
+                            // to the capture thread here, once, when they change.
+                            if let Some(state) = &mut slot.deck.screen_capture {
+                                if state.config_dirty {
+                                    self.screen_capture_manager
+                                        .set_config(id, state.config.clone());
+                                    state.config_dirty = false;
+                                }
+                            }
+                            // A crop or target resize reallocates the shared
+                            // texture, so the deck's source dimensions are
+                            // pushed down each frame rather than fixed at open.
+                            if let Some((w, h)) = self.screen_capture_manager.resolution(id) {
+                                slot.deck.set_external_source_size(w, h);
+                            }
+                            self.screen_capture_manager.texture_view(id).cloned()
+                        }
+                        // Taps own no device, so the mixer resolves them all at
+                        // once in `prepare_taps` below.
+                        ExternalSourceKind::Tap => None,
                         ExternalSourceKind::DepthSensor(id) => {
                             // Depth decks read the R16Uint depth view + RGB view
                             // and reproject via the point-cloud pass rather than
@@ -386,6 +436,11 @@ impl VardaApp {
                 }
             }
         }
+
+        // Runs after the binding loop but still before any deck renders, which
+        // is the window in which a tap can be swapped safely.
+        // See spec/program-tap.md.
+        self.mixer.prepare_taps(&self.context);
 
         // Collect audio values for modulation
         let audio_values = {

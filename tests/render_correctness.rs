@@ -68,7 +68,11 @@ fn render_once(ctx: &GpuContext, mixer: &mut Mixer) {
 /// row-major, `w*h` pixels. Blocks on `poll(Wait)` — allowed here because this
 /// is a test, not the render thread.
 fn read_back(ctx: &GpuContext, mixer: &Mixer, width: u32, height: u32) -> Vec<[f32; 4]> {
-    let tex = mixer.composite_texture();
+    read_texture(ctx, mixer.composite_texture(), width, height)
+}
+
+/// Read back any `Rgba16Float` target as linear-light RGBA f32.
+fn read_texture(ctx: &GpuContext, tex: &wgpu::Texture, width: u32, height: u32) -> Vec<[f32; 4]> {
     let bytes_per_pixel = 8u32; // Rgba16Float
     let unpadded = width * bytes_per_pixel;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -1806,5 +1810,186 @@ fn chroma_flow_regenerates_from_the_source() {
          0.05s differs from every 4s by only {difference:.5} mean luminance. \
          Nothing is being drawn back from the source, so the field is warping \
          alone and will smear itself away."
+    );
+}
+
+// ── Program / channel tap ────────────────────────────────────────────
+//
+// See /spec/program-tap.md. The contract these pin is that a tap shows the
+// *previous* frame, uniformly, regardless of where the tapping deck sits in
+// the channel order. That is what makes feedback loops terminate, so it must
+// fail loudly if someone later "optimizes" a tap into reading the live target.
+
+/// Advance the mixer the way the app does: resolve taps, then render.
+fn render_frame_with_taps(ctx: &GpuContext, mixer: &mut Mixer) {
+    mixer.prepare_taps(ctx);
+    render_once(ctx, mixer);
+}
+
+/// A tap in a *later* channel than the one it reads. This is the direction a
+/// naive implementation gets wrong: channel 0 has already composited by the
+/// time channel 1's decks render, so binding it directly would show the
+/// current frame's red on frame one.
+#[test]
+fn tap_shows_the_previous_frame_not_the_current_one() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = new_mixer(&ctx);
+    let ch0_uuid = mixer.channel(0).unwrap().uuid().to_string();
+
+    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    mixer.channel_mut(0).unwrap().add_deck(red);
+    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::Channel(ch0_uuid), "tap", W, H)
+        .expect("tap deck");
+    mixer.channel_mut(1).unwrap().add_deck(tap);
+    mixer.set_crossfader(1.0);
+
+    render_frame_with_taps(&ctx, &mut mixer);
+    let first = center(&read_back(&ctx, &mixer, W, H));
+    assert_lo(
+        first[0],
+        "frame 1 tap must be black — channel 0 composited earlier in this same \
+         frame, and showing its red would mean the tap read the live target",
+    );
+
+    render_frame_with_taps(&ctx, &mut mixer);
+    let second = center(&read_back(&ctx, &mixer, W, H));
+    assert_hi(second[0], "frame 2 tap must show frame 1's red");
+}
+
+/// The same assertion with the tap in an *earlier* channel than its source.
+/// Both directions agreeing is what proves the double buffer removed the
+/// ordering dependence rather than merely reversing it.
+#[test]
+fn tap_latency_does_not_depend_on_channel_order() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = new_mixer(&ctx);
+    let ch1_uuid = mixer.channel(1).unwrap().uuid().to_string();
+
+    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::Channel(ch1_uuid), "tap", W, H)
+        .expect("tap deck");
+    mixer.channel_mut(0).unwrap().add_deck(tap);
+    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    mixer.channel_mut(1).unwrap().add_deck(red);
+    mixer.set_crossfader(0.0);
+
+    render_frame_with_taps(&ctx, &mut mixer);
+    assert_lo(
+        center(&read_back(&ctx, &mixer, W, H))[0],
+        "frame 1 tap must be black in the earlier-channel direction too",
+    );
+
+    render_frame_with_taps(&ctx, &mut mixer);
+    assert_hi(
+        center(&read_back(&ctx, &mixer, W, H))[0],
+        "frame 2 tap must show frame 1's red, exactly as in the other direction",
+    );
+}
+
+/// A master tap is uniformly one frame behind for the same reason: every deck
+/// renders before the master composite, so there is no ordering to depend on.
+#[test]
+fn master_tap_shows_the_previous_frame() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = new_mixer(&ctx);
+
+    // The tap deck sits *under* the red deck in the same channel: an opaque
+    // Normal blend covers it, so the program is always exactly red, while the
+    // tap deck still renders every frame. Parking it in the far channel instead
+    // would fade that channel out, and a fully faded channel is culled — the
+    // deck would never render and this would measure the cull, not the tap.
+    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::MasterProgram, "tap", W, H)
+        .expect("tap deck");
+    mixer.channel_mut(0).unwrap().add_deck(tap);
+    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    mixer.channel_mut(0).unwrap().add_deck(red);
+    mixer.set_crossfader(0.0);
+
+    let tap_texture = |m: &Mixer| -> Vec<[f32; 4]> {
+        read_texture(&ctx, &m.channel(0).unwrap().decks[0].deck.texture, W, H)
+    };
+
+    render_frame_with_taps(&ctx, &mut mixer);
+    assert_lo(
+        center(&tap_texture(&mixer))[0],
+        "frame 1 master tap must be black — the program has not been composited yet",
+    );
+
+    render_frame_with_taps(&ctx, &mut mixer);
+    assert_hi(
+        center(&tap_texture(&mixer))[0],
+        "frame 2 master tap must show frame 1's program",
+    );
+}
+
+/// A deck tapping the channel it lives in is a legitimate and commonly wanted
+/// feedback configuration. At partial opacity it must converge rather than
+/// producing NaN or infinity in the `Rgba16Float` target.
+#[test]
+fn self_tapping_deck_converges_rather_than_diverging() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = new_mixer(&ctx);
+    let ch0_uuid = mixer.channel(0).unwrap().uuid().to_string();
+
+    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    mixer.channel_mut(0).unwrap().add_deck(red);
+    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::Channel(ch0_uuid), "tap", W, H)
+        .expect("tap deck");
+    let tap_idx = mixer.channel_mut(0).unwrap().add_deck(tap);
+    mixer.channel_mut(0).unwrap().decks[tap_idx].opacity = 0.5;
+    mixer.set_crossfader(0.0);
+
+    for frame in 0..12 {
+        render_frame_with_taps(&ctx, &mut mixer);
+        let px = center(&read_back(&ctx, &mixer, W, H));
+        for (i, v) in px.iter().enumerate() {
+            assert!(
+                v.is_finite(),
+                "frame {frame} channel {i} went non-finite ({v}) — a self-tap at \
+                 50% opacity is a difference equation and must settle"
+            );
+        }
+    }
+}
+
+/// The feature has to be free when unused: no tap deck, no tap target.
+#[test]
+fn a_scene_without_taps_allocates_no_tap_targets() {
+    let Some(ctx) = headless_gpu() else {
+        return;
+    };
+    let mut mixer = new_mixer(&ctx);
+    let red = Deck::new_solid_color(&ctx, [1.0, 0.0, 0.0, 1.0], W, H).expect("solid deck");
+    mixer.channel_mut(0).unwrap().add_deck(red);
+
+    render_frame_with_taps(&ctx, &mut mixer);
+    assert!(
+        mixer.has_no_tap_targets(),
+        "a scene with no tap decks must not allocate any tap render target"
+    );
+
+    // ...and adding one, then removing it, gives the memory back.
+    let ch0_uuid = mixer.channel(0).unwrap().uuid().to_string();
+    let tap = Deck::new_from_tap(&ctx, varda::deck::TapSource::Channel(ch0_uuid), "tap", W, H)
+        .expect("tap deck");
+    let idx = mixer.channel_mut(1).unwrap().add_deck(tap);
+    render_frame_with_taps(&ctx, &mut mixer);
+    assert!(
+        !mixer.has_no_tap_targets(),
+        "a tapped channel must have a tap target"
+    );
+
+    mixer.channel_mut(1).unwrap().remove_deck_slot(idx);
+    render_frame_with_taps(&ctx, &mut mixer);
+    assert!(
+        mixer.has_no_tap_targets(),
+        "removing the last tap deck must release the tap target"
     );
 }

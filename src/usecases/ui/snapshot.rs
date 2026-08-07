@@ -25,9 +25,9 @@ pub(crate) fn build_ui_data(
     use crate::usecases::ui::{
         AudioDeviceUI, AudioPassthroughUI, AudioUIData, AutoTransitionUI, ChannelUIInfo,
         DeckUIInfo, DepthPreproUI, MidiDeviceUI, MidiMappingUI, ModAssignmentUI, ModSourceUI,
-        ModSourceUIEntry, MonitorInfo, NotificationUI, OutputUI, PointCloudUI, SequenceStepKindUI,
-        SequenceStepUI, SequenceUIData, SrtLibraryEntry, SurfaceAssignmentUI, SurfaceUI, UIData,
-        VideoPlaybackUI,
+        ModSourceUIEntry, MonitorInfo, NotificationUI, OutputUI, PointCloudUI, ScreenCaptureUI,
+        SequenceStepKindUI, SequenceStepUI, SequenceUIData, SrtLibraryEntry, SurfaceAssignmentUI,
+        SurfaceUI, TapUI, UIData, VideoPlaybackUI,
     };
 
     // Build the domain-neutral engine state first
@@ -89,6 +89,23 @@ pub(crate) fn build_ui_data(
                         motion_gain: p.motion_gain,
                         mirror: p.mirror,
                     });
+                    let screen_capture = d.screen_capture.as_ref().map(|s| ScreenCaptureUI {
+                        target_label: s.target_label.clone(),
+                        is_display: s.is_display,
+                        rate: s.rate_norm,
+                        rate_fps: s.rate_fps,
+                        crop: s.crop,
+                        show_cursor: s.show_cursor,
+                        exclude_varda: s.exclude_varda,
+                        bound: s.bound,
+                        connected: s.connected,
+                    });
+                    let tap = d.tap.as_ref().map(|t| TapUI {
+                        kind: t.kind.clone(),
+                        channel_uuid: t.channel_uuid.clone(),
+                        label: t.label.clone(),
+                        bound: t.bound,
+                    });
                     DeckUIInfo {
                         deck_idx: d.idx,
                         uuid: d.uuid.clone(),
@@ -97,6 +114,8 @@ pub(crate) fn build_ui_data(
                         is_depth_sensor: d.is_depth_sensor,
                         point_cloud,
                         depth_prepro,
+                        screen_capture,
+                        tap,
                         is_html_interactive: d.is_html_interactive,
                         opacity: d.opacity,
                         effective_opacity: d.effective_opacity,
@@ -556,6 +575,9 @@ pub(crate) fn build_ui_data(
         midi_mappings,
         cameras: engine.cameras.devices,
         depth_sensors: engine.depth_sensors.devices,
+        capture_targets: engine.screen_capture.targets,
+        screen_capture_permission: engine.screen_capture.permission,
+        screen_capture_available: engine.screen_capture.available,
         ndi_sources: engine.ndi_sources.clone(),
         ndi_available: engine.ndi_available,
         syphon_sources: engine.syphon_sources.clone(),
