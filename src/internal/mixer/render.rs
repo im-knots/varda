@@ -436,9 +436,12 @@ impl Mixer {
         let mixer_cpu_us = channels_us + mixer_composite_us + master_fx_us;
         let (deck_gpu_us, deck_encode_us) = self.active_deck_costs();
         if mixer_cpu_us > 100 {
-            if let Some(raw_ratio) =
-                raw_gpu_load_ratio(deck_gpu_us, deck_encode_us, actual_frame_us, frame_budget_us)
-            {
+            if let Some(raw_ratio) = raw_gpu_load_ratio(
+                deck_gpu_us,
+                deck_encode_us,
+                actual_frame_us,
+                frame_budget_us,
+            ) {
                 // EMA smoothing (α = 0.15) — responsive but not jittery
                 self.gpu_load_ratio = 0.15 * raw_ratio + 0.85 * self.gpu_load_ratio;
             }
@@ -1306,8 +1309,8 @@ mod gpu_load_ratio_tests {
     #[test]
     fn timestamps_give_the_plain_gpu_over_cpu_underestimation_factor() {
         // 4 ms of GPU work encoded in 500 us: deck cost is understated 8x.
-        let ratio = raw_gpu_load_ratio(4000.0, 500.0, BUDGET_60FPS, BUDGET_60FPS)
-            .expect("timing present");
+        let ratio =
+            raw_gpu_load_ratio(4000.0, 500.0, BUDGET_60FPS, BUDGET_60FPS).expect("timing present");
         assert!((ratio - 8.0).abs() < 1e-3, "expected 8x, got {ratio}");
     }
 

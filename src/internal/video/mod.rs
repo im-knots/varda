@@ -1213,7 +1213,11 @@ mod tests {
             .unwrap();
 
         let wait = wait_for_next_frame(&mut next_frame_at, interval);
-        assert_eq!(wait, std::time::Duration::ZERO, "a late frame waits not at all");
+        assert_eq!(
+            wait,
+            std::time::Duration::ZERO,
+            "a late frame waits not at all"
+        );
         assert!(
             next_frame_at > std::time::Instant::now(),
             "the schedule must restart in the future, not replay a backlog"
