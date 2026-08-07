@@ -102,7 +102,7 @@ invalidates the whole build cache, and this project has a heavy dependency tree.
 To build without depth-sensor support instead, drop the feature:
 
 ```bash
-cargo build --release --no-default-features --features face-detection,html
+cargo build --release --no-default-features --features face-detection,html,screen-capture
 ```
 
 ### Run from source

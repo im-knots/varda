@@ -103,7 +103,7 @@ loader, the CLI installer, shader search paths, and the Syphon restore path all 
 branches. `clippy.yml` therefore runs three jobs (linux, macos, windows) so every branch is linted
 somewhere. If CI reports a lint you cannot reproduce, check whether the file is platform-gated before
 assuming a version difference. The Windows job matches the release build's feature set
-(`--no-default-features --features face-detection,html`), since `depth` has no vcpkg port.
+(`--no-default-features --features face-detection,html,screen-capture`), since `depth` has no vcpkg port.
 
 Five pedantic lints are allowed crate-wide. Each has a rationale comment in `Cargo.toml`:
 
